@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
@@ -75,6 +76,14 @@ interface IntegratedFileBrowserProps {
   onClose: () => void;
 }
 
+// Cache to store state per session
+const sessionStateCache = new Map<string, {
+  currentPath: string;
+  files: FileItem[];
+  selectedFiles: Set<string>;
+  searchTerm: string;
+}>();
+
 export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }: IntegratedFileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -115,11 +124,44 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     { name: 'data.json', type: 'file', size: 5120, modified: new Date('2024-01-12'), permissions: '-rw-r--r--', owner: 'www-data', group: 'www-data', path: 'data.json' }
   ];
 
+  // Restore or initialize state when session changes
   useEffect(() => {
-    if (isConnected) {
+    if (sessionId) {
+      const cached = sessionStateCache.get(sessionId);
+      if (cached) {
+        // Restore previous state
+        setCurrentPath(cached.currentPath);
+        setFiles(cached.files);
+        setSelectedFiles(cached.selectedFiles);
+        setSearchTerm(cached.searchTerm);
+      } else {
+        // Initialize new session state
+        setCurrentPath('/home');
+        setFiles([]);
+        setSelectedFiles(new Set());
+        setSearchTerm('');
+      }
+    }
+  }, [sessionId]);
+
+  // Save state to cache when it changes
+  useEffect(() => {
+    if (sessionId) {
+      sessionStateCache.set(sessionId, {
+        currentPath,
+        files,
+        selectedFiles,
+        searchTerm
+      });
+    }
+  }, [sessionId, currentPath, files, selectedFiles, searchTerm]);
+
+  useEffect(() => {
+    if (isConnected && sessionId) {
+      console.log('useEffect triggered - loading files', { currentPath, sessionId, isConnected });
       loadFiles();
     }
-  }, [currentPath, isConnected]);
+  }, [currentPath, isConnected, sessionId]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -230,11 +272,89 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
   };
 
   const loadFiles = async () => {
+    if (!sessionId || !isConnected) {
+      setFiles([]);
+      return;
+    }
+    
     setIsLoading(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 500));
-    setFiles(mockFiles);
-    setIsLoading(false);
+    try {
+      const output = await invoke<string>(
+        'list_files',
+        { sessionId: sessionId, path: currentPath }
+      );
+      
+      if (output) {
+        // Parse ls -la --time-style=long-iso output to FileItem format
+        // Format: perms links owner group size date time filename
+        // Example: drwxr-xr-x  5 root root 72 2025-09-17 03:38 giga-sls
+        const lines = output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
+        
+        console.log('Parsing files from output:', output);
+        console.log('Found lines:', lines.length);
+        
+        const parsedFiles: FileItem[] = lines.map(line => {
+          const parts = line.trim().split(/\s+/);
+          
+          console.log('Parsing line:', line);
+          console.log('Parts:', parts);
+          
+          if (parts.length < 8) {
+            console.log('Skipping line - not enough parts:', parts.length);
+            return null;
+          }
+          
+          const permissions = parts[0];
+          const owner = parts[2];
+          const group = parts[3];
+          const size = parseInt(parts[4]) || 0;
+          // parts[5] is date, parts[6] is time, parts[7+] is filename
+          const name = parts.slice(7).join(' ');
+          const type = permissions.startsWith('d') ? 'directory' : 'file';
+          
+          console.log('Parsed file:', { name, type, permissions, owner, group, size });
+          
+          // Skip . and .. entries
+          if (name === '.' || name === '..') {
+            console.log('Skipping . or ..');
+            return null;
+          }
+          
+          return {
+            name,
+            type,
+            size,
+            modified: new Date(),
+            permissions,
+            owner,
+            group,
+            path: currentPath === '/' ? `/${name}` : `${currentPath}/${name}`
+          } as FileItem;
+        }).filter(f => f !== null) as FileItem[];
+        
+        // Add parent directory navigation
+        if (currentPath !== '/') {
+          parsedFiles.unshift({
+            name: '..',
+            type: 'directory',
+            size: 0,
+            modified: new Date(),
+            permissions: 'drwxr-xr-x',
+            owner: '-',
+            group: '-',
+            path: currentPath.split('/').slice(0, -1).join('/') || '/'
+          });
+        }
+        
+        setFiles(parsedFiles);
+      }
+    } catch (error) {
+      console.error('Failed to load files:', error);
+      toast.error('Failed to load files');
+      setFiles([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const formatFileSize = (bytes: number) => {
@@ -280,73 +400,143 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
   };
 
   const handleFileDoubleClick = async (file: FileItem) => {
+    console.log('handleFileDoubleClick called', { file, currentPath, sessionId });
+    
     if (file.type === 'directory') {
-      if (file.name === '..') {
-        const parentPath = currentPath.split('/').slice(0, -1).join('/') || '/';
-        setCurrentPath(parentPath);
-      } else {
-        setCurrentPath(`${currentPath}/${file.name}`);
-      }
+      console.log('Navigating to directory:', file.path);
+      setCurrentPath(file.path);
     } else {
       // Open file for viewing/editing
+      console.log('Opening file for viewing');
       setEditingFile(file);
-      // Mock file content loading
-      setFileContent(`# ${file.name}\n\nThis is mock content for ${file.name}\nFile size: ${formatFileSize(file.size)}\nLast modified: ${formatDate(file.modified)}\nPermissions: ${file.permissions}\n\n// Add your content here...`);
+      setIsLoading(true);
+      try {
+        const content = await invoke<string>('read_file_content', {
+          sessionId,
+          path: file.path
+        });
+        setFileContent(content);
+      } catch (error) {
+        console.error('Failed to read file:', error);
+        toast.error('Failed to read file content');
+        setFileContent(`# ${file.name}\n\nError loading file content: ${error}`);
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
-  const handleFileSelect = (fileName: string) => {
-    const newSelected = new Set(selectedFiles);
-    if (newSelected.has(fileName)) {
-      newSelected.delete(fileName);
-    } else {
-      newSelected.add(fileName);
+  const handleFileSelect = (fileName: string, event: React.MouseEvent) => {
+    // Only select/deselect if Ctrl (Windows/Linux) or Cmd (Mac) is pressed
+    if (event.ctrlKey || event.metaKey) {
+      event.stopPropagation();
+      const newSelected = new Set(selectedFiles);
+      if (newSelected.has(fileName)) {
+        newSelected.delete(fileName);
+      } else {
+        newSelected.add(fileName);
+      }
+      setSelectedFiles(newSelected);
     }
-    setSelectedFiles(newSelected);
+    // If not holding Ctrl/Cmd, do nothing (allow double-click to handle navigation)
+  };
+
+  const handleFileClick = (file: FileItem, event: React.MouseEvent) => {
+    console.log('handleFileClick called', { file, ctrlKey: event.ctrlKey, metaKey: event.metaKey });
+    
+    if (event.ctrlKey || event.metaKey) {
+      // Ctrl/Cmd + Click: toggle selection
+      handleFileSelect(file.name, event);
+    } else {
+      // Regular click on directory: navigate into it
+      if (file.type === 'directory') {
+        console.log('Click - navigating to directory:', file.path);
+        setCurrentPath(file.path);
+      }
+      // Regular click on file: do nothing (or optionally preview)
+    }
   };
 
   const handleUpload = () => {
-    // Mock file upload
-    const mockTransfer: TransferItem = {
-      id: `upload-${Date.now()}`,
-      type: 'upload',
-      fileName: 'uploaded-file.txt',
-      size: 1024000,
-      transferred: 0,
-      status: 'transferring',
-      speed: 0
-    };
-    
-    setTransfers(prev => [...prev, mockTransfer]);
-    setShowTransfers(true);
-    
-    // Simulate transfer progress
-    const interval = setInterval(() => {
-      setTransfers(prev => prev.map(t => {
-        if (t.id === mockTransfer.id && t.status === 'transferring') {
-          const newTransferred = Math.min(t.transferred + 50000, t.size);
-          const speed = 250000; // 250 KB/s
-          return {
-            ...t,
-            transferred: newTransferred,
-            speed,
-            status: newTransferred === t.size ? 'completed' : 'transferring'
-          };
-        }
-        return t;
-      }));
-    }, 200);
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async (e) => {
+      const files = (e.target as HTMLInputElement).files;
+      if (!files || files.length === 0) return;
 
-    setTimeout(() => {
-      clearInterval(interval);
-      toast.success('File uploaded successfully');
-      loadFiles(); // Refresh file list
-    }, 5000);
+      const fileArray = Array.from(files);
+      toast.success(`Uploading ${fileArray.length} file${fileArray.length > 1 ? 's' : ''}`);
+      
+      for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i];
+        const transferId = `upload-${Date.now()}-${i}`;
+        
+        const mockTransfer: TransferItem = {
+          id: transferId,
+          type: 'upload',
+          fileName: file.name,
+          size: file.size,
+          transferred: 0,
+          status: 'transferring',
+          speed: 0
+        };
+        
+        setTransfers(prev => [...prev, mockTransfer]);
+        setShowTransfers(true);
+        
+        try {
+          // Read file content
+          const arrayBuffer = await file.arrayBuffer();
+          const uint8Array = new Uint8Array(arrayBuffer);
+          
+          // Upload using SFTP
+          const remotePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
+          
+          const result = await invoke<{ success: boolean; bytesTransferred?: number; error?: string }>(
+            'sftp_upload_file',
+            {
+              request: {
+                session_id: sessionId,
+                local_path: '',
+                remote_path: remotePath,
+                data: Array.from(uint8Array)
+              }
+            }
+          );
+          
+          if (result.success) {
+            setTransfers(prev => prev.map(t => 
+              t.id === transferId ? { ...t, status: 'completed' as const, transferred: file.size } : t
+            ));
+            
+            if (i === fileArray.length - 1) {
+              toast.success(`Successfully uploaded ${fileArray.length} file${fileArray.length > 1 ? 's' : ''}`);
+              loadFiles();
+            }
+          } else {
+            setTransfers(prev => prev.map(t => 
+              t.id === transferId ? { ...t, status: 'error' as const } : t
+            ));
+            toast.error(`Failed to upload ${file.name}`);
+          }
+        } catch (error) {
+          console.error('Upload error:', error);
+          setTransfers(prev => prev.map(t => 
+            t.id === transferId ? { ...t, status: 'error' as const } : t
+          ));
+          toast.error(`Failed to upload ${file.name}`);
+        }
+      }
+    };
+    input.click();
   };
 
-  const handleDownload = (file: FileItem) => {
+  const handleDownload = async (file: FileItem) => {
+    const transferId = `download-${Date.now()}`;
+    
     const mockTransfer: TransferItem = {
-      id: `download-${Date.now()}`,
+      id: transferId,
       type: 'download',
       fileName: file.name,
       size: file.size,
@@ -358,49 +548,106 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     setTransfers(prev => [...prev, mockTransfer]);
     setShowTransfers(true);
     
-    // Simulate transfer progress
-    const interval = setInterval(() => {
-      setTransfers(prev => prev.map(t => {
-        if (t.id === mockTransfer.id && t.status === 'transferring') {
-          const newTransferred = Math.min(t.transferred + 100000, t.size);
-          const speed = 500000; // 500 KB/s
-          return {
-            ...t,
-            transferred: newTransferred,
-            speed,
-            status: newTransferred === t.size ? 'completed' : 'transferring'
-          };
+    try {
+      const remotePath = file.path;
+      
+      // Download using SFTP
+      const result = await invoke<{ success: boolean; data?: number[]; error?: string }>(
+        'sftp_download_file',
+        {
+          request: {
+            session_id: sessionId,
+            local_path: '',
+            remote_path: remotePath
+          }
         }
-        return t;
-      }));
-    }, 200);
-
-    setTimeout(() => {
-      clearInterval(interval);
-      toast.success(`${file.name} downloaded successfully`);
-    }, 3000);
+      );
+      
+      if (result.success && result.data) {
+        // Convert data to blob and download
+        const uint8Array = new Uint8Array(result.data);
+        const blob = new Blob([uint8Array]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        setTransfers(prev => prev.map(t => 
+          t.id === transferId ? { ...t, status: 'completed' as const, transferred: file.size } : t
+        ));
+        toast.success(`${file.name} downloaded successfully`);
+      } else {
+        setTransfers(prev => prev.map(t => 
+          t.id === transferId ? { ...t, status: 'error' as const } : t
+        ));
+        toast.error(`Failed to download ${file.name}`);
+      }
+    } catch (error) {
+      console.error('Download error:', error);
+      setTransfers(prev => prev.map(t => 
+        t.id === transferId ? { ...t, status: 'error' as const } : t
+      ));
+      toast.error(`Failed to download ${file.name}`);
+    }
   };
 
-  const handleCreateFolder = () => {
+  const handleCreateFolder = async () => {
     const folderName = prompt('Enter folder name:');
     if (folderName) {
-      toast.success(`Folder "${folderName}" created`);
-      loadFiles();
+      try {
+        const folderPath = currentPath === '/' ? `/${folderName}` : `${currentPath}/${folderName}`;
+        await invoke<boolean>('create_directory', {
+          sessionId,
+          path: folderPath
+        });
+        toast.success(`Folder "${folderName}" created`);
+        loadFiles();
+      } catch (error) {
+        console.error('Failed to create folder:', error);
+        toast.error('Failed to create folder');
+      }
     }
   };
 
-  const handleDeleteFile = (file: FileItem) => {
+  const handleDeleteFile = async (file: FileItem) => {
     if (confirm(`Are you sure you want to delete "${file.name}"?`)) {
-      toast.success(`${file.name} deleted`);
-      loadFiles();
+      try {
+        const filePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
+        await invoke<boolean>('delete_file', {
+          sessionId,
+          path: filePath,
+          isDirectory: file.type === 'directory'
+        });
+        toast.success(`${file.name} deleted`);
+        loadFiles();
+      } catch (error) {
+        console.error('Failed to delete file:', error);
+        toast.error('Failed to delete file');
+      }
     }
   };
 
-  const handleSaveFile = () => {
+  const handleSaveFile = async () => {
     if (editingFile) {
-      toast.success(`${editingFile.name} saved successfully`);
-      setEditingFile(null);
-      setFileContent('');
+      try {
+        const filePath = currentPath === '/' ? `/${editingFile.name}` : `${currentPath}/${editingFile.name}`;
+        await invoke<boolean>('create_file', {
+          sessionId,
+          path: filePath,
+          content: fileContent
+        });
+        toast.success(`${editingFile.name} saved successfully`);
+        setEditingFile(null);
+        setFileContent('');
+        loadFiles();
+      } catch (error) {
+        console.error('Failed to save file:', error);
+        toast.error('Failed to save file');
+      }
     }
   };
 
@@ -414,12 +661,35 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     toast.success(`${files.length} item(s) cut to clipboard`);
   };
 
-  const handlePasteFiles = () => {
+  const handlePasteFiles = async () => {
     if (clipboard) {
-      const operation = clipboard.operation === 'copy' ? 'copied' : 'moved';
-      toast.success(`${clipboard.files.length} item(s) ${operation} successfully`);
-      setClipboard(null);
-      loadFiles(); // Refresh file list
+      try {
+        for (const file of clipboard.files) {
+          const destPath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
+          
+          if (clipboard.operation === 'copy') {
+            await invoke<boolean>('copy_file', {
+              sessionId,
+              sourcePath: file.path,
+              destPath
+            });
+          } else {
+            await invoke<boolean>('rename_file', {
+              sessionId,
+              oldPath: file.path,
+              newPath: destPath
+            });
+          }
+        }
+        
+        const operation = clipboard.operation === 'copy' ? 'copied' : 'moved';
+        toast.success(`${clipboard.files.length} item(s) ${operation} successfully`);
+        setClipboard(null);
+        loadFiles();
+      } catch (error) {
+        console.error('Failed to paste files:', error);
+        toast.error('Failed to paste files');
+      }
     }
   };
 
@@ -428,12 +698,26 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     setNewFileName(file.name);
   };
 
-  const handleRenameConfirm = () => {
+  const handleRenameConfirm = async () => {
     if (renamingFile && newFileName.trim()) {
-      toast.success(`"${renamingFile.name}" renamed to "${newFileName}"`);
-      setRenamingFile(null);
-      setNewFileName('');
-      loadFiles();
+      try {
+        const oldPath = currentPath === '/' ? `/${renamingFile.name}` : `${currentPath}/${renamingFile.name}`;
+        const newPath = currentPath === '/' ? `/${newFileName}` : `${currentPath}/${newFileName}`;
+        
+        await invoke<boolean>('rename_file', {
+          sessionId,
+          oldPath,
+          newPath
+        });
+        
+        toast.success(`"${renamingFile.name}" renamed to "${newFileName}"`);
+        setRenamingFile(null);
+        setNewFileName('');
+        loadFiles();
+      } catch (error) {
+        console.error('Failed to rename file:', error);
+        toast.error('Failed to rename file');
+      }
     }
   };
 
@@ -452,18 +736,43 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     toast.info(`File: ${file.name}\nSize: ${formatFileSize(file.size)}\nModified: ${formatDate(file.modified)}\nPermissions: ${file.permissions}`);
   };
 
-  const handleNewFile = () => {
+  const handleNewFile = async () => {
     const fileName = prompt('Enter file name:');
     if (fileName) {
-      toast.success(`File "${fileName}" created`);
-      loadFiles();
+      try {
+        const filePath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
+        await invoke<boolean>('create_file', {
+          sessionId,
+          path: filePath,
+          content: ''
+        });
+        toast.success(`File "${fileName}" created`);
+        loadFiles();
+      } catch (error) {
+        console.error('Failed to create file:', error);
+        toast.error('Failed to create file');
+      }
     }
   };
 
-  const handleDuplicateFile = (file: FileItem) => {
+  const handleDuplicateFile = async (file: FileItem) => {
     const newName = `${file.name}_copy`;
-    toast.success(`"${file.name}" duplicated as "${newName}"`);
-    loadFiles();
+    try {
+      const sourcePath = file.path;
+      const destPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
+      
+      await invoke<boolean>('copy_file', {
+        sessionId,
+        sourcePath,
+        destPath
+      });
+      
+      toast.success(`"${file.name}" duplicated as "${newName}"`);
+      loadFiles();
+    } catch (error) {
+      console.error('Failed to duplicate file:', error);
+      toast.error('Failed to duplicate file');
+    }
   };
 
   // Drag and drop handlers
@@ -493,7 +802,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     e.stopPropagation();
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDraggingOver(false);
@@ -506,9 +815,12 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     toast.success(`Uploading ${droppedFiles.length} file${droppedFiles.length > 1 ? 's' : ''} to ${currentPath}`);
     
     // Process each dropped file
-    droppedFiles.forEach((file, index) => {
+    for (let index = 0; index < droppedFiles.length; index++) {
+      const file = droppedFiles[index];
+      const transferId = `upload-${Date.now()}-${index}`;
+      
       const mockTransfer: TransferItem = {
-        id: `upload-${Date.now()}-${index}`,
+        id: transferId,
         type: 'upload',
         fileName: file.name,
         size: file.size,
@@ -520,38 +832,50 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       setTransfers(prev => [...prev, mockTransfer]);
       setShowTransfers(true);
       
-      // Simulate transfer progress
-      const interval = setInterval(() => {
-        setTransfers(prev => prev.map(t => {
-          if (t.id === mockTransfer.id && t.status === 'transferring') {
-            const newTransferred = Math.min(t.transferred + 50000, t.size);
-            const speed = 250000 + Math.random() * 100000; // Variable speed
-            return {
-              ...t,
-              transferred: newTransferred,
-              speed,
-              status: newTransferred === t.size ? 'completed' : 'transferring'
-            };
-          }
-          return t;
-        }));
-      }, 200);
-
-      // Complete the transfer after simulated time
-      const duration = Math.max(2000, (file.size / 250000) * 1000); // Simulate based on size
-      setTimeout(() => {
-        clearInterval(interval);
-        setTransfers(prev => prev.map(t => 
-          t.id === mockTransfer.id ? { ...t, status: 'completed' as const, transferred: t.size } : t
-        ));
+      try {
+        // Read file content
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
         
-        // Show success message for last file
-        if (index === droppedFiles.length - 1) {
-          toast.success(`Successfully uploaded ${droppedFiles.length} file${droppedFiles.length > 1 ? 's' : ''}`);
-          loadFiles(); // Refresh file list
+        // Upload using SFTP
+        const remotePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
+        
+        const result = await invoke<{ success: boolean; bytesTransferred?: number; error?: string }>(
+          'sftp_upload_file',
+          {
+            request: {
+              session_id: sessionId,
+              local_path: '',
+              remote_path: remotePath,
+              data: Array.from(uint8Array)
+            }
+          }
+        );
+        
+        if (result.success) {
+          setTransfers(prev => prev.map(t => 
+            t.id === transferId ? { ...t, status: 'completed' as const, transferred: file.size } : t
+          ));
+          
+          // Show success message for last file
+          if (index === droppedFiles.length - 1) {
+            toast.success(`Successfully uploaded ${droppedFiles.length} file${droppedFiles.length > 1 ? 's' : ''}`);
+            loadFiles(); // Refresh file list
+          }
+        } else {
+          setTransfers(prev => prev.map(t => 
+            t.id === transferId ? { ...t, status: 'error' as const } : t
+          ));
+          toast.error(`Failed to upload ${file.name}`);
         }
-      }, duration);
-    });
+      } catch (error) {
+        console.error('Upload error:', error);
+        setTransfers(prev => prev.map(t => 
+          t.id === transferId ? { ...t, status: 'error' as const } : t
+        ));
+        toast.error(`Failed to upload ${file.name}`);
+      }
+    }
   };
 
   const filteredFiles = files.filter(file => 
@@ -687,7 +1011,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
                     className={`flex gap-2 px-2 py-1.5 hover:bg-muted/50 cursor-pointer border-b border-border/30 ${
                       selectedFiles.has(file.name) ? 'bg-accent' : ''
                     }`}
-                    onClick={() => handleFileSelect(file.name)}
+                    onClick={(e) => handleFileClick(file, e)}
                     onDoubleClick={() => handleFileDoubleClick(file)}
                   >
                     <div className="flex items-center gap-2 min-w-0" style={{ width: `${columnWidths.name}px` }}>

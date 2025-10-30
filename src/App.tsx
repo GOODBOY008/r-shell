@@ -5,6 +5,8 @@ import { SessionManager } from './components/session-manager';
 import { SessionTabs } from './components/session-tabs';
 import { Terminal } from './components/terminal';
 import { SystemMonitor } from './components/system-monitor';
+import { LogViewer } from './components/log-viewer';
+import { NetworkMonitor } from './components/network-monitor';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, SessionConfig } from './components/connection-dialog';
 import { SFTPPanel } from './components/sftp-panel';
@@ -12,7 +14,8 @@ import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 
-import { Resizable, ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 
 interface SessionNode {
   id: string;
@@ -300,9 +303,23 @@ export default function App() {
           
           <ResizableHandle />
           
-          {/* Right Sidebar - System Monitor Only */}
+          {/* Right Sidebar - Tabs for Monitor/Logs */}
           <ResizablePanel defaultSize={25} minSize={20}>
-            <SystemMonitor />
+            <Tabs defaultValue="monitor" className="h-full flex flex-col">
+              <TabsList className="grid w-full grid-cols-2 mx-3 mt-2">
+                <TabsTrigger value="monitor" className="text-xs">Monitor</TabsTrigger>
+                <TabsTrigger value="logs" className="text-xs">Logs</TabsTrigger>
+              </TabsList>
+              <TabsContent value="monitor" className="flex-1 mt-0 overflow-hidden">
+                <div className="h-full overflow-auto space-y-4">
+                  <SystemMonitor sessionId={activeTabId} />
+                  <NetworkMonitor sessionId={activeTabId} />
+                </div>
+              </TabsContent>
+              <TabsContent value="logs" className="flex-1 mt-0 overflow-hidden">
+                <LogViewer sessionId={activeTabId} />
+              </TabsContent>
+            </Tabs>
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>

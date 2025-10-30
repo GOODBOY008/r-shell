@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import {
   Dialog,
   DialogContent,
@@ -71,50 +73,79 @@ export function SFTPPanel({
   host,
 }: SFTPPanelProps) {
   const [currentPath, setCurrentPath] = useState("/home");
-  const [files, setFiles] = useState<FileItem[]>([
-    {
-      name: "..",
-      type: "directory",
-      size: 0,
-      modified: new Date(),
-      permissions: "drwxr-xr-x",
-      owner: "root",
-      group: "root",
-    },
-    {
-      name: "documents",
-      type: "directory",
-      size: 4096,
-      modified: new Date(),
-      permissions: "drwxr-xr-x",
-      owner: "user",
-      group: "user",
-    },
-    {
-      name: "config.txt",
-      type: "file",
-      size: 1024,
-      modified: new Date(),
-      permissions: "-rw-r--r--",
-      owner: "user",
-      group: "user",
-    },
-    {
-      name: "script.sh",
-      type: "file",
-      size: 2048,
-      modified: new Date(),
-      permissions: "-rwxr-xr-x",
-      owner: "user",
-      group: "user",
-    },
-  ]);
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [loading, setLoading] = useState(false);
   const [transfers, setTransfers] = useState<TransferItem[]>(
     [],
   );
   const [selectedFiles, setSelectedFiles] = useState<
     Set<string>
   >(new Set());
+
+  // Load files from remote server
+  const loadRemoteFiles = async (path: string) => {
+    if (!sessionId) return;
+    
+    try {
+      setLoading(true);
+      const result = await invoke<{ success: boolean; output?: string; error?: string }>(
+        'list_files',
+        { sessionId: sessionId, path }
+      );
+      
+      if (result.success && result.output) {
+        // Parse ls -la output to FileItem format
+        const lines = result.output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
+        const parsedFiles: FileItem[] = lines.map(line => {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length < 9) return null;
+          
+          const permissions = parts[0];
+          const owner = parts[2];
+          const group = parts[3];
+          const size = parseInt(parts[4]) || 0;
+          const name = parts.slice(8).join(' ');
+          const type = permissions.startsWith('d') ? 'directory' : 'file';
+          
+          return {
+            name,
+            type,
+            size,
+            modified: new Date(),
+            permissions,
+            owner,
+            group
+          } as FileItem;
+        }).filter(f => f !== null) as FileItem[];
+        
+        // Add parent directory navigation
+        if (path !== '/') {
+          parsedFiles.unshift({
+            name: '..',
+            type: 'directory',
+            size: 0,
+            modified: new Date(),
+            permissions: 'drwxr-xr-x',
+            owner: '-',
+            group: '-'
+          });
+        }
+        
+        setFiles(parsedFiles);
+      }
+    } catch (error) {
+      console.error('Failed to load files:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load files when path changes or dialog opens
+  useEffect(() => {
+    if (open && sessionId) {
+      loadRemoteFiles(currentPath);
+    }
+  }, [open, sessionId, currentPath]);
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 B";
@@ -168,49 +199,144 @@ export function SFTPPanel({
     }
   };
 
-  const handleUpload = () => {
-    // Mock upload
-    const mockTransfer: TransferItem = {
-      id: `upload-${Date.now()}`,
-      type: "upload",
-      localPath: "/local/file.txt",
-      remotePath: `${currentPath}/file.txt`,
-      size: 1024000,
+  const handleDownload = async (file: FileItem) => {
+    if (!sessionId || file.type === "directory") return;
+    
+    const transferId = `download-${Date.now()}`;
+    const remotePath = `${currentPath}/${file.name}`;
+    // For now, download to a default location (can be enhanced with file picker later)
+    const localPath = `/tmp/${file.name}`;
+    
+    // Add to transfer queue
+    const newTransfer: TransferItem = {
+      id: transferId,
+      type: "download",
+      localPath,
+      remotePath,
+      size: file.size,
       transferred: 0,
       status: "transferring",
       speed: 0,
     };
-    setTransfers((prev) => [...prev, mockTransfer]);
-
-    // Simulate transfer progress
-    const interval = setInterval(() => {
-      setTransfers((prev) =>
-        prev.map((t) => {
-          if (
-            t.id === mockTransfer.id &&
-            t.status === "transferring"
-          ) {
-            const newTransferred = Math.min(
-              t.transferred + 50000,
-              t.size,
-            );
-            const speed = 250000; // 250 KB/s
-            return {
-              ...t,
-              transferred: newTransferred,
-              speed,
-              status:
-                newTransferred === t.size
-                  ? "completed"
-                  : "transferring",
-            };
-          }
-          return t;
-        }),
+    setTransfers((prev) => [...prev, newTransfer]);
+    
+    try {
+      const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
+        'sftp_download_file',
+        {
+          sessionId: sessionId,
+          remotePath: remotePath,
+          localPath: localPath
+        }
       );
-    }, 200);
+      
+      if (result.success) {
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId
+              ? { ...t, status: "completed" as const, transferred: result.bytes_transferred || t.size }
+              : t
+          )
+        );
+        toast.success(`Downloaded ${file.name} successfully`);
+      } else {
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId ? { ...t, status: "error" as const } : t
+          )
+        );
+        toast.error(`Failed to download: ${result.error}`);
+      }
+    } catch (error) {
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.id === transferId ? { ...t, status: "error" as const } : t
+        )
+      );
+      toast.error(`Download error: ${String(error)}`);
+    }
+  };
 
-    setTimeout(() => clearInterval(interval), 5000);
+  const handleUpload = () => {
+    // Create a hidden file input element
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = async (e) => {
+      const target = e.target as HTMLInputElement;
+      const files = target.files;
+      if (!files || files.length === 0 || !sessionId) return;
+      
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        await uploadFile(file);
+      }
+    };
+    input.click();
+  };
+
+  const uploadFile = async (file: File) => {
+    if (!sessionId) return;
+    
+    const transferId = `upload-${Date.now()}-${file.name}`;
+    const remotePath = `${currentPath}/${file.name}`;
+    
+    // Add to transfer queue
+    const newTransfer: TransferItem = {
+      id: transferId,
+      type: "upload",
+      localPath: file.name,
+      remotePath,
+      size: file.size,
+      transferred: 0,
+      status: "transferring",
+      speed: 0,
+    };
+    setTransfers((prev) => [...prev, newTransfer]);
+    
+    try {
+      // Read file as ArrayBuffer
+      const arrayBuffer = await file.arrayBuffer();
+      const bytes = Array.from(new Uint8Array(arrayBuffer));
+      
+      const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
+        'sftp_upload_file',
+        {
+          sessionId: sessionId,
+          localPath: file.name, // Just the filename for display
+          remotePath: remotePath,
+          data: bytes
+        }
+      );
+      
+      if (result.success) {
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId
+              ? { ...t, status: "completed" as const, transferred: result.bytes_transferred || t.size }
+              : t
+          )
+        );
+        toast.success(`Uploaded ${file.name} successfully`);
+        // Reload the file list to show the new file
+        loadRemoteFiles(currentPath);
+      } else {
+        setTransfers((prev) =>
+          prev.map((t) =>
+            t.id === transferId ? { ...t, status: "error" as const } : t
+          )
+        );
+        toast.error(`Failed to upload: ${result.error}`);
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      setTransfers((prev) =>
+        prev.map((t) =>
+          t.id === transferId ? { ...t, status: "error" as const } : t
+        )
+      );
+      toast.error(`Upload failed: ${String(error)}`);
+    }
   };
 
   return (
@@ -299,9 +425,10 @@ export function SFTPPanel({
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => {}}
+                    onClick={() => loadRemoteFiles(currentPath)}
+                    disabled={loading}
                   >
-                    <RefreshCw className="h-4 w-4" />
+                    <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
                   </Button>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -356,7 +483,7 @@ export function SFTPPanel({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleDownload(file)}>
                           <Download className="mr-2 h-4 w-4" />
                           Download
                         </DropdownMenuItem>

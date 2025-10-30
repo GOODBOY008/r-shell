@@ -2,6 +2,18 @@
 
 A modern, feature-rich SSH client application built with React, TypeScript, and Tauri.
 
+## 🎯 Project Purpose
+
+This project is a **learning and practice project for vibe coding** methodology. It demonstrates:
+
+- 🎨 **AI-Generated Frontend**: The entire frontend UI is generated from Figma designs using [Figma Make](https://www.figma.com/make/uUd7WO54vPnv03SmioKWqj/SSH-Client-Application?node-id=0-1&t=ZzB8GvFKHeoUIZpw-1)
+- 🤖 **AI-Assisted Development**: The complete development process is powered by **GitHub Copilot**
+- 🚀 **Modern Workflow**: Experience the efficiency of AI-driven development with minimal manual coding
+
+> **Note**: This is an experimental project to explore the capabilities and limitations of AI-assisted development workflows. The goal is to understand how far we can go with AI pair programming tools in building a complete desktop application.
+>
+> 📐 **View the Figma Design**: Check out the [Figma Make preview](https://www.figma.com/make/uUd7WO54vPnv03SmioKWqj/SSH-Client-Application?node-id=0-1&t=ZzB8GvFKHeoUIZpw-1) to see how the frontend was generated.
+
 ## Overview
 
 R-Shell is a desktop SSH client that provides a beautiful and intuitive interface for managing SSH connections, file transfers, and remote system monitoring. Built with modern web technologies and packaged as a native desktop application using Tauri.

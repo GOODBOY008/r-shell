@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -10,6 +11,8 @@ import { Switch } from './ui/switch';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
+import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
+import { toast } from 'sonner';
 import { 
   Server, 
   Shield, 
@@ -18,7 +21,13 @@ import {
   Terminal as TerminalIcon,
   FileText,
   Clock,
-  Globe
+  Globe,
+  Save,
+  BookOpen,
+  Star,
+  Trash2,
+  Download,
+  Upload
 } from 'lucide-react';
 
 interface ConnectionDialogProps {
@@ -97,6 +106,63 @@ export function ConnectionDialog({
   });
 
   const [isConnecting, setIsConnecting] = useState(false);
+  const [savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
+  const [showSaveProfile, setShowSaveProfile] = useState(false);
+
+  // Load saved profiles when dialog opens
+  useEffect(() => {
+    if (open) {
+      setSavedProfiles(ConnectionProfileManager.getProfiles());
+    }
+  }, [open]);
+
+  const handleSaveProfile = () => {
+    try {
+      const profile = ConnectionProfileManager.saveProfile({
+        name: config.name,
+        host: config.host,
+        port: config.port,
+        username: config.username,
+        authMethod: config.authMethod === 'publickey' ? 'key' : 'password',
+        password: config.password,
+        privateKey: config.privateKeyPath,
+      });
+      setSavedProfiles(ConnectionProfileManager.getProfiles());
+      toast.success(`Saved profile: ${profile.name}`);
+      setShowSaveProfile(false);
+    } catch (error) {
+      toast.error('Failed to save profile');
+    }
+  };
+
+  const handleLoadProfile = (profile: ConnectionProfile) => {
+    setConfig({
+      ...config,
+      name: profile.name,
+      host: profile.host,
+      port: profile.port,
+      username: profile.username,
+      authMethod: profile.authMethod === 'key' ? 'publickey' : 'password',
+      password: profile.password,
+      privateKeyPath: profile.privateKey,
+    });
+    toast.success(`Loaded profile: ${profile.name}`);
+  };
+
+  const handleDeleteProfile = (id: string) => {
+    if (ConnectionProfileManager.deleteProfile(id)) {
+      setSavedProfiles(ConnectionProfileManager.getProfiles());
+      toast.success('Profile deleted');
+    }
+  };
+
+  const handleToggleFavorite = (id: string) => {
+    const profile = ConnectionProfileManager.getProfile(id);
+    if (profile) {
+      ConnectionProfileManager.updateProfile(id, { favorite: !profile.favorite });
+      setSavedProfiles(ConnectionProfileManager.getProfiles());
+    }
+  };
 
   const handleConnect = async () => {
     setIsConnecting(true);
@@ -107,44 +173,70 @@ export function ConnectionDialog({
       return;
     }
 
-    // Simulate connection attempt
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    onConnect({
-      ...config,
-      id: editingSession?.id || `session-${Date.now()}`
-    });
-    
-    setIsConnecting(false);
-    onOpenChange(false);
-    
-    // Reset form if creating new session
-    if (!editingSession) {
-      setConfig({
-        name: '',
-        protocol: 'SSH',
-        host: '',
-        port: 22,
-        username: '',
-        authMethod: 'password',
-        password: '',
-        privateKeyPath: '',
-        passphrase: '',
-        proxyType: 'none',
-        proxyHost: '',
-        proxyPort: 8080,
-        proxyUsername: '',
-        proxyPassword: '',
-        compression: true,
-        keepAlive: true,
-        keepAliveInterval: 60,
-        serverAliveCountMax: 3,
-        terminalType: 'xterm-256color',
-        encoding: 'UTF-8',
-        localEcho: false,
-        colorScheme: 'dark',
-        fontSize: 14
-      });
+    try {
+      // Actually connect to SSH server
+      const sessionId = editingSession?.id || `session-${Date.now()}`;
+      const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+        'ssh_connect',
+        {
+          request: {
+            session_id: sessionId,
+            host: config.host,
+            port: config.port || 22,
+            username: config.username,
+            auth_method: config.authMethod || 'password',
+            password: config.password || '',
+            key_path: config.privateKeyPath || null,
+            passphrase: config.passphrase || null,
+          }
+        }
+      );
+
+      if (result.success) {
+        onConnect({
+          ...config,
+          id: sessionId
+        });
+        onOpenChange(false);
+        
+        // Reset form if creating new session
+        if (!editingSession) {
+          setConfig({
+            name: '',
+            protocol: 'SSH',
+            host: '',
+            port: 22,
+            username: '',
+            authMethod: 'password',
+            password: '',
+            privateKeyPath: '',
+            passphrase: '',
+            proxyType: 'none',
+            proxyHost: '',
+            proxyPort: 8080,
+            proxyUsername: '',
+            proxyPassword: '',
+            compression: true,
+            keepAlive: true,
+            keepAliveInterval: 60,
+            serverAliveCountMax: 3,
+            terminalType: 'xterm-256color',
+            encoding: 'UTF-8',
+            localEcho: false,
+            colorScheme: 'dark',
+            fontSize: 14
+          });
+        }
+      } else {
+        // Show error toast
+        console.error('Connection failed:', result.error);
+        alert(`Connection failed: ${result.error || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Connection error:', error);
+      alert(`Connection error: ${error}`);
+    } finally {
+      setIsConnecting(false);
     }
   };
 
@@ -169,8 +261,15 @@ export function ConnectionDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="connection" className="flex-1 flex flex-col overflow-hidden">
+        <Tabs defaultValue="profiles" className="flex-1 flex flex-col overflow-hidden">
           <TabsList className="w-full justify-start rounded-none border-b bg-transparent h-auto p-0 px-4 overflow-x-auto">
+            <TabsTrigger 
+              value="profiles" 
+              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              <span>Profiles</span>
+            </TabsTrigger>
             <TabsTrigger 
               value="connection" 
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
@@ -207,6 +306,78 @@ export function ConnectionDialog({
               <span>Terminal</span>
             </TabsTrigger>
           </TabsList>
+
+          {/* Profiles Tab */}
+          <TabsContent value="profiles" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-semibold">Saved Profiles</h3>
+                  <p className="text-sm text-muted-foreground">Quick connect to your saved servers</p>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleSaveProfile}>
+                  <Save className="h-4 w-4 mr-2" />
+                  Save Current
+                </Button>
+              </div>
+
+              {savedProfiles.length === 0 ? (
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="text-center text-muted-foreground">
+                      <BookOpen className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                      <p>No saved profiles yet</p>
+                      <p className="text-sm mt-2">Fill in connection details and click "Save Current" to create a profile</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <div className="grid gap-3">
+                  {savedProfiles.map((profile) => (
+                    <Card key={profile.id} className="hover:border-primary transition-colors cursor-pointer" onClick={() => handleLoadProfile(profile)}>
+                      <CardContent className="p-4">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <h4 className="font-semibold">{profile.name}</h4>
+                              {profile.favorite && <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />}
+                            </div>
+                            <p className="text-sm text-muted-foreground">
+                              {profile.username}@{profile.host}:{profile.port}
+                            </p>
+                            <div className="flex items-center gap-2 mt-2">
+                              <Badge variant="secondary" className="text-xs">
+                                {profile.authMethod === 'key' ? 'SSH Key' : 'Password'}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                Updated {new Date(profile.updatedAt).toLocaleDateString()}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleToggleFavorite(profile.id)}
+                            >
+                              <Star className={`h-4 w-4 ${profile.favorite ? 'text-yellow-500 fill-yellow-500' : ''}`} />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteProfile(profile.id)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          </TabsContent>
 
           <TabsContent value="connection" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
