@@ -1,6 +1,22 @@
+<div align="center">
+
 # R-Shell - SSH Client Application
 
+[![GitHub license](https://img.shields.io/github/license/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/blob/main/LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/issues)
+[![GitHub forks](https://img.shields.io/github/forks/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/network)
+[![Tauri](https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri)](https://tauri.app/)
+[![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
+[![Rust](https://img.shields.io/badge/Rust-Latest-orange?logo=rust)](https://www.rust-lang.org/)
+
 A modern, feature-rich SSH client application built with React, TypeScript, and Tauri.
+
+[Features](#features) • [Installation](#getting-started) • [Documentation](#documentation) • [Contributing](CONTRIBUTING.md) • [License](LICENSE)
+
+</div>
+
+---
 
 ## 🎯 Project Purpose
 
@@ -485,3 +501,60 @@ cargo test test_name
 - [React Documentation](https://react.dev/)
 - [Vite Documentation](https://vitejs.dev/)
 - [Rust Book](https://doc.rust-lang.org/book/)
+
+## 🤝 Contributing
+
+We welcome contributions from the community! This project is an experiment in AI-assisted development, and we're excited to see how the community can enhance it.
+
+### How to Contribute
+
+1. **Fork the repository**
+2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
+3. **Commit your changes** (`git commit -m 'feat: add amazing feature'`)
+4. **Push to the branch** (`git push origin feature/amazing-feature`)
+5. **Open a Pull Request**
+
+Please read our [Contributing Guidelines](CONTRIBUTING.md) and [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
+
+### Areas We Need Help
+
+- 🐛 Bug fixes and issue reports
+- 📝 Documentation improvements
+- ✨ Feature enhancements
+- 🧪 Test coverage
+- 🌐 Internationalization (i18n)
+- 🎨 UI/UX improvements
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🌟 Star History
+
+If you find this project useful, please consider giving it a star! ⭐
+
+[![Star History Chart](https://api.star-history.com/svg?repos=GOODBOY008/r-shell&type=Date)](https://star-history.com/#GOODBOY008/r-shell&Date)
+
+## 💬 Community & Support
+
+- **Issues**: [GitHub Issues](https://github.com/GOODBOY008/r-shell/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/GOODBOY008/r-shell/discussions)
+- **Pull Requests**: [GitHub PRs](https://github.com/GOODBOY008/r-shell/pulls)
+
+## 🙏 Acknowledgments
+
+- Built with components from [shadcn/ui](https://ui.shadcn.com/)
+- UI design generated from [Figma Make](https://www.figma.com/make/)
+- Icons from [Lucide](https://lucide.dev/)
+- Powered by [GitHub Copilot](https://github.com/features/copilot)
+
+---
+
+<div align="center">
+
+**Made with ❤️ and 🤖 AI**
+
+If you like this project, please give it a ⭐!
+
+</div>
+
