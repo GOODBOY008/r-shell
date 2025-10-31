@@ -1,17 +1,50 @@
-import React, { useState } from 'react';
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus } from 'lucide-react';
 import { Button } from './ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog';
+import { SessionStorageManager } from '../lib/session-storage';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from './ui/context-menu';
+import { toast } from 'sonner';
 
 interface SessionNode {
   id: string;
   name: string;
   type: 'folder' | 'session';
+  path?: string; // For folders
   protocol?: string;
   host?: string;
+  port?: number;
   username?: string;
+  profileId?: string;
+  lastConnected?: string;
+  isConnected?: boolean;
   children?: SessionNode[];
   isExpanded?: boolean;
 }
@@ -19,49 +52,118 @@ interface SessionNode {
 interface SessionManagerProps {
   onSessionSelect: (session: SessionNode) => void;
   selectedSessionId: string | null;
+  activeSessions?: Set<string>; // Set of currently active session IDs
+  onNewConnection?: () => void; // Callback to open connection dialog
+  onEditSession?: (session: SessionNode) => void; // Callback to edit session
+  onDeleteSession?: (sessionId: string) => void; // Callback to delete session
+  onDuplicateSession?: (session: SessionNode) => void; // Callback to duplicate session
 }
 
-const mockSessions: SessionNode[] = [
-  {
-    id: 'all',
-    name: 'All Sessions',
-    type: 'folder',
-    isExpanded: true,
-    children: [
-      {
-        id: 'personal',
-        name: 'Personal',
-        type: 'folder',
-        isExpanded: true,
-        children: [
-          { id: 'local', name: 'Local', type: 'session', protocol: 'SSH', host: 'localhost', username: 'user' },
-          { id: 'cmd', name: 'CMD', type: 'session', protocol: 'CMD' },
-          { id: 'linux-shell', name: 'Linux Shell', type: 'session', protocol: 'SSH', host: 'linux-server', username: 'root' },
-          { id: 'local-shell', name: 'Local Shell', type: 'session', protocol: 'Shell' },
-          { id: 'powershell', name: 'PowerShell', type: 'session', protocol: 'PowerShell' },
-          { id: 'wsl', name: 'WSL', type: 'session', protocol: 'WSL' }
-        ]
-      },
-      {
-        id: 'work',
-        name: 'Work',
-        type: 'folder',
-        isExpanded: true,
-        children: [
-          { id: 'site-a', name: 'Site A', type: 'session', protocol: 'SSH', host: 'server-a.company.com', username: 'admin' },
-          { id: 'rsca-01', name: 'rscA-01', type: 'session', protocol: 'SSH', host: '192.168.1.101', username: 'user01' },
-          { id: 'rsca-02', name: 'rscA-02', type: 'session', protocol: 'SSH', host: '192.168.1.102', username: 'user01' },
-          { id: 'rsca-03', name: 'rscA-03', type: 'session', protocol: 'SSH', host: '192.168.1.103', username: 'user01' },
-          { id: 'site-b', name: 'Site B', type: 'session', protocol: 'SSH', host: 'server-b.company.com', username: 'admin' },
-          { id: 'rscb-01', name: 'rscB-01', type: 'session', protocol: 'SSH', host: '192.168.2.101', username: 'user01' }
-        ]
-      }
-    ]
-  }
-];
+export function SessionManager({ 
+  onSessionSelect, 
+  selectedSessionId, 
+  activeSessions = new Set(), 
+  onNewConnection,
+  onEditSession,
+  onDeleteSession,
+  onDuplicateSession
+}: SessionManagerProps) {
+  // Load sessions from storage
+  const loadSessions = (): SessionNode[] => {
+    const tree = SessionStorageManager.buildSessionTree(activeSessions);
+    return tree.length > 0 ? tree : [];
+  };
 
-export function SessionManager({ onSessionSelect, selectedSessionId }: SessionManagerProps) {
-  const [sessions, setSessions] = useState<SessionNode[]>(mockSessions);
+  const [sessions, setSessions] = useState<SessionNode[]>(loadSessions());
+  
+  // Folder management state
+  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderParentPath, setNewFolderParentPath] = useState<string | undefined>(undefined);
+  const [deleteFolderDialogOpen, setDeleteFolderDialogOpen] = useState(false);
+  const [folderToDelete, setFolderToDelete] = useState<{ path: string; name: string } | null>(null);
+
+  // Reload sessions when active sessions change
+  useEffect(() => {
+    setSessions(loadSessions());
+  }, [activeSessions]);
+
+  // Handle session deletion
+  const handleDelete = (sessionId: string) => {
+    if (SessionStorageManager.deleteSession(sessionId)) {
+      setSessions(loadSessions());
+      toast.success('Session deleted');
+      if (onDeleteSession) {
+        onDeleteSession(sessionId);
+      }
+    } else {
+      toast.error('Failed to delete session');
+    }
+  };
+
+  // Handle session duplication
+  const handleDuplicate = (node: SessionNode) => {
+    if (node.type === 'session' && node.host) {
+      const duplicated = SessionStorageManager.saveSession({
+        name: `${node.name} (Copy)`,
+        host: node.host,
+        port: node.port || 22,
+        username: node.username || '',
+        protocol: node.protocol || 'SSH',
+        folder: 'All Sessions',
+      });
+      setSessions(loadSessions());
+      toast.success(`Duplicated: ${duplicated.name}`);
+      if (onDuplicateSession) {
+        onDuplicateSession(node);
+      }
+    }
+  };
+  
+  // Handle creating new folder
+  const handleCreateFolder = () => {
+    if (!newFolderName.trim()) {
+      toast.error('Folder name cannot be empty');
+      return;
+    }
+    
+    try {
+      SessionStorageManager.createFolder(newFolderName.trim(), newFolderParentPath);
+      setSessions(loadSessions());
+      toast.success(`Folder "${newFolderName}" created`);
+      setNewFolderDialogOpen(false);
+      setNewFolderName('');
+      setNewFolderParentPath(undefined);
+    } catch (error) {
+      toast.error('Failed to create folder');
+    }
+  };
+  
+  // Handle deleting folder
+  const handleDeleteFolder = () => {
+    if (!folderToDelete) return;
+    
+    if (SessionStorageManager.deleteFolder(folderToDelete.path, true)) {
+      setSessions(loadSessions());
+      toast.success(`Folder "${folderToDelete.name}" deleted`);
+      setDeleteFolderDialogOpen(false);
+      setFolderToDelete(null);
+    } else {
+      toast.error('Failed to delete folder');
+    }
+  };
+  
+  // Open new folder dialog
+  const openNewFolderDialog = (parentPath?: string) => {
+    setNewFolderParentPath(parentPath);
+    setNewFolderDialogOpen(true);
+  };
+  
+  // Open delete folder dialog
+  const openDeleteFolderDialog = (path: string, name: string) => {
+    setFolderToDelete({ path, name });
+    setDeleteFolderDialogOpen(true);
+  };
   
   // Find the selected session details
   const getSelectedSession = (nodes: SessionNode[]): SessionNode | null => {
@@ -78,15 +180,6 @@ export function SessionManager({ onSessionSelect, selectedSessionId }: SessionMa
   };
   
   const selectedSession = getSelectedSession(sessions);
-  
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'connected': return 'bg-green-500';
-      case 'connecting': return 'bg-yellow-500';
-      case 'disconnected': return 'bg-red-500';
-      default: return 'bg-gray-500';
-    }
-  };
 
   const toggleExpanded = (nodeId: string) => {
     const updateNode = (nodes: SessionNode[]): SessionNode[] => {
@@ -124,35 +217,108 @@ export function SessionManager({ onSessionSelect, selectedSessionId }: SessionMa
 
   const renderNode = (node: SessionNode, level: number = 0) => {
     const isSelected = selectedSessionId === node.id;
+    const isConnected = node.type === 'session' && node.isConnected;
+    
+    const nodeContent = (
+      <div
+        className={`flex items-center gap-2 px-2 py-1 hover:bg-accent cursor-pointer ${
+          isSelected ? 'bg-accent' : ''
+        }`}
+        style={{ paddingLeft: `${level * 16 + 8}px` }}
+        onClick={() => {
+          if (node.type === 'folder') {
+            toggleExpanded(node.id);
+          } else {
+            onSessionSelect(node);
+          }
+        }}
+      >
+        {node.type === 'folder' && (
+          <Button variant="ghost" size="sm" className="p-0 h-4 w-4">
+            {node.isExpanded ? 
+              <ChevronDown className="w-3 h-3" /> : 
+              <ChevronRight className="w-3 h-3" />
+            }
+          </Button>
+        )}
+        {node.type === 'session' && <div className="w-4" />}
+        
+        <div className="relative">
+          {getIcon(node)}
+          {isConnected && (
+            <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full border border-card" />
+          )}
+        </div>
+        <span className="text-sm flex-1">{node.name}</span>
+      </div>
+    );
     
     return (
       <div key={node.id}>
-        <div
-          className={`flex items-center gap-2 px-2 py-1 hover:bg-accent cursor-pointer ${
-            isSelected ? 'bg-accent' : ''
-          }`}
-          style={{ paddingLeft: `${level * 16 + 8}px` }}
-          onClick={() => {
-            if (node.type === 'folder') {
-              toggleExpanded(node.id);
-            } else {
-              onSessionSelect(node);
-            }
-          }}
-        >
-          {node.type === 'folder' && (
-            <Button variant="ghost" size="sm" className="p-0 h-4 w-4">
-              {node.isExpanded ? 
-                <ChevronDown className="w-3 h-3" /> : 
-                <ChevronRight className="w-3 h-3" />
-              }
-            </Button>
-          )}
-          {node.type === 'session' && <div className="w-4" />}
-          
-          {getIcon(node)}
-          <span className="text-sm">{node.name}</span>
-        </div>
+        {node.type === 'session' ? (
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              {nodeContent}
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem
+                onClick={() => onSessionSelect(node)}
+              >
+                {isConnected ? 'Switch to Session' : 'Connect'}
+              </ContextMenuItem>
+              {onEditSession && (
+                <ContextMenuItem
+                  onClick={() => onEditSession(node)}
+                >
+                  <Pencil className="w-4 h-4 mr-2" />
+                  Edit
+                </ContextMenuItem>
+              )}
+              <ContextMenuItem
+                onClick={() => handleDuplicate(node)}
+              >
+                <Copy className="w-4 h-4 mr-2" />
+                Duplicate
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                onClick={() => handleDelete(node.id)}
+                className="text-destructive"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        ) : node.type === 'folder' ? (
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              {nodeContent}
+            </ContextMenuTrigger>
+            <ContextMenuContent>
+              <ContextMenuItem
+                onClick={() => openNewFolderDialog(node.path)}
+              >
+                <FolderPlus className="w-4 h-4 mr-2" />
+                New Subfolder
+              </ContextMenuItem>
+              {node.path !== 'All Sessions' && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    onClick={() => openDeleteFolderDialog(node.path!, node.name)}
+                    className="text-destructive"
+                  >
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete Folder
+                  </ContextMenuItem>
+                </>
+              )}
+            </ContextMenuContent>
+          </ContextMenu>
+        ) : (
+          nodeContent
+        )}
         
         {node.type === 'folder' && node.isExpanded && node.children && (
           <div>
@@ -164,14 +330,35 @@ export function SessionManager({ onSessionSelect, selectedSessionId }: SessionMa
   };
 
   return (
+    <>
     <div className="bg-card border-r border-border h-full flex flex-col">
       {/* Session Browser */}
       <div className="flex-1 min-h-0 flex flex-col">
-        <div className="p-3 border-b border-border">
+        <div className="p-3 border-b border-border flex items-center justify-between">
           <h3 className="font-medium">Session Manager</h3>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => openNewFolderDialog()}
+            className="h-7 w-7 p-0"
+          >
+            <FolderPlus className="w-4 h-4" />
+          </Button>
         </div>
         <div className="flex-1 overflow-auto">
-          {sessions.map(session => renderNode(session))}
+          {sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-full p-4 text-center">
+              <p className="text-sm text-muted-foreground mb-4">No sessions yet</p>
+              {onNewConnection && (
+                <Button onClick={onNewConnection} size="sm" variant="outline">
+                  <Plus className="w-4 h-4 mr-2" />
+                  New Connection
+                </Button>
+              )}
+            </div>
+          ) : (
+            sessions.map(session => renderNode(session))
+          )}
         </div>
       </div>
       
@@ -200,10 +387,19 @@ export function SessionManager({ onSessionSelect, selectedSessionId }: SessionMa
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium">Status</span>
                   <div className="flex items-center gap-2">
-                    <div className="w-2 h-2 rounded-full bg-green-500" />
-                    <span className="text-xs">Connected</span>
+                    <div className={`w-2 h-2 rounded-full ${selectedSession.isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
+                    <span className="text-xs">{selectedSession.isConnected ? 'Connected' : 'Disconnected'}</span>
                   </div>
                 </div>
+
+                {selectedSession.lastConnected && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-medium">Last Connected</span>
+                    <span className="text-xs">
+                      {new Date(selectedSession.lastConnected).toLocaleString()}
+                    </span>
+                  </div>
+                )}
               </div>
               
               {selectedSession.host && (
@@ -225,7 +421,7 @@ export function SessionManager({ onSessionSelect, selectedSessionId }: SessionMa
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium">Port</span>
                       <span className="text-xs">
-                        {selectedSession.protocol === 'SSH' ? 22 : 23}
+                        {selectedSession.port || (selectedSession.protocol === 'SSH' ? 22 : 23)}
                       </span>
                     </div>
                   </div>
@@ -250,5 +446,61 @@ export function SessionManager({ onSessionSelect, selectedSessionId }: SessionMa
         </div>
       </div>
     </div>
+    
+    {/* New Folder Dialog */}
+    <Dialog open={newFolderDialogOpen} onOpenChange={setNewFolderDialogOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create New Folder</DialogTitle>
+          <DialogDescription>
+            Create a new folder to organize your sessions.
+            {newFolderParentPath && ` Parent: ${newFolderParentPath}`}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4 py-4">
+          <div className="space-y-2">
+            <Label htmlFor="folder-name">Folder Name</Label>
+            <Input
+              id="folder-name"
+              placeholder="Enter folder name"
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleCreateFolder();
+                }
+              }}
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setNewFolderDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button onClick={handleCreateFolder}>Create</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    
+    {/* Delete Folder Confirmation Dialog */}
+    <AlertDialog open={deleteFolderDialogOpen} onOpenChange={setDeleteFolderDialogOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete Folder?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to delete the folder "{folderToDelete?.name}"? 
+            This will also delete all sessions and subfolders within it. 
+            This action cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={handleDeleteFolder} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 }

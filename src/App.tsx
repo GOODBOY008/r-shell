@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MenuBar } from './components/menu-bar';
 import { Toolbar } from './components/toolbar';
 import { SessionManager } from './components/session-manager';
@@ -13,6 +13,7 @@ import { SFTPPanel } from './components/sftp-panel';
 import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
+import { ActiveSessionsManager, SessionStorageManager } from './lib/session-storage';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
@@ -21,9 +22,12 @@ interface SessionNode {
   id: string;
   name: string;
   type: 'folder' | 'session';
+  path?: string; // For folders
   protocol?: string;
   host?: string;
+  port?: number;
   username?: string;
+  isConnected?: boolean;
   children?: SessionNode[];
   isExpanded?: boolean;
 }
@@ -39,23 +43,40 @@ interface SessionTab {
 
 export default function App() {
   const [selectedSession, setSelectedSession] = useState<SessionNode | null>(null);
-  const [tabs, setTabs] = useState<SessionTab[]>([
-    {
-      id: 'rscb-01',
-      name: 'rscB-01',
-      protocol: 'SSH',
-      host: '192.168.2.101',
-      username: 'user01',
-      isActive: true
-    }
-  ]);
-  const [activeTabId, setActiveTabId] = useState('rscb-01');
+  const [tabs, setTabs] = useState<SessionTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState('');
   
   // Modal states
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const [sftpPanelOpen, setSftpPanelOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<SessionConfig | null>(null);
+
+  // Restore sessions on mount
+  useEffect(() => {
+    const activeSessions = ActiveSessionsManager.getActiveSessions();
+    // Note: We're not auto-reconnecting here, just showing that sessions were previously open
+    // Auto-reconnection would require storing credentials (which should be done securely)
+    // For now, we just clear the active sessions on startup
+    if (activeSessions.length > 0) {
+      console.log('Previous sessions found:', activeSessions);
+      // TODO: Implement reconnection dialog
+    }
+  }, []);
+
+  // Save active sessions when tabs change
+  useEffect(() => {
+    if (tabs.length > 0) {
+      const activeSessions = tabs.map((tab, index) => ({
+        tabId: tab.id,
+        sessionId: tab.id,
+        order: index,
+      }));
+      ActiveSessionsManager.saveActiveSessions(activeSessions);
+    } else {
+      ActiveSessionsManager.clearActiveSessions();
+    }
+  }, [tabs]);
 
   const handleSessionSelect = (session: SessionNode) => {
     if (session.type === 'session') {
@@ -64,7 +85,27 @@ export default function App() {
       // Check if tab already exists
       const existingTab = tabs.find(tab => tab.id === session.id);
       if (!existingTab) {
-        // Create new tab
+        // If session is not connected, open connection dialog with pre-filled data
+        if (!session.isConnected) {
+          // Load session data from storage
+          const sessionData = SessionStorageManager.getSession(session.id);
+          if (sessionData) {
+            // Pre-fill connection dialog with session data
+            setEditingSession({
+              id: session.id,
+              name: sessionData.name,
+              protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+              host: sessionData.host,
+              port: sessionData.port,
+              username: sessionData.username,
+              authMethod: 'password',
+            });
+            setConnectionDialogOpen(true);
+          }
+          return;
+        }
+        
+        // Create new tab if session is already connected somehow
         const newTab: SessionTab = {
           id: session.id,
           name: session.name,
@@ -248,6 +289,8 @@ export default function App() {
             <SessionManager 
               onSessionSelect={handleSessionSelect}
               selectedSessionId={selectedSession?.id || null}
+              activeSessions={new Set(tabs.map(tab => tab.id))}
+              onNewConnection={handleNewTab}
             />
           </ResizablePanel>
           

@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
+import { SessionStorageManager } from '../lib/session-storage';
 import { toast } from 'sonner';
 import { 
   Server, 
@@ -108,11 +109,19 @@ export function ConnectionDialog({
   const [isConnecting, setIsConnecting] = useState(false);
   const [savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
   const [showSaveProfile, setShowSaveProfile] = useState(false);
+  const [saveAsSession, setSaveAsSession] = useState(true);
+  const [sessionFolder, setSessionFolder] = useState('All Sessions');
+  const [availableFolders, setAvailableFolders] = useState<string[]>([]);
 
-  // Load saved profiles when dialog opens
+  // Load saved profiles and folders when dialog opens
   useEffect(() => {
     if (open) {
       setSavedProfiles(ConnectionProfileManager.getProfiles());
+      
+      // Load all available folders
+      const folders = SessionStorageManager.getFolders();
+      const folderPaths = folders.map(f => f.path).sort();
+      setAvailableFolders(folderPaths);
     }
   }, [open]);
 
@@ -193,6 +202,23 @@ export function ConnectionDialog({
       );
 
       if (result.success) {
+        // Save session if checkbox is checked
+        if (saveAsSession) {
+          SessionStorageManager.saveSession({
+            name: config.name,
+            host: config.host,
+            port: config.port || 22,
+            username: config.username,
+            protocol: config.protocol,
+            folder: sessionFolder,
+          });
+        }
+
+        // Update last connected timestamp if editing existing session
+        if (editingSession?.id) {
+          SessionStorageManager.updateLastConnected(editingSession.id);
+        }
+
         onConnect({
           ...config,
           id: sessionId
@@ -246,7 +272,7 @@ export function ConnectionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="fixed top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
+      <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
             <div className="p-2 bg-primary/10 rounded-lg">
@@ -261,15 +287,8 @@ export function ConnectionDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="profiles" className="flex-1 flex flex-col overflow-hidden">
+        <Tabs defaultValue="connection" className="flex-1 flex flex-col overflow-hidden">
           <TabsList className="w-full justify-start rounded-none border-b bg-transparent h-auto p-0 px-4 overflow-x-auto">
-            <TabsTrigger 
-              value="profiles" 
-              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
-            >
-              <BookOpen className="h-3.5 w-3.5" />
-              <span>Profiles</span>
-            </TabsTrigger>
             <TabsTrigger 
               value="connection" 
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
@@ -306,78 +325,6 @@ export function ConnectionDialog({
               <span>Terminal</span>
             </TabsTrigger>
           </TabsList>
-
-          {/* Profiles Tab */}
-          <TabsContent value="profiles" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold">Saved Profiles</h3>
-                  <p className="text-sm text-muted-foreground">Quick connect to your saved servers</p>
-                </div>
-                <Button variant="outline" size="sm" onClick={handleSaveProfile}>
-                  <Save className="h-4 w-4 mr-2" />
-                  Save Current
-                </Button>
-              </div>
-
-              {savedProfiles.length === 0 ? (
-                <Card>
-                  <CardContent className="pt-6">
-                    <div className="text-center text-muted-foreground">
-                      <BookOpen className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                      <p>No saved profiles yet</p>
-                      <p className="text-sm mt-2">Fill in connection details and click "Save Current" to create a profile</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              ) : (
-                <div className="grid gap-3">
-                  {savedProfiles.map((profile) => (
-                    <Card key={profile.id} className="hover:border-primary transition-colors cursor-pointer" onClick={() => handleLoadProfile(profile)}>
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <h4 className="font-semibold">{profile.name}</h4>
-                              {profile.favorite && <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />}
-                            </div>
-                            <p className="text-sm text-muted-foreground">
-                              {profile.username}@{profile.host}:{profile.port}
-                            </p>
-                            <div className="flex items-center gap-2 mt-2">
-                              <Badge variant="secondary" className="text-xs">
-                                {profile.authMethod === 'key' ? 'SSH Key' : 'Password'}
-                              </Badge>
-                              <span className="text-xs text-muted-foreground">
-                                Updated {new Date(profile.updatedAt).toLocaleDateString()}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleToggleFavorite(profile.id)}
-                            >
-                              <Star className={`h-4 w-4 ${profile.favorite ? 'text-yellow-500 fill-yellow-500' : ''}`} />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteProfile(profile.id)}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </div>
-          </TabsContent>
 
           <TabsContent value="connection" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
@@ -785,13 +732,63 @@ export function ConnectionDialog({
         </Tabs>
 
         <DialogFooter className="px-6 py-4 border-t bg-muted/30">
-          <div className="flex justify-between w-full">
-            <Button variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleConnect} disabled={isConnecting} className="min-w-[120px]">
-              {isConnecting ? 'Connecting...' : editingSession ? 'Update Session' : 'Connect'}
-            </Button>
+          <div className="flex flex-col gap-3 w-full">
+            {/* Save as Session Option */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="save-session"
+                  checked={saveAsSession}
+                  onCheckedChange={setSaveAsSession}
+                />
+                <Label htmlFor="save-session" className="text-sm cursor-pointer">
+                  Save as persistent session
+                </Label>
+              </div>
+              {saveAsSession && (
+                <Select value={sessionFolder} onValueChange={setSessionFolder}>
+                  <SelectTrigger className="w-[240px] h-8">
+                    <SelectValue placeholder="Select folder" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-[300px]">
+                    {availableFolders.length > 0 ? (
+                      availableFolders.map((folder) => {
+                        // Calculate indentation level based on folder depth
+                        const depth = folder.split('/').length - 1;
+                        const displayName = folder.split('/').pop() || folder;
+                        // Use proper visual hierarchy indicators
+                        const prefix = depth === 0 ? '' : '└─ '.padStart(depth * 3, '  ');
+                        
+                        return (
+                          <SelectItem 
+                            key={folder} 
+                            value={folder}
+                            className="font-mono text-xs"
+                          >
+                            <span className="flex items-center gap-1">
+                              <span className="text-muted-foreground">{prefix}</span>
+                              <span>{displayName}</span>
+                            </span>
+                          </SelectItem>
+                        );
+                      })
+                    ) : (
+                      <SelectItem value="All Sessions">All Sessions</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex justify-between">
+              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleConnect} disabled={isConnecting} className="min-w-[120px]">
+                {isConnecting ? 'Connecting...' : editingSession ? 'Update Session' : 'Connect'}
+              </Button>
+            </div>
           </div>
         </DialogFooter>
       </DialogContent>
