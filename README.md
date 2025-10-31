@@ -20,6 +20,15 @@ A modern, feature-rich SSH client application built with React, TypeScript, and 
 
 ---
 
+## 📸 Screenshots
+
+<div align="center">
+  <img src="screenshots/app-screenshot.png" alt="R-Shell Application Screenshot" width="100%">
+  <p><i>R-Shell's modern and intuitive interface</i></p>
+</div>
+
+---
+
 ## 🎯 Project Purpose
 
 This project is a **learning and practice project for vibe coding** methodology. It demonstrates:
