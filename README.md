@@ -3,6 +3,8 @@
 # R-Shell - SSH Client Application
 
 [![GitHub license](https://img.shields.io/github/license/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/blob/main/LICENSE)
+[![Test](https://github.com/GOODBOY008/r-shell/actions/workflows/test.yml/badge.svg)](https://github.com/GOODBOY008/r-shell/actions/workflows/test.yml)
+[![Release](https://github.com/GOODBOY008/r-shell/actions/workflows/release.yml/badge.svg)](https://github.com/GOODBOY008/r-shell/actions/workflows/release.yml)
 [![GitHub stars](https://img.shields.io/github/stars/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/issues)
 [![GitHub forks](https://img.shields.io/github/forks/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/network)
