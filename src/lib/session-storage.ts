@@ -18,6 +18,11 @@ export interface SessionData {
   color?: string;
   tags?: string[];
   description?: string;
+  // Authentication details
+  authMethod?: 'password' | 'publickey' | 'keyboard-interactive';
+  password?: string; // Note: In production, this should be encrypted
+  privateKeyPath?: string;
+  passphrase?: string;
 }
 
 export interface SessionFolder {

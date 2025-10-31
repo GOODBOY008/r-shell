@@ -211,6 +211,10 @@ export function ConnectionDialog({
             username: config.username,
             protocol: config.protocol,
             folder: sessionFolder,
+            authMethod: config.authMethod,
+            password: config.password,
+            privateKeyPath: config.privateKeyPath,
+            passphrase: config.passphrase,
           });
         }
 

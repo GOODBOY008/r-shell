@@ -882,6 +882,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     file.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Count actual files/folders (excluding ".." navigation entry)
+  const actualItemCount = filteredFiles.filter(file => file.name !== '..').length;
+
   if (!isConnected) {
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground">
@@ -895,6 +898,12 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
 
   return (
     <div className={`h-full flex flex-col bg-background border-t ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
+      {/* Current Path Display */}
+      <div className="px-2 py-1 border-b bg-muted/30 flex items-center gap-2 text-xs">
+        <Folder className="h-3 w-3 text-muted-foreground" />
+        <span className="text-muted-foreground font-mono">{currentPath}</span>
+      </div>
+      
       {/* Compact Toolbar */}
       <div className="px-2 py-1.5 border-b flex items-center gap-1.5 text-xs">
         <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => setCurrentPath('/home')}>
@@ -919,7 +928,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
           />
         </div>
         
-        <span className="text-muted-foreground whitespace-nowrap">{filteredFiles.length} items</span>
+        <span className="text-muted-foreground whitespace-nowrap">{actualItemCount} items</span>
         
         {selectedFiles.size > 0 && (
           <span className="text-muted-foreground whitespace-nowrap">{selectedFiles.size} selected</span>
@@ -1231,7 +1240,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
 
       {/* File Editor Dialog */}
       <Dialog open={!!editingFile} onOpenChange={(open) => !open && setEditingFile(null)}>
-        <DialogContent className="max-w-4xl max-h-[80vh]">
+        <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-[1400px] max-h-[80vh]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Edit className="h-4 w-4" />

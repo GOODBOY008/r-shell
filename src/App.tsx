@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { MenuBar } from './components/menu-bar';
 import { Toolbar } from './components/toolbar';
 import { SessionManager } from './components/session-manager';
@@ -78,29 +79,102 @@ export default function App() {
     }
   }, [tabs]);
 
-  const handleSessionSelect = (session: SessionNode) => {
+  const handleSessionSelect = async (session: SessionNode) => {
     if (session.type === 'session') {
       setSelectedSession(session);
       
       // Check if tab already exists
       const existingTab = tabs.find(tab => tab.id === session.id);
       if (!existingTab) {
-        // If session is not connected, open connection dialog with pre-filled data
+        // If session is not connected, load session data and connect
         if (!session.isConnected) {
           // Load session data from storage
           const sessionData = SessionStorageManager.getSession(session.id);
           if (sessionData) {
-            // Pre-fill connection dialog with session data
-            setEditingSession({
-              id: session.id,
-              name: sessionData.name,
-              protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
-              host: sessionData.host,
-              port: sessionData.port,
-              username: sessionData.username,
-              authMethod: 'password',
-            });
-            setConnectionDialogOpen(true);
+            // Check if we have authentication credentials saved
+            const hasCredentials = sessionData.authMethod === 'password' 
+              ? !!sessionData.password 
+              : !!sessionData.privateKeyPath;
+            
+            if (hasCredentials) {
+              // We have saved credentials - establish SSH connection first
+              try {
+                const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+                  'ssh_connect',
+                  {
+                    request: {
+                      session_id: session.id,
+                      host: sessionData.host,
+                      port: sessionData.port || 22,
+                      username: sessionData.username,
+                      auth_method: sessionData.authMethod || 'password',
+                      password: sessionData.password || '',
+                      key_path: sessionData.privateKeyPath || null,
+                      passphrase: sessionData.passphrase || null,
+                    }
+                  }
+                );
+
+                if (result.success) {
+                  // Update last connected timestamp
+                  SessionStorageManager.updateLastConnected(session.id);
+                  
+                  // Create the tab after successful connection
+                  const config: SessionConfig = {
+                    id: session.id,
+                    name: sessionData.name,
+                    protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+                    host: sessionData.host,
+                    port: sessionData.port,
+                    username: sessionData.username,
+                    authMethod: sessionData.authMethod || 'password',
+                    password: sessionData.password,
+                    privateKeyPath: sessionData.privateKeyPath,
+                    passphrase: sessionData.passphrase,
+                  };
+                  
+                  handleConnectionDialogConnect(config);
+                } else {
+                  // Connection failed - show error and open dialog
+                  console.error('SSH connection failed:', result.error);
+                  setEditingSession({
+                    id: session.id,
+                    name: sessionData.name,
+                    protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+                    host: sessionData.host,
+                    port: sessionData.port,
+                    username: sessionData.username,
+                    authMethod: sessionData.authMethod || 'password',
+                  });
+                  setConnectionDialogOpen(true);
+                }
+              } catch (error) {
+                console.error('Error connecting to SSH:', error);
+                // On error, open dialog to let user try again
+                setEditingSession({
+                  id: session.id,
+                  name: sessionData.name,
+                  protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+                  host: sessionData.host,
+                  port: sessionData.port,
+                  username: sessionData.username,
+                  authMethod: sessionData.authMethod || 'password',
+                });
+                setConnectionDialogOpen(true);
+              }
+            } else {
+              // No saved credentials - open dialog to input credentials
+              setEditingSession({
+                id: session.id,
+                name: sessionData.name,
+                protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+                host: sessionData.host,
+                port: sessionData.port,
+                username: sessionData.username,
+                authMethod: sessionData.authMethod || 'password',
+              });
+              setConnectionDialogOpen(true);
+            }
           }
           return;
         }
