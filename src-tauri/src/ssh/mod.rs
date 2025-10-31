@@ -179,6 +179,34 @@ impl SshClient {
         }
     }
 
+    pub async fn download_file_to_memory(&self, remote_path: &str) -> Result<Vec<u8>> {
+        if let Some(session) = &self.session {
+            // Open SFTP subsystem
+            let channel = session.channel_open_session().await?;
+            channel.request_subsystem(true, "sftp").await?;
+            let sftp = SftpSession::new(channel.into_stream()).await?;
+
+            // Open remote file for reading
+            let mut remote_file = sftp.open(remote_path).await?;
+            
+            // Read file content
+            let mut buffer = Vec::new();
+            let mut temp_buf = vec![0u8; 8192];
+            
+            loop {
+                let n = remote_file.read(&mut temp_buf).await?;
+                if n == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&temp_buf[..n]);
+            }
+
+            Ok(buffer)
+        } else {
+            Err(anyhow::anyhow!("Not connected"))
+        }
+    }
+
     pub async fn upload_file(&self, local_path: &str, remote_path: &str) -> Result<u64> {
         if let Some(session) = &self.session {
             // Read local file

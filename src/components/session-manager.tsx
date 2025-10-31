@@ -219,19 +219,31 @@ export function SessionManager({
     const isSelected = selectedSessionId === node.id;
     const isConnected = node.type === 'session' && node.isConnected;
     
+    const handleNodeClick = () => {
+      if (node.type === 'folder') {
+        toggleExpanded(node.id);
+      } else {
+        onSessionSelect(node);
+      }
+    };
+
+    const handleContextMenu = () => {
+      // Select/highlight the node when right-clicking
+      // This helps users know which item the context menu will operate on
+      // Only select if not already selected to avoid unnecessary updates
+      if (!isSelected) {
+        onSessionSelect(node);
+      }
+    };
+    
     const nodeContent = (
       <div
         className={`flex items-center gap-2 px-2 py-1 hover:bg-accent cursor-pointer ${
           isSelected ? 'bg-accent' : ''
         }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
-        onClick={() => {
-          if (node.type === 'folder') {
-            toggleExpanded(node.id);
-          } else {
-            onSessionSelect(node);
-          }
-        }}
+        onClick={handleNodeClick}
+        onContextMenu={handleContextMenu}
       >
         {node.type === 'folder' && (
           <Button variant="ghost" size="sm" className="p-0 h-4 w-4">

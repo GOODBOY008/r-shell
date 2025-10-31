@@ -1022,6 +1022,12 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
                     }`}
                     onClick={(e) => handleFileClick(file, e)}
                     onDoubleClick={() => handleFileDoubleClick(file)}
+                    onContextMenu={() => {
+                      // Select the file when right-clicking to show which file the context menu operates on
+                      if (!selectedFiles.has(file.name)) {
+                        setSelectedFiles(new Set([file.name]));
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-2 min-w-0" style={{ width: `${columnWidths.name}px` }}>
                       {getFileIcon(file)}

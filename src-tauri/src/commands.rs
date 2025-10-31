@@ -223,6 +223,7 @@ pub struct FileTransferRequest {
 pub struct FileTransferResponse {
     pub success: bool,
     pub bytes_transferred: Option<u64>,
+    pub data: Option<Vec<u8>>, // For download: file contents
     pub error: Option<String>,
 }
 
@@ -238,17 +239,41 @@ pub async fn sftp_download_file(
 
     let client = session.read().await;
     
-    match client.download_file(&request.remote_path, &request.local_path).await {
-        Ok(bytes) => Ok(FileTransferResponse {
-            success: true,
-            bytes_transferred: Some(bytes),
-            error: None,
-        }),
-        Err(e) => Ok(FileTransferResponse {
-            success: false,
-            bytes_transferred: None,
-            error: Some(e.to_string()),
-        }),
+    // If local_path is empty, download to memory (for browser download)
+    if request.local_path.is_empty() {
+        match client.download_file_to_memory(&request.remote_path).await {
+            Ok(data) => {
+                let bytes = data.len() as u64;
+                Ok(FileTransferResponse {
+                    success: true,
+                    bytes_transferred: Some(bytes),
+                    data: Some(data),
+                    error: None,
+                })
+            },
+            Err(e) => Ok(FileTransferResponse {
+                success: false,
+                bytes_transferred: None,
+                data: None,
+                error: Some(e.to_string()),
+            }),
+        }
+    } else {
+        // Download to local file
+        match client.download_file(&request.remote_path, &request.local_path).await {
+            Ok(bytes) => Ok(FileTransferResponse {
+                success: true,
+                bytes_transferred: Some(bytes),
+                data: None,
+                error: None,
+            }),
+            Err(e) => Ok(FileTransferResponse {
+                success: false,
+                bytes_transferred: None,
+                data: None,
+                error: Some(e.to_string()),
+            }),
+        }
     }
 }
 
@@ -275,11 +300,13 @@ pub async fn sftp_upload_file(
         Ok(bytes) => Ok(FileTransferResponse {
             success: true,
             bytes_transferred: Some(bytes),
+            data: None,
             error: None,
         }),
         Err(e) => Ok(FileTransferResponse {
             success: false,
             bytes_transferred: None,
+            data: None,
             error: Some(e.to_string()),
         }),
     }

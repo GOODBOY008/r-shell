@@ -46,7 +46,7 @@ export function Toolbar({ onNewSession, onOpenSession, onOpenSFTP, onOpenSetting
           </TooltipTrigger>
           <TooltipContent>Open Session</TooltipContent>
         </Tooltip>
-
+{/* 
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="sm">
@@ -132,7 +132,7 @@ export function Toolbar({ onNewSession, onOpenSession, onOpenSFTP, onOpenSetting
             </Button>
           </TooltipTrigger>
           <TooltipContent>Reconnect</TooltipContent>
-        </Tooltip>
+        </Tooltip> */}
 
         <Separator orientation="vertical" className="h-4 mx-1" />
 
@@ -145,14 +145,14 @@ export function Toolbar({ onNewSession, onOpenSession, onOpenSFTP, onOpenSetting
           <TooltipContent>Options</TooltipContent>
         </Tooltip>
 
-        <Tooltip>
+        {/* <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="sm">
               <MoreHorizontal className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
           <TooltipContent>More Tools</TooltipContent>
-        </Tooltip>
+        </Tooltip> */}
       </div>
     </TooltipProvider>
   );
