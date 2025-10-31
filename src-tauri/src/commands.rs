@@ -433,6 +433,7 @@ pub struct ProcessListResponse {
 #[tauri::command]
 pub async fn get_processes(
     session_id: String,
+    sort_by: Option<String>,
     state: State<'_, Arc<SessionManager>>,
 ) -> Result<ProcessListResponse, String> {
     let session = state
@@ -444,9 +445,14 @@ pub async fn get_processes(
     
     // Execute ps command to get process list
     // Using ps aux for detailed process information
-    let command = "ps aux --sort=-%cpu | head -50";
+    // Support sorting by cpu (default) or memory
+    let sort_option = match sort_by.as_deref() {
+        Some("mem") => "-%mem",
+        _ => "-%cpu", // Default to CPU sorting
+    };
+    let command = format!("ps aux --sort={} | head -50", sort_option);
     
-    match client.execute_command(command).await {
+    match client.execute_command(&command).await {
         Ok(output) => {
             let mut processes = Vec::new();
             

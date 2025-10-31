@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Activity, Terminal, HardDrive, Network, ArrowDownUp, Gauge, X } from 'lucide-react';
+import { Activity, Terminal, HardDrive, Network, ArrowDownUp, Gauge, X, ArrowDown } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Progress } from './ui/progress';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Button } from './ui/button';
 import {
@@ -95,6 +94,10 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     diskUsage: 0,
     uptime: '0:00:00'
   });
+  const [processes, setProcesses] = useState<Process[]>([]);
+  const [processToKill, setProcessToKill] = useState<Process | null>(null);
+  const [processSortBy, setProcessSortBy] = useState<'cpu' | 'mem'>('cpu');
+  const [disks, setDisks] = useState<DiskUsage[]>([]);
 
   // Fetch system stats from backend
   const fetchSystemStats = async () => {
@@ -196,7 +199,8 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         }>; 
         error?: string 
       }>('get_processes', { 
-        sessionId: sessionId 
+        sessionId: sessionId,
+        sortBy: processSortBy
       });
       
       if (result.success && result.processes) {
@@ -271,12 +275,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
       clearInterval(statsInterval);
       clearInterval(processInterval);
     };
-  }, [sessionId]); // Re-run when sessionId changes
-
-  const [processes, setProcesses] = useState<Process[]>([]);
-  const [processToKill, setProcessToKill] = useState<Process | null>(null);
-
-  const [disks, setDisks] = useState<DiskUsage[]>([]);
+  }, [sessionId, processSortBy]); // Re-run when sessionId or sort changes
 
   // Fetch disk usage data
   const fetchDiskUsage = async () => {
@@ -513,34 +512,49 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
           </div>
           <Card>
             <CardContent className="p-0">
-              <div className="relative h-40 overflow-hidden">
-                <div className="overflow-auto h-full">
-                  <Table>
-                    <TableHeader className="sticky top-0 bg-background z-10">
-                      <TableRow>
-                        <TableHead className="w-16 text-xs bg-background">PID</TableHead>
-                        <TableHead className="w-20 text-xs bg-background">User</TableHead>
-                        <TableHead className="w-16 text-xs bg-background">CPU%</TableHead>
-                        <TableHead className="w-16 text-xs bg-background">Mem%</TableHead>
-                        <TableHead className="text-xs bg-background">Command</TableHead>
-                        <TableHead className="w-12 text-xs bg-background"></TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {processes.slice(0, 8).map((process) => (
-                        <TableRow key={process.pid}>
-                          <TableCell className="text-xs">{process.pid}</TableCell>
-                          <TableCell className="text-xs">{process.user}</TableCell>
-                          <TableCell className={`text-xs font-semibold ${getUsageColor(process.cpu)}`}>
-                            {process.cpu.toFixed(1)}%
-                          </TableCell>
-                          <TableCell className={`text-xs font-semibold ${getUsageColor(process.mem)}`}>
-                            {process.mem.toFixed(1)}%
-                          </TableCell>
-                          <TableCell className="text-xs font-mono truncate max-w-0" title={process.command}>
-                            {process.command}
-                        </TableCell>
-                        <TableCell className="text-xs">
+              <div className="rounded-md border h-40 overflow-auto">
+                <table className="w-full caption-bottom text-sm">
+                  <thead className="[&_tr]:border-b">
+                    <tr className="border-b transition-colors">
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-16">PID</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-20">User</th>
+                      <th 
+                        className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-16 cursor-pointer hover:bg-muted/50 select-none"
+                        onClick={() => setProcessSortBy('cpu')}
+                      >
+                        <div className="flex items-center gap-1">
+                          CPU%
+                          {processSortBy === 'cpu' && <ArrowDown className="w-3 h-3" />}
+                        </div>
+                      </th>
+                      <th 
+                        className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-16 cursor-pointer hover:bg-muted/50 select-none"
+                        onClick={() => setProcessSortBy('mem')}
+                      >
+                        <div className="flex items-center gap-1">
+                          Mem%
+                          {processSortBy === 'mem' && <ArrowDown className="w-3 h-3" />}
+                        </div>
+                      </th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs">Command</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-12"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="[&_tr:last-child]:border-0">
+                    {processes.slice(0, 8).map((process) => (
+                      <tr key={process.pid} className="hover:bg-muted/50 border-b transition-colors">
+                        <td className="p-2 align-middle whitespace-nowrap text-xs">{process.pid}</td>
+                        <td className="p-2 align-middle whitespace-nowrap text-xs">{process.user}</td>
+                        <td className={`p-2 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.cpu)}`}>
+                          {process.cpu.toFixed(1)}%
+                        </td>
+                        <td className={`p-2 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.mem)}`}>
+                          {process.mem.toFixed(1)}%
+                        </td>
+                        <td className="p-2 align-middle whitespace-nowrap text-xs font-mono truncate max-w-0" title={process.command}>
+                          {process.command}
+                        </td>
+                        <td className="p-2 align-middle whitespace-nowrap text-xs">
                           <Button
                             variant="ghost"
                             size="icon"
@@ -550,13 +564,12 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                           >
                             <X className="h-3 w-3" />
                           </Button>
-                        </TableCell>
-                      </TableRow>
+                        </td>
+                      </tr>
                     ))}
-                  </TableBody>
-                </Table>
+                  </tbody>
+                </table>
               </div>
-            </div>
             </CardContent>
           </Card>
         </div>
@@ -574,31 +587,31 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                   No disk information available
                 </div>
               ) : (
-                <div className="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="sticky top-0 z-10 bg-background w-[140px]">Filesystem</TableHead>
-                        <TableHead className="sticky top-0 z-10 bg-background w-[100px]">Mount Point</TableHead>
-                        <TableHead className="sticky top-0 z-10 bg-background text-right w-[80px]">Size</TableHead>
-                        <TableHead className="sticky top-0 z-10 bg-background text-right w-[80px]">Used</TableHead>
-                        <TableHead className="sticky top-0 z-10 bg-background text-right w-[80px]">Available</TableHead>
-                        <TableHead className="sticky top-0 z-10 bg-background text-right w-[140px]">Usage</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
+                <div className="rounded-md border h-40 overflow-auto">
+                  <table className="w-full caption-bottom text-sm">
+                    <thead className="[&_tr]:border-b">
+                      <tr className="border-b transition-colors">
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap w-[140px]">Filesystem</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap w-[100px]">Mount Point</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[80px]">Size</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[80px]">Used</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[80px]">Available</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[140px]">Usage</th>
+                      </tr>
+                    </thead>
+                    <tbody className="[&_tr:last-child]:border-0">
                       {disks.map((disk, index) => (
-                        <TableRow key={index}>
-                          <TableCell className="font-mono text-xs max-w-[140px] truncate" title={disk.filesystem}>
+                        <tr key={index} className="hover:bg-muted/50 border-b transition-colors">
+                          <td className="p-2 align-middle whitespace-nowrap font-mono text-xs max-w-[140px] truncate" title={disk.filesystem}>
                             {disk.filesystem}
-                          </TableCell>
-                          <TableCell className="font-medium text-xs max-w-[100px] truncate" title={disk.path}>
+                          </td>
+                          <td className="p-2 align-middle whitespace-nowrap font-medium text-xs max-w-[100px] truncate" title={disk.path}>
                             {disk.path}
-                          </TableCell>
-                          <TableCell className="text-right font-mono text-xs">{disk.total}</TableCell>
-                          <TableCell className="text-right font-mono text-xs">{disk.used}</TableCell>
-                          <TableCell className="text-right font-mono text-xs">{disk.available}</TableCell>
-                          <TableCell className="text-right">
+                          </td>
+                          <td className="p-2 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.total}</td>
+                          <td className="p-2 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.used}</td>
+                          <td className="p-2 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.available}</td>
+                          <td className="p-2 align-middle whitespace-nowrap text-right">
                             <div className="flex items-center justify-end gap-2">
                               <Progress 
                                 value={disk.usage} 
@@ -608,11 +621,11 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                                 {disk.usage}%
                               </span>
                             </div>
-                          </TableCell>
-                        </TableRow>
+                          </td>
+                        </tr>
                       ))}
-                    </TableBody>
-                  </Table>
+                    </tbody>
+                  </table>
                 </div>
               )}
             </CardContent>
