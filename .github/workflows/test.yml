@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, windows-latest]
+        platform: [macos-latest, ubuntu-latest, windows-latest]
 
     runs-on: ${{ matrix.platform }}
 
@@ -42,11 +42,28 @@ jobs:
         run: |
           brew install pkg-config
 
+      - name: Install dependencies (Linux)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
       - name: Install frontend dependencies
         run: pnpm install
 
       - name: Build frontend
         run: pnpm build
+
+      - name: Check TypeScript types
+        run: pnpm tsc --noEmit
 
       - name: Run Rust tests
         working-directory: src-tauri

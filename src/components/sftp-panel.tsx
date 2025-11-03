@@ -382,16 +382,28 @@ export function SFTPPanel({
                     name: "document.pdf",
                     type: "file" as const,
                     size: 2048000,
+                    modified: new Date(),
+                    permissions: '-rw-r--r--',
+                    owner: 'user',
+                    group: 'user'
                   },
                   {
                     name: "image.jpg",
                     type: "file" as const,
                     size: 1024000,
+                    modified: new Date(),
+                    permissions: '-rw-r--r--',
+                    owner: 'user',
+                    group: 'user'
                   },
                   {
                     name: "script.py",
                     type: "file" as const,
                     size: 4096,
+                    modified: new Date(),
+                    permissions: '-rw-r--r--',
+                    owner: 'user',
+                    group: 'user'
                   },
                 ].map((file, index) => (
                   <div

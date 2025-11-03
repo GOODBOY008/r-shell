@@ -18,6 +18,8 @@ jobs:
             args: '--target aarch64-apple-darwin'
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
+          - platform: ubuntu-latest
+            args: ''
           - platform: windows-latest
             args: ''
 
@@ -52,6 +54,20 @@ jobs:
         run: |
           brew install pkg-config
 
+      - name: Install dependencies (Linux)
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
       - name: Install frontend dependencies
         run: pnpm install
 
@@ -66,25 +82,3 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
-
-  create-universal-macos:
-    needs: release
-    runs-on: macos-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create universal binary
-        run: |
-          # This step would create a universal macOS binary
-          # combining both aarch64 and x86_64 builds
-          # Implementation depends on your specific needs
-          echo "Universal binary creation - implement if needed"

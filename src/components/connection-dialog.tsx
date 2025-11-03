@@ -507,7 +507,7 @@ export function ConnectionDialog({
                   <Label>Proxy Type</Label>
                   <Select 
                     value={config.proxyType} 
-                    onValueChange={(value: SessionConfig['proxyType']) => updateConfig({ proxyType: value })}
+                    onValueChange={(value: string) => updateConfig({ proxyType: value as SessionConfig['proxyType'] })}
                   >
                     <SelectTrigger>
                       <SelectValue />
