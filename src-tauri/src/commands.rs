@@ -16,6 +16,32 @@ pub struct ConnectRequest {
     pub passphrase: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MemoryStats {
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+    pub available: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DiskStats {
+    pub total: String,
+    pub used: String,
+    pub available: String,
+    pub use_percent: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SystemStats {
+    pub cpu_percent: f64,
+    pub memory: MemoryStats,
+    pub swap: MemoryStats,
+    pub disk: DiskStats,
+    pub uptime: String,
+    pub load_average: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CommandResponse {
     pub success: bool,
@@ -105,7 +131,7 @@ pub async fn ssh_execute_command(
             // Check if it's an interactive command that failed
             let error_msg = if is_interactive_command(&command) {
                 format!("{}\n\nNote: Interactive commands like '{}' may not work in this terminal. Try using batch mode alternatives.", 
-                    e.to_string(), 
+                    e, 
                     get_command_name(&command))
             } else {
                 e.to_string()
@@ -149,7 +175,7 @@ fn is_interactive_command(command: &str) -> bool {
 
 // Helper function to extract command name
 fn get_command_name(command: &str) -> String {
-    command.trim()
+    command
         .split_whitespace()
         .next()
         .unwrap_or("")
@@ -160,7 +186,7 @@ fn get_command_name(command: &str) -> String {
 pub async fn get_system_stats(
     session_id: String,
     state: State<'_, Arc<SessionManager>>,
-) -> Result<String, String> {
+) -> Result<SystemStats, String> {
     let session = state
         .get_session(&session_id)
         .await
@@ -168,27 +194,76 @@ pub async fn get_system_stats(
 
     let client = session.read().await;
     
-    // Execute multiple commands to gather system stats
-    let commands = vec![
-        ("cpu", "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'"),
-        ("memory", "free -m | awk 'NR==2{printf \"{\\\"total\\\":%s,\\\"used\\\":%s,\\\"free\\\":%s}\\n\", $2,$3,$4}'"),
-        ("swap", "free -m | awk 'NR==3{printf \"{\\\"total\\\":%s,\\\"used\\\":%s,\\\"free\\\":%s}\\n\", $2,$3,$4}'"),
-        ("disk", "df -h / | awk 'NR==2{printf \"{\\\"size\\\":\\\"%s\\\",\\\"used\\\":\\\"%s\\\",\\\"avail\\\":\\\"%s\\\",\\\"use_percent\\\":\\\"%s\\\"}\\n\", $2,$3,$4,$5}'"),
-    ];
+    // CPU usage (percentage)
+    let cpu_cmd = "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'";
+    let cpu_percent = client
+        .execute_command(cpu_cmd)
+        .await
+        .ok()
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .unwrap_or(0.0);
 
-    let mut results = serde_json::Map::new();
-    for (key, cmd) in commands {
-        match client.execute_command(cmd).await {
-            Ok(output) => {
-                results.insert(key.to_string(), serde_json::Value::String(output.trim().to_string()));
-            }
-            Err(_) => {
-                results.insert(key.to_string(), serde_json::Value::Null);
-            }
-        }
-    }
+    // Memory stats (in MB)
+    let mem_cmd = "free -m | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$7}'";
+    let mem_output = client.execute_command(mem_cmd).await.unwrap_or_default();
+    let mem_parts: Vec<&str> = mem_output.split_whitespace().collect();
+    let memory = MemoryStats {
+        total: mem_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0),
+        used: mem_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0),
+        free: mem_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
+        available: mem_parts.get(3).and_then(|s| s.parse().ok()).unwrap_or(0),
+    };
 
-    Ok(serde_json::to_string(&results).unwrap())
+    // Swap stats (in MB)
+    let swap_cmd = "free -m | awk 'NR==3{printf \"%s %s %s\", $2,$3,$4}'";
+    let swap_output = client.execute_command(swap_cmd).await.unwrap_or_default();
+    let swap_parts: Vec<&str> = swap_output.split_whitespace().collect();
+    let swap = MemoryStats {
+        total: swap_parts.first().and_then(|s| s.parse().ok()).unwrap_or(0),
+        used: swap_parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0),
+        free: swap_parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0),
+        available: 0, // Swap doesn't have 'available' concept
+    };
+
+    // Disk stats for root filesystem
+    let disk_cmd = "df -h / | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$5}'";
+    let disk_output = client.execute_command(disk_cmd).await.unwrap_or_default();
+    let disk_parts: Vec<&str> = disk_output.trim().split_whitespace().collect();
+    let disk = DiskStats {
+        total: disk_parts.get(0).unwrap_or(&"0").to_string(),
+        used: disk_parts.get(1).unwrap_or(&"0").to_string(),
+        available: disk_parts.get(2).unwrap_or(&"0").to_string(),
+        use_percent: disk_parts
+            .get(3)
+            .and_then(|s| s.trim_end_matches('%').parse().ok())
+            .unwrap_or(0.0),
+    };
+
+    // Uptime
+    let uptime_cmd = "uptime -p 2>/dev/null || uptime | awk '{print $3\" \"$4}'";
+    let uptime = client
+        .execute_command(uptime_cmd)
+        .await
+        .unwrap_or_else(|_| "Unknown".to_string())
+        .trim()
+        .to_string();
+
+    // Load average
+    let load_cmd = "uptime | awk -F'load average:' '{print $2}' | xargs";
+    let load_average = client
+        .execute_command(load_cmd)
+        .await
+        .ok()
+        .map(|s| s.trim().to_string());
+
+    Ok(SystemStats {
+        cpu_percent,
+        memory,
+        swap,
+        disk,
+        uptime,
+        load_average,
+    })
 }
 
 #[tauri::command]
@@ -1012,4 +1087,172 @@ pub async fn get_disk_usage(
             error: Some(e.to_string()),
         }),
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TabCompletionRequest {
+    pub session_id: String,
+    pub input: String,
+    pub cursor_position: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TabCompletionResponse {
+    pub success: bool,
+    pub completions: Vec<String>,
+    pub common_prefix: Option<String>,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn ssh_tab_complete(
+    session_id: String,
+    input: String,
+    cursor_position: usize,
+    state: State<'_, Arc<SessionManager>>,
+) -> Result<TabCompletionResponse, String> {
+    let session = state
+        .get_session(&session_id)
+        .await
+        .ok_or("Session not found")?;
+
+    let client = session.read().await;
+
+    // Extract the word to complete (last word before cursor)
+    let text_before_cursor = &input[..cursor_position.min(input.len())];
+    let words: Vec<&str> = text_before_cursor.split_whitespace().collect();
+    let word_to_complete = words.last().copied().unwrap_or("");
+    
+    // Determine completion type
+    let is_first_word = words.len() <= 1;
+    
+    // Build completion command based on context
+    let completion_cmd = if is_first_word {
+        // Command completion: use compgen -c for commands
+        format!("compgen -c {} 2>/dev/null || echo", word_to_complete)
+    } else {
+        // File/directory completion: use compgen -f for files
+        format!("compgen -f {} 2>/dev/null || ls -1ap {} 2>/dev/null | grep '^{}' || echo", 
+                word_to_complete, 
+                if word_to_complete.is_empty() { "." } else { word_to_complete },
+                word_to_complete)
+    };
+
+    match client.execute_command(&completion_cmd).await {
+        Ok(output) => {
+            let completions: Vec<String> = output
+                .lines()
+                .filter(|s| !s.is_empty() && s.starts_with(word_to_complete))
+                .map(|s| s.trim().to_string())
+                .take(50) // Limit to 50 completions
+                .collect();
+
+            // Find common prefix
+            let common_prefix = if completions.len() > 1 {
+                find_common_prefix(&completions)
+            } else {
+                None
+            };
+
+            Ok(TabCompletionResponse {
+                success: true,
+                completions,
+                common_prefix,
+                error: None,
+            })
+        }
+        Err(e) => Ok(TabCompletionResponse {
+            success: false,
+            completions: Vec::new(),
+            common_prefix: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+// Helper function to find common prefix among strings
+fn find_common_prefix(strings: &[String]) -> Option<String> {
+    if strings.is_empty() {
+        return None;
+    }
+    if strings.len() == 1 {
+        return Some(strings[0].clone());
+    }
+
+    let first = &strings[0];
+    let mut prefix = String::new();
+
+    for (i, ch) in first.chars().enumerate() {
+        if strings.iter().all(|s| s.chars().nth(i) == Some(ch)) {
+            prefix.push(ch);
+        } else {
+            break;
+        }
+    }
+
+    if prefix.is_empty() || prefix == strings[0] {
+        None
+    } else {
+        Some(prefix)
+    }
+}
+
+// ========== PTY Session Commands (Interactive Terminal) ==========
+// These commands enable full interactivity like ttyd does
+
+/// Start a PTY shell session
+/// This creates a persistent interactive shell that supports:
+/// - vim, nano, emacs (text editors)
+/// - less, more, tail -f (pagers and streams)
+/// - top, htop, btop (process monitors)
+/// - any other interactive command
+#[tauri::command]
+pub async fn start_pty_session(
+    session_id: String,
+    cols: u32,
+    rows: u32,
+    state: State<'_, Arc<SessionManager>>,
+) -> Result<(), String> {
+    state
+        .start_pty_session(&session_id, cols, rows)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Write data to PTY (user input from terminal)
+#[tauri::command]
+pub async fn write_to_pty(
+    session_id: String,
+    data: Vec<u8>,
+    state: State<'_, Arc<SessionManager>>,
+) -> Result<(), String> {
+    state
+        .write_to_pty(&session_id, data)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Read data from PTY (output to display in terminal)
+/// This command is blocking - it waits for output from the PTY
+#[tauri::command]
+pub async fn read_from_pty(
+    session_id: String,
+    state: State<'_, Arc<SessionManager>>,
+) -> Result<Vec<u8>, String> {
+    state
+        .read_from_pty(&session_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Close PTY session
+#[tauri::command]
+pub async fn close_pty_session(
+    session_id: String,
+    state: State<'_, Arc<SessionManager>>,
+) -> Result<(), String> {
+    state
+        .close_pty_session(&session_id)
+        .await
+        .map_err(|e| e.to_string())
 }

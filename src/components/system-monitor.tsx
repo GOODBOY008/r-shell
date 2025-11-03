@@ -104,80 +104,36 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     if (!sessionId) return;
     
     try {
-      const result = await invoke<string>(
-        'get_system_stats',
-        { sessionId: sessionId }
-      );
+      const stats = await invoke<{
+        cpu_percent: number;
+        memory: { total: number; used: number; free: number; available: number };
+        swap: { total: number; used: number; free: number; available: number };
+        disk: { total: string; used: string; available: string; use_percent: number };
+        uptime: string;
+        load_average?: string;
+      }>('get_system_stats', { sessionId });
       
-      try {
-        const parsed = JSON.parse(result);
+      // Calculate memory percentage
+      const memoryPercent = stats.memory.total > 0 
+        ? (stats.memory.used / stats.memory.total) * 100 
+        : 0;
+      
+      // Calculate swap percentage
+      const swapPercent = stats.swap.total > 0
+        ? (stats.swap.used / stats.swap.total) * 100
+        : 0;
         
-        // Parse CPU (simple number)
-        const cpu = parseFloat(parsed.cpu) || 0;
-        
-        // Parse memory (JSON string with total/used/free)
-        let memory = 0;
-        let memoryTotal = 0;
-        let memoryUsed = 0;
-        if (parsed.memory) {
-          try {
-            const memData = JSON.parse(parsed.memory);
-            if (memData.total && memData.used) {
-              memoryTotal = parseInt(memData.total);
-              memoryUsed = parseInt(memData.used);
-              memory = (memoryUsed / memoryTotal) * 100;
-            }
-          } catch {
-            memory = parseFloat(parsed.memory) || 0;
-          }
-        }
-
-        // Parse swap (JSON string with total/used/free)
-        let swap = 0;
-        let swapTotal = 0;
-        let swapUsed = 0;
-        if (parsed.swap) {
-          try {
-            const swapData = JSON.parse(parsed.swap);
-            if (swapData.total && swapData.used) {
-              swapTotal = parseInt(swapData.total);
-              swapUsed = parseInt(swapData.used);
-              if (swapTotal > 0) {
-                swap = (swapUsed / swapTotal) * 100;
-              }
-            }
-          } catch {
-            swap = parseFloat(parsed.swap) || 0;
-          }
-        }
-        
-        // Parse disk (JSON string with size/used/avail/use_percent)
-        let diskUsage = 0;
-        if (parsed.disk) {
-          try {
-            const diskData = JSON.parse(parsed.disk);
-            if (diskData.use_percent) {
-              diskUsage = parseFloat(diskData.use_percent.replace('%', '')) || 0;
-            }
-          } catch {
-            diskUsage = parseFloat(parsed.disk) || 0;
-          }
-        }
-        
-        setStats({
-          cpu,
-          memory,
-          memoryTotal,
-          memoryUsed,
-          swap,
-          swapTotal,
-          swapUsed,
-          diskUsage,
-          uptime: parsed.uptime || '0:00:00'
-        });
-      } catch (e) {
-        console.error('Failed to parse system stats:', e);
-      }
+      setStats({
+        cpu: stats.cpu_percent,
+        memory: memoryPercent,
+        memoryTotal: stats.memory.total,
+        memoryUsed: stats.memory.used,
+        swap: swapPercent,
+        swapTotal: stats.swap.total,
+        swapUsed: stats.swap.used,
+        diskUsage: stats.disk.use_percent,
+        uptime: stats.uptime
+      });
     } catch (error) {
       console.error('Failed to fetch system stats:', error);
     }

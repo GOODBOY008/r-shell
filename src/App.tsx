@@ -4,7 +4,7 @@ import { MenuBar } from './components/menu-bar';
 import { Toolbar } from './components/toolbar';
 import { SessionManager } from './components/session-manager';
 import { SessionTabs } from './components/session-tabs';
-import { Terminal } from './components/terminal';
+import { PtyTerminal } from './components/pty-terminal';
 import { SystemMonitor } from './components/system-monitor';
 import { LogViewer } from './components/log-viewer';
 import { NetworkMonitor } from './components/network-monitor';
@@ -388,7 +388,7 @@ export default function App() {
                 <ResizablePanelGroup direction="vertical" className="flex-1">
                   {/* Terminal Panel */}
                   <ResizablePanel defaultSize={60} minSize={30}>
-                    <Terminal 
+                    <PtyTerminal 
                       key={activeTab.id}
                       sessionId={activeTab.id}
                       sessionName={activeTab.name}

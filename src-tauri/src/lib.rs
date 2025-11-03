@@ -20,6 +20,7 @@ pub fn run() {
             commands::ssh_connect,
             commands::ssh_disconnect,
             commands::ssh_execute_command,
+            commands::ssh_tab_complete,
             commands::get_system_stats,
             commands::list_files,
             commands::list_sessions,
@@ -40,6 +41,11 @@ pub fn run() {
             commands::create_file,
             commands::read_file_content,
             commands::copy_file,
+            // PTY session commands for interactive terminal (like ttyd)
+            commands::start_pty_session,
+            commands::write_to_pty,
+            commands::read_from_pty,
+            commands::close_pty_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

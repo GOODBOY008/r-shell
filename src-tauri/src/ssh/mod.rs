@@ -5,6 +5,7 @@ use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConfig {
@@ -30,6 +31,13 @@ pub struct SshSession {
 
 pub struct SshClient {
     session: Option<Arc<client::Handle<Client>>>,
+}
+
+// PTY session handle for interactive shell
+pub struct PtySession {
+    pub input_tx: mpsc::Sender<Vec<u8>>,
+    pub output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
+    pub channel_id: ChannelId,
 }
 
 pub struct Client;
@@ -144,6 +152,93 @@ impl SshClient {
 
     pub fn is_connected(&self) -> bool {
         self.session.is_some()
+    }
+
+    /// Create a persistent PTY shell session (like ttyd)
+    /// This enables interactive commands like vim, less, more, top, etc.
+    pub async fn create_pty_session(
+        &self,
+        cols: u32,
+        rows: u32,
+    ) -> Result<PtySession> {
+        if let Some(session) = &self.session {
+            // Open a new SSH channel
+            let mut channel = session.channel_open_session().await?;
+            
+            // Request PTY with terminal type and dimensions
+            // Similar to ttyd's approach: xterm-256color terminal
+            channel
+                .request_pty(
+                    true,                    // want_reply
+                    "xterm-256color",        // terminal type (like ttyd)
+                    cols,                    // columns
+                    rows,                    // rows
+                    0,                       // pixel_width (not used)
+                    0,                       // pixel_height (not used)
+                    &[],                     // terminal modes
+                )
+                .await?;
+            
+            // Start interactive shell
+            channel.request_shell(true).await?;
+            
+            // Create channels for bidirectional communication (like ttyd's pty_buf)
+            let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(100);
+            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(1000);
+            
+            let channel_id = channel.id();
+            
+            // Clone channel for input task
+            let input_channel = channel.make_writer();
+            
+            // Spawn task to handle input (frontend → SSH)
+            // This is similar to ttyd's pty_write and INPUT command handling
+            tokio::spawn(async move {
+                let mut writer = input_channel;
+                while let Some(data) = input_rx.recv().await {
+                    if let Err(e) = writer.write_all(&data).await {
+                        eprintln!("[PTY] Failed to send data to SSH: {}", e);
+                        break;
+                    }
+                }
+            });
+            
+            // Spawn task to handle output (SSH → frontend)
+            // This is similar to ttyd's process_read_cb and OUTPUT command
+            tokio::spawn(async move {
+                loop {
+                    match channel.wait().await {
+                        Some(ChannelMsg::Data { data }) => {
+                            if output_tx.send(data.to_vec()).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(ChannelMsg::ExtendedData { data, .. }) => {
+                            // stderr data (also send to output)
+                            if output_tx.send(data.to_vec()).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                            eprintln!("[PTY] Channel closed");
+                            break;
+                        }
+                        Some(ChannelMsg::ExitStatus { exit_status }) => {
+                            eprintln!("[PTY] Process exited with status: {}", exit_status);
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            
+            Ok(PtySession {
+                input_tx,
+                output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
+                channel_id,
+            })
+        } else {
+            Err(anyhow::anyhow!("Not connected"))
+        }
     }
 
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {

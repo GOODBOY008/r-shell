@@ -185,41 +185,6 @@ Real-time monitoring:
 - Network statistics
 - Disk usage
 
-## Integration with Figma Design
-
-This project integrates a React frontend generated from Figma with the Tauri platform:
-
-### What was Integrated:
-1. ✅ All UI components from `SSH Client Application (Community)`
-2. ✅ Radix UI component library for accessible UI primitives
-3. ✅ Tailwind CSS for styling
-4. ✅ Complete component structure with session management
-5. ✅ Resizable panels for flexible layout
-6. ✅ Modal dialogs for connections and settings
-
-### Changes Made:
-- Updated `package.json` with all required dependencies
-- Configured Tailwind CSS with PostCSS
-- Set up TypeScript path aliases (`@/*` → `./src/*`)
-- Integrated Tauri-specific configurations in `vite.config.ts`
-- Fixed import statements to remove version specifiers
-- Created utility functions for component styling
-
-## Configuration
-
-### Tailwind CSS
-Configured in `tailwind.config.js` with custom theme extending CSS variables for colors and border radius.
-
-### TypeScript
-Path aliases configured in `tsconfig.json`:
-- `@/*` maps to `./src/*`
-
-### Vite
-Custom configuration in `vite.config.ts`:
-- Path resolution for `@` alias
-- Tauri-specific dev server settings
-- HMR configuration
-
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
