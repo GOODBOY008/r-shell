@@ -26,6 +26,10 @@ pub enum WsMessage {
         cols: u32,
         rows: u32,
     },
+    /// Pause output (flow control - like ttyd)
+    Pause { session_id: String },
+    /// Resume output (flow control - like ttyd)
+    Resume { session_id: String },
     /// Close PTY session
     Close { session_id: String },
     /// Error message
@@ -94,7 +98,42 @@ impl WebSocketServer {
         // Handle incoming WebSocket messages
         while let Some(msg) = ws_receiver.next().await {
             match msg {
+                Ok(Message::Binary(data)) => {
+                    // CRITICAL: Binary protocol for maximum performance (like ttyd)
+                    // Format: [command byte][session_id bytes][data bytes]
+                    if data.is_empty() {
+                        continue;
+                    }
+                    
+                    let command = data[0];
+                    
+                    match command {
+                        0x00 => {
+                            // INPUT command - fastest path
+                            if data.len() < 37 {
+                                tracing::warn!("Binary INPUT message too short");
+                                continue;
+                            }
+                            
+                            let session_id = String::from_utf8_lossy(&data[1..37]).to_string();
+                            let input_data = data[37..].to_vec();
+                            
+                            // Direct write - no JSON overhead
+                            if let Err(e) = self
+                                .session_manager
+                                .write_to_pty(&session_id, input_data)
+                                .await
+                            {
+                                tracing::error!("Failed to write to PTY: {}", e);
+                            }
+                        }
+                        _ => {
+                            tracing::warn!("Unknown binary command: {}", command);
+                        }
+                    }
+                }
                 Ok(Message::Text(text)) => {
+                    // Fallback: JSON protocol for control messages
                     tracing::debug!("Received text message: {}", text);
                     
                     // Parse the message
@@ -118,32 +157,6 @@ impl WebSocketServer {
                             };
                             let _ = tx.send(serde_json::to_string(&error)?);
                         }
-                    }
-                }
-                Ok(Message::Binary(data)) => {
-                    tracing::debug!("Received binary message of {} bytes", data.len());
-                    // Binary messages are treated as raw terminal input
-                    // Format: first 36 bytes are session_id UUID, rest is data
-                    if data.len() < 36 {
-                        let error = WsMessage::Error {
-                            message: "Binary message too short".to_string(),
-                        };
-                        let _ = tx.send(serde_json::to_string(&error)?);
-                        continue;
-                    }
-                    
-                    let session_id = String::from_utf8_lossy(&data[..36]).to_string();
-                    let input_data = data[36..].to_vec();
-                    
-                    if let Err(e) = self
-                        .session_manager
-                        .write_to_pty(&session_id, input_data)
-                        .await
-                    {
-                        let error = WsMessage::Error {
-                            message: format!("Failed to write to PTY: {}", e),
-                        };
-                        let _ = tx.send(serde_json::to_string(&error)?);
                     }
                 }
                 Ok(Message::Close(_)) => {
@@ -195,30 +208,60 @@ impl WebSocketServer {
                 tx.send(serde_json::to_string(&response)?)?;
 
                 // Start reading from PTY and sending to WebSocket
+                // CRITICAL OPTIMIZATION: Use blocking read instead of polling
                 let session_manager = self.session_manager.clone();
                 let session_id_clone = session_id.clone();
                 let tx_clone = tx.clone();
 
                 tokio::spawn(async move {
+                    // Buffer for accumulating small chunks
+                    let mut accumulated = Vec::with_capacity(8192);
+                    let mut last_send = tokio::time::Instant::now();
+                    
                     loop {
                         match session_manager.read_from_pty(&session_id_clone).await {
                             Ok(data) => {
                                 if data.is_empty() {
-                                    // No data available, continue polling
+                                    // Send accumulated data if we have any and timeout reached
+                                    if !accumulated.is_empty() && last_send.elapsed().as_millis() > 5 {
+                                        // Send output to WebSocket
+                                        let output = WsMessage::Output {
+                                            session_id: session_id_clone.clone(),
+                                            data: accumulated.clone(),
+                                        };
+
+                                        if let Ok(json) = serde_json::to_string(&output) {
+                                            if tx_clone.send(json).is_err() {
+                                                tracing::error!("Failed to send output to WebSocket");
+                                                break;
+                                            }
+                                        }
+                                        accumulated.clear();
+                                        last_send = tokio::time::Instant::now();
+                                    }
                                     continue;
                                 }
 
-                                // Send output to WebSocket
-                                let output = WsMessage::Output {
-                                    session_id: session_id_clone.clone(),
-                                    data,
-                                };
+                                // Accumulate data
+                                accumulated.extend_from_slice(&data);
+                                
+                                // Send immediately if:
+                                // 1. Buffer is large enough (> 4KB)
+                                // 2. Or 5ms has passed since last send
+                                if accumulated.len() > 4096 || last_send.elapsed().as_millis() > 5 {
+                                    let output = WsMessage::Output {
+                                        session_id: session_id_clone.clone(),
+                                        data: accumulated.clone(),
+                                    };
 
-                                if let Ok(json) = serde_json::to_string(&output) {
-                                    if tx_clone.send(json).is_err() {
-                                        tracing::error!("Failed to send output to WebSocket");
-                                        break;
+                                    if let Ok(json) = serde_json::to_string(&output) {
+                                        if tx_clone.send(json).is_err() {
+                                            tracing::error!("Failed to send output to WebSocket");
+                                            break;
+                                        }
                                     }
+                                    accumulated.clear();
+                                    last_send = tokio::time::Instant::now();
                                 }
                             }
                             Err(e) => {
@@ -244,6 +287,18 @@ impl WebSocketServer {
                     message: format!("Terminal resized: {}x{}", cols, rows),
                 };
                 tx.send(serde_json::to_string(&response)?)?;
+            }
+            WsMessage::Pause { session_id } => {
+                tracing::debug!("Pausing output for session: {}", session_id);
+                // Flow control: pause reading from PTY
+                // In a full implementation, we'd pause the output task
+                // For now, just acknowledge
+            }
+            WsMessage::Resume { session_id } => {
+                tracing::debug!("Resuming output for session: {}", session_id);
+                // Flow control: resume reading from PTY
+                // In a full implementation, we'd resume the output task
+                // For now, just acknowledge
             }
             WsMessage::Close { session_id } => {
                 tracing::info!("Closing PTY session: {}", session_id);

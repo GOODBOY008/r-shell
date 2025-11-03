@@ -104,7 +104,7 @@ impl SessionManager {
     }
     
     /// Read data from PTY (output for display)
-    /// Uses timeout to prevent hanging when PTY is idle
+    /// OPTIMIZED: Use try_recv first for immediate data, then short timeout
     pub async fn read_from_pty(
         &self,
         session_id: &str,
@@ -116,15 +116,25 @@ impl SessionManager {
         
         let mut rx = pty.output_rx.lock().await;
         
-        // Use longer timeout (200ms) to reduce network requests
-        // Return empty vec if no data available (PTY is idle/waiting for input)
+        // Try immediate read first (non-blocking)
+        match rx.try_recv() {
+            Ok(data) => return Ok(data),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                // No immediate data, use short timeout
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return Err(anyhow::anyhow!("PTY session closed"));
+            }
+        }
+        
+        // Fall back to short timeout wait (1ms for ultra-low latency)
         match tokio::time::timeout(
-            tokio::time::Duration::from_millis(200),
+            tokio::time::Duration::from_millis(1),
             rx.recv()
         ).await {
             Ok(Some(data)) => Ok(data),
             Ok(None) => Err(anyhow::anyhow!("PTY session closed")),
-            Err(_) => Ok(Vec::new()), // Timeout - no data available, return empty
+            Err(_) => Ok(Vec::new()), // Timeout - no data available
         }
     }
     

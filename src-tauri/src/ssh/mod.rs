@@ -183,8 +183,9 @@ impl SshClient {
             channel.request_shell(true).await?;
             
             // Create channels for bidirectional communication (like ttyd's pty_buf)
-            let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(100);
-            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(1000);
+            // Increased capacity for better buffering during fast input
+            let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1000);  // Increased from 100
+            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(2000);    // Increased from 1000
             
             let channel_id = channel.id();
             
@@ -193,11 +194,19 @@ impl SshClient {
             
             // Spawn task to handle input (frontend → SSH)
             // This is similar to ttyd's pty_write and INPUT command handling
+            // Key: immediate write + flush for responsiveness
             tokio::spawn(async move {
                 let mut writer = input_channel;
                 while let Some(data) = input_rx.recv().await {
+                    // Write data immediately
                     if let Err(e) = writer.write_all(&data).await {
                         eprintln!("[PTY] Failed to send data to SSH: {}", e);
+                        break;
+                    }
+                    // Critical: flush immediately after write (like ttyd)
+                    // This ensures data is sent to PTY without buffering delay
+                    if let Err(e) = writer.flush().await {
+                        eprintln!("[PTY] Failed to flush data to SSH: {}", e);
                         break;
                     }
                 }

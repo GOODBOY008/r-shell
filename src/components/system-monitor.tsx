@@ -206,6 +206,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
   };
 
   // Poll system stats every 3 seconds
+  // OPTIMIZATION: Use longer intervals to reduce load on terminal
   useEffect(() => {
     if (!sessionId) {
       // Clear data when no session
@@ -223,9 +224,24 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     fetchSystemStats();
     fetchProcesses();
     
-    // Set up polling intervals
-    const statsInterval = setInterval(fetchSystemStats, 3000);
-    const processInterval = setInterval(fetchProcesses, 5000); // Refresh processes every 5 seconds
+    // OPTIMIZED: Longer intervals to reduce impact on terminal
+    // Use requestIdleCallback if available for better performance
+    const statsInterval = setInterval(() => {
+      // Only fetch if browser is idle
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => fetchSystemStats());
+      } else {
+        fetchSystemStats();
+      }
+    }, 5000); // Increased from 3s to 5s
+    
+    const processInterval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => fetchProcesses());
+      } else {
+        fetchProcesses();
+      }
+    }, 10000); // Increased from 5s to 10s
     
     return () => {
       clearInterval(statsInterval);
@@ -265,11 +281,20 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
   };
 
   // Fetch disk usage on mount and when session changes
+  // OPTIMIZED: Much longer interval - disk usage rarely changes
   useEffect(() => {
+    if (!sessionId) return;
+    
     fetchDiskUsage();
     
-    // Refresh disk usage every 30 seconds
-    const interval = setInterval(fetchDiskUsage, 30000);
+    // Refresh disk usage every 60 seconds (increased from 30s)
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => fetchDiskUsage());
+      } else {
+        fetchDiskUsage();
+      }
+    }, 60000);
     
     return () => clearInterval(interval);
   }, [sessionId]);
@@ -284,6 +309,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
   const [networkHistory, setNetworkHistory] = useState<NetworkHistoryData[]>([]);
 
   // Network usage monitoring - fetch real bandwidth data
+  // OPTIMIZED: Use longer interval and request idle callback
   useEffect(() => {
     if (!sessionId) {
       setNetworkHistory([]);
@@ -353,13 +379,20 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     // Initial fetch
     fetchBandwidth();
 
-    // Update every 2 seconds (includes 1 second measurement interval in backend)
-    const interval = setInterval(fetchBandwidth, 2000);
+    // OPTIMIZED: Increased from 2s to 5s, use idle callback
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => fetchBandwidth());
+      } else {
+        fetchBandwidth();
+      }
+    }, 5000);
 
     return () => clearInterval(interval);
   }, [sessionId]);
 
   // Network latency monitoring - fetch real ping data
+  // OPTIMIZED: Longer interval, use idle callback
   useEffect(() => {
     if (!sessionId) {
       setLatencyData([]);
@@ -399,8 +432,14 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     // Initial fetch
     fetchLatency();
 
-    // Update every 3 seconds
-    const interval = setInterval(fetchLatency, 3000);
+    // OPTIMIZED: Increased from 3s to 10s, use idle callback
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => fetchLatency());
+      } else {
+        fetchLatency();
+      }
+    }, 10000);
 
     return () => clearInterval(interval);
   }, [sessionId]);
