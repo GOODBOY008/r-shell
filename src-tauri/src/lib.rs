@@ -1,8 +1,10 @@
 mod ssh;
 mod session_manager;
 mod commands;
+mod websocket_server;
 
 use session_manager::SessionManager;
+use websocket_server::WebSocketServer;
 use std::sync::Arc;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -15,6 +17,20 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup({
+            let session_manager_clone = session_manager.clone();
+            move |_app| {
+                // Start WebSocket server for terminal I/O on port 9001
+                // This runs after Tauri's async runtime is initialized
+                let ws_server = Arc::new(WebSocketServer::new(session_manager_clone, 9001));
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = ws_server.start().await {
+                        tracing::error!("WebSocket server error: {}", e);
+                    }
+                });
+                Ok(())
+            }
+        })
         .manage(session_manager)
         .invoke_handler(tauri::generate_handler![
             commands::ssh_connect,
@@ -41,11 +57,8 @@ pub fn run() {
             commands::create_file,
             commands::read_file_content,
             commands::copy_file,
-            // PTY session commands for interactive terminal (like ttyd)
-            commands::start_pty_session,
-            commands::write_to_pty,
-            commands::read_from_pty,
-            commands::close_pty_session,
+            // Note: PTY terminal I/O now uses WebSocket instead of IPC
+            // WebSocket server runs on ws://127.0.0.1:9001
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

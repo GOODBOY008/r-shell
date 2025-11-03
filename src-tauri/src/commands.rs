@@ -1197,62 +1197,7 @@ fn find_common_prefix(strings: &[String]) -> Option<String> {
     }
 }
 
-// ========== PTY Session Commands (Interactive Terminal) ==========
-// These commands enable full interactivity like ttyd does
-
-/// Start a PTY shell session
-/// This creates a persistent interactive shell that supports:
-/// - vim, nano, emacs (text editors)
-/// - less, more, tail -f (pagers and streams)
-/// - top, htop, btop (process monitors)
-/// - any other interactive command
-#[tauri::command]
-pub async fn start_pty_session(
-    session_id: String,
-    cols: u32,
-    rows: u32,
-    state: State<'_, Arc<SessionManager>>,
-) -> Result<(), String> {
-    state
-        .start_pty_session(&session_id, cols, rows)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Write data to PTY (user input from terminal)
-#[tauri::command]
-pub async fn write_to_pty(
-    session_id: String,
-    data: Vec<u8>,
-    state: State<'_, Arc<SessionManager>>,
-) -> Result<(), String> {
-    state
-        .write_to_pty(&session_id, data)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Read data from PTY (output to display in terminal)
-/// This command is blocking - it waits for output from the PTY
-#[tauri::command]
-pub async fn read_from_pty(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
-) -> Result<Vec<u8>, String> {
-    state
-        .read_from_pty(&session_id)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-/// Close PTY session
-#[tauri::command]
-pub async fn close_pty_session(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
-) -> Result<(), String> {
-    state
-        .close_pty_session(&session_id)
-        .await
-        .map_err(|e| e.to_string())
-}
+// ========== PTY Session ==========
+// PTY terminal I/O now uses WebSocket instead of IPC for better performance
+// WebSocket server runs on ws://127.0.0.1:9001
+// See src/websocket_server.rs for implementation

@@ -2,7 +2,6 @@ import React from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { invoke } from '@tauri-apps/api/core';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -18,7 +17,7 @@ interface PtyTerminalProps {
  * This terminal uses a persistent PTY (pseudo-terminal) session for full interactivity.
  * It supports all interactive commands like vim, less, more, top, etc.
  * 
- * Based on ttyd architecture: https://github.com/tsl0922/ttyd
+ * Communication is done via WebSocket for low-latency bidirectional streaming.
  */
 export function PtyTerminal({ 
   sessionId, 
@@ -29,6 +28,7 @@ export function PtyTerminal({
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
+  const wsRef = React.useRef<WebSocket | null>(null);
   
   React.useEffect(() => {
     if (!terminalRef.current) return;
@@ -82,116 +82,113 @@ export function PtyTerminal({
     term.writeln(`\x1b[90m  ${username}@${host}\x1b[0m`);
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.write('\r\n');
-    term.writeln('\x1b[33m🚀 Starting interactive shell (PTY mode)...\x1b[0m');
+    term.writeln('\x1b[33m🚀 Starting interactive shell (WebSocket + PTY mode)...\x1b[0m');
     term.write('\r\n');
 
-    let ptyActive = false;
     let isRunning = true;
-    
-    // Queue for sequential sending (prevents concurrent calls)
-    const inputQueue: Uint8Array[] = [];
-    let isSending = false;
 
-    // Process queue sequentially
-    const processQueue = async () => {
-      if (isSending || inputQueue.length === 0 || !ptyActive) return;
-      
-      isSending = true;
-      
-      // Take ALL pending items and combine them
-      const batch = inputQueue.splice(0, inputQueue.length);
-      
-      // Combine all bytes
-      const totalLength = batch.reduce((sum, arr) => sum + arr.length, 0);
-      const combined = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const chunk of batch) {
-        combined.set(chunk, offset);
-        offset += chunk.length;
-      }
-      
-      try {
-        await invoke('write_to_pty', {
-          sessionId,
-          data: Array.from(combined),
-        });
-      } catch (e) {
-        console.error('[PTY Terminal] Write error:', e);
-      }
-      
-      isSending = false;
-      
-      // Process any new items that arrived
-      if (inputQueue.length > 0 && ptyActive) {
-        Promise.resolve().then(() => processQueue());
-      }
-    };
+    // Connect to WebSocket server
+    const connectWebSocket = () => {
+      const ws = new WebSocket('ws://127.0.0.1:9001');
+      wsRef.current = ws;
 
-    // Start PTY session
-    const startPTY = async () => {
-      try {
-        await invoke('start_pty_session', {
-          sessionId,
+      ws.onopen = () => {
+        console.log('[PTY Terminal] WebSocket connected');
+        term.writeln('\x1b[32m✓ WebSocket connected\x1b[0m');
+        
+        // Start PTY session
+        const startMsg = {
+          type: 'StartPty',
+          session_id: sessionId,
           cols: term.cols,
           rows: term.rows,
-        });
+        };
+        ws.send(JSON.stringify(startMsg));
+      };
 
-        ptyActive = true;
-        term.writeln('\x1b[32m✓ PTY session started\x1b[0m');
-        term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
-        term.write('\r\n');
-
-        console.log('[PTY Terminal] Session started successfully');
-
-        // Start output reading loop
-        while (isRunning && ptyActive) {
-          try {
-            const data = await invoke<number[]>('read_from_pty', {
-              sessionId,
-            });
-
-            if (data && data.length > 0) {
-              const text = new TextDecoder().decode(new Uint8Array(data));
-              term.write(text);
-              // Data received - check immediately for more
-            } else {
-              // No data available - PTY is idle
-              // Use longer delay to reduce network traffic
-              await new Promise(resolve => setTimeout(resolve, 200));
-            }
-          } catch (e) {
-            console.error('[PTY Terminal] Read error:', e);
-            term.write(`\r\n\x1b[31m[PTY read error: ${e}]\x1b[0m\r\n`);
-            break;
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          
+          switch (msg.type) {
+            case 'Success':
+              console.log('[PTY Terminal]', msg.message);
+              if (msg.message.includes('PTY session started')) {
+                term.writeln('\x1b[32m✓ PTY session started\x1b[0m');
+                term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
+                term.write('\r\n');
+              }
+              break;
+              
+            case 'Output':
+              // Terminal output from PTY
+              if (msg.data && msg.data.length > 0) {
+                const text = new TextDecoder().decode(new Uint8Array(msg.data));
+                term.write(text);
+              }
+              break;
+              
+            case 'Error':
+              console.error('[PTY Terminal] Error:', msg.message);
+              term.write(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m\r\n`);
+              break;
+              
+            default:
+              console.log('[PTY Terminal] Unknown message type:', msg.type);
           }
+        } catch (e) {
+          console.error('[PTY Terminal] Failed to parse message:', e);
         }
-      } catch (e) {
-        console.error('[PTY Terminal] Failed to start:', e);
-        term.write(`\r\n\x1b[31m[PTY error: ${e}]\x1b[0m\r\n`);
-        term.writeln('\x1b[33mPTY mode failed. Interactive commands may not work.\x1b[0m');
-        ptyActive = false;
-      }
+      };
+
+      ws.onerror = (error) => {
+        console.error('[PTY Terminal] WebSocket error:', error);
+        term.write('\r\n\x1b[31m[WebSocket error]\x1b[0m\r\n');
+      };
+
+      ws.onclose = () => {
+        console.log('[PTY Terminal] WebSocket closed');
+        if (isRunning) {
+          term.write('\r\n\x1b[33m[Connection closed. Attempting to reconnect...]\x1b[0m\r\n');
+          setTimeout(() => {
+            if (isRunning) {
+              connectWebSocket();
+            }
+          }, 2000);
+        }
+      };
     };
 
-    startPTY();
+    connectWebSocket();
 
-    // Handle user input - queue and process immediately
+    // Handle user input - send directly to WebSocket
     const inputDisposable = term.onData((data: string) => {
-      if (ptyActive) {
-        // Encode and add to queue
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
         const encoder = new TextEncoder();
         const bytes = encoder.encode(data);
-        inputQueue.push(bytes);
         
-        // Process immediately (will batch if already sending)
-        processQueue();
+        const inputMsg = {
+          type: 'Input',
+          session_id: sessionId,
+          data: Array.from(bytes),
+        };
+        
+        ws.send(JSON.stringify(inputMsg));
       }
     });
 
     // Handle terminal resize
     const resizeDisposable = term.onResize(({ cols, rows }) => {
-      if (ptyActive) {
-        // TODO: Implement resize_pty command
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const resizeMsg = {
+          type: 'Resize',
+          session_id: sessionId,
+          cols,
+          rows,
+        };
+        ws.send(JSON.stringify(resizeMsg));
         console.log(`[PTY Terminal] Terminal resized to ${cols}x${rows}`);
       }
     });
@@ -206,31 +203,21 @@ export function PtyTerminal({
     return () => {
       console.log('[PTY Terminal] Cleaning up');
       isRunning = false;
-      ptyActive = false;
       
-      // Flush any remaining queued input
-      if (inputQueue.length > 0) {
-        const totalLength = inputQueue.reduce((sum: number, arr: Uint8Array) => sum + arr.length, 0);
-        const combined = new Uint8Array(totalLength);
-        let offset = 0;
-        for (const chunk of inputQueue) {
-          combined.set(chunk, offset);
-          offset += chunk.length;
-        }
-        invoke('write_to_pty', {
-          sessionId,
-          data: Array.from(combined),
-        }).catch(console.error);
+      // Close PTY session via WebSocket
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        const closeMsg = {
+          type: 'Close',
+          session_id: sessionId,
+        };
+        ws.send(JSON.stringify(closeMsg));
+        ws.close();
       }
       
       inputDisposable.dispose();
       resizeDisposable.dispose();
       window.removeEventListener('resize', handleWindowResize);
-      
-      // Close PTY session
-      invoke('close_pty_session', { sessionId }).catch((e) => {
-        console.error('[PTY Terminal] Error closing session:', e);
-      });
       
       term.dispose();
     };
