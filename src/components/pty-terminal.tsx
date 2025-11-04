@@ -314,8 +314,20 @@ export function PtyTerminal({
   }, [sessionId, sessionName, host, username]);
 
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full terminal-no-scrollbar">
       <div ref={terminalRef} className="h-full w-full bg-[#1e1e1e]" />
+      <style>{`
+        .terminal-no-scrollbar .xterm-viewport {
+          overflow-y: hidden !important;
+        }
+        .terminal-no-scrollbar .xterm-viewport::-webkit-scrollbar {
+          display: none;
+        }
+        .terminal-no-scrollbar .xterm-viewport {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+      `}</style>
     </div>
   );
 }

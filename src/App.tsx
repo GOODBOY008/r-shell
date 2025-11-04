@@ -364,7 +364,7 @@ export default function App() {
       <div className="flex-1 flex overflow-hidden">
         <ResizablePanelGroup direction="horizontal">
           {/* Left Sidebar - Session Manager with integrated Connection Details */}
-          <ResizablePanel defaultSize={18} minSize={15}>
+          <ResizablePanel defaultSize={12} minSize={12}>
             <SessionManager 
               onSessionSelect={handleSessionSelect}
               selectedSessionId={selectedSession?.id || null}
@@ -376,7 +376,7 @@ export default function App() {
           <ResizableHandle />
           
           {/* Main Content */}
-          <ResizablePanel defaultSize={rightSidebarVisible ? 62 : 82} minSize={30}>
+          <ResizablePanel defaultSize={rightSidebarVisible ? 68 : 85} minSize={30}>
             <div className="h-full flex flex-col">
               <SessionTabs 
                 tabs={tabs}
@@ -392,7 +392,7 @@ export default function App() {
               {activeTab ? (
                 <ResizablePanelGroup direction="vertical" className="flex-1">
                   {/* Terminal Panel */}
-                  <ResizablePanel defaultSize={60} minSize={30}>
+                  <ResizablePanel defaultSize={70} minSize={30}>
                     <PtyTerminal 
                       key={activeTab.id}
                       sessionId={activeTab.id}
@@ -405,7 +405,7 @@ export default function App() {
                   <ResizableHandle />
                   
                   {/* File Browser Panel */}
-                  <ResizablePanel defaultSize={40} minSize={25}>
+                  <ResizablePanel defaultSize={30} minSize={20}>
                     <IntegratedFileBrowser
                       sessionId={activeTab.id}
                       host={activeTab.host}
@@ -428,7 +428,7 @@ export default function App() {
               <ResizableHandle />
               
               {/* Right Sidebar - Tabs for Monitor/Logs */}
-              <ResizablePanel defaultSize={20} minSize={12}>
+              <ResizablePanel defaultSize={15} minSize={15}>
                 <Tabs defaultValue="monitor" className="h-full flex flex-col">
                   <TabsList className="inline-flex w-auto mx-2 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
