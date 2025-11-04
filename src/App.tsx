@@ -428,14 +428,14 @@ export default function App() {
               <ResizableHandle />
               
               {/* Right Sidebar - Tabs for Monitor/Logs */}
-              <ResizablePanel defaultSize={20} minSize={15}>
+              <ResizablePanel defaultSize={20} minSize={12}>
                 <Tabs defaultValue="monitor" className="h-full flex flex-col">
-                  <TabsList className="inline-flex w-auto mx-3 mt-2">
-                    <TabsTrigger value="monitor" className="text-xs">Monitor</TabsTrigger>
-                    <TabsTrigger value="logs" className="text-xs">Logs</TabsTrigger>
+                  <TabsList className="inline-flex w-auto mx-2 mt-2">
+                    <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
+                    <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
                   </TabsList>
                   <TabsContent value="monitor" className="flex-1 mt-0 overflow-hidden">
-                    <div className="h-full overflow-auto space-y-4 p-3">
+                    <div className="h-full overflow-auto p-2">
                       <SystemMonitor sessionId={activeTabId} />
                       {/* <NetworkMonitor sessionId={activeTabId} /> */}
                     </div>

@@ -448,17 +448,17 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
 
   return (
     <ScrollArea className="h-full">
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         {/* System Overview */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Activity className="w-3.5 h-3.5" />
-            <h3 className="text-xs font-medium">System Overview</h3>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Activity className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-medium truncate">System Overview</h3>
           </div>
           <Card>
-            <CardContent className="p-2.5 space-y-2">
+            <CardContent className="p-2 space-y-1.5">
               <div className="space-y-1">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center gap-1">
                   <span className="text-xs font-medium">CPU</span>
                   <span className={`text-xs font-semibold ${getUsageColor(stats.cpu)}`}>
                     {stats.cpu.toFixed(1)}%
@@ -468,31 +468,35 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
               </div>
               
               <div className="space-y-1">
-                <div className="flex justify-between items-center">
+                <div className="flex justify-between items-center gap-1">
                   <span className="text-xs font-medium">Memory</span>
-                  <span className={`text-xs font-semibold ${getUsageColor(stats.memory)}`}>
-                    {stats.memoryUsed && stats.memoryTotal 
-                      ? `${stats.memoryUsed}MB / ${stats.memoryTotal}MB (${stats.memory.toFixed(1)}%)`
-                      : `${stats.memory.toFixed(1)}%`
-                    }
+                  <span className={`text-xs font-semibold ${getUsageColor(stats.memory)} truncate`} title={stats.memoryUsed && stats.memoryTotal ? `${stats.memoryUsed}MB / ${stats.memoryTotal}MB` : ''}>
+                    {stats.memory.toFixed(1)}%
                   </span>
                 </div>
                 <Progress value={stats.memory} className={`h-1.5 ${getProgressColor(stats.memory)}`} />
+                {stats.memoryUsed && stats.memoryTotal && (
+                  <div className="text-[9px] text-muted-foreground text-right leading-tight">
+                    {stats.memoryUsed}MB / {stats.memoryTotal}MB
+                  </div>
+                )}
               </div>
 
               {/* Swap Space - Only show if swap exists */}
               {stats.swapTotal !== undefined && stats.swapTotal > 0 && (
                 <div className="space-y-1">
-                  <div className="flex justify-between items-center">
+                  <div className="flex justify-between items-center gap-1">
                     <span className="text-xs font-medium">Swap</span>
-                    <span className={`text-xs font-semibold ${getUsageColor(stats.swap || 0)}`}>
-                      {stats.swapUsed !== undefined && stats.swapTotal 
-                        ? `${stats.swapUsed}MB / ${stats.swapTotal}MB (${(stats.swap || 0).toFixed(1)}%)`
-                        : `${(stats.swap || 0).toFixed(1)}%`
-                      }
+                    <span className={`text-xs font-semibold ${getUsageColor(stats.swap || 0)} truncate`} title={stats.swapUsed !== undefined && stats.swapTotal ? `${stats.swapUsed}MB / ${stats.swapTotal}MB` : ''}>
+                      {(stats.swap || 0).toFixed(1)}%
                     </span>
                   </div>
                   <Progress value={stats.swap || 0} className={`h-1.5 ${getProgressColor(stats.swap || 0)}`} />
+                  {stats.swapUsed !== undefined && stats.swapTotal && (
+                    <div className="text-[9px] text-muted-foreground text-right leading-tight">
+                      {stats.swapUsed}MB / {stats.swapTotal}MB
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -500,10 +504,10 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         </div>
 
         {/* Running Processes */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Terminal className="w-3.5 h-3.5" />
-            <h3 className="text-xs font-medium">Running Processes</h3>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Terminal className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-medium truncate">Running Processes</h3>
           </div>
           <Card>
             <CardContent className="p-0">
@@ -511,53 +515,51 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                 <table className="w-full caption-bottom text-sm">
                   <thead className="[&_tr]:border-b">
                     <tr className="border-b transition-colors">
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-12">PID</th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-16">User</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs">PID</th>
                       <th 
-                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-12 cursor-pointer hover:bg-muted/50 select-none"
+                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs cursor-pointer hover:bg-muted/50 select-none"
                         onClick={() => setProcessSortBy('cpu')}
                       >
-                        <div className="flex items-center gap-1">
-                          CPU%
-                          {processSortBy === 'cpu' && <ArrowDown className="w-3 h-3" />}
+                        <div className="flex items-center gap-0.5">
+                          CPU
+                          {processSortBy === 'cpu' && <ArrowDown className="w-2.5 h-2.5" />}
                         </div>
                       </th>
                       <th 
-                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-12 cursor-pointer hover:bg-muted/50 select-none"
+                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs cursor-pointer hover:bg-muted/50 select-none"
                         onClick={() => setProcessSortBy('mem')}
                       >
-                        <div className="flex items-center gap-1">
-                          Mem%
-                          {processSortBy === 'mem' && <ArrowDown className="w-3 h-3" />}
+                        <div className="flex items-center gap-0.5">
+                          Mem
+                          {processSortBy === 'mem' && <ArrowDown className="w-2.5 h-2.5" />}
                         </div>
                       </th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs">Command</th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-10"></th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs">Command</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs w-8"></th>
                     </tr>
                   </thead>
                   <tbody className="[&_tr:last-child]:border-0">
                     {processes.slice(0, 8).map((process) => (
                       <tr key={process.pid} className="hover:bg-muted/50 border-b transition-colors">
-                        <td className="p-1.5 align-middle whitespace-nowrap text-xs">{process.pid}</td>
-                        <td className="p-1.5 align-middle whitespace-nowrap text-xs">{process.user}</td>
-                        <td className={`p-1.5 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.cpu)}`}>
-                          {process.cpu.toFixed(1)}%
+                        <td className="p-1 align-middle whitespace-nowrap text-[10px]">{process.pid}</td>
+                        <td className={`p-1 align-middle whitespace-nowrap text-[10px] font-semibold ${getUsageColor(process.cpu)}`}>
+                          {process.cpu.toFixed(0)}%
                         </td>
-                        <td className={`p-1.5 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.mem)}`}>
-                          {process.mem.toFixed(1)}%
+                        <td className={`p-1 align-middle whitespace-nowrap text-[10px] font-semibold ${getUsageColor(process.mem)}`}>
+                          {process.mem.toFixed(0)}%
                         </td>
-                        <td className="p-1.5 align-middle whitespace-nowrap text-xs font-mono truncate max-w-0" title={process.command}>
+                        <td className="p-1 align-middle whitespace-nowrap text-[10px] font-mono truncate max-w-0" title={process.command}>
                           {process.command}
                         </td>
-                        <td className="p-1.5 align-middle whitespace-nowrap text-xs">
+                        <td className="p-1 align-middle whitespace-nowrap text-xs">
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-5 w-5"
+                            className="h-4 w-4"
                             onClick={() => setProcessToKill(process)}
                             title="Kill process"
                           >
-                            <X className="h-3 w-3" />
+                            <X className="h-2.5 w-2.5" />
                           </Button>
                         </td>
                       </tr>
@@ -570,15 +572,15 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         </div>
 
         {/* Disk Usage */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <HardDrive className="w-3.5 h-3.5" />
-            <h3 className="text-xs font-medium">Disk Usage</h3>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <HardDrive className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-medium truncate">Disk Usage</h3>
           </div>
           <Card>
             <CardContent className="p-0">
               {disks.length === 0 ? (
-                <div className="p-3 text-xs text-muted-foreground">
+                <div className="p-2 text-[10px] text-muted-foreground">
                   No disk information available
                 </div>
               ) : (
@@ -586,29 +588,21 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                   <table className="w-full caption-bottom text-sm">
                     <thead className="[&_tr]:border-b">
                       <tr className="border-b transition-colors">
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium text-xs">Filesystem</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium text-xs">Mount</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-right align-middle font-medium text-xs">Size</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-right align-middle font-medium text-xs">Usage</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium text-xs">Path</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-xs">Size</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-xs">Usage</th>
                       </tr>
                     </thead>
                     <tbody className="[&_tr:last-child]:border-0">
                       {disks.map((disk, index) => (
                         <tr key={index} className="hover:bg-muted/50 border-b transition-colors">
-                          <td className="p-1.5 align-middle whitespace-nowrap font-mono text-xs truncate max-w-[80px]" title={disk.filesystem}>
-                            {disk.filesystem}
-                          </td>
-                          <td className="p-1.5 align-middle whitespace-nowrap font-medium text-xs truncate max-w-[60px]" title={disk.path}>
+                          <td className="p-1 align-middle font-medium text-[10px] truncate max-w-0" title={`${disk.path} (${disk.filesystem})`}>
                             {disk.path}
                           </td>
-                          <td className="p-1.5 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.total}</td>
-                          <td className="p-1.5 align-middle whitespace-nowrap text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <Progress 
-                                value={disk.usage} 
-                                className={`h-1.5 w-12 ${getProgressColor(disk.usage)}`}
-                              />
-                              <span className={`font-mono text-xs w-9 font-semibold ${getUsageColor(disk.usage)}`}>
+                          <td className="p-1 align-middle text-right font-mono text-[10px] whitespace-nowrap">{disk.total}</td>
+                          <td className="p-1 align-middle text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <span className={`font-mono text-[10px] font-semibold ${getUsageColor(disk.usage)}`}>
                                 {disk.usage}%
                               </span>
                             </div>
@@ -624,35 +618,39 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         </div>
 
         {/* Network Usage */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <ArrowDownUp className="w-3.5 h-3.5" />
-            <h3 className="text-xs font-medium">Network Usage</h3>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <ArrowDownUp className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-medium truncate">Network Usage</h3>
           </div>
           <Card>
-            <CardContent className="p-2.5 space-y-2.5">
+            <CardContent className="p-2 space-y-2">
               {/* Current Speeds */}
-              <div className="flex items-center justify-around">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-[#3b82f6]" />
-                  <div>
-                    <div className="text-xs text-muted-foreground">Download</div>
-                    <div className="font-medium">{networkUsage.downloadFormatted}</div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#3b82f6] shrink-0" />
+                    <div className="text-[9px] text-muted-foreground">Down</div>
+                  </div>
+                  <div className="font-medium text-[10px] truncate" title={networkUsage.downloadFormatted}>
+                    {networkUsage.downloadFormatted}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-[#ef4444]" />
-                  <div>
-                    <div className="text-xs text-muted-foreground">Upload</div>
-                    <div className="font-medium">{networkUsage.uploadFormatted}</div>
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[#ef4444] shrink-0" />
+                    <div className="text-[9px] text-muted-foreground">Up</div>
+                  </div>
+                  <div className="font-medium text-[10px] truncate" title={networkUsage.uploadFormatted}>
+                    {networkUsage.uploadFormatted}
                   </div>
                 </div>
               </div>
               
               {/* Usage History Chart */}
               <div>
-                <div className="text-xs text-muted-foreground mb-1.5">Usage history</div>
-                <div className="h-32">
+                <div className="text-[9px] text-muted-foreground mb-1">History</div>
+                <div className="h-24">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart 
                       data={networkHistory.map(item => ({
@@ -660,7 +658,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                         uploadPositive: item.upload,
                         downloadNegative: -item.download
                       }))}
-                      margin={{ top: 5, right: 5, left: 0, bottom: 5 }}
+                      margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
                     >
                       <defs>
                         <linearGradient id="uploadGradient" x1="0" y1="0" x2="0" y2="1">
@@ -676,7 +674,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                       <XAxis 
                         dataKey="time"
                         axisLine={true}
-                        tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
+                        tick={{ fontSize: 8, fill: 'hsl(var(--muted-foreground))' }}
                         stroke="hsl(var(--muted-foreground))"
                         tickLine={false}
                         interval="preserveStartEnd"
@@ -740,16 +738,16 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         </div>
 
         {/* Network Latency */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <Gauge className="w-3.5 h-3.5" />
-            <h3 className="text-xs font-medium">Network Latency</h3>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <Gauge className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-medium truncate">Network Latency</h3>
           </div>
           <Card>
-            <CardContent className="p-2.5">
-              <div className="h-32">
+            <CardContent className="p-2">
+              <div className="h-24">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={latencyData}>
+                  <AreaChart data={latencyData} margin={{ top: 5, right: 2, left: -10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
                     <defs>
                       <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
@@ -759,15 +757,15 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                     </defs>
                     <XAxis 
                       dataKey="time" 
-                      tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+                      tick={{ fontSize: 8, fill: 'hsl(var(--muted-foreground))' }}
                       stroke="hsl(var(--muted-foreground))"
                       strokeWidth={0.5}
                     />
                     <YAxis 
-                      tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }}
+                      tick={{ fontSize: 8, fill: 'hsl(var(--muted-foreground))' }}
                       stroke="hsl(var(--muted-foreground))"
                       strokeWidth={0.5}
-                      label={{ value: 'ms', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: 'hsl(var(--muted-foreground))' } }}
+                      width={30}
                     />
                     <Tooltip 
                       contentStyle={{
