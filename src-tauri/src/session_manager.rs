@@ -75,7 +75,7 @@ impl SessionManager {
     }
     
     /// Send data to PTY (user input)
-    /// macOS ARM optimization: Use direct send without try_send to ensure delivery
+    /// Uses try_send for better performance (non-blocking)
     pub async fn write_to_pty(
         &self,
         session_id: &str,
@@ -86,10 +86,21 @@ impl SessionManager {
             .get(session_id)
             .ok_or_else(|| anyhow::anyhow!("PTY session not found"))?;
         
-        // macOS ARM fix: Use blocking send to ensure input is never dropped
-        // This prevents character loss during fast typing
-        pty.input_tx.send(data).await
-            .map_err(|_| anyhow::anyhow!("PTY channel closed"))
+        // Use try_send for better performance (like ttyd's immediate send)
+        match pty.input_tx.try_send(data) {
+            Ok(_) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(data)) => {
+                // If channel is full, fall back to async send in background
+                let tx = pty.input_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(data).await;
+                });
+                Ok(())
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                Err(anyhow::anyhow!("PTY channel closed"))
+            }
+        }
     }
     
     /// Read data from PTY (output for display)
