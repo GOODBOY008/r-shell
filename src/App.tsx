@@ -52,6 +52,9 @@ export default function App() {
   const [sftpPanelOpen, setSftpPanelOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<SessionConfig | null>(null);
+  
+  // Right sidebar visibility
+  const [rightSidebarVisible, setRightSidebarVisible] = useState(true);
 
   // Restore sessions on mount
   useEffect(() => {
@@ -354,12 +357,14 @@ export default function App() {
         onNewSession={handleNewTab} 
         onOpenSFTP={handleOpenSFTP}
         onOpenSettings={handleOpenSettings}
+        onToggleRightSidebar={() => setRightSidebarVisible(!rightSidebarVisible)}
+        rightSidebarVisible={rightSidebarVisible}
       />
       
       <div className="flex-1 flex overflow-hidden">
         <ResizablePanelGroup direction="horizontal">
           {/* Left Sidebar - Session Manager with integrated Connection Details */}
-          <ResizablePanel defaultSize={20} minSize={15}>
+          <ResizablePanel defaultSize={18} minSize={15}>
             <SessionManager 
               onSessionSelect={handleSessionSelect}
               selectedSessionId={selectedSession?.id || null}
@@ -371,7 +376,7 @@ export default function App() {
           <ResizableHandle />
           
           {/* Main Content */}
-          <ResizablePanel defaultSize={55} minSize={30}>
+          <ResizablePanel defaultSize={rightSidebarVisible ? 62 : 82} minSize={30}>
             <div className="h-full flex flex-col">
               <SessionTabs 
                 tabs={tabs}
@@ -418,26 +423,30 @@ export default function App() {
             </div>
           </ResizablePanel>
           
-          <ResizableHandle />
-          
-          {/* Right Sidebar - Tabs for Monitor/Logs */}
-          <ResizablePanel defaultSize={25} minSize={20}>
-            <Tabs defaultValue="monitor" className="h-full flex flex-col">
-              <TabsList className="inline-flex w-auto mx-3 mt-2">
-                <TabsTrigger value="monitor" className="text-xs">Monitor</TabsTrigger>
-                <TabsTrigger value="logs" className="text-xs">Logs</TabsTrigger>
-              </TabsList>
-              <TabsContent value="monitor" className="flex-1 mt-0 overflow-hidden">
-                <div className="h-full overflow-auto space-y-4">
-                  <SystemMonitor sessionId={activeTabId} />
-                  {/* <NetworkMonitor sessionId={activeTabId} /> */}
-                </div>
-              </TabsContent>
-              <TabsContent value="logs" className="flex-1 mt-0 overflow-hidden">
-                <LogViewer sessionId={activeTabId} />
-              </TabsContent>
-            </Tabs>
-          </ResizablePanel>
+          {rightSidebarVisible && (
+            <>
+              <ResizableHandle />
+              
+              {/* Right Sidebar - Tabs for Monitor/Logs */}
+              <ResizablePanel defaultSize={20} minSize={15}>
+                <Tabs defaultValue="monitor" className="h-full flex flex-col">
+                  <TabsList className="inline-flex w-auto mx-3 mt-2">
+                    <TabsTrigger value="monitor" className="text-xs">Monitor</TabsTrigger>
+                    <TabsTrigger value="logs" className="text-xs">Logs</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="monitor" className="flex-1 mt-0 overflow-hidden">
+                    <div className="h-full overflow-auto space-y-4 p-3">
+                      <SystemMonitor sessionId={activeTabId} />
+                      {/* <NetworkMonitor sessionId={activeTabId} /> */}
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="logs" className="flex-1 mt-0 overflow-hidden">
+                    <LogViewer sessionId={activeTabId} />
+                  </TabsContent>
+                </Tabs>
+              </ResizablePanel>
+            </>
+          )}
         </ResizablePanelGroup>
       </div>
       

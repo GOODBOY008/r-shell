@@ -14,7 +14,9 @@ import {
   Globe,
   FileText,
   RotateCcw,
-  MoreHorizontal
+  MoreHorizontal,
+  PanelRightClose,
+  PanelRightOpen
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 
@@ -23,9 +25,11 @@ interface ToolbarProps {
   onOpenSession?: () => void;
   onOpenSFTP?: () => void;
   onOpenSettings?: () => void;
+  onToggleRightSidebar?: () => void;
+  rightSidebarVisible?: boolean;
 }
 
-export function Toolbar({ onNewSession, onOpenSession, onOpenSFTP, onOpenSettings }: ToolbarProps) {
+export function Toolbar({ onNewSession, onOpenSession, onOpenSFTP, onOpenSettings, onToggleRightSidebar, rightSidebarVisible }: ToolbarProps) {
   return (
     <TooltipProvider>
       <div className="border-b border-border bg-background px-2 py-1 flex items-center gap-1">
@@ -143,6 +147,17 @@ export function Toolbar({ onNewSession, onOpenSession, onOpenSFTP, onOpenSetting
             </Button>
           </TooltipTrigger>
           <TooltipContent>Options</TooltipContent>
+        </Tooltip>
+
+        <Separator orientation="vertical" className="h-4 mx-1" />
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" onClick={onToggleRightSidebar}>
+              {rightSidebarVisible ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{rightSidebarVisible ? 'Hide' : 'Show'} Monitor Panel</TooltipContent>
         </Tooltip>
 
         {/* <Tooltip>

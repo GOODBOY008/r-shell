@@ -80,17 +80,17 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
   ];
 
   return (
-    <div className="h-full flex items-center justify-center p-8 bg-gradient-to-br from-background via-background to-muted/20">
-      <div className="max-w-5xl w-full space-y-8 animate-in fade-in duration-500">
+    <div className="h-full overflow-auto bg-gradient-to-br from-background via-background to-muted/20">
+      <div className="max-w-5xl w-full mx-auto p-6 space-y-6 animate-in fade-in duration-500">
         {/* Hero Section */}
-        <div className="text-center space-y-4">
-          <div className="flex items-center justify-center gap-3 mb-6">
-            <div className="p-3 bg-primary/10 rounded-xl border border-primary/20">
-              <Terminal className="h-8 w-8 text-primary" />
+        <div className="text-center space-y-3">
+          <div className="flex items-center justify-center gap-3">
+            <div className="p-2.5 bg-primary/10 rounded-xl border border-primary/20">
+              <Terminal className="h-7 w-7 text-primary" />
             </div>
             <div>
-              <h1 className="text-3xl">Welcome to SSH Client</h1>
-              <p className="text-muted-foreground mt-1">
+              <h1 className="text-2xl font-semibold">Welcome to SSH Client</h1>
+              <p className="text-muted-foreground text-sm mt-0.5">
                 Professional terminal emulator for remote server management
               </p>
             </div>
@@ -98,12 +98,12 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
 
           {/* Supported Protocols */}
           <div className="flex items-center justify-center gap-2 flex-wrap">
-            <span className="text-sm text-muted-foreground">Supports:</span>
+            <span className="text-xs text-muted-foreground">Supports:</span>
             {protocols.map((protocol) => (
               <Badge 
                 key={protocol.name} 
                 variant="outline" 
-                className={`${protocol.color}`}
+                className={`${protocol.color} text-xs`}
               >
                 {protocol.name}
               </Badge>
@@ -113,30 +113,30 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
 
         {/* Quick Actions */}
         <Card className="border-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Zap className="h-5 w-5" />
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <Zap className="h-4 w-4" />
               Quick Actions
             </CardTitle>
-            <CardDescription>
+            <CardDescription className="text-xs">
               Get started with a new session or configure your workspace
             </CardDescription>
           </CardHeader>
-          <CardContent className="grid gap-4 md:grid-cols-3">
+          <CardContent className="grid gap-3 md:grid-cols-3">
             {quickActions.map((action, index) => (
               <Card 
                 key={index}
                 className="relative overflow-hidden hover:shadow-md transition-all cursor-pointer group border-2 hover:border-primary/50"
                 onClick={action.action}
               >
-                <CardContent className="p-6">
-                  <div className="flex flex-col items-center text-center space-y-3">
-                    <div className="p-3 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
-                      <action.icon className="h-6 w-6 text-primary" />
+                <CardContent className="p-4">
+                  <div className="flex flex-col items-center text-center space-y-2">
+                    <div className="p-2.5 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
+                      <action.icon className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <h3 className="font-medium mb-1">{action.title}</h3>
-                      <p className="text-sm text-muted-foreground">
+                      <h3 className="font-medium text-sm mb-0.5">{action.title}</h3>
+                      <p className="text-xs text-muted-foreground">
                         {action.description}
                       </p>
                     </div>
@@ -158,17 +158,17 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
         </Card>
 
         {/* Features Grid */}
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid gap-3 md:grid-cols-2">
           {features.map((feature, index) => (
             <Card key={index} className="hover:shadow-md transition-shadow">
-              <CardContent className="p-6">
-                <div className="flex gap-4">
+              <CardContent className="p-4">
+                <div className="flex gap-3">
                   <div className="p-2 bg-muted rounded-lg h-fit">
-                    <feature.icon className="h-5 w-5 text-muted-foreground" />
+                    <feature.icon className="h-4 w-4 text-muted-foreground" />
                   </div>
                   <div className="flex-1">
-                    <h4 className="font-medium mb-1">{feature.title}</h4>
-                    <p className="text-sm text-muted-foreground">
+                    <h4 className="font-medium text-sm mb-0.5">{feature.title}</h4>
+                    <p className="text-xs text-muted-foreground">
                       {feature.description}
                     </p>
                   </div>
@@ -182,14 +182,14 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
 
         {/* Getting Started Tips */}
         <Card className="bg-muted/50 border-dashed">
-          <CardContent className="p-6">
-            <div className="flex items-start gap-4">
+          <CardContent className="p-4">
+            <div className="flex items-start gap-3">
               <div className="p-2 bg-background rounded-lg">
-                <BookOpen className="h-5 w-5 text-muted-foreground" />
+                <BookOpen className="h-4 w-4 text-muted-foreground" />
               </div>
-              <div className="flex-1 space-y-3">
-                <h4 className="font-medium">Getting Started</h4>
-                <ul className="space-y-2 text-sm text-muted-foreground">
+              <div className="flex-1 space-y-2">
+                <h4 className="font-medium text-sm">Getting Started</h4>
+                <ul className="space-y-1.5 text-xs text-muted-foreground">
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">•</span>
                     <span><strong>Session Manager:</strong> Use the left sidebar to organize your connections into folders</span>
@@ -213,12 +213,12 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
         </Card>
 
         {/* Call to Action */}
-        <div className="text-center">
+        <div className="text-center pb-4">
           <Button size="lg" onClick={onNewSession} className="gap-2 shadow-lg">
             <Plus className="h-5 w-5" />
             Create New Session
           </Button>
-          <p className="text-sm text-muted-foreground mt-3">
+          <p className="text-xs text-muted-foreground mt-2">
             or select an existing session from the Session Manager
           </p>
         </div>

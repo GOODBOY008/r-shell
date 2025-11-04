@@ -448,7 +448,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
 
   return (
     <ScrollArea className="h-full">
-      <div className="p-3 space-y-3">
+      <div className="space-y-3">
         {/* System Overview */}
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -511,10 +511,10 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                 <table className="w-full caption-bottom text-sm">
                   <thead className="[&_tr]:border-b">
                     <tr className="border-b transition-colors">
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-16">PID</th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-20">User</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-12">PID</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-16">User</th>
                       <th 
-                        className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-16 cursor-pointer hover:bg-muted/50 select-none"
+                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-12 cursor-pointer hover:bg-muted/50 select-none"
                         onClick={() => setProcessSortBy('cpu')}
                       >
                         <div className="flex items-center gap-1">
@@ -523,7 +523,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                         </div>
                       </th>
                       <th 
-                        className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-16 cursor-pointer hover:bg-muted/50 select-none"
+                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-12 cursor-pointer hover:bg-muted/50 select-none"
                         onClick={() => setProcessSortBy('mem')}
                       >
                         <div className="flex items-center gap-1">
@@ -531,29 +531,29 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                           {processSortBy === 'mem' && <ArrowDown className="w-3 h-3" />}
                         </div>
                       </th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs">Command</th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap text-xs w-12"></th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs">Command</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium whitespace-nowrap text-xs w-10"></th>
                     </tr>
                   </thead>
                   <tbody className="[&_tr:last-child]:border-0">
                     {processes.slice(0, 8).map((process) => (
                       <tr key={process.pid} className="hover:bg-muted/50 border-b transition-colors">
-                        <td className="p-2 align-middle whitespace-nowrap text-xs">{process.pid}</td>
-                        <td className="p-2 align-middle whitespace-nowrap text-xs">{process.user}</td>
-                        <td className={`p-2 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.cpu)}`}>
+                        <td className="p-1.5 align-middle whitespace-nowrap text-xs">{process.pid}</td>
+                        <td className="p-1.5 align-middle whitespace-nowrap text-xs">{process.user}</td>
+                        <td className={`p-1.5 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.cpu)}`}>
                           {process.cpu.toFixed(1)}%
                         </td>
-                        <td className={`p-2 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.mem)}`}>
+                        <td className={`p-1.5 align-middle whitespace-nowrap text-xs font-semibold ${getUsageColor(process.mem)}`}>
                           {process.mem.toFixed(1)}%
                         </td>
-                        <td className="p-2 align-middle whitespace-nowrap text-xs font-mono truncate max-w-0" title={process.command}>
+                        <td className="p-1.5 align-middle whitespace-nowrap text-xs font-mono truncate max-w-0" title={process.command}>
                           {process.command}
                         </td>
-                        <td className="p-2 align-middle whitespace-nowrap text-xs">
+                        <td className="p-1.5 align-middle whitespace-nowrap text-xs">
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-6 w-6"
+                            className="h-5 w-5"
                             onClick={() => setProcessToKill(process)}
                             title="Kill process"
                           >
@@ -578,7 +578,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
           <Card>
             <CardContent className="p-0">
               {disks.length === 0 ? (
-                <div className="p-4 text-sm text-muted-foreground">
+                <div className="p-3 text-xs text-muted-foreground">
                   No disk information available
                 </div>
               ) : (
@@ -586,33 +586,29 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                   <table className="w-full caption-bottom text-sm">
                     <thead className="[&_tr]:border-b">
                       <tr className="border-b transition-colors">
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap w-[140px]">Filesystem</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap w-[100px]">Mount Point</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[80px]">Size</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[80px]">Used</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[80px]">Available</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-10 px-2 text-right align-middle font-medium whitespace-nowrap w-[140px]">Usage</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium text-xs">Filesystem</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-left align-middle font-medium text-xs">Mount</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-right align-middle font-medium text-xs">Size</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1.5 text-right align-middle font-medium text-xs">Usage</th>
                       </tr>
                     </thead>
                     <tbody className="[&_tr:last-child]:border-0">
                       {disks.map((disk, index) => (
                         <tr key={index} className="hover:bg-muted/50 border-b transition-colors">
-                          <td className="p-2 align-middle whitespace-nowrap font-mono text-xs max-w-[140px] truncate" title={disk.filesystem}>
+                          <td className="p-1.5 align-middle whitespace-nowrap font-mono text-xs truncate max-w-[80px]" title={disk.filesystem}>
                             {disk.filesystem}
                           </td>
-                          <td className="p-2 align-middle whitespace-nowrap font-medium text-xs max-w-[100px] truncate" title={disk.path}>
+                          <td className="p-1.5 align-middle whitespace-nowrap font-medium text-xs truncate max-w-[60px]" title={disk.path}>
                             {disk.path}
                           </td>
-                          <td className="p-2 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.total}</td>
-                          <td className="p-2 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.used}</td>
-                          <td className="p-2 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.available}</td>
-                          <td className="p-2 align-middle whitespace-nowrap text-right">
-                            <div className="flex items-center justify-end gap-2">
+                          <td className="p-1.5 align-middle whitespace-nowrap text-right font-mono text-xs">{disk.total}</td>
+                          <td className="p-1.5 align-middle whitespace-nowrap text-right">
+                            <div className="flex items-center justify-end gap-1.5">
                               <Progress 
                                 value={disk.usage} 
-                                className={`h-1.5 w-16 ${getProgressColor(disk.usage)}`}
+                                className={`h-1.5 w-12 ${getProgressColor(disk.usage)}`}
                               />
-                              <span className={`font-mono text-xs w-10 font-semibold ${getUsageColor(disk.usage)}`}>
+                              <span className={`font-mono text-xs w-9 font-semibold ${getUsageColor(disk.usage)}`}>
                                 {disk.usage}%
                               </span>
                             </div>
