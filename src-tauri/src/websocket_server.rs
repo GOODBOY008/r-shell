@@ -63,6 +63,11 @@ impl WebSocketServer {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
+                    // macOS ARM optimization: Disable Nagle's algorithm for low latency
+                    if let Err(e) = stream.set_nodelay(true) {
+                        tracing::warn!("Failed to set TCP_NODELAY: {}", e);
+                    }
+                    
                     tracing::info!("New WebSocket connection from: {}", addr);
                     let server = self.clone();
                     tokio::spawn(async move {
@@ -101,6 +106,7 @@ impl WebSocketServer {
                 Ok(Message::Binary(data)) => {
                     // CRITICAL: Binary protocol for maximum performance (like ttyd)
                     // Format: [command byte][session_id bytes][data bytes]
+                    // macOS ARM optimization: Process immediately without queueing
                     if data.is_empty() {
                         continue;
                     }
@@ -109,7 +115,7 @@ impl WebSocketServer {
                     
                     match command {
                         0x00 => {
-                            // INPUT command - fastest path
+                            // INPUT command - fastest path for macOS ARM
                             if data.len() < 37 {
                                 tracing::warn!("Binary INPUT message too short");
                                 continue;
@@ -118,7 +124,7 @@ impl WebSocketServer {
                             let session_id = String::from_utf8_lossy(&data[1..37]).to_string();
                             let input_data = data[37..].to_vec();
                             
-                            // Direct write - no JSON overhead
+                            // macOS ARM fix: Direct write without spawning - reduces latency
                             if let Err(e) = self
                                 .session_manager
                                 .write_to_pty(&session_id, input_data)

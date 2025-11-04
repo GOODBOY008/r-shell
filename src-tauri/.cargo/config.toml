@@ -1,0 +1,23 @@
+# macOS ARM (Apple Silicon) specific optimizations for terminal input latency
+
+[target.aarch64-apple-darwin]
+rustflags = [
+    "-C", "target-cpu=native",           # Use native ARM instructions
+    "-C", "opt-level=3",                 # Maximum optimization
+    "-C", "link-arg=-Wl,-dead_strip",    # Strip unused code
+]
+
+[build]
+# Increase parallel compilation jobs
+jobs = 8
+
+[profile.release]
+# Already configured in Cargo.toml, but ensuring consistency
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# macOS specific hints
+[env]
+# Optimize for ARM64
+CARGO_BUILD_TARGET = "aarch64-apple-darwin"

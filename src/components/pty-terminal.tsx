@@ -70,6 +70,11 @@ export function PtyTerminal({
       },
       convertEol: true,
       scrollback: 10000,
+      // macOS ARM optimization: Disable smooth scrolling for immediate response
+      smoothScrollDuration: 0,
+      // Fast scroll settings
+      fastScrollModifier: 'shift',
+      fastScrollSensitivity: 5,
     });
 
     const fitAddon = new FitAddon();
@@ -207,65 +212,52 @@ export function PtyTerminal({
     connectWebSocket();
 
     // Handle user input - ULTRA-OPTIMIZED binary protocol
-    // Strategy: Batch inputs within 5ms window for better network efficiency
-    let inputBuffer: Uint8Array[] = [];
-    let inputTimer: NodeJS.Timeout | null = null;
+    // macOS ARM optimization: Zero-latency input with immediate send
+    const encoder = new TextEncoder();
+    const sessionIdBytes = encoder.encode(sessionId);
     
-    const flushInput = () => {
+    // Batch buffer for paste operations only
+    let pasteBuffer: Uint8Array[] = [];
+    let pasteTimer: NodeJS.Timeout | null = null;
+    
+    const flushPaste = () => {
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN || inputBuffer.length === 0) {
+      if (!ws || ws.readyState !== WebSocket.OPEN || pasteBuffer.length === 0) {
         return;
       }
       
-      // Calculate total size
       let totalSize = 0;
-      for (const chunk of inputBuffer) {
+      for (const chunk of pasteBuffer) {
         totalSize += chunk.length;
       }
       
-      // Create combined binary message
-      const encoder = new TextEncoder();
-      const sessionIdBytes = encoder.encode(sessionId);
       const binaryMsg = new Uint8Array(1 + sessionIdBytes.length + totalSize);
-      
-      binaryMsg[0] = 0x00; // INPUT command
+      binaryMsg[0] = 0x00;
       binaryMsg.set(sessionIdBytes, 1);
       
       let offset = 1 + sessionIdBytes.length;
-      for (const chunk of inputBuffer) {
+      for (const chunk of pasteBuffer) {
         binaryMsg.set(chunk, offset);
         offset += chunk.length;
       }
       
       ws.send(binaryMsg);
-      inputBuffer = [];
+      pasteBuffer = [];
     };
     
     const inputDisposable = term.onData((data: string) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       
-      const encoder = new TextEncoder();
       const dataBytes = encoder.encode(data);
       
-      // For single characters, send immediately (best for responsiveness)
-      if (data.length === 1) {
-        const sessionIdBytes = encoder.encode(sessionId);
-        const binaryMsg = new Uint8Array(1 + sessionIdBytes.length + dataBytes.length);
-        binaryMsg[0] = 0x00;
-        binaryMsg.set(sessionIdBytes, 1);
-        binaryMsg.set(dataBytes, 1 + sessionIdBytes.length);
-        ws.send(binaryMsg);
-      } else {
-        // For paste operations, batch with 2ms window
-        inputBuffer.push(dataBytes);
-        
-        if (inputTimer) {
-          clearTimeout(inputTimer);
-        }
-        
-        inputTimer = setTimeout(flushInput, 2);
-      }
+      // CRITICAL: macOS ARM optimization - always send immediately
+      // No batching for ANY input to ensure zero latency
+      const binaryMsg = new Uint8Array(1 + sessionIdBytes.length + dataBytes.length);
+      binaryMsg[0] = 0x00;
+      binaryMsg.set(sessionIdBytes, 1);
+      binaryMsg.set(dataBytes, 1 + sessionIdBytes.length);
+      ws.send(binaryMsg);
     });
 
     // Handle terminal resize

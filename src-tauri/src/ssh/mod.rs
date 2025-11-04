@@ -183,9 +183,9 @@ impl SshClient {
             channel.request_shell(true).await?;
             
             // Create channels for bidirectional communication (like ttyd's pty_buf)
-            // Increased capacity for better buffering during fast input
-            let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1000);  // Increased from 100
-            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(2000);    // Increased from 1000
+            // macOS ARM optimization: Larger buffers to prevent blocking
+            let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(4096);  // Increased for macOS ARM
+            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(8192);    // Increased for macOS ARM
             
             let channel_id = channel.id();
             
@@ -194,7 +194,7 @@ impl SshClient {
             
             // Spawn task to handle input (frontend → SSH)
             // This is similar to ttyd's pty_write and INPUT command handling
-            // Key: immediate write + flush for responsiveness
+            // macOS ARM optimization: immediate write + flush with priority scheduling
             tokio::spawn(async move {
                 let mut writer = input_channel;
                 while let Some(data) = input_rx.recv().await {
@@ -203,12 +203,14 @@ impl SshClient {
                         eprintln!("[PTY] Failed to send data to SSH: {}", e);
                         break;
                     }
-                    // Critical: flush immediately after write (like ttyd)
+                    // CRITICAL: flush immediately after EVERY write (macOS ARM fix)
                     // This ensures data is sent to PTY without buffering delay
                     if let Err(e) = writer.flush().await {
                         eprintln!("[PTY] Failed to flush data to SSH: {}", e);
                         break;
                     }
+                    // Yield to allow other tasks to run (prevents monopolizing)
+                    tokio::task::yield_now().await;
                 }
             });
             
