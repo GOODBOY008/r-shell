@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Button } from './ui/button';
 import { 
   DropdownMenu, 
@@ -11,6 +11,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger
 } from './ui/dropdown-menu';
+import { SessionStorageManager, type SessionData } from '@/lib/session-storage';
 import { 
   Plus, 
   FolderOpen, 
@@ -53,6 +54,7 @@ interface MenuBarProps {
   onCloneTab?: () => void;
   onNextTab?: () => void;
   onPreviousTab?: () => void;
+  onRecentSessionSelect?: (session: SessionData) => void;
   hasActiveSession?: boolean;
   canPaste?: boolean;
 }
@@ -75,11 +77,33 @@ export function MenuBar({
   onCloneTab,
   onNextTab,
   onPreviousTab,
+  onRecentSessionSelect,
   hasActiveSession = false,
   canPaste = true
 }: MenuBarProps) {
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const cmdOrCtrl = isMac ? '⌘' : 'Ctrl';
+  
+  // Load recent sessions
+  const [recentSessions, setRecentSessions] = useState<SessionData[]>([]);
+  
+  useEffect(() => {
+    // Load recent sessions on mount and whenever the component updates
+    const loadRecentSessions = () => {
+      const sessions = SessionStorageManager.getRecentSessions(5); // Get top 5 recent sessions
+      setRecentSessions(sessions);
+    };
+    
+    loadRecentSessions();
+    
+    // Listen for storage changes to update recent sessions
+    const handleStorageChange = () => {
+      loadRecentSessions();
+    };
+    
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
 
   return (
     <div className="border-b border-border bg-background px-2 py-1 flex items-center gap-1">
@@ -106,9 +130,23 @@ export function MenuBar({
               Recent Sessions
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
-              <DropdownMenuItem>production-server-01</DropdownMenuItem>
-              <DropdownMenuItem>dev-staging-02</DropdownMenuItem>
-              <DropdownMenuItem>backup-server</DropdownMenuItem>
+              {recentSessions.length > 0 ? (
+                recentSessions.map(session => (
+                  <DropdownMenuItem 
+                    key={session.id}
+                    onClick={() => onRecentSessionSelect?.(session)}
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="font-medium">{session.name}</span>
+                      <span className="text-xs text-muted-foreground">({session.username}@{session.host})</span>
+                    </span>
+                  </DropdownMenuItem>
+                ))
+              ) : (
+                <DropdownMenuItem disabled>
+                  <span className="text-muted-foreground">No recent sessions</span>
+                </DropdownMenuItem>
+              )}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSeparator />
