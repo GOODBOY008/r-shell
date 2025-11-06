@@ -2,6 +2,7 @@ import React from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -29,6 +30,7 @@ export function PtyTerminal({
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
+  const rendererRef = React.useRef<string>('canvas');
   
   // Flow control - inspired by ttyd
   const flowControlRef = React.useRef({
@@ -79,6 +81,18 @@ export function PtyTerminal({
     term.loadAddon(webLinks);
     
     term.open(terminalRef.current);
+    
+    // Load WebGL renderer for better performance
+    try {
+      const webglAddon = new WebglAddon();
+      term.loadAddon(webglAddon);
+      rendererRef.current = 'webgl';
+      console.log('[PTY Terminal] WebGL renderer loaded');
+    } catch (e) {
+      rendererRef.current = 'canvas';
+      console.warn('[PTY Terminal] WebGL not supported, falling back to canvas:', e);
+    }
+    
     fitAddon.fit();
 
     // Store refs
@@ -89,6 +103,7 @@ export function PtyTerminal({
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.writeln(`\x1b[1;36m  ${sessionName}\x1b[0m`);
     term.writeln(`\x1b[90m  ${username}@${host}\x1b[0m`);
+    term.writeln(`\x1b[90m  Renderer: ${rendererRef.current.toUpperCase()}\x1b[0m`);
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.write('\r\n');
     term.writeln('\x1b[33m🚀 Starting interactive shell (WebSocket + PTY mode)...\x1b[0m');

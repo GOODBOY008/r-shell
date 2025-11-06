@@ -3,6 +3,7 @@ import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { invoke } from '@tauri-apps/api/core';
 import { X, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from './ui/button';
@@ -21,6 +22,7 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
   const searchRef = React.useRef<SearchAddon | null>(null);
+  const rendererRef = React.useRef<string>('canvas');
   const commandHistoryRef = React.useRef<string[]>([]);
   const historyIndexRef = React.useRef<number>(-1);
   const [showSearch, setShowSearch] = React.useState(false);
@@ -43,12 +45,24 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     const fitAddon = new FitAddon();
     const webLinks = new WebLinksAddon();
     const search = new SearchAddon();
+    const webgl = new WebglAddon();
 
     term.loadAddon(fitAddon);
     term.loadAddon(webLinks);
     term.loadAddon(search);
 
     term.open(terminalRef.current);
+    
+    // Load WebGL addon after terminal is opened
+    try {
+      term.loadAddon(webgl);
+      rendererRef.current = 'webgl';
+      console.log('WebGL renderer enabled');
+    } catch (e) {
+      rendererRef.current = 'canvas';
+      console.warn('WebGL addon failed to load, falling back to canvas:', e);
+    }
+    
     fitAddon.fit();
 
     xtermRef.current = term;
@@ -56,6 +70,7 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     searchRef.current = search;
 
     term.writeln(`\x1b[1;32mConnected to ${sessionName} (${username}@${host})\x1b[0m`);
+    term.writeln(`\x1b[90mRenderer: ${rendererRef.current.toUpperCase()}\x1b[0m`);
     term.write('\r\n');
     term.write('$ ');
 
