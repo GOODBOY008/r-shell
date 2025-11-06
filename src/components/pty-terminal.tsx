@@ -41,6 +41,11 @@ export function PtyTerminal({
     lowWater: 2,
   });
   
+  // Track IME composition state for proper handling of input methods like Pinyin
+  const compositionStateRef = React.useRef({
+    isComposing: false,
+  });
+  
   React.useEffect(() => {
     if (!terminalRef.current) return;
 
@@ -224,10 +229,65 @@ export function PtyTerminal({
 
     connectWebSocket();
 
-    // Track IME composition state for proper handling of input methods like Pinyin
-    const compositionStateRef = React.useRef({
-      isComposing: false,
-    });
+    // Handle composition events for IME (Chinese, Japanese, Korean input methods)
+    const handleCompositionStart = (event: CompositionEvent) => {
+      compositionStateRef.current.isComposing = true;
+      console.log('[PTY Terminal] IME composition started');
+    };
+
+    const handleCompositionUpdate = (event: CompositionEvent) => {
+      compositionStateRef.current.isComposing = true;
+      console.log('[PTY Terminal] IME composition update:', event.data);
+    };
+
+    const handleCompositionEnd = (event: CompositionEvent) => {
+      const ws = wsRef.current;
+      
+      // Send the composed data immediately
+      const composedData = event.data;
+      if (composedData && ws && ws.readyState === WebSocket.OPEN) {
+        const encoder = new TextEncoder();
+        const dataBytes = Array.from(encoder.encode(composedData));
+        
+        const inputMsg = {
+          type: 'Input',
+          session_id: sessionId,
+          data: dataBytes,
+        };
+        
+        console.log('[PTY Terminal] Sending composed input:', composedData, '(' + composedData.length + ' chars)');
+        ws.send(JSON.stringify(inputMsg));
+      }
+      
+      // Small delay before resetting to ensure onData doesn't fire
+      setTimeout(() => {
+        compositionStateRef.current.isComposing = false;
+        console.log('[PTY Terminal] IME composition ended');
+      }, 10);
+    };
+
+    // Attach composition event listeners to the terminal's textarea
+    // We need to wait for xterm to render the textarea
+    let textareaElement: HTMLTextAreaElement | null = null;
+    const attachCompositionListeners = () => {
+      if (terminalRef.current) {
+        const textarea = terminalRef.current.querySelector('textarea');
+        if (textarea) {
+          textareaElement = textarea as HTMLTextAreaElement;
+          textareaElement.addEventListener('compositionstart', handleCompositionStart);
+          textareaElement.addEventListener('compositionupdate', handleCompositionUpdate);
+          textareaElement.addEventListener('compositionend', handleCompositionEnd);
+          console.log('[PTY Terminal] Composition event listeners attached');
+          return true;
+        }
+      }
+      return false;
+    };
+    
+    // Try to attach immediately, or wait a bit for xterm to render
+    if (!attachCompositionListeners()) {
+      setTimeout(attachCompositionListeners, 100);
+    }
 
     // Handle user input with IME composition support
     const inputDisposable = term.onData((data: string) => {
@@ -237,6 +297,7 @@ export function PtyTerminal({
       // If composing with IME, skip sending data
       // This prevents sending incomplete characters during Pinyin/IME input
       if (compositionStateRef.current.isComposing) {
+        console.log('[PTY Terminal] Skipping input during composition');
         return;
       }
       
@@ -254,49 +315,6 @@ export function PtyTerminal({
       console.log('[PTY Terminal] Sending input:', data.length, 'chars');
       ws.send(JSON.stringify(inputMsg));
     });
-
-    // Handle composition events for IME (Chinese, Japanese, Korean input methods)
-    const handleCompositionStart = () => {
-      compositionStateRef.current.isComposing = true;
-      console.log('[PTY Terminal] IME composition started');
-    };
-
-    const handleCompositionEnd = (event: CompositionEvent) => {
-      compositionStateRef.current.isComposing = false;
-      
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      
-      // Send the composed data
-      const composedData = event.data;
-      if (composedData) {
-        const encoder = new TextEncoder();
-        const dataBytes = Array.from(encoder.encode(composedData));
-        
-        const inputMsg = {
-          type: 'Input',
-          session_id: sessionId,
-          data: dataBytes,
-        };
-        
-        console.log('[PTY Terminal] Sending composed input:', composedData.length, 'chars');
-        ws.send(JSON.stringify(inputMsg));
-      }
-    };
-
-    // Attach composition event listeners to the terminal's textarea
-    // Store reference for cleanup
-    let textareaElement: HTMLTextAreaElement | null = null;
-    if (terminalRef.current) {
-      const textarea = terminalRef.current.querySelector('textarea');
-      if (textarea) {
-        textareaElement = textarea as HTMLTextAreaElement;
-        textareaElement.addEventListener('compositionstart', handleCompositionStart);
-        textareaElement.addEventListener('compositionend', handleCompositionEnd);
-      }
-    }
 
     // Handle terminal resize
     const resizeDisposable = term.onResize(({ cols, rows }) => {
@@ -358,6 +376,7 @@ export function PtyTerminal({
       // Remove composition event listeners
       if (textareaElement) {
         textareaElement.removeEventListener('compositionstart', handleCompositionStart);
+        textareaElement.removeEventListener('compositionupdate', handleCompositionUpdate);
         textareaElement.removeEventListener('compositionend', handleCompositionEnd);
       }
       
