@@ -79,6 +79,7 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
 
     let inputBuffer = '';
     let cursorPosition = 0;
+    let isComposing = false;
 
     const clearLine = () => {
       // Move cursor to start of input, clear to end
@@ -95,6 +96,11 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     };
 
   term.onData(async (data: string) => {
+      // Skip processing if IME composition is active
+      if (isComposing) {
+        return;
+      }
+      
       for (let i = 0; i < data.length; i++) {
         const ch = data[i];
         const code = ch.charCodeAt(0);
@@ -203,6 +209,40 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
       }
     });
 
+    // Handle IME composition events (Chinese, Japanese, Korean input methods)
+    const handleCompositionStart = () => {
+      isComposing = true;
+      console.log('[Terminal] IME composition started');
+    };
+
+    const handleCompositionEnd = (event: CompositionEvent) => {
+      isComposing = false;
+      const composedData = event.data;
+      
+      // Insert the composed text into the input buffer
+      if (composedData) {
+        inputBuffer = inputBuffer.slice(0, cursorPosition) + composedData + inputBuffer.slice(cursorPosition);
+        cursorPosition += composedData.length;
+        term.write(composedData);
+        if (cursorPosition < inputBuffer.length) {
+          // Redraw rest of line if cursor not at end
+          term.write(inputBuffer.slice(cursorPosition));
+          term.write('\b'.repeat(inputBuffer.length - cursorPosition));
+        }
+        console.log('[Terminal] IME composition ended:', composedData.length, 'chars');
+      }
+    };
+
+    // Attach composition event listeners to the terminal's textarea
+    const terminalElement = terminalRef.current;
+    if (terminalElement) {
+      const textarea = terminalElement.querySelector('textarea');
+      if (textarea) {
+        textarea.addEventListener('compositionstart', handleCompositionStart);
+        textarea.addEventListener('compositionend', handleCompositionEnd);
+      }
+    }
+
     // Keyboard shortcuts handler
     const handleKeyDown = (e: KeyboardEvent) => {
       // Copy: Ctrl+Shift+C or Cmd+C (when text is selected)
@@ -264,6 +304,15 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     window.addEventListener('resize', handleResize);
 
     return () => {
+      // Remove composition event listeners
+      if (terminalElement) {
+        const textarea = terminalElement.querySelector('textarea');
+        if (textarea) {
+          textarea.removeEventListener('compositionstart', handleCompositionStart);
+          textarea.removeEventListener('compositionend', handleCompositionEnd);
+        }
+      }
+      
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('resize', handleResize);
       term.dispose();

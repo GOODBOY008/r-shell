@@ -224,10 +224,23 @@ export function PtyTerminal({
 
     connectWebSocket();
 
-    // Handle user input
+    // Track IME composition state for proper handling of input methods like Pinyin
+    const compositionStateRef = React.useRef({
+      isComposing: false,
+      pendingData: [] as string[],
+    });
+
+    // Handle user input with IME composition support
     const inputDisposable = term.onData((data: string) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      
+      // If composing with IME, buffer the data
+      // This prevents sending incomplete characters during Pinyin/IME input
+      if (compositionStateRef.current.isComposing) {
+        compositionStateRef.current.pendingData.push(data);
+        return;
+      }
       
       // Convert string to bytes for binary data
       const encoder = new TextEncoder();
@@ -243,6 +256,52 @@ export function PtyTerminal({
       console.log('[PTY Terminal] Sending input:', data.length, 'chars');
       ws.send(JSON.stringify(inputMsg));
     });
+
+    // Handle composition events for IME (Chinese, Japanese, Korean input methods)
+    const handleCompositionStart = () => {
+      compositionStateRef.current.isComposing = true;
+      compositionStateRef.current.pendingData = [];
+      console.log('[PTY Terminal] IME composition started');
+    };
+
+    const handleCompositionEnd = (event: CompositionEvent) => {
+      compositionStateRef.current.isComposing = false;
+      
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        compositionStateRef.current.pendingData = [];
+        return;
+      }
+      
+      // Send the composed data
+      const composedData = event.data;
+      if (composedData) {
+        const encoder = new TextEncoder();
+        const dataBytes = Array.from(encoder.encode(composedData));
+        
+        const inputMsg = {
+          type: 'Input',
+          session_id: sessionId,
+          data: dataBytes,
+        };
+        
+        console.log('[PTY Terminal] Sending composed input:', composedData.length, 'chars');
+        ws.send(JSON.stringify(inputMsg));
+      }
+      
+      // Clear pending data after sending
+      compositionStateRef.current.pendingData = [];
+    };
+
+    // Attach composition event listeners to the terminal's textarea
+    const terminalElement = terminalRef.current;
+    if (terminalElement) {
+      const textarea = terminalElement.querySelector('textarea');
+      if (textarea) {
+        textarea.addEventListener('compositionstart', handleCompositionStart);
+        textarea.addEventListener('compositionend', handleCompositionEnd);
+      }
+    }
 
     // Handle terminal resize
     const resizeDisposable = term.onResize(({ cols, rows }) => {
@@ -299,6 +358,15 @@ export function PtyTerminal({
         };
         ws.send(JSON.stringify(closeMsg));
         ws.close();
+      }
+      
+      // Remove composition event listeners
+      if (terminalElement) {
+        const textarea = terminalElement.querySelector('textarea');
+        if (textarea) {
+          textarea.removeEventListener('compositionstart', handleCompositionStart);
+          textarea.removeEventListener('compositionend', handleCompositionEnd);
+        }
       }
       
       inputDisposable.dispose();
