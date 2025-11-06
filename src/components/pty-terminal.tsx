@@ -294,9 +294,8 @@ export function PtyTerminal({
     };
 
     // Attach composition event listeners to the terminal's textarea
-    const terminalElement = terminalRef.current;
-    if (terminalElement) {
-      const textarea = terminalElement.querySelector('textarea');
+    if (terminalRef.current) {
+      const textarea = terminalRef.current.querySelector('textarea');
       if (textarea) {
         textarea.addEventListener('compositionstart', handleCompositionStart);
         textarea.addEventListener('compositionend', handleCompositionEnd);
@@ -361,8 +360,8 @@ export function PtyTerminal({
       }
       
       // Remove composition event listeners
-      if (terminalElement) {
-        const textarea = terminalElement.querySelector('textarea');
+      if (terminalRef.current) {
+        const textarea = terminalRef.current.querySelector('textarea');
         if (textarea) {
           textarea.removeEventListener('compositionstart', handleCompositionStart);
           textarea.removeEventListener('compositionend', handleCompositionEnd);
