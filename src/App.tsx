@@ -458,15 +458,31 @@ export default function App() {
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
                   </TabsList>
-                  <TabsContent value="monitor" className="flex-1 mt-0 overflow-hidden">
-                    <div className="h-full overflow-auto p-2">
-                      <SystemMonitor sessionId={activeTabId} />
-                      {/* <NetworkMonitor sessionId={activeTabId} /> */}
-                    </div>
-                  </TabsContent>
-                  <TabsContent value="logs" className="flex-1 mt-0 overflow-hidden">
-                    <LogViewer sessionId={activeTabId} />
-                  </TabsContent>
+                  
+                  {/* Always render both Monitor and Logs, use CSS to show/hide */}
+                  <div className="flex-1 mt-0 overflow-hidden relative">
+                    {/* Monitor Tab Content - forceMount keeps it always mounted */}
+                    <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      <div className="h-full overflow-auto p-2">
+                        {/* Render monitors for all sessions but only show the active one */}
+                        {tabs.map((tab) => (
+                          <div key={`monitor-${tab.id}`} style={{ display: tab.id === activeTabId ? 'block' : 'none', height: '100%' }}>
+                            <SystemMonitor sessionId={tab.id} />
+                          </div>
+                        ))}
+                      </div>
+                    </TabsContent>
+                    
+                    {/* Logs Tab Content - forceMount keeps it always mounted */}
+                    <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      {/* Render log viewers for all sessions but only show the active one */}
+                      {tabs.map((tab) => (
+                        <div key={`logs-${tab.id}`} style={{ display: tab.id === activeTabId ? 'block' : 'none', height: '100%' }}>
+                          <LogViewer sessionId={tab.id} />
+                        </div>
+                      ))}
+                    </TabsContent>
+                  </div>
                 </Tabs>
               </ResizablePanel>
             </>
