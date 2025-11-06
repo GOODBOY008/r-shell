@@ -8,6 +8,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { X, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { loadAppearanceSettings, getTerminalOptions } from '../lib/terminal-config';
 import 'xterm/css/xterm.css';
 
 interface TerminalProps {
@@ -15,9 +16,10 @@ interface TerminalProps {
   sessionName: string;
   host?: string;
   username?: string;
+  appearanceKey?: number;
 }
 
-export function Terminal({ sessionId, sessionName, host = 'localhost', username = 'user' }: TerminalProps) {
+export function Terminal({ sessionId, sessionName, host = 'localhost', username = 'user', appearanceKey = 0 }: TerminalProps) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -31,15 +33,15 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
   React.useEffect(() => {
     if (!terminalRef.current) return;
 
-  const term = new XTerm({
-      cursorBlink: true,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      fontSize: 14,
+    // Load appearance settings
+    const appearance = loadAppearanceSettings();
+    const termOptions = getTerminalOptions(appearance);
+
+    const term = new XTerm({
+      ...termOptions,
       rows: 24,
       cols: 80,
-      theme: { background: '#1e1e1e', foreground: '#d4d4d4' },
       allowProposedApi: true,
-      convertEol: true, // Convert \n to \r\n automatically
     });
 
     const fitAddon = new FitAddon();
@@ -268,7 +270,7 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
       window.removeEventListener('resize', handleResize);
       term.dispose();
     };
-  }, [sessionId, sessionName, host, username]);
+  }, [sessionId, sessionName, host, username, appearanceKey]);
 
   // Search functionality
   const handleSearch = (term: string, direction: 'next' | 'prev' = 'next') => {
@@ -297,8 +299,14 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     <div 
       className="relative h-full w-full"
       onClick={() => xtermRef.current?.focus()}
+      style={{
+        opacity: (() => {
+          const appearance = loadAppearanceSettings();
+          return appearance.allowTransparency ? appearance.opacity / 100 : 1;
+        })(),
+      }}
     >
-      <div ref={terminalRef} className="h-full w-full bg-[#1e1e1e]" />
+      <div ref={terminalRef} className="h-full w-full" />
       
       {/* Search Bar */}
       {showSearch && (

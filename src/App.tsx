@@ -14,7 +14,8 @@ import { SFTPPanel } from './components/sftp-panel';
 import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
-import { ActiveSessionsManager, SessionStorageManager, type SessionData } from './lib/session-storage';
+import { ActiveSessionsManager, SessionStorageManager } from './lib/session-storage';
+import { TerminalAppearanceSettings } from './lib/terminal-config';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -320,23 +321,6 @@ export default function App() {
   const handleOpenSFTP = () => {
     setSftpPanelOpen(true);
   };
-  
-  const handleRecentSessionSelect = async (sessionData: SessionData) => {
-    // Convert SessionData to SessionNode and connect
-    const sessionNode: SessionNode = {
-      id: sessionData.id,
-      name: sessionData.name,
-      type: 'session',
-      protocol: sessionData.protocol,
-      host: sessionData.host,
-      port: sessionData.port,
-      username: sessionData.username,
-      isConnected: tabs.some(tab => tab.id === sessionData.id),
-    };
-    
-    // Use the existing connect handler
-    await handleSessionConnect(sessionNode);
-  };
 
   const activeTab = tabs.find(tab => tab.id === activeTabId);
   const activeSession = activeTab ? {
@@ -382,7 +366,6 @@ export default function App() {
         }}
         onOpenSettings={handleOpenSettings}
         onOpenSFTP={handleOpenSFTP}
-        onRecentSessionSelect={handleRecentSessionSelect}
         hasActiveSession={!!activeTab}
         canPaste={true}
       />

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -22,13 +22,23 @@ import {
   HardDrive,
   User
 } from 'lucide-react';
+import { 
+  TerminalAppearanceSettings, 
+  defaultAppearanceSettings, 
+  loadAppearanceSettings,
+  saveAppearanceSettings,
+  terminalThemes 
+} from '../lib/terminal-config';
 
 interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onAppearanceChange?: (settings: TerminalAppearanceSettings) => void;
 }
 
-export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onAppearanceChange }: SettingsModalProps) {
+  const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
+  
   const [settings, setSettings] = useState({
     // Terminal settings
     fontSize: 14,
@@ -68,19 +78,45 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
     telemetry: false
   });
 
+  // Load settings when modal opens
+  useEffect(() => {
+    if (open) {
+      const appearance = loadAppearanceSettings();
+      setTerminalAppearance(appearance);
+    }
+  }, [open]);
+
+  const updateTerminalAppearance = <K extends keyof TerminalAppearanceSettings>(
+    key: K, 
+    value: TerminalAppearanceSettings[K]
+  ) => {
+    setTerminalAppearance(prev => ({ ...prev, [key]: value }));
+  };
+
   const updateSetting = (key: keyof typeof settings, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
   const handleSave = () => {
-    // Save settings to localStorage or backend
+    // Save terminal appearance settings
+    saveAppearanceSettings(terminalAppearance);
+    
+    // Notify parent component of appearance changes
+    if (onAppearanceChange) {
+      onAppearanceChange(terminalAppearance);
+    }
+    
+    // Save other settings to localStorage
     localStorage.setItem('sshClientSettings', JSON.stringify(settings));
     onOpenChange(false);
   };
 
   const handleReset = () => {
     if (confirm('Are you sure you want to reset all settings to defaults?')) {
-      // Reset to default values
+      // Reset terminal appearance
+      setTerminalAppearance(defaultAppearanceSettings);
+      
+      // Reset other settings to default values
       setSettings({
         fontSize: 14,
         fontFamily: 'JetBrains Mono',
@@ -189,26 +225,31 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>Font Family</Label>
-                    <Select value={settings.fontFamily} onValueChange={(value) => updateSetting('fontFamily', value)}>
+                    <Select 
+                      value={terminalAppearance.fontFamily} 
+                      onValueChange={(value) => updateTerminalAppearance('fontFamily', value)}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="JetBrains Mono">JetBrains Mono</SelectItem>
-                        <SelectItem value="Fira Code">Fira Code</SelectItem>
-                        <SelectItem value="Consolas">Consolas</SelectItem>
-                        <SelectItem value="Monaco">Monaco</SelectItem>
-                        <SelectItem value="Courier New">Courier New</SelectItem>
+                        <SelectItem value="Menlo, Monaco, 'Courier New', monospace">Menlo</SelectItem>
+                        <SelectItem value="'JetBrains Mono', monospace">JetBrains Mono</SelectItem>
+                        <SelectItem value="'Fira Code', monospace">Fira Code</SelectItem>
+                        <SelectItem value="'Source Code Pro', monospace">Source Code Pro</SelectItem>
+                        <SelectItem value="Consolas, monospace">Consolas</SelectItem>
+                        <SelectItem value="Monaco, monospace">Monaco</SelectItem>
+                        <SelectItem value="'Courier New', monospace">Courier New</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Font Size: {settings.fontSize}px</Label>
+                    <Label>Font Size: {terminalAppearance.fontSize}px</Label>
                     <Slider
-                      value={[settings.fontSize]}
-                      onValueChange={([value]) => updateSetting('fontSize', value)}
+                      value={[terminalAppearance.fontSize]}
+                      onValueChange={([value]) => updateTerminalAppearance('fontSize', value)}
                       min={8}
-                      max={24}
+                      max={32}
                       step={1}
                     />
                   </div>
@@ -216,23 +257,57 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Color Scheme</Label>
-                    <Select value={settings.colorScheme} onValueChange={(value) => updateSetting('colorScheme', value)}>
+                    <Label>Line Height: {terminalAppearance.lineHeight}</Label>
+                    <Slider
+                      value={[terminalAppearance.lineHeight]}
+                      onValueChange={([value]) => updateTerminalAppearance('lineHeight', value)}
+                      min={1.0}
+                      max={2.0}
+                      step={0.1}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Letter Spacing: {terminalAppearance.letterSpacing}px</Label>
+                    <Slider
+                      value={[terminalAppearance.letterSpacing]}
+                      onValueChange={([value]) => updateTerminalAppearance('letterSpacing', value)}
+                      min={-2}
+                      max={5}
+                      step={0.5}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Color Theme</Label>
+                    <Select 
+                      value={terminalAppearance.theme} 
+                      onValueChange={(value) => updateTerminalAppearance('theme', value)}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="dark">Dark</SelectItem>
-                        <SelectItem value="light">Light</SelectItem>
-                        <SelectItem value="solarized">Solarized</SelectItem>
+                        <SelectItem value="vs-code-dark">VS Code Dark</SelectItem>
                         <SelectItem value="monokai">Monokai</SelectItem>
+                        <SelectItem value="solarized-dark">Solarized Dark</SelectItem>
+                        <SelectItem value="solarized-light">Solarized Light</SelectItem>
+                        <SelectItem value="dracula">Dracula</SelectItem>
+                        <SelectItem value="one-dark">One Dark</SelectItem>
+                        <SelectItem value="nord">Nord</SelectItem>
+                        <SelectItem value="gruvbox-dark">Gruvbox Dark</SelectItem>
+                        <SelectItem value="tokyo-night">Tokyo Night</SelectItem>
                         <SelectItem value="matrix">Matrix</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
                     <Label>Cursor Style</Label>
-                    <Select value={settings.cursorStyle} onValueChange={(value) => updateSetting('cursorStyle', value)}>
+                    <Select 
+                      value={terminalAppearance.cursorStyle} 
+                      onValueChange={(value: 'block' | 'underline' | 'bar') => updateTerminalAppearance('cursorStyle', value)}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -246,14 +321,75 @@ export function SettingsModal({ open, onOpenChange }: SettingsModalProps) {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Scrollback Lines: {settings.scrollbackLines.toLocaleString()}</Label>
+                  <Label>Scrollback Lines: {terminalAppearance.scrollback.toLocaleString()}</Label>
                   <Slider
-                    value={[settings.scrollbackLines]}
-                    onValueChange={([value]) => updateSetting('scrollbackLines', value)}
+                    value={[terminalAppearance.scrollback]}
+                    onValueChange={([value]) => updateTerminalAppearance('scrollback', value)}
                     min={1000}
-                    max={50000}
+                    max={100000}
                     step={1000}
                   />
+                </div>
+
+                <Separator />
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Cursor Blink</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Enable cursor blinking animation
+                    </p>
+                  </div>
+                  <Switch
+                    checked={terminalAppearance.cursorBlink}
+                    onCheckedChange={(checked) => updateTerminalAppearance('cursorBlink', checked)}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Allow Transparency</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Enable transparent terminal background
+                    </p>
+                  </div>
+                  <Switch
+                    checked={terminalAppearance.allowTransparency}
+                    onCheckedChange={(checked) => updateTerminalAppearance('allowTransparency', checked)}
+                  />
+                </div>
+
+                {terminalAppearance.allowTransparency && (
+                  <div className="space-y-2">
+                    <Label>Opacity: {terminalAppearance.opacity}%</Label>
+                    <Slider
+                      value={[terminalAppearance.opacity]}
+                      onValueChange={([value]) => updateTerminalAppearance('opacity', value)}
+                      min={10}
+                      max={100}
+                      step={5}
+                    />
+                  </div>
+                )}
+
+                <div className="p-4 bg-muted rounded-lg">
+                  <div 
+                    className="font-mono text-sm p-3 rounded"
+                    style={{
+                      fontFamily: terminalAppearance.fontFamily,
+                      fontSize: `${terminalAppearance.fontSize}px`,
+                      lineHeight: terminalAppearance.lineHeight,
+                      letterSpacing: `${terminalAppearance.letterSpacing}px`,
+                      backgroundColor: terminalThemes[terminalAppearance.theme]?.background || '#1e1e1e',
+                      color: terminalThemes[terminalAppearance.theme]?.foreground || '#d4d4d4',
+                      opacity: terminalAppearance.allowTransparency ? terminalAppearance.opacity / 100 : 1,
+                    }}
+                  >
+                    <div style={{ color: terminalThemes[terminalAppearance.theme]?.green }}>user@host</div>
+                    <div>$ ls -la</div>
+                    <div style={{ color: terminalThemes[terminalAppearance.theme]?.blue }}>drwxr-xr-x</div>
+                    <div style={{ color: terminalThemes[terminalAppearance.theme]?.yellow }}>-rw-r--r--</div>
+                  </div>
                 </div>
               </CardContent>
             </Card>

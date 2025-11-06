@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { loadAppearanceSettings, getTerminalOptions } from '../lib/terminal-config';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -10,6 +11,7 @@ interface PtyTerminalProps {
   sessionName: string;
   host?: string;
   username?: string;
+  appearanceKey?: number; // Key to force re-render when appearance changes
 }
 
 /**
@@ -24,13 +26,15 @@ export function PtyTerminal({
   sessionId, 
   sessionName, 
   host = 'localhost', 
-  username = 'user' 
+  username = 'user',
+  appearanceKey = 0
 }: PtyTerminalProps) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
   
   // Flow control - inspired by ttyd
   const flowControlRef = React.useRef({
@@ -44,35 +48,12 @@ export function PtyTerminal({
   React.useEffect(() => {
     if (!terminalRef.current) return;
 
-    // Create terminal
-    const term = new XTerm({
-      cursorBlink: true,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      fontSize: 14,
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#f0f0f0',
-        cursor: '#f0f0f0',
-        black: '#000000',
-        red: '#cd3131',
-        green: '#0dbc79',
-        yellow: '#e5e510',
-        blue: '#2472c8',
-        magenta: '#bc3fbc',
-        cyan: '#11a8cd',
-        white: '#e5e5e5',
-        brightBlack: '#666666',
-        brightRed: '#f14c4c',
-        brightGreen: '#23d18b',
-        brightYellow: '#f5f543',
-        brightBlue: '#3b8eea',
-        brightMagenta: '#d670d6',
-        brightCyan: '#29b8db',
-        brightWhite: '#e5e5e5',
-      },
-      convertEol: true,
-      scrollback: 10000,
-    });
+    // Load appearance settings
+    const appearance = loadAppearanceSettings();
+    const termOptions = getTerminalOptions(appearance);
+
+    // Create terminal with user's appearance settings
+    const term = new XTerm(termOptions);
 
     const fitAddon = new FitAddon();
     const webLinks = new WebLinksAddon();
@@ -308,14 +289,21 @@ export function PtyTerminal({
       
       term.dispose();
     };
-  }, [sessionId, sessionName, host, username]);
+  }, [sessionId, sessionName, host, username, appearanceKey]);
 
   return (
     <div 
+      ref={containerRef}
       className="relative h-full w-full terminal-no-scrollbar"
       onClick={() => xtermRef.current?.focus()}
+      style={{
+        opacity: (() => {
+          const appearance = loadAppearanceSettings();
+          return appearance.allowTransparency ? appearance.opacity / 100 : 1;
+        })(),
+      }}
     >
-      <div ref={terminalRef} className="h-full w-full bg-[#1e1e1e]" />
+      <div ref={terminalRef} className="h-full w-full" />
       <style>{`
         .terminal-no-scrollbar .xterm-viewport {
           overflow-y: hidden !important;
