@@ -82,7 +82,14 @@ export default function App() {
     }
   }, [tabs]);
 
-  const handleSessionSelect = async (session: SessionNode) => {
+  const handleSessionSelect = (session: SessionNode) => {
+    // Just select the session, don't connect
+    if (session.type === 'session') {
+      setSelectedSession(session);
+    }
+  };
+
+  const handleSessionConnect = async (session: SessionNode) => {
     if (session.type === 'session') {
       setSelectedSession(session);
       
@@ -367,6 +374,7 @@ export default function App() {
           <ResizablePanel defaultSize={12} minSize={12}>
             <SessionManager 
               onSessionSelect={handleSessionSelect}
+              onSessionConnect={handleSessionConnect}
               selectedSessionId={selectedSession?.id || null}
               activeSessions={new Set(tabs.map(tab => tab.id))}
               onNewConnection={handleNewTab}
