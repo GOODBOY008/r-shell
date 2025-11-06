@@ -69,6 +69,9 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     fitRef.current = fitAddon;
     searchRef.current = search;
 
+    // Focus terminal to enable keyboard input
+    term.focus();
+
     term.writeln(`\x1b[1;32mConnected to ${sessionName} (${username}@${host})\x1b[0m`);
     term.writeln(`\x1b[90mRenderer: ${rendererRef.current.toUpperCase()}\x1b[0m`);
     term.write('\r\n');
@@ -291,7 +294,10 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
   }, [searchTerm]);
 
   return (
-    <div className="relative h-full w-full">
+    <div 
+      className="relative h-full w-full"
+      onClick={() => xtermRef.current?.focus()}
+    >
       <div ref={terminalRef} className="h-full w-full bg-[#1e1e1e]" />
       
       {/* Search Bar */}

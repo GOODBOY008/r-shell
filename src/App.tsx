@@ -389,31 +389,39 @@ export default function App() {
                 onCloseToLeft={handleCloseToLeft}
               />
               
-              {activeTab ? (
-                <ResizablePanelGroup direction="vertical" className="flex-1">
-                  {/* Terminal Panel */}
-                  <ResizablePanel defaultSize={70} minSize={30}>
-                    <PtyTerminal 
-                      key={activeTab.id}
-                      sessionId={activeTab.id}
-                      sessionName={activeTab.name}
-                      host={activeTab.host}
-                      username={activeTab.username}
-                    />
-                  </ResizablePanel>
-                  
-                  <ResizableHandle />
-                  
-                  {/* File Browser Panel */}
-                  <ResizablePanel defaultSize={30} minSize={20}>
-                    <IntegratedFileBrowser
-                      sessionId={activeTab.id}
-                      host={activeTab.host}
-                      isConnected={true}
-                      onClose={() => {}} // No close functionality since it's always visible
-                    />
-                  </ResizablePanel>
-                </ResizablePanelGroup>
+              {tabs.length > 0 ? (
+                <>
+                  {tabs.map((tab) => (
+                    <div
+                      key={tab.id}
+                      style={{ display: tab.id === activeTabId ? 'flex' : 'none', height: '100%', flexDirection: 'column', flex: 1 }}
+                    >
+                      <ResizablePanelGroup direction="vertical" className="flex-1">
+                        {/* Terminal Panel */}
+                        <ResizablePanel defaultSize={70} minSize={30}>
+                          <PtyTerminal 
+                            sessionId={tab.id}
+                            sessionName={tab.name}
+                            host={tab.host}
+                            username={tab.username}
+                          />
+                        </ResizablePanel>
+                        
+                        <ResizableHandle />
+                        
+                        {/* File Browser Panel */}
+                        <ResizablePanel defaultSize={30} minSize={20}>
+                          <IntegratedFileBrowser
+                            sessionId={tab.id}
+                            host={tab.host}
+                            isConnected={true}
+                            onClose={() => {}} // No close functionality since it's always visible
+                          />
+                        </ResizablePanel>
+                      </ResizablePanelGroup>
+                    </div>
+                  ))}
+                </>
               ) : (
                 <WelcomeScreen 
                   onNewSession={handleNewTab}

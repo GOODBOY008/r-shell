@@ -99,6 +99,9 @@ export function PtyTerminal({
     xtermRef.current = term;
     fitRef.current = fitAddon;
 
+    // Focus terminal to enable keyboard input
+    term.focus();
+
     // Welcome message
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.writeln(`\x1b[1;36m  ${sessionName}\x1b[0m`);
@@ -221,66 +224,24 @@ export function PtyTerminal({
 
     connectWebSocket();
 
-    // Handle user input - ULTRA-OPTIMIZED binary protocol
-    // Strategy: Batch inputs within 5ms window for better network efficiency
-    let inputBuffer: Uint8Array[] = [];
-    let inputTimer: NodeJS.Timeout | null = null;
-    
-    const flushInput = () => {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN || inputBuffer.length === 0) {
-        return;
-      }
-      
-      // Calculate total size
-      let totalSize = 0;
-      for (const chunk of inputBuffer) {
-        totalSize += chunk.length;
-      }
-      
-      // Create combined binary message
-      const encoder = new TextEncoder();
-      const sessionIdBytes = encoder.encode(sessionId);
-      const binaryMsg = new Uint8Array(1 + sessionIdBytes.length + totalSize);
-      
-      binaryMsg[0] = 0x00; // INPUT command
-      binaryMsg.set(sessionIdBytes, 1);
-      
-      let offset = 1 + sessionIdBytes.length;
-      for (const chunk of inputBuffer) {
-        binaryMsg.set(chunk, offset);
-        offset += chunk.length;
-      }
-      
-      ws.send(binaryMsg);
-      inputBuffer = [];
-    };
-    
+    // Handle user input
     const inputDisposable = term.onData((data: string) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       
+      // Convert string to bytes for binary data
       const encoder = new TextEncoder();
-      const dataBytes = encoder.encode(data);
+      const dataBytes = Array.from(encoder.encode(data));
       
-      // For single characters, send immediately (best for responsiveness)
-      if (data.length === 1) {
-        const sessionIdBytes = encoder.encode(sessionId);
-        const binaryMsg = new Uint8Array(1 + sessionIdBytes.length + dataBytes.length);
-        binaryMsg[0] = 0x00;
-        binaryMsg.set(sessionIdBytes, 1);
-        binaryMsg.set(dataBytes, 1 + sessionIdBytes.length);
-        ws.send(binaryMsg);
-      } else {
-        // For paste operations, batch with 2ms window
-        inputBuffer.push(dataBytes);
-        
-        if (inputTimer) {
-          clearTimeout(inputTimer);
-        }
-        
-        inputTimer = setTimeout(flushInput, 2);
-      }
+      // Send as JSON message (matches server's Input message type)
+      const inputMsg = {
+        type: 'Input',
+        session_id: sessionId,
+        data: dataBytes,
+      };
+      
+      console.log('[PTY Terminal] Sending input:', data.length, 'chars');
+      ws.send(JSON.stringify(inputMsg));
     });
 
     // Handle terminal resize
@@ -300,9 +261,29 @@ export function PtyTerminal({
 
     // Handle window resize
     const handleWindowResize = () => {
-      fitAddon.fit();
+      // Only fit if terminal is visible
+      if (terminalRef.current && terminalRef.current.offsetParent !== null) {
+        fitAddon.fit();
+      }
     };
     window.addEventListener('resize', handleWindowResize);
+
+    // Handle tab visibility changes using ResizeObserver
+    // When tab becomes visible again, fit the terminal
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // Only refit if the container has a reasonable size
+        if (entry.contentRect.width > 100 && entry.contentRect.height > 100) {
+          setTimeout(() => {
+            fitAddon.fit();
+          }, 0);
+        }
+      }
+    });
+    
+    if (terminalRef.current) {
+      resizeObserver.observe(terminalRef.current);
+    }
 
     // Cleanup
     return () => {
@@ -323,13 +304,17 @@ export function PtyTerminal({
       inputDisposable.dispose();
       resizeDisposable.dispose();
       window.removeEventListener('resize', handleWindowResize);
+      resizeObserver.disconnect();
       
       term.dispose();
     };
   }, [sessionId, sessionName, host, username]);
 
   return (
-    <div className="relative h-full w-full terminal-no-scrollbar">
+    <div 
+      className="relative h-full w-full terminal-no-scrollbar"
+      onClick={() => xtermRef.current?.focus()}
+    >
       <div ref={terminalRef} className="h-full w-full bg-[#1e1e1e]" />
       <style>{`
         .terminal-no-scrollbar .xterm-viewport {
