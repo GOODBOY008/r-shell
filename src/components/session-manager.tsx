@@ -104,18 +104,27 @@ export function SessionManager({
   // Handle session duplication
   const handleDuplicate = (node: SessionNode) => {
     if (node.type === 'session' && node.host) {
-      const duplicated = SessionStorageManager.saveSession({
-        name: `${node.name} (Copy)`,
-        host: node.host,
-        port: node.port || 22,
-        username: node.username || '',
-        protocol: node.protocol || 'SSH',
-        folder: 'All Sessions',
-      });
-      setSessions(loadSessions());
-      toast.success(`Duplicated: ${duplicated.name}`);
-      if (onDuplicateSession) {
-        onDuplicateSession(node);
+      // Load the full session data to get authentication credentials
+      const sessionData = SessionStorageManager.getSession(node.id);
+      if (sessionData) {
+        const duplicated = SessionStorageManager.saveSession({
+          name: `${node.name} (Copy)`,
+          host: node.host,
+          port: node.port || 22,
+          username: node.username || '',
+          protocol: node.protocol || 'SSH',
+          folder: sessionData.folder || 'All Sessions',
+          // Copy authentication credentials
+          authMethod: sessionData.authMethod,
+          password: sessionData.password,
+          privateKeyPath: sessionData.privateKeyPath,
+          passphrase: sessionData.passphrase,
+        });
+        setSessions(loadSessions());
+        toast.success(`Duplicated: ${duplicated.name}`);
+        if (onDuplicateSession) {
+          onDuplicateSession(node);
+        }
       }
     }
   };
