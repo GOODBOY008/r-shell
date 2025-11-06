@@ -184,29 +184,58 @@ export function SessionManager({
     }
     
     try {
-      // Delete old folder and create new one with sessions moved
-      const sessions = SessionStorageManager.getSessionsByFolder(folderToRename.path);
+      const oldPath = folderToRename.path;
+      const newName = renameFolderNewName.trim();
       const newPath = folderToRename.parentPath 
-        ? `${folderToRename.parentPath}/${renameFolderNewName.trim()}`
-        : renameFolderNewName.trim();
+        ? `${folderToRename.parentPath}/${newName}`
+        : newName;
       
-      // Create new folder
-      SessionStorageManager.createFolder(renameFolderNewName.trim(), folderToRename.parentPath);
+      // Get all sessions in this folder and subfolders
+      const allSessions = SessionStorageManager.getSessionsByFolderRecursive(oldPath);
       
-      // Move all sessions to new folder
-      sessions.forEach(session => {
-        SessionStorageManager.moveSession(session.id, newPath);
+      // Get all subfolders
+      const subfolders = SessionStorageManager.getSubfoldersRecursive(oldPath);
+      
+      // Create new folder first
+      SessionStorageManager.createFolder(newName, folderToRename.parentPath);
+      
+      // Recreate all subfolders with new parent path
+      subfolders.forEach(subfolder => {
+        const relativePath = subfolder.path.substring(oldPath.length + 1); // Remove old parent path
+        const newSubfolderPath = `${newPath}/${relativePath}`;
+        const parts = relativePath.split('/');
+        const subfolderName = parts[parts.length - 1];
+        const subfolderParentPath = parts.length > 1 
+          ? `${newPath}/${parts.slice(0, -1).join('/')}`
+          : newPath;
+        
+        SessionStorageManager.createFolder(subfolderName, subfolderParentPath);
       });
       
-      // Delete old folder
-      SessionStorageManager.deleteFolder(folderToRename.path, false);
+      // Move all sessions to new paths
+      allSessions.forEach(session => {
+        let newSessionPath: string;
+        if (session.folder === oldPath) {
+          // Session directly in the renamed folder
+          newSessionPath = newPath;
+        } else {
+          // Session in a subfolder - update the path
+          const relativePath = session.folder!.substring(oldPath.length + 1);
+          newSessionPath = `${newPath}/${relativePath}`;
+        }
+        SessionStorageManager.moveSession(session.id, newSessionPath);
+      });
+      
+      // Delete old folder and all subfolders
+      SessionStorageManager.deleteFolder(oldPath, true);
       
       setSessions(loadSessions());
-      toast.success(`Folder renamed to "${renameFolderNewName}"`);
+      toast.success(`Folder renamed to "${newName}"`);
       setRenameFolderDialogOpen(false);
       setFolderToRename(null);
       setRenameFolderNewName('');
     } catch (error) {
+      console.error('Rename folder error:', error);
       toast.error('Failed to rename folder');
     }
   };
@@ -348,11 +377,12 @@ export function SessionManager({
     const isDragging = draggedItem?.node.id === node.id;
     
     const handleNodeClick = () => {
+      // Always select the node first
+      onSessionSelect(node);
+      
+      // Then toggle folder expansion if it's a folder
       if (node.type === 'folder') {
         toggleExpanded(node.id);
-      } else {
-        // Just select the session, don't connect
-        onSessionSelect(node);
       }
     };
 
@@ -451,7 +481,7 @@ export function SessionManager({
           </ContextMenu>
         ) : node.type === 'folder' ? (
           <ContextMenu onOpenChange={(open) => {
-            if (open && node.type === 'session') {
+            if (open && node.type === 'folder') {
               // Select the folder when context menu opens (right-click)
               onSessionSelect(node);
             }

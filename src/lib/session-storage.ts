@@ -81,6 +81,22 @@ export class SessionStorageManager {
   }
 
   /**
+   * Get all sessions in a folder and its subfolders (recursive)
+   */
+  static getSessionsByFolderRecursive(folderPath: string): SessionData[] {
+    const sessions = this.getSessions();
+    return sessions.filter(s => s.folder === folderPath || s.folder?.startsWith(folderPath + '/'));
+  }
+
+  /**
+   * Get all subfolders recursively
+   */
+  static getSubfoldersRecursive(folderPath: string): SessionFolder[] {
+    const folders = this.getFolders();
+    return folders.filter(f => f.path.startsWith(folderPath + '/'));
+  }
+
+  /**
    * Save a new session
    */
   static saveSession(session: Omit<SessionData, 'id' | 'createdAt'>): SessionData {
