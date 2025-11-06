@@ -135,6 +135,9 @@ export function SFTPPanel({
       }
     } catch (error) {
       console.error('Failed to load files:', error);
+      toast.error('Failed to Load Files', {
+        description: error instanceof Error ? error.message : 'Unable to load remote directory contents.',
+      });
     } finally {
       setLoading(false);
     }
@@ -245,7 +248,9 @@ export function SFTPPanel({
             t.id === transferId ? { ...t, status: "error" as const } : t
           )
         );
-        toast.error(`Failed to download: ${result.error}`);
+        toast.error('Download Failed', {
+          description: result.error || 'Unable to download file from server.',
+        });
       }
     } catch (error) {
       setTransfers((prev) =>
@@ -253,7 +258,9 @@ export function SFTPPanel({
           t.id === transferId ? { ...t, status: "error" as const } : t
         )
       );
-      toast.error(`Download error: ${String(error)}`);
+      toast.error('Download Failed', {
+        description: error instanceof Error ? error.message : 'An unexpected error occurred during download.',
+      });
     }
   };
 
@@ -326,7 +333,9 @@ export function SFTPPanel({
             t.id === transferId ? { ...t, status: "error" as const } : t
           )
         );
-        toast.error(`Failed to upload: ${result.error}`);
+        toast.error('Upload Failed', {
+          description: result.error || 'Unable to upload file to server.',
+        });
       }
     } catch (error) {
       console.error("Upload error:", error);
@@ -335,7 +344,9 @@ export function SFTPPanel({
           t.id === transferId ? { ...t, status: "error" as const } : t
         )
       );
-      toast.error(`Upload failed: ${String(error)}`);
+      toast.error('Upload Failed', {
+        description: error instanceof Error ? error.message : 'An unexpected error occurred during upload.',
+      });
     }
   };
 

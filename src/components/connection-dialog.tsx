@@ -178,6 +178,9 @@ export function ConnectionDialog({
     
     // Basic validation
     if (!config.name || !config.host || !config.username) {
+      toast.error('Missing Required Fields', {
+        description: 'Please fill in all required fields: Session Name, Host, and Username.',
+      });
       setIsConnecting(false);
       return;
     }
@@ -260,11 +263,17 @@ export function ConnectionDialog({
       } else {
         // Show error toast
         console.error('Connection failed:', result.error);
-        alert(`Connection failed: ${result.error || 'Unknown error'}`);
+        toast.error('Connection Failed', {
+          description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
+          duration: 5000,
+        });
       }
     } catch (error) {
       console.error('Connection error:', error);
-      alert(`Connection error: ${error}`);
+      toast.error('Connection Error', {
+        description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
+        duration: 5000,
+      });
     } finally {
       setIsConnecting(false);
     }

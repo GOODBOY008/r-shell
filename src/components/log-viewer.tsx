@@ -7,6 +7,7 @@ import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ScrollArea } from './ui/scroll-area';
 import { Badge } from './ui/badge';
+import { toast } from 'sonner';
 
 interface LogViewerProps {
   sessionId?: string;
@@ -49,6 +50,9 @@ export function LogViewer({ sessionId }: LogViewerProps) {
       }
     } catch (error) {
       console.error('Failed to fetch log files:', error);
+      toast.error('Failed to Load Log Files', {
+        description: error instanceof Error ? error.message : 'Unable to fetch log file list from server.',
+      });
     }
   };
 
@@ -71,9 +75,15 @@ export function LogViewer({ sessionId }: LogViewerProps) {
         setLogContent(result.output);
       } else {
         setLogContent(`Error: ${result.error || 'Failed to fetch log'}`);
+        toast.error('Failed to Load Log Content', {
+          description: result.error || 'Unable to fetch log content from server.',
+        });
       }
     } catch (error) {
       setLogContent(`Error: ${error}`);
+      toast.error('Failed to Load Log Content', {
+        description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+      });
     } finally {
       setIsLoading(false);
     }

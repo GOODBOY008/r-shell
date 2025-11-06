@@ -15,6 +15,8 @@ import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 import { ActiveSessionsManager, SessionStorageManager } from './lib/session-storage';
+import { Toaster } from './components/ui/sonner';
+import { toast } from 'sonner';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
@@ -147,6 +149,9 @@ export default function App() {
                 } else {
                   // Connection failed - show error and open dialog
                   console.error('SSH connection failed:', result.error);
+                  toast.error('Connection Failed', {
+                    description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
+                  });
                   setEditingSession({
                     id: session.id,
                     name: sessionData.name,
@@ -160,6 +165,9 @@ export default function App() {
                 }
               } catch (error) {
                 console.error('Error connecting to SSH:', error);
+                toast.error('Connection Error', {
+                  description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
+                });
                 // On error, open dialog to let user try again
                 setEditingSession({
                   id: session.id,
@@ -487,6 +495,8 @@ export default function App() {
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
       />
+      
+      <Toaster richColors position="top-right" />
     </div>
   );
 }

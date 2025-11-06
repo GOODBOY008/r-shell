@@ -350,7 +350,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       }
     } catch (error) {
       console.error('Failed to load files:', error);
-      toast.error('Failed to load files');
+      toast.error('Failed to Load Files', {
+        description: error instanceof Error ? error.message : 'Unable to load remote directory contents.',
+      });
       setFiles([]);
     } finally {
       setIsLoading(false);
@@ -418,7 +420,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         setFileContent(content);
       } catch (error) {
         console.error('Failed to read file:', error);
-        toast.error('Failed to read file content');
+        toast.error('Failed to Read File', {
+          description: error instanceof Error ? error.message : 'Unable to read file content from server.',
+        });
         setFileContent(`# ${file.name}\n\nError loading file content: ${error}`);
       } finally {
         setIsLoading(false);
@@ -518,14 +522,18 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
             setTransfers(prev => prev.map(t => 
               t.id === transferId ? { ...t, status: 'error' as const } : t
             ));
-            toast.error(`Failed to upload ${file.name}`);
+            toast.error('Upload Failed', {
+              description: result.error || `Unable to upload ${file.name} to server.`,
+            });
           }
         } catch (error) {
           console.error('Upload error:', error);
           setTransfers(prev => prev.map(t => 
             t.id === transferId ? { ...t, status: 'error' as const } : t
           ));
-          toast.error(`Failed to upload ${file.name}`);
+          toast.error('Upload Failed', {
+            description: error instanceof Error ? error.message : `An error occurred while uploading ${file.name}.`,
+          });
         }
       }
     };
@@ -584,14 +592,18 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         setTransfers(prev => prev.map(t => 
           t.id === transferId ? { ...t, status: 'error' as const } : t
         ));
-        toast.error(`Failed to download ${file.name}`);
+        toast.error('Download Failed', {
+          description: result.error || `Unable to download ${file.name} from server.`,
+        });
       }
     } catch (error) {
       console.error('Download error:', error);
       setTransfers(prev => prev.map(t => 
         t.id === transferId ? { ...t, status: 'error' as const } : t
       ));
-      toast.error(`Failed to download ${file.name}`);
+      toast.error('Download Failed', {
+        description: error instanceof Error ? error.message : 'An error occurred during download.',
+      });
     }
   };
 
@@ -608,7 +620,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         loadFiles();
       } catch (error) {
         console.error('Failed to create folder:', error);
-        toast.error('Failed to create folder');
+        toast.error('Failed to Create Folder', {
+          description: error instanceof Error ? error.message : 'Unable to create directory on server.',
+        });
       }
     }
   };
@@ -626,7 +640,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         loadFiles();
       } catch (error) {
         console.error('Failed to delete file:', error);
-        toast.error('Failed to delete file');
+        toast.error('Failed to Delete File', {
+          description: error instanceof Error ? error.message : 'Unable to delete file from server.',
+        });
       }
     }
   };
@@ -646,7 +662,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         loadFiles();
       } catch (error) {
         console.error('Failed to save file:', error);
-        toast.error('Failed to save file');
+        toast.error('Failed to Save File', {
+          description: error instanceof Error ? error.message : 'Unable to save file to server.',
+        });
       }
     }
   };
@@ -688,7 +706,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         loadFiles();
       } catch (error) {
         console.error('Failed to paste files:', error);
-        toast.error('Failed to paste files');
+        toast.error('Failed to Paste Files', {
+          description: error instanceof Error ? error.message : 'Unable to complete paste operation.',
+        });
       }
     }
   };
@@ -716,7 +736,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         loadFiles();
       } catch (error) {
         console.error('Failed to rename file:', error);
-        toast.error('Failed to rename file');
+        toast.error('Failed to Rename File', {
+          description: error instanceof Error ? error.message : 'Unable to rename file on server.',
+        });
       }
     }
   };
@@ -750,7 +772,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         loadFiles();
       } catch (error) {
         console.error('Failed to create file:', error);
-        toast.error('Failed to create file');
+        toast.error('Failed to Create File', {
+          description: error instanceof Error ? error.message : 'Unable to create file on server.',
+        });
       }
     }
   };
@@ -771,7 +795,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       loadFiles();
     } catch (error) {
       console.error('Failed to duplicate file:', error);
-      toast.error('Failed to duplicate file');
+      toast.error('Failed to Duplicate File', {
+        description: error instanceof Error ? error.message : 'Unable to duplicate file on server.',
+      });
     }
   };
 
@@ -866,14 +892,18 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
           setTransfers(prev => prev.map(t => 
             t.id === transferId ? { ...t, status: 'error' as const } : t
           ));
-          toast.error(`Failed to upload ${file.name}`);
+          toast.error('Upload Failed', {
+            description: result.error || `Unable to upload ${file.name} to server.`,
+          });
         }
       } catch (error) {
         console.error('Upload error:', error);
         setTransfers(prev => prev.map(t => 
           t.id === transferId ? { ...t, status: 'error' as const } : t
         ));
-        toast.error(`Failed to upload ${file.name}`);
+        toast.error('Upload Failed', {
+          description: error instanceof Error ? error.message : `An error occurred while uploading ${file.name}.`,
+        });
       }
     }
   };

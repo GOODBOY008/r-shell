@@ -236,7 +236,9 @@ export function SessionManager({
       setRenameFolderNewName('');
     } catch (error) {
       console.error('Rename folder error:', error);
-      toast.error('Failed to rename folder');
+      toast.error('Failed to Rename Folder', {
+        description: error instanceof Error ? error.message : 'Unable to rename folder.',
+      });
     }
   };
   
@@ -310,7 +312,9 @@ export function SessionManager({
         setSessions(loadSessions());
         toast.success(`Moved folder "${draggedItem.node.name}" to "${targetNode.name}"`);
       } catch (error) {
-        toast.error('Failed to move folder');
+        toast.error('Failed to Move Folder', {
+          description: error instanceof Error ? error.message : 'Unable to move folder to new location.',
+        });
       }
     }
     
