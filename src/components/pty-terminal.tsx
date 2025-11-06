@@ -227,7 +227,6 @@ export function PtyTerminal({
     // Track IME composition state for proper handling of input methods like Pinyin
     const compositionStateRef = React.useRef({
       isComposing: false,
-      pendingData: [] as string[],
     });
 
     // Handle user input with IME composition support
@@ -235,10 +234,9 @@ export function PtyTerminal({
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       
-      // If composing with IME, buffer the data
+      // If composing with IME, skip sending data
       // This prevents sending incomplete characters during Pinyin/IME input
       if (compositionStateRef.current.isComposing) {
-        compositionStateRef.current.pendingData.push(data);
         return;
       }
       
@@ -260,7 +258,6 @@ export function PtyTerminal({
     // Handle composition events for IME (Chinese, Japanese, Korean input methods)
     const handleCompositionStart = () => {
       compositionStateRef.current.isComposing = true;
-      compositionStateRef.current.pendingData = [];
       console.log('[PTY Terminal] IME composition started');
     };
 
@@ -269,7 +266,6 @@ export function PtyTerminal({
       
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        compositionStateRef.current.pendingData = [];
         return;
       }
       
@@ -288,17 +284,17 @@ export function PtyTerminal({
         console.log('[PTY Terminal] Sending composed input:', composedData.length, 'chars');
         ws.send(JSON.stringify(inputMsg));
       }
-      
-      // Clear pending data after sending
-      compositionStateRef.current.pendingData = [];
     };
 
     // Attach composition event listeners to the terminal's textarea
+    // Store reference for cleanup
+    let textareaElement: HTMLTextAreaElement | null = null;
     if (terminalRef.current) {
       const textarea = terminalRef.current.querySelector('textarea');
       if (textarea) {
-        textarea.addEventListener('compositionstart', handleCompositionStart);
-        textarea.addEventListener('compositionend', handleCompositionEnd);
+        textareaElement = textarea as HTMLTextAreaElement;
+        textareaElement.addEventListener('compositionstart', handleCompositionStart);
+        textareaElement.addEventListener('compositionend', handleCompositionEnd);
       }
     }
 
@@ -360,12 +356,9 @@ export function PtyTerminal({
       }
       
       // Remove composition event listeners
-      if (terminalRef.current) {
-        const textarea = terminalRef.current.querySelector('textarea');
-        if (textarea) {
-          textarea.removeEventListener('compositionstart', handleCompositionStart);
-          textarea.removeEventListener('compositionend', handleCompositionEnd);
-        }
+      if (textareaElement) {
+        textareaElement.removeEventListener('compositionstart', handleCompositionStart);
+        textareaElement.removeEventListener('compositionend', handleCompositionEnd);
       }
       
       inputDisposable.dispose();

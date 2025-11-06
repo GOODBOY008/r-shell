@@ -234,11 +234,14 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     };
 
     // Attach composition event listeners to the terminal's textarea
+    // Store reference for cleanup
+    let textareaElement: HTMLTextAreaElement | null = null;
     if (terminalRef.current) {
       const textarea = terminalRef.current.querySelector('textarea');
       if (textarea) {
-        textarea.addEventListener('compositionstart', handleCompositionStart);
-        textarea.addEventListener('compositionend', handleCompositionEnd);
+        textareaElement = textarea as HTMLTextAreaElement;
+        textareaElement.addEventListener('compositionstart', handleCompositionStart);
+        textareaElement.addEventListener('compositionend', handleCompositionEnd);
       }
     }
 
@@ -304,12 +307,9 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
 
     return () => {
       // Remove composition event listeners
-      if (terminalRef.current) {
-        const textarea = terminalRef.current.querySelector('textarea');
-        if (textarea) {
-          textarea.removeEventListener('compositionstart', handleCompositionStart);
-          textarea.removeEventListener('compositionend', handleCompositionEnd);
-        }
+      if (textareaElement) {
+        textareaElement.removeEventListener('compositionstart', handleCompositionStart);
+        textareaElement.removeEventListener('compositionend', handleCompositionEnd);
       }
       
       window.removeEventListener('keydown', handleKeyDown);
