@@ -76,25 +76,34 @@ r-shell/
 ├── src/
 │   ├── components/         # React components
 │   │   ├── ui/            # Reusable UI components (Radix-based)
-│   │   ├── connection-dialog.tsx
-│   │   ├── integrated-file-browser.tsx
-│   │   ├── menu-bar.tsx
-│   │   ├── session-manager.tsx
-│   │   ├── session-tabs.tsx
-│   │   ├── settings-modal.tsx
-│   │   ├── sftp-panel.tsx
-│   │   ├── status-bar.tsx
-│   │   ├── system-monitor.tsx
-│   │   ├── terminal.tsx
-│   │   ├── toolbar.tsx
-│   │   └── welcome-screen.tsx
+│   │   ├── pty-terminal.tsx        # PTY terminal with xterm.js
+│   │   ├── integrated-file-browser.tsx  # SFTP file browser
+│   │   ├── session-manager.tsx     # Connection management
+│   │   ├── system-monitor.tsx      # Real-time metrics
+│   │   ├── connection-dialog.tsx   # SSH connection form
+│   │   ├── session-tabs.tsx        # Tab navigation
+│   │   ├── menu-bar.tsx            # Application menu
+│   │   ├── settings-modal.tsx      # Settings dialog
+│   │   └── ...                     # Other components
 │   ├── lib/               # Utility functions
+│   │   ├── session-storage.ts      # Persistent session profiles
+│   │   ├── terminal-config.ts      # Terminal appearance settings
+│   │   └── utils.ts                # Helper utilities
 │   ├── styles/            # Global styles
-│   ├── App.tsx            # Main application component
-│   ├── main.tsx           # Application entry point
+│   ├── App.tsx            # Main application shell
+│   ├── main.tsx           # React entry point
 │   └── index.css          # Global CSS with Tailwind directives
 ├── src-tauri/             # Tauri/Rust backend
-├── public/                # Static assets
+│   ├── src/
+│   │   ├── ssh/           # SSH/SFTP implementation
+│   │   ├── commands.rs    # Tauri command handlers
+│   │   ├── websocket_server.rs  # WebSocket terminal I/O
+│   │   ├── session_manager.rs   # Session lifecycle
+│   │   ├── lib.rs         # Library setup
+│   │   └── main.rs        # Application entry
+│   ├── Cargo.toml         # Rust dependencies
+│   └── tauri.conf.json    # Tauri configuration
+├── docs/                  # Documentation
 └── index.html             # HTML entry point
 ```
 
@@ -188,287 +197,6 @@ Real-time monitoring:
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-[Your License Here]
-
-## Acknowledgments
-
-- Built with components from [shadcn/ui](https://ui.shadcn.com/)
-- UI design generated from Figma
-- Icons from [Lucide](https://lucide.dev/)
-
-## Development Guide
-
-### Prerequisites
-
-Before you begin, ensure you have the following installed:
-
-- **Node.js** (v18 or later) and **pnpm**
-- **Rust** (latest stable version)
-- **Tauri CLI dependencies** for your platform:
-  - **macOS**: Xcode Command Line Tools (`xcode-select --install`)
-  - **Linux**: See [Tauri prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites)
-  - **Windows**: Microsoft Visual Studio C++ Build Tools
-
-### Installation
-
-1. Clone the repository:
-   ```bash
-   git clone <repository-url>
-   cd r-shell
-   ```
-
-2. Install dependencies:
-   ```bash
-   pnpm install
-   ```
-
-### Development Commands
-
-- **Start development server** (with hot reload):
-  ```bash
-  pnpm tauri dev
-  ```
-  This starts both the Vite dev server and the Tauri application.
-
-- **Build frontend only** (for testing):
-  ```bash
-  pnpm dev
-  ```
-
-- **Build for production**:
-  ```bash
-  pnpm tauri build
-  ```
-
-- **Type checking**:
-  ```bash
-  pnpm build
-  ```
-
-### Project Structure
-
-```
-r-shell/
-├── src/                  # React frontend source
-│   ├── App.tsx          # Main React component
-│   ├── main.tsx         # React entry point
-│   └── assets/          # Static assets
-├── src-tauri/           # Rust backend source
-│   ├── src/
-│   │   ├── main.rs      # Tauri application entry
-│   │   └── lib.rs       # Rust library code
-│   ├── Cargo.toml       # Rust dependencies
-│   └── tauri.conf.json  # Tauri configuration
-├── public/              # Public static files
-└── index.html           # HTML template
-```
-
-## Debugging Guide
-
-### Frontend Debugging
-
-#### Using Browser DevTools
-
-1. Start the development server:
-   ```bash
-   pnpm tauri dev
-   ```
-
-2. Right-click in the application window and select **"Inspect Element"** or use:
-   - **macOS**: `Cmd + Option + I`
-   - **Linux/Windows**: `Ctrl + Shift + I`
-
-3. You can now use the full Chrome DevTools to:
-   - Inspect React components
-   - Debug JavaScript/TypeScript
-   - Monitor network requests
-   - Check console logs
-
-#### VS Code Debugging
-
-1. Install the "Tauri" extension in VS Code
-
-2. Create `.vscode/launch.json`:
-   ```json
-   {
-     "version": "0.2.0",
-     "configurations": [
-       {
-         "type": "chrome",
-         "request": "launch",
-         "name": "Debug Frontend",
-         "url": "http://localhost:1420",
-         "webRoot": "${workspaceFolder}/src"
-       }
-     ]
-   }
-   ```
-
-3. Start dev server and use the debug configuration
-
-### Backend (Rust) Debugging
-
-#### Using Console Logs
-
-Add debug prints in your Rust code:
-```rust
-println!("Debug: {:?}", some_variable);
-// or use the dbg! macro
-dbg!(some_variable);
-```
-
-View logs in the terminal where you ran `pnpm tauri dev`.
-
-#### Using Rust Debugger (CodeLLDB)
-
-1. Install the **"CodeLLDB"** extension in VS Code
-
-2. Create or update `.vscode/launch.json`:
-   ```json
-   {
-     "version": "0.2.0",
-     "configurations": [
-       {
-         "type": "lldb",
-         "request": "launch",
-         "name": "Tauri Development Debug",
-         "cargo": {
-           "args": [
-             "build",
-             "--manifest-path=./src-tauri/Cargo.toml",
-             "--no-default-features"
-           ]
-         },
-         "cwd": "${workspaceFolder}"
-       },
-       {
-         "type": "lldb",
-         "request": "launch",
-         "name": "Tauri Production Debug",
-         "cargo": {
-           "args": [
-             "build",
-             "--release",
-             "--manifest-path=./src-tauri/Cargo.toml"
-           ]
-         },
-         "cwd": "${workspaceFolder}"
-       }
-     ]
-   }
-   ```
-
-3. Set breakpoints in Rust files and start debugging with F5
-
-#### Using rust-analyzer
-
-- Hover over types to see their definitions
-- Use "Go to Definition" (F12) to navigate code
-- Run individual tests with the "Run Test" code lens
-
-### Common Debugging Scenarios
-
-#### Application Won't Start
-
-1. Check if ports are already in use:
-   ```bash
-   lsof -i :1420  # Frontend dev server
-   ```
-
-2. Clear build artifacts:
-   ```bash
-   pnpm tauri clean
-   rm -rf node_modules
-   pnpm install
-   ```
-
-3. Check Rust compilation errors in terminal output
-
-#### Frontend/Backend Communication Issues
-
-1. Enable verbose logging in `src-tauri/tauri.conf.json`:
-   ```json
-   {
-     "tauri": {
-       "bundle": {
-         "active": true
-       }
-     },
-     "build": {
-       "devPath": "http://localhost:1420",
-       "distDir": "../dist"
-     }
-   }
-   ```
-
-2. Check the browser console for IPC errors
-
-3. Verify command definitions match between Rust and TypeScript
-
-#### Performance Issues
-
-1. Use React DevTools Profiler to identify slow components
-
-2. Profile Rust code:
-   ```bash
-   cargo build --release --manifest-path=./src-tauri/Cargo.toml
-   cargo flamegraph --manifest-path=./src-tauri/Cargo.toml
-   ```
-
-3. Check the DevTools Performance tab for frontend bottlenecks
-
-### Logging Best Practices
-
-#### Frontend
-```typescript
-console.log('[Debug]', data);
-console.error('[Error]', error);
-console.warn('[Warning]', warning);
-```
-
-#### Backend
-```rust
-use tauri::Manager;
-
-// Use the log crate for different levels
-log::info!("Info message");
-log::debug!("Debug message");
-log::error!("Error message");
-log::warn!("Warning message");
-```
-
-### Testing
-
-Run tests for different parts of the application:
-
-```bash
-# Frontend tests (if configured)
-pnpm test
-
-# Rust tests
-cd src-tauri
-cargo test
-
-# Run specific test
-cargo test test_name
-```
-
-## Troubleshooting
-
-### Build Errors
-
-- **Rust compilation fails**: Update Rust with `rustup update`
-- **TypeScript errors**: Run `pnpm install` to ensure types are up to date
-- **Missing dependencies**: Check platform-specific requirements
-
-### Runtime Errors
-
-- Check both terminal output (Rust logs) and browser console (JS logs)
-- Verify file paths are correct for your OS
-- Check permissions for file system or network access
 
 ## Additional Resources
 
