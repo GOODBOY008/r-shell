@@ -308,11 +308,20 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
           const owner = parts[2];
           const group = parts[3];
           const size = parseInt(parts[4]) || 0;
-          // parts[5] is date, parts[6] is time, parts[7+] is filename
+          // parts[5] is date (YYYY-MM-DD), parts[6] is time (HH:MM), parts[7+] is filename
+          const dateStr = parts[5];
+          const timeStr = parts[6];
           const name = parts.slice(7).join(' ');
           const type = permissions.startsWith('d') ? 'directory' : 'file';
           
-          console.log('Parsed file:', { name, type, permissions, owner, group, size });
+          // Parse the modification date from ls output
+          let modifiedDate = new Date();
+          if (dateStr && timeStr) {
+            // Combine date and time: "2025-01-15 14:30" -> "2025-01-15T14:30"
+            modifiedDate = new Date(`${dateStr}T${timeStr}`);
+          }
+          
+          console.log('Parsed file:', { name, type, permissions, owner, group, size, modified: modifiedDate });
           
           // Skip . and .. entries
           if (name === '.' || name === '..') {
@@ -324,7 +333,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
             name,
             type,
             size,
-            modified: new Date(),
+            modified: modifiedDate,
             permissions,
             owner,
             group,
