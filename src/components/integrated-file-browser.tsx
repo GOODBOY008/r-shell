@@ -45,6 +45,7 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from './ui/dropdown-menu';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from './ui/context-menu';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
 import { Textarea } from "./ui/textarea";
 import { toast } from 'sonner';
 
@@ -97,6 +98,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
   const [clipboard, setClipboard] = useState<{ files: FileItem[], operation: 'copy' | 'cut' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [newFileName, setNewFileName] = useState('');
+  const [deletingFile, setDeletingFile] = useState<FileItem | null>(null);
   
   // Column widths state
   const [columnWidths, setColumnWidths] = useState({
@@ -636,24 +638,43 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     }
   };
 
-  const handleDeleteFile = async (file: FileItem) => {
-    if (confirm(`Are you sure you want to delete "${file.name}"?`)) {
-      try {
-        const filePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
-        await invoke<boolean>('delete_file', {
-          sessionId,
-          path: filePath,
-          isDirectory: file.type === 'directory'
-        });
-        toast.success(`${file.name} deleted`);
-        loadFiles();
-      } catch (error) {
-        console.error('Failed to delete file:', error);
-        toast.error('Failed to Delete File', {
-          description: error instanceof Error ? error.message : 'Unable to delete file from server.',
-        });
-      }
+  const handleDeleteFile = (file: FileItem) => {
+    console.log('[FileBrowser] Opening delete confirmation for:', file.name);
+    setDeletingFile(file);
+  };
+
+  const confirmDeleteFile = async () => {
+    if (!deletingFile) return;
+    
+    console.log('[FileBrowser] Confirming delete for:', deletingFile.name);
+    try {
+      const filePath = deletingFile.path;
+      console.log('[FileBrowser] Deleting file', { 
+        filePath, 
+        isDirectory: deletingFile.type === 'directory',
+        sessionId 
+      });
+      
+      await invoke<boolean>('delete_file', {
+        sessionId,
+        path: filePath,
+        isDirectory: deletingFile.type === 'directory'
+      });
+      
+      toast.success(`${deletingFile.name} deleted successfully`);
+      setDeletingFile(null);
+      loadFiles();
+    } catch (error) {
+      console.error('[FileBrowser] Failed to delete file:', error);
+      toast.error('Failed to Delete File', {
+        description: error instanceof Error ? error.message : 'Unable to delete file from server.',
+      });
     }
+  };
+
+  const cancelDeleteFile = () => {
+    console.log('[FileBrowser] User cancelled deletion');
+    setDeletingFile(null);
   };
 
   const handleSaveFile = async () => {
@@ -1282,6 +1303,30 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
           ))}
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={!!deletingFile} onOpenChange={(open) => !open && setDeletingFile(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deletingFile?.type === 'directory' ? 'Folder' : 'File'}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{deletingFile?.name}"?
+              {deletingFile?.type === 'directory' && (
+                <span className="block mt-2 text-destructive font-medium">
+                  Warning: This will delete the folder and all its contents.
+                </span>
+              )}
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDeleteFile}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteFile} className="bg-destructive hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* File Editor Dialog */}
       <Dialog open={!!editingFile} onOpenChange={(open) => !open && setEditingFile(null)}>
