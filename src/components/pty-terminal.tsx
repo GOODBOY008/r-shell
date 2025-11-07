@@ -94,14 +94,45 @@ export function PtyTerminal({
     term.write('\r\n');
 
     let isRunning = true;
+    
+    // CRITICAL: Wait for terminal to have proper dimensions before connecting
+    // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
+    const waitForProperSize = () => {
+      return new Promise<void>((resolve) => {
+        const checkSize = () => {
+          // Refit to get latest dimensions
+          fitAddon.fit();
+          
+          console.log(`[PTY Terminal] [${sessionId}] Current size: ${term.cols}x${term.rows}`);
+          
+          // Consider terminal properly sized if it has reasonable dimensions
+          // Typical minimum: 80x24, but we'll accept 40x10 as minimum
+          if (term.cols >= 40 && term.rows >= 10) {
+            console.log(`[PTY Terminal] [${sessionId}] Terminal properly sized`);
+            resolve();
+          } else {
+            // Terminal still too small (probably hidden), retry after 100ms
+            console.log(`[PTY Terminal] [${sessionId}] Terminal too small, waiting...`);
+            setTimeout(checkSize, 100);
+          }
+        };
+        
+        // Start checking after a brief delay
+        setTimeout(checkSize, 50);
+      });
+    };
 
     // Connect to WebSocket server
-    const connectWebSocket = () => {
+    const connectWebSocket = async () => {
+      // CRITICAL: Wait for terminal to be properly sized before starting PTY
+      await waitForProperSize();
+      
+      console.log(`[PTY Terminal] [${sessionId}] Connecting to WebSocket...`);
       const ws = new WebSocket('ws://127.0.0.1:9001');
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('[PTY Terminal] WebSocket connected');
+        console.log(`[PTY Terminal] [${sessionId}] WebSocket connected`);
         term.writeln('\x1b[32m✓ WebSocket connected\x1b[0m');
         
         // Start PTY session
@@ -111,6 +142,7 @@ export function PtyTerminal({
           cols: term.cols,
           rows: term.rows,
         };
+        console.log(`[PTY Terminal] [${sessionId}] Starting PTY session with ${term.cols}x${term.rows}`);
         ws.send(JSON.stringify(startMsg));
       };
 
@@ -120,7 +152,7 @@ export function PtyTerminal({
           
           switch (msg.type) {
             case 'Success':
-              console.log('[PTY Terminal]', msg.message);
+              console.log(`[PTY Terminal] [${sessionId}]`, msg.message);
               if (msg.message.includes('PTY session started')) {
                 term.writeln('\x1b[32m✓ PTY session started\x1b[0m');
                 term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
@@ -221,7 +253,7 @@ export function PtyTerminal({
         data: dataBytes,
       };
       
-      console.log('[PTY Terminal] Sending input:', data.length, 'chars');
+      console.log(`[PTY Terminal] [${sessionId}] Sending input:`, data.length, 'chars');
       ws.send(JSON.stringify(inputMsg));
     });
 
@@ -268,7 +300,7 @@ export function PtyTerminal({
 
     // Cleanup
     return () => {
-      console.log('[PTY Terminal] Cleaning up');
+      console.log(`[PTY Terminal] [${sessionId}] Cleaning up`);
       isRunning = false;
       
       // Close PTY session via WebSocket

@@ -61,14 +61,139 @@ export default function App() {
 
   // Restore sessions on mount
   useEffect(() => {
-    const activeSessions = ActiveSessionsManager.getActiveSessions();
-    // Note: We're not auto-reconnecting here, just showing that sessions were previously open
-    // Auto-reconnection would require storing credentials (which should be done securely)
-    // For now, we just clear the active sessions on startup
-    if (activeSessions.length > 0) {
+    const restoreSessions = async () => {
+      const activeSessions = ActiveSessionsManager.getActiveSessions();
+      
+      if (activeSessions.length === 0) {
+        return;
+      }
+
       console.log('Previous sessions found:', activeSessions);
-      // TODO: Implement reconnection dialog
-    }
+      
+      // Sort by order to restore in correct sequence
+      const sortedSessions = [...activeSessions].sort((a, b) => a.order - b.order);
+      
+      let restoredCount = 0;
+      let failedCount = 0;
+
+      // Restore sessions sequentially with delay for proper initialization
+      for (let i = 0; i < sortedSessions.length; i++) {
+        const activeSession = sortedSessions[i];
+        const sessionData = SessionStorageManager.getSession(activeSession.sessionId);
+        
+        if (!sessionData) {
+          console.warn(`Session ${activeSession.sessionId} not found in storage`);
+          failedCount++;
+          continue;
+        }
+
+        // Check if we have authentication credentials saved
+        const hasCredentials = sessionData.authMethod === 'password' 
+          ? !!sessionData.password 
+          : !!sessionData.privateKeyPath;
+        
+        if (!hasCredentials) {
+          console.log(`Session ${sessionData.name} has no saved credentials, skipping restore`);
+          failedCount++;
+          continue;
+        }
+
+        try {
+          // Establish SSH connection
+          const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+            'ssh_connect',
+            {
+              request: {
+                session_id: sessionData.id,
+                host: sessionData.host,
+                port: sessionData.port || 22,
+                username: sessionData.username,
+                auth_method: sessionData.authMethod || 'password',
+                password: sessionData.password || '',
+                key_path: sessionData.privateKeyPath || null,
+                passphrase: sessionData.passphrase || null,
+              }
+            }
+          );
+
+          if (result.success) {
+            // Update last connected timestamp
+            SessionStorageManager.updateLastConnected(sessionData.id);
+            
+            // CRITICAL: Set active tab BEFORE creating tab component
+            // This ensures the terminal is visible when it mounts,
+            // allowing xterm.js to calculate proper dimensions
+            const isFirstTab = i === 0;
+            
+            if (isFirstTab) {
+              setActiveTabId(sessionData.id);
+              setSelectedSession({
+                id: sessionData.id,
+                name: sessionData.name,
+                type: 'session',
+                protocol: sessionData.protocol,
+                host: sessionData.host,
+                username: sessionData.username,
+                isConnected: true
+              });
+            }
+            
+            // Create the tab
+            const newTab: SessionTab = {
+              id: sessionData.id,
+              name: sessionData.name,
+              protocol: sessionData.protocol,
+              host: sessionData.host,
+              username: sessionData.username,
+              isActive: isFirstTab
+            };
+            
+            // Add tab to state
+            setTabs(prev => [...prev, newTab]);
+            
+            restoredCount++;
+            console.log(`✓ Restored session: ${sessionData.name}`);
+            
+            // CRITICAL: Wait for terminal initialization before proceeding to next session
+            // Each terminal needs time to:
+            // 1. Mount the component and create xterm instance
+            // 2. Establish WebSocket connection to ws://127.0.0.1:9001
+            // 3. Send StartPty message and receive confirmation
+            // 4. Start PTY output reader task on backend
+            // Without this delay, subsequent sessions may:
+            // - Connect to wrong PTY session
+            // - Receive mixed output from other sessions
+            // - Have input echoing issues
+            if (i < sortedSessions.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+          } else {
+            console.error(`Failed to restore session ${sessionData.name}:`, result.error);
+            failedCount++;
+          }
+        } catch (error) {
+          console.error(`Error restoring session ${sessionData.name}:`, error);
+          failedCount++;
+        }
+      }
+
+      // Show toast notification with restore results
+      if (restoredCount > 0) {
+        toast.success('Sessions Restored', {
+          description: failedCount > 0 
+            ? `${restoredCount} session(s) restored, ${failedCount} failed`
+            : `Successfully restored ${restoredCount} session(s)`,
+        });
+      } else if (failedCount > 0) {
+        // All sessions failed to restore, clear active sessions
+        ActiveSessionsManager.clearActiveSessions();
+        toast.error('Session Restore Failed', {
+          description: 'Unable to restore previous sessions. Please reconnect manually.',
+        });
+      }
+    };
+
+    restoreSessions();
   }, []);
 
   // Save active sessions when tabs change
