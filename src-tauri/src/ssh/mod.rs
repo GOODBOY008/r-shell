@@ -61,24 +61,60 @@ impl SshClient {
 
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
         let ssh_config = client::Config::default();
-        let mut ssh_session = client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client).await?;
+        let mut ssh_session = client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client).await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?;
 
         let authenticated = match &config.auth_method {
             AuthMethod::Password { password } => {
                 ssh_session
                     .authenticate_password(&config.username, password)
-                    .await?
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?
             }
             AuthMethod::PublicKey { key_path, passphrase } => {
-                let key = decode_secret_key(key_path, passphrase.as_deref())?;
+                // Expand tilde in path
+                let expanded_path = if key_path.starts_with("~/") {
+                    if let Some(home) = std::env::var("HOME").ok() {
+                        key_path.replacen("~", &home, 1)
+                    } else {
+                        key_path.clone()
+                    }
+                } else {
+                    key_path.clone()
+                };
+
+                // Check if file exists
+                if !std::path::Path::new(&expanded_path).exists() {
+                    return Err(anyhow::anyhow!(
+                        "SSH key file not found: {}. Please check the file path and try again.",
+                        key_path
+                    ));
+                }
+
+                // Try to load the key
+                let key = decode_secret_key(&expanded_path, passphrase.as_deref())
+                    .map_err(|e| {
+                        if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
+                            anyhow::anyhow!(
+                                "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
+                            )
+                        } else {
+                            anyhow::anyhow!(
+                                "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
+                                key_path, e
+                            )
+                        }
+                    })?;
+
                 ssh_session
                     .authenticate_publickey(&config.username, Arc::new(key))
-                    .await?
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Public key authentication failed: {}. The key may not be authorized on the server.", e))?
             }
         };
 
         if !authenticated {
-            return Err(anyhow::anyhow!("Authentication failed"));
+            return Err(anyhow::anyhow!("Authentication failed. Please check your credentials and try again."));
         }
 
         self.session = Some(Arc::new(ssh_session));

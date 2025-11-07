@@ -185,6 +185,23 @@ export function ConnectionDialog({
       return;
     }
 
+    // Validate authentication method specific fields
+    if (config.authMethod === 'password' && !config.password) {
+      toast.error('Password Required', {
+        description: 'Please enter a password for password authentication.',
+      });
+      setIsConnecting(false);
+      return;
+    }
+
+    if (config.authMethod === 'publickey' && !config.privateKeyPath) {
+      toast.error('Private Key Required', {
+        description: 'Please select or enter the path to your SSH private key file.',
+      });
+      setIsConnecting(false);
+      return;
+    }
+
     try {
       // Actually connect to SSH server
       const sessionId = editingSession?.id || `session-${Date.now()}`;
@@ -468,17 +485,20 @@ export function ConnectionDialog({
                       <Label htmlFor="private-key">Private Key File</Label>
                       <Input
                         id="private-key"
-                        placeholder="/home/user/.ssh/id_rsa"
+                        placeholder="~/.ssh/id_rsa or ~/.ssh/id_ed25519"
                         value={config.privateKeyPath}
                         onChange={(e) => updateConfig({ privateKeyPath: e.target.value })}
                       />
+                      <p className="text-xs text-muted-foreground">
+                        Common locations: ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa
+                      </p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="passphrase">Passphrase (if required)</Label>
+                      <Label htmlFor="passphrase">Passphrase (optional)</Label>
                       <Input
                         id="passphrase"
                         type="password"
-                        placeholder="Enter passphrase"
+                        placeholder="Enter passphrase if key is encrypted"
                         value={config.passphrase}
                         onChange={(e) => updateConfig({ passphrase: e.target.value })}
                       />
@@ -492,8 +512,11 @@ export function ConnectionDialog({
                     <span className="font-medium">Security Note</span>
                   </div>
                   <p className="text-sm text-muted-foreground">
-                    For production environments, we recommend using public key authentication 
-                    instead of passwords for enhanced security.
+                    {config.authMethod === 'password' ? (
+                      <>For production environments, we recommend using public key authentication instead of passwords for enhanced security.</>
+                    ) : (
+                      <>Public key authentication is more secure than passwords. R-Shell supports RSA, Ed25519, and ECDSA keys.</>
+                    )}
                   </p>
                 </div>
               </CardContent>

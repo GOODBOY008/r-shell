@@ -204,6 +204,10 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">•</span>
+                    <span><strong>SSH Key Auth:</strong> Use public key authentication for secure, password-free connections</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-primary mt-0.5">•</span>
                     <span><strong>Keyboard Shortcuts:</strong> Press <kbd className="px-1.5 py-0.5 bg-background border rounded text-xs">Ctrl+N</kbd> for new session, <kbd className="px-1.5 py-0.5 bg-background border rounded text-xs">Ctrl+T</kbd> for new tab</span>
                   </li>
                 </ul>
