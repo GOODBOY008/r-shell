@@ -226,7 +226,7 @@ export function MenuBar({
       </DropdownMenu>
 
       {/* View Menu */}
-      <DropdownMenu>
+      {/* <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm">View</Button>
         </DropdownMenuTrigger>
@@ -271,7 +271,7 @@ export function MenuBar({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
         </DropdownMenuContent>
-      </DropdownMenu>
+      </DropdownMenu> */}
 
       {/* Tools Menu */}
       <DropdownMenu>
@@ -279,7 +279,7 @@ export function MenuBar({
           <Button variant="ghost" size="sm">Tools</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onClick={onOpenSFTP} disabled={!hasActiveSession}>
+          {/* <DropdownMenuItem onClick={onOpenSFTP} disabled={!hasActiveSession}>
             <Upload className="mr-2 h-4 w-4" />
             SFTP File Transfer
             <DropdownMenuShortcut>F4</DropdownMenuShortcut>
@@ -301,8 +301,8 @@ export function MenuBar({
           <DropdownMenuItem disabled={!hasActiveSession}>
             <Upload className="mr-2 h-4 w-4" />
             Receive File
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
+          </DropdownMenuItem> */}
+          {/* <DropdownMenuSeparator /> */}
           <DropdownMenuItem onClick={onOpenSettings}>
             <Settings className="mr-2 h-4 w-4" />
             Options...

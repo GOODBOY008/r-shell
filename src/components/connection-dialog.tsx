@@ -63,14 +63,7 @@ export interface SessionConfig {
   keepAliveInterval?: number;
   serverAliveCountMax?: number;
   
-  // Terminal options
-  terminalType?: string;
-  encoding?: string;
-  localEcho?: boolean;
-  
-  // Appearance
-  colorScheme?: string;
-  fontSize?: number;
+
 }
 
 export function ConnectionDialog({ 
@@ -98,11 +91,6 @@ export function ConnectionDialog({
     keepAlive: true,
     keepAliveInterval: 60,
     serverAliveCountMax: 3,
-    terminalType: 'xterm-256color',
-    encoding: 'UTF-8',
-    localEcho: false,
-    colorScheme: 'dark',
-    fontSize: 14,
     ...editingSession
   });
 
@@ -269,12 +257,7 @@ export function ConnectionDialog({
             compression: true,
             keepAlive: true,
             keepAliveInterval: 60,
-            serverAliveCountMax: 3,
-            terminalType: 'xterm-256color',
-            encoding: 'UTF-8',
-            localEcho: false,
-            colorScheme: 'dark',
-            fontSize: 14
+            serverAliveCountMax: 3
           });
         }
       } else {
@@ -346,13 +329,6 @@ export function ConnectionDialog({
             >
               <TerminalIcon className="h-3.5 w-3.5" />
               <span>Advanced</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="terminal" 
-              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
-            >
-              <FileText className="h-3.5 w-3.5" />
-              <span>Terminal</span>
             </TabsTrigger>
           </TabsList>
 
@@ -671,100 +647,7 @@ export function ConnectionDialog({
             </Card>
           </TabsContent>
 
-          <TabsContent value="terminal" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FileText className="h-4 w-4" />
-                  Terminal Settings
-                </CardTitle>
-                <CardDescription>
-                  Configure terminal emulation and display options.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="terminal-type">Terminal Type</Label>
-                    <Select 
-                      value={config.terminalType} 
-                      onValueChange={(value) => updateConfig({ terminalType: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="xterm-256color">xterm-256color</SelectItem>
-                        <SelectItem value="xterm">xterm</SelectItem>
-                        <SelectItem value="vt100">vt100</SelectItem>
-                        <SelectItem value="linux">linux</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="encoding">Character Encoding</Label>
-                    <Select 
-                      value={config.encoding} 
-                      onValueChange={(value) => updateConfig({ encoding: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="UTF-8">UTF-8</SelectItem>
-                        <SelectItem value="ISO-8859-1">ISO-8859-1</SelectItem>
-                        <SelectItem value="ASCII">ASCII</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="color-scheme">Color Scheme</Label>
-                    <Select 
-                      value={config.colorScheme} 
-                      onValueChange={(value) => updateConfig({ colorScheme: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="dark">Dark</SelectItem>
-                        <SelectItem value="light">Light</SelectItem>
-                        <SelectItem value="solarized">Solarized</SelectItem>
-                        <SelectItem value="monokai">Monokai</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="font-size">Font Size</Label>
-                    <Input
-                      id="font-size"
-                      type="number"
-                      min="8"
-                      max="24"
-                      value={config.fontSize}
-                      onChange={(e) => updateConfig({ fontSize: parseInt(e.target.value) || 14 })}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Local Echo</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Display typed characters locally before sending to server
-                    </p>
-                  </div>
-                  <Switch
-                    checked={config.localEcho}
-                    onCheckedChange={(checked) => updateConfig({ localEcho: checked })}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
         </Tabs>
 
         <DialogFooter className="px-6 py-4 border-t bg-muted/30">
