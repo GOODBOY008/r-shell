@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { FileText, RefreshCw, Download, Search, Filter, X } from 'lucide-react';
+import { FileText, RefreshCw, Download, Search, Filter, X, Lock, Unlock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -26,7 +26,10 @@ export function LogViewer({ sessionId }: LogViewerProps) {
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [lineCount, setLineCount] = useState<number>(50);
+  const [scrollLocked, setScrollLocked] = useState(true); // Auto-scroll to bottom when locked
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const lastScrollTop = useRef<number>(0);
 
   // Fetch available log files
   const fetchLogFiles = async () => {
@@ -56,11 +59,14 @@ export function LogViewer({ sessionId }: LogViewerProps) {
     }
   };
 
-  // Fetch log content
-  const fetchLogContent = async () => {
+  // Fetch log content with smooth update
+  const fetchLogContent = useCallback(async (isAutoRefresh = false) => {
     if (!sessionId || !selectedLogPath) return;
     
-    setIsLoading(true);
+    if (!isAutoRefresh) {
+      setIsLoading(true);
+    }
+    
     try {
       const result = await invoke<{ success: boolean; output?: string; error?: string }>(
         'tail_log',
@@ -72,22 +78,43 @@ export function LogViewer({ sessionId }: LogViewerProps) {
       );
       
       if (result.success && result.output) {
+        // Store scroll position before update
+        const scrollContainer = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]');
+        const wasAtBottom = scrollContainer 
+          ? scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 50
+          : true;
+        
         setLogContent(result.output);
+        
+        // Restore scroll position or scroll to bottom if locked
+        if (scrollLocked || wasAtBottom) {
+          setTimeout(() => {
+            if (scrollContainer) {
+              scrollContainer.scrollTop = scrollContainer.scrollHeight;
+            }
+          }, 10);
+        }
       } else {
         setLogContent(`Error: ${result.error || 'Failed to fetch log'}`);
-        toast.error('Failed to Load Log Content', {
-          description: result.error || 'Unable to fetch log content from server.',
-        });
+        if (!isAutoRefresh) {
+          toast.error('Failed to Load Log Content', {
+            description: result.error || 'Unable to fetch log content from server.',
+          });
+        }
       }
     } catch (error) {
       setLogContent(`Error: ${error}`);
-      toast.error('Failed to Load Log Content', {
-        description: error instanceof Error ? error.message : 'An unexpected error occurred.',
-      });
+      if (!isAutoRefresh) {
+        toast.error('Failed to Load Log Content', {
+          description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+        });
+      }
     } finally {
-      setIsLoading(false);
+      if (!isAutoRefresh) {
+        setIsLoading(false);
+      }
     }
-  };
+  }, [sessionId, selectedLogPath, lineCount, scrollLocked]);
 
   // Load log files on mount
   useEffect(() => {
@@ -100,20 +127,24 @@ export function LogViewer({ sessionId }: LogViewerProps) {
   useEffect(() => {
     if (!autoRefresh || !selectedLogPath) return;
     
-    const interval = setInterval(fetchLogContent, 3000);
+    const interval = setInterval(() => fetchLogContent(true), 3000);
     return () => clearInterval(interval);
-  }, [autoRefresh, selectedLogPath, sessionId, lineCount]);
+  }, [autoRefresh, selectedLogPath, fetchLogContent]);
+
+  // Memoized log lines to prevent unnecessary re-renders
+  const logLines = useMemo(() => {
+    return logContent.split('\n');
+  }, [logContent]);
 
   // Filter log lines based on search term
-  const filteredLogContent = searchTerm
-    ? logContent
-        .split('\n')
-        .filter(line => line.toLowerCase().includes(searchTerm.toLowerCase()))
-        .join('\n')
-    : logContent;
+  const filteredLogLines = useMemo(() => {
+    if (!searchTerm) return logLines;
+    const lowerSearch = searchTerm.toLowerCase();
+    return logLines.filter(line => line.toLowerCase().includes(lowerSearch));
+  }, [logLines, searchTerm]);
 
-  // Highlight log levels
-  const highlightLogLine = (line: string) => {
+  // Highlight log levels - memoized function
+  const highlightLogLine = useCallback((line: string) => {
     const lowerLine = line.toLowerCase();
     if (lowerLine.includes('error') || lowerLine.includes('err')) {
       return 'text-red-400';
@@ -125,7 +156,22 @@ export function LogViewer({ sessionId }: LogViewerProps) {
       return 'text-gray-400';
     }
     return 'text-foreground';
-  };
+  }, []);
+
+  // Detect user scroll to unlock auto-scroll
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const isAtBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 50;
+    
+    // Auto-lock when user scrolls to bottom, unlock when scrolling up
+    if (isAtBottom && !scrollLocked) {
+      setScrollLocked(true);
+    } else if (!isAtBottom && scrollLocked && target.scrollTop < lastScrollTop.current) {
+      setScrollLocked(false);
+    }
+    
+    lastScrollTop.current = target.scrollTop;
+  }, [scrollLocked]);
 
   // Download logs
   const downloadLogs = () => {
@@ -199,6 +245,15 @@ export function LogViewer({ sessionId }: LogViewerProps) {
             >
               Auto-refresh
             </Button>
+            <Button
+              size="sm"
+              variant={scrollLocked ? 'default' : 'outline'}
+              onClick={() => setScrollLocked(!scrollLocked)}
+              disabled={!selectedLogPath}
+              title={scrollLocked ? 'Click to unlock scroll (stay at current position)' : 'Click to lock scroll (auto-scroll to bottom)'}
+            >
+              {scrollLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -240,7 +295,11 @@ export function LogViewer({ sessionId }: LogViewerProps) {
       <Card className="flex-1 flex flex-col overflow-hidden">
         <CardContent className="p-0 flex-1 overflow-hidden">
           <ScrollArea className="h-full" ref={scrollAreaRef}>
-            <div className="p-3">
+            <div 
+              className="p-3" 
+              ref={contentRef}
+              onScroll={handleScroll}
+            >
               {!selectedLogPath ? (
                 <div className="text-center text-sm text-muted-foreground py-8">
                   Select a log file to view
@@ -249,14 +308,18 @@ export function LogViewer({ sessionId }: LogViewerProps) {
                 <div className="text-center text-sm text-muted-foreground py-8">
                   Loading logs...
                 </div>
-              ) : filteredLogContent ? (
+              ) : filteredLogLines.length > 0 ? (
                 <pre className="text-xs font-mono whitespace-pre-wrap break-all">
-                  {filteredLogContent.split('\n').map((line, i) => (
-                    <div key={i} className={highlightLogLine(line)}>
+                  {filteredLogLines.map((line, i) => (
+                    <div key={`${selectedLogPath}-${i}-${line.substring(0, 20)}`} className={highlightLogLine(line)}>
                       {line || '\n'}
                     </div>
                   ))}
                 </pre>
+              ) : logContent ? (
+                <div className="text-center text-sm text-muted-foreground py-8">
+                  No matching log lines
+                </div>
               ) : (
                 <div className="text-center text-sm text-muted-foreground py-8">
                   No log content
