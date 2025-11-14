@@ -6,10 +6,15 @@ import * as ResizablePrimitive from "react-resizable-panels";
 
 import { cn } from "./utils";
 
+interface ResizablePanelGroupProps extends React.ComponentProps<typeof ResizablePrimitive.PanelGroup> {
+  storageKey?: string;
+}
+
 function ResizablePanelGroup({
   className,
+  storageKey,
   ...props
-}: React.ComponentProps<typeof ResizablePrimitive.PanelGroup>) {
+}: ResizablePanelGroupProps) {
   return (
     <ResizablePrimitive.PanelGroup
       data-slot="resizable-panel-group"
@@ -17,6 +22,16 @@ function ResizablePanelGroup({
         "flex h-full w-full data-[panel-group-direction=vertical]:flex-col",
         className,
       )}
+      storage={storageKey ? {
+        getItem: (name: string) => {
+          const item = localStorage.getItem(name);
+          return item ? JSON.parse(item) : null;
+        },
+        setItem: (name: string, value: string) => {
+          localStorage.setItem(name, JSON.stringify(value));
+        },
+      } : undefined}
+      autoSaveId={storageKey}
       {...props}
     />
   );

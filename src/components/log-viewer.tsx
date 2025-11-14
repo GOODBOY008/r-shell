@@ -232,7 +232,7 @@ export function LogViewer({ sessionId }: LogViewerProps) {
             <span className="text-xs text-muted-foreground">lines</span>
             <Button
               size="sm"
-              onClick={fetchLogContent}
+              onClick={() => fetchLogContent()}
               disabled={!selectedLogPath || isLoading}
             >
               Load

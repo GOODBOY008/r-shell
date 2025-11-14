@@ -16,6 +16,8 @@ import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 import { ActiveSessionsManager, SessionStorageManager } from './lib/session-storage';
 import { TerminalAppearanceSettings } from './lib/terminal-config';
+import { useLayout, LayoutProvider } from './lib/layout-context';
+import { useKeyboardShortcuts, createLayoutShortcuts } from './lib/keyboard-shortcuts';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -45,7 +47,7 @@ interface SessionTab {
   isActive: boolean;
 }
 
-export default function App() {
+function AppContent() {
   const [selectedSession, setSelectedSession] = useState<SessionNode | null>(null);
   const [tabs, setTabs] = useState<SessionTab[]>([]);
   const [activeTabId, setActiveTabId] = useState('');
@@ -56,8 +58,26 @@ export default function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<SessionConfig | null>(null);
   
-  // Right sidebar visibility
-  const [rightSidebarVisible, setRightSidebarVisible] = useState(true);
+  // Layout management
+  const {
+    layout,
+    toggleLeftSidebar,
+    toggleRightSidebar,
+    toggleBottomPanel,
+    toggleZenMode,
+    applyPreset,
+  } = useLayout();
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts(
+    createLayoutShortcuts({
+      toggleLeftSidebar,
+      toggleRightSidebar,
+      toggleBottomPanel,
+      toggleZenMode,
+    }),
+    true
+  );
 
   // Restore sessions on mount
   useEffect(() => {
@@ -498,27 +518,38 @@ export default function App() {
         onNewSession={handleNewTab} 
         onOpenSFTP={handleOpenSFTP}
         onOpenSettings={handleOpenSettings}
-        onToggleRightSidebar={() => setRightSidebarVisible(!rightSidebarVisible)}
-        rightSidebarVisible={rightSidebarVisible}
+        onToggleLeftSidebar={toggleLeftSidebar}
+        onToggleRightSidebar={toggleRightSidebar}
+        onToggleBottomPanel={toggleBottomPanel}
+        onToggleZenMode={toggleZenMode}
+        onApplyPreset={applyPreset}
+        leftSidebarVisible={layout.leftSidebarVisible}
+        rightSidebarVisible={layout.rightSidebarVisible}
+        bottomPanelVisible={layout.bottomPanelVisible}
+        zenMode={layout.zenMode}
       />
       
       <div className="flex-1 flex overflow-hidden">
-        <ResizablePanelGroup direction="horizontal">
+        <ResizablePanelGroup direction="horizontal" storageKey="r-shell-main-layout">
           {/* Left Sidebar - Session Manager with integrated Connection Details */}
-          <ResizablePanel defaultSize={12} minSize={12}>
-            <SessionManager 
-              onSessionSelect={handleSessionSelect}
-              onSessionConnect={handleSessionConnect}
-              selectedSessionId={selectedSession?.id || null}
-              activeSessions={new Set(tabs.map(tab => tab.id))}
-              onNewConnection={handleNewTab}
-            />
-          </ResizablePanel>
-          
-          <ResizableHandle />
+          {layout.leftSidebarVisible && (
+            <>
+              <ResizablePanel defaultSize={layout.leftSidebarSize} minSize={12} maxSize={30}>
+                <SessionManager 
+                  onSessionSelect={handleSessionSelect}
+                  onSessionConnect={handleSessionConnect}
+                  selectedSessionId={selectedSession?.id || null}
+                  activeSessions={new Set(tabs.map(tab => tab.id))}
+                  onNewConnection={handleNewTab}
+                />
+              </ResizablePanel>
+              
+              <ResizableHandle />
+            </>
+          )}
           
           {/* Main Content */}
-          <ResizablePanel defaultSize={rightSidebarVisible ? 68 : 85} minSize={30}>
+          <ResizablePanel minSize={30}>
             <div className="h-full flex flex-col">
               <SessionTabs 
                 tabs={tabs}
@@ -538,9 +569,9 @@ export default function App() {
                       key={tab.id}
                       style={{ display: tab.id === activeTabId ? 'flex' : 'none', height: '100%', flexDirection: 'column', flex: 1 }}
                     >
-                      <ResizablePanelGroup direction="vertical" className="flex-1">
+                      <ResizablePanelGroup direction="vertical" className="flex-1" storageKey={`r-shell-terminal-${tab.id}`}>
                         {/* Terminal Panel */}
-                        <ResizablePanel defaultSize={70} minSize={30}>
+                        <ResizablePanel defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
                           <PtyTerminal 
                             sessionId={tab.id}
                             sessionName={tab.name}
@@ -549,17 +580,21 @@ export default function App() {
                           />
                         </ResizablePanel>
                         
-                        <ResizableHandle />
-                        
-                        {/* File Browser Panel */}
-                        <ResizablePanel defaultSize={30} minSize={20}>
-                          <IntegratedFileBrowser
-                            sessionId={tab.id}
-                            host={tab.host}
-                            isConnected={true}
-                            onClose={() => {}} // No close functionality since it's always visible
-                          />
-                        </ResizablePanel>
+                        {layout.bottomPanelVisible && (
+                          <>
+                            <ResizableHandle />
+                            
+                            {/* File Browser Panel */}
+                            <ResizablePanel defaultSize={layout.bottomPanelSize} minSize={20} maxSize={50}>
+                              <IntegratedFileBrowser
+                                sessionId={tab.id}
+                                host={tab.host}
+                                isConnected={true}
+                                onClose={() => {}} // No close functionality since it's always visible
+                              />
+                            </ResizablePanel>
+                          </>
+                        )}
                       </ResizablePanelGroup>
                     </div>
                   ))}
@@ -573,12 +608,12 @@ export default function App() {
             </div>
           </ResizablePanel>
           
-          {rightSidebarVisible && (
+          {layout.rightSidebarVisible && (
             <>
               <ResizableHandle />
               
               {/* Right Sidebar - Tabs for Monitor/Logs */}
-              <ResizablePanel defaultSize={15} minSize={15}>
+              <ResizablePanel defaultSize={layout.rightSidebarSize} minSize={15} maxSize={30}>
                 <Tabs defaultValue="monitor" className="h-full flex flex-col">
                   <TabsList className="inline-flex w-auto mx-2 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
@@ -640,5 +675,12 @@ export default function App() {
       
       <Toaster richColors position="top-right" />
     </div>
+  );
+}
+export default function App() {
+  return (
+    <LayoutProvider>
+      <AppContent />
+    </LayoutProvider>
   );
 }
