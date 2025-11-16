@@ -58,6 +58,10 @@ function AppContent() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<SessionConfig | null>(null);
   
+  // Restoration state
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoringProgress, setRestoringProgress] = useState({ current: 0, total: 0 });
+  
   // Layout management
   const {
     layout,
@@ -90,6 +94,10 @@ function AppContent() {
 
       console.log('Previous sessions found:', activeSessions);
       
+      // Set restoring state
+      setIsRestoring(true);
+      setRestoringProgress({ current: 0, total: activeSessions.length });
+      
       // Sort by order to restore in correct sequence
       const sortedSessions = [...activeSessions].sort((a, b) => a.order - b.order);
       
@@ -101,6 +109,9 @@ function AppContent() {
       for (let i = 0; i < sortedSessions.length; i++) {
         const activeSession = sortedSessions[i];
         const sessionData = SessionStorageManager.getSession(activeSession.sessionId);
+        
+        // Update progress
+        setRestoringProgress({ current: i + 1, total: sortedSessions.length });
         
         if (!sessionData) {
           console.warn(`Session ${activeSession.sessionId} not found in storage`);
@@ -212,6 +223,10 @@ function AppContent() {
           description: 'Unable to restore previous sessions. Please reconnect manually.',
         });
       }
+      
+      // Clear restoring state
+      setIsRestoring(false);
+      setRestoringProgress({ current: 0, total: 0 });
     };
 
     restoreSessions();
@@ -488,6 +503,36 @@ function AppContent() {
 
   return (
     <div className="h-screen flex flex-col bg-background">
+      {/* Session Restoration Loading Overlay */}
+      {isRestoring && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-card border rounded-lg shadow-lg p-8 max-w-md w-full mx-4">
+            <div className="flex flex-col items-center space-y-4">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-primary/30 border-t-primary rounded-full animate-spin"></div>
+              </div>
+              <div className="text-center space-y-2">
+                <h3 className="text-lg font-semibold">Restoring Sessions</h3>
+                <p className="text-sm text-muted-foreground">
+                  Please wait while we reconnect your previous sessions...
+                </p>
+                <div className="text-sm font-medium text-primary">
+                  {restoringProgress.current} of {restoringProgress.total}
+                </div>
+              </div>
+              <div className="w-full bg-secondary rounded-full h-2 overflow-hidden">
+                <div 
+                  className="bg-primary h-full transition-all duration-300 ease-out"
+                  style={{ 
+                    width: `${restoringProgress.total > 0 ? (restoringProgress.current / restoringProgress.total) * 100 : 0}%` 
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
       <MenuBar 
         onNewSession={handleNewTab}
         onNewTab={handleNewTab}
