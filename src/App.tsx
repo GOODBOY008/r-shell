@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MenuBar } from './components/menu-bar';
 import { Toolbar } from './components/toolbar';
@@ -95,6 +95,7 @@ function AppContent() {
       
       let restoredCount = 0;
       let failedCount = 0;
+      const restoredTabs: SessionTab[] = [];
 
       // Restore sessions sequentially with delay for proper initialization
       for (let i = 0; i < sortedSessions.length; i++) {
@@ -140,25 +141,10 @@ function AppContent() {
             // Update last connected timestamp
             SessionStorageManager.updateLastConnected(sessionData.id);
             
-            // CRITICAL: Set active tab BEFORE creating tab component
-            // This ensures the terminal is visible when it mounts,
-            // allowing xterm.js to calculate proper dimensions
+            // Mark first tab as active
             const isFirstTab = i === 0;
             
-            if (isFirstTab) {
-              setActiveTabId(sessionData.id);
-              setSelectedSession({
-                id: sessionData.id,
-                name: sessionData.name,
-                type: 'session',
-                protocol: sessionData.protocol,
-                host: sessionData.host,
-                username: sessionData.username,
-                isConnected: true
-              });
-            }
-            
-            // Create the tab
+            // Create the tab object
             const newTab: SessionTab = {
               id: sessionData.id,
               name: sessionData.name,
@@ -168,8 +154,8 @@ function AppContent() {
               isActive: isFirstTab
             };
             
-            // Add tab to state
-            setTabs(prev => [...prev, newTab]);
+            // Add to restored tabs array
+            restoredTabs.push(newTab);
             
             restoredCount++;
             console.log(`✓ Restored session: ${sessionData.name}`);
@@ -195,6 +181,21 @@ function AppContent() {
           console.error(`Error restoring session ${sessionData.name}:`, error);
           failedCount++;
         }
+      }
+
+      // Batch update all restored tabs at once instead of individual updates
+      if (restoredTabs.length > 0) {
+        setTabs(restoredTabs);
+        setActiveTabId(restoredTabs[0].id);
+        setSelectedSession({
+          id: restoredTabs[0].id,
+          name: restoredTabs[0].name,
+          type: 'session',
+          protocol: restoredTabs[0].protocol,
+          host: restoredTabs[0].host,
+          username: restoredTabs[0].username,
+          isConnected: true
+        });
       }
 
       // Show toast notification with restore results
@@ -364,12 +365,13 @@ function AppContent() {
     }
   };
 
-  const handleTabSelect = (tabId: string) => {
+  const handleTabSelect = useCallback((tabId: string) => {
+    // Batch all state updates together using React 18 automatic batching
+    const tab = tabs.find(t => t.id === tabId);
+    
     setTabs(prev => prev.map(tab => ({ ...tab, isActive: tab.id === tabId })));
     setActiveTabId(tabId);
     
-    // Update selected session
-    const tab = tabs.find(t => t.id === tabId);
     if (tab) {
       setSelectedSession({
         id: tab.id,
@@ -380,72 +382,79 @@ function AppContent() {
         username: tab.username
       });
     }
-  };
+  }, [tabs]);
 
-  const handleTabClose = (tabId: string) => {
+  const handleTabClose = useCallback((tabId: string) => {
     const remainingTabs = tabs.filter(tab => tab.id !== tabId);
-    setTabs(remainingTabs);
     
     if (activeTabId === tabId && remainingTabs.length > 0) {
+      // Batch state updates: closing active tab and selecting new one
       const newActiveTab = remainingTabs[remainingTabs.length - 1];
+      setTabs(remainingTabs.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
       setActiveTabId(newActiveTab.id);
-      setTabs(prev => prev.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
     } else if (remainingTabs.length === 0) {
+      // No tabs remaining
+      setTabs([]);
       setActiveTabId('');
       setSelectedSession(null);
+    } else {
+      // Closed an inactive tab
+      setTabs(remainingTabs);
     }
-  };
+  }, [tabs, activeTabId]);
 
-  const handleCloseAll = () => {
+  const handleCloseAll = useCallback(() => {
     setTabs([]);
     setActiveTabId('');
     setSelectedSession(null);
-  };
+  }, []);
 
-  const handleCloseOthers = (tabId: string) => {
+  const handleCloseOthers = useCallback((tabId: string) => {
     const tabToKeep = tabs.find(tab => tab.id === tabId);
     if (tabToKeep) {
       setTabs([{ ...tabToKeep, isActive: true }]);
       setActiveTabId(tabId);
     }
-  };
+  }, [tabs]);
 
-  const handleCloseToRight = (tabId: string) => {
+  const handleCloseToRight = useCallback((tabId: string) => {
     const tabIndex = tabs.findIndex(tab => tab.id === tabId);
     if (tabIndex !== -1) {
       const remainingTabs = tabs.slice(0, tabIndex + 1);
-      setTabs(remainingTabs);
       
       // If active tab was closed, activate the rightmost remaining tab
       if (!remainingTabs.find(tab => tab.id === activeTabId)) {
         const newActiveTab = remainingTabs[remainingTabs.length - 1];
+        setTabs(remainingTabs.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
         setActiveTabId(newActiveTab.id);
-        setTabs(prev => prev.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
+      } else {
+        setTabs(remainingTabs);
       }
     }
-  };
+  }, [tabs, activeTabId]);
 
-  const handleCloseToLeft = (tabId: string) => {
+  const handleCloseToLeft = useCallback((tabId: string) => {
     const tabIndex = tabs.findIndex(tab => tab.id === tabId);
     if (tabIndex !== -1) {
       const remainingTabs = tabs.slice(tabIndex);
-      setTabs(remainingTabs);
       
       // If active tab was closed, activate the leftmost remaining tab
       if (!remainingTabs.find(tab => tab.id === activeTabId)) {
         const newActiveTab = remainingTabs[0];
+        setTabs(remainingTabs.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
         setActiveTabId(newActiveTab.id);
-        setTabs(prev => prev.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
+      } else {
+        setTabs(remainingTabs);
       }
     }
-  };
+  }, [tabs, activeTabId]);
 
-  const handleNewTab = () => {
+  const handleNewTab = useCallback(() => {
     setConnectionDialogOpen(true);
     setEditingSession(null);
-  };
+  }, []);
 
-  const handleConnectionDialogConnect = (config: SessionConfig) => {
+  const handleConnectionDialogConnect = useCallback((config: SessionConfig) => {
     const newTab: SessionTab = {
       id: config.id || `session-${Date.now()}`,
       name: config.name,
@@ -457,15 +466,15 @@ function AppContent() {
     
     setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), newTab]);
     setActiveTabId(newTab.id);
-  };
+  }, []);
 
-  const handleOpenSettings = () => {
+  const handleOpenSettings = useCallback(() => {
     setSettingsModalOpen(true);
-  };
+  }, []);
 
-  const handleOpenSFTP = () => {
+  const handleOpenSFTP = useCallback(() => {
     setSftpPanelOpen(true);
-  };
+  }, []);
 
   const activeTab = tabs.find(tab => tab.id === activeTabId);
   const activeSession = activeTab ? {
