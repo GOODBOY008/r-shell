@@ -13,9 +13,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Command history search
 - Multi-language support (i18n)
 - Plugin system
-- Session restore on startup
 - Batch command execution
 - Port forwarding support
+
+## [0.2.0] - 2025-11-17
+
+### Added
+- 🎨 Enhanced UI components and styling improvements
+- 📋 Improved session management interface
+- ✨ Better error handling and user feedback
+- 🔧 Additional terminal customization options
+
+### Changed
+- ⚡ Performance optimizations for terminal rendering
+- 🔄 Improved session state persistence
+- 📊 Enhanced system monitoring display
+
+### Fixed
+- 🐛 Various bug fixes and stability improvements
+- 🔧 Terminal display issues on some platforms
+- 📁 File browser navigation edge cases
 
 ## [0.1.0] - 2025-10-30
 
