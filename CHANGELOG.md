@@ -16,6 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Batch command execution
 - Port forwarding support
 
+## [0.3.0] - 2025-11-17
+
+### Added
+- 🚀 New features and improvements
+- 📦 Package updates and dependency optimizations
+- 🎯 Enhanced user experience
+
+### Changed
+- 🔄 Codebase refinements and optimizations
+- 📚 Documentation updates
+
+### Fixed
+- 🐛 Bug fixes and stability improvements
+
 ## [0.2.0] - 2025-11-17
 
 ### Added
