@@ -34,6 +34,7 @@ pub fn run() {
         .manage(session_manager)
         .invoke_handler(tauri::generate_handler![
             commands::ssh_connect,
+            commands::ssh_cancel_connect,
             commands::ssh_disconnect,
             commands::ssh_execute_command,
             commands::ssh_tab_complete,

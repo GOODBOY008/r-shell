@@ -87,6 +87,26 @@ pub async fn ssh_connect(
 }
 
 #[tauri::command]
+pub async fn ssh_cancel_connect(
+    session_id: String,
+    state: State<'_, Arc<SessionManager>>,
+) -> Result<CommandResponse, String> {
+    if state.cancel_pending_connection(&session_id).await {
+        Ok(CommandResponse {
+            success: true,
+            output: Some("Connection cancelled".to_string()),
+            error: None,
+        })
+    } else {
+        Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some("No pending connection to cancel".to_string()),
+        })
+    }
+}
+
+#[tauri::command]
 pub async fn ssh_disconnect(
     session_id: String,
     state: State<'_, Arc<SessionManager>>,

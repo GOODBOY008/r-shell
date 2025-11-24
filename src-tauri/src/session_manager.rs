@@ -3,10 +3,12 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<String, Arc<RwLock<SshClient>>>>>,
     pty_sessions: Arc<RwLock<HashMap<String, Arc<PtySession>>>>,
+    pending_connections: Arc<RwLock<HashMap<String, CancellationToken>>>,
 }
 
 impl SessionManager {
@@ -14,17 +16,49 @@ impl SessionManager {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             pty_sessions: Arc::new(RwLock::new(HashMap::new())),
+            pending_connections: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub async fn create_session(&self, session_id: String, config: SshConfig) -> Result<()> {
         let mut client = SshClient::new();
-        client.connect(&config).await?;
+        let cancel_token = self.register_pending_connection(&session_id).await;
+
+        let connect_result = tokio::select! {
+            res = client.connect(&config) => res,
+            _ = cancel_token.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
+        };
+
+        self.clear_pending_connection(&session_id).await;
+
+        connect_result?;
         
         let mut sessions = self.sessions.write().await;
         sessions.insert(session_id, Arc::new(RwLock::new(client)));
         
         Ok(())
+    }
+
+    async fn register_pending_connection(&self, session_id: &str) -> CancellationToken {
+        let token = CancellationToken::new();
+        let mut pending = self.pending_connections.write().await;
+        pending.insert(session_id.to_string(), token.clone());
+        token
+    }
+
+    async fn clear_pending_connection(&self, session_id: &str) {
+        let mut pending = self.pending_connections.write().await;
+        pending.remove(session_id);
+    }
+
+    pub async fn cancel_pending_connection(&self, session_id: &str) -> bool {
+        let mut pending = self.pending_connections.write().await;
+        if let Some(token) = pending.remove(session_id) {
+            token.cancel();
+            true
+        } else {
+            false
+        }
     }
 
     pub async fn get_session(&self, session_id: &str) -> Option<Arc<RwLock<SshClient>>> {

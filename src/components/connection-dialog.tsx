@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 import { Button } from './ui/button';
@@ -95,11 +95,14 @@ export function ConnectionDialog({
   });
 
   const [isConnecting, setIsConnecting] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
   const [showSaveProfile, setShowSaveProfile] = useState(false);
   const [saveAsSession, setSaveAsSession] = useState(true);
   const [sessionFolder, setSessionFolder] = useState('All Sessions');
   const [availableFolders, setAvailableFolders] = useState<string[]>([]);
+  const sessionIdRef = useRef<string | null>(null);
+  const cancelRequestedRef = useRef(false);
 
   // Load saved profiles and folders when dialog opens
   useEffect(() => {
@@ -161,15 +164,30 @@ export function ConnectionDialog({
     }
   };
 
+  const resetConnectionState = () => {
+    setIsConnecting(false);
+    setIsCancelling(false);
+    sessionIdRef.current = null;
+    cancelRequestedRef.current = false;
+  };
+
   const handleConnect = async () => {
+    if (isConnecting) {
+      return;
+    }
+
     setIsConnecting(true);
+    setIsCancelling(false);
+    cancelRequestedRef.current = false;
+    const sessionId = editingSession?.id || `session-${Date.now()}`;
+    sessionIdRef.current = sessionId;
     
     // Basic validation
     if (!config.name || !config.host || !config.username) {
       toast.error('Missing Required Fields', {
         description: 'Please fill in all required fields: Session Name, Host, and Username.',
       });
-      setIsConnecting(false);
+      resetConnectionState();
       return;
     }
 
@@ -178,7 +196,7 @@ export function ConnectionDialog({
       toast.error('Password Required', {
         description: 'Please enter a password for password authentication.',
       });
-      setIsConnecting(false);
+      resetConnectionState();
       return;
     }
 
@@ -186,13 +204,12 @@ export function ConnectionDialog({
       toast.error('Private Key Required', {
         description: 'Please select or enter the path to your SSH private key file.',
       });
-      setIsConnecting(false);
+      resetConnectionState();
       return;
     }
 
     try {
       // Actually connect to SSH server
-      const sessionId = editingSession?.id || `session-${Date.now()}`;
       const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
         'ssh_connect',
         {
@@ -263,19 +280,65 @@ export function ConnectionDialog({
       } else {
         // Show error toast
         console.error('Connection failed:', result.error);
-        toast.error('Connection Failed', {
-          description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
-          duration: 5000,
-        });
+        if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
+          toast.info('Connection cancelled');
+        } else {
+          toast.error('Connection Failed', {
+            description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
+            duration: 5000,
+          });
+        }
       }
     } catch (error) {
       console.error('Connection error:', error);
-      toast.error('Connection Error', {
-        description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
-        duration: 5000,
-      });
+      if (cancelRequestedRef.current) {
+        toast.info('Connection cancelled');
+      } else {
+        toast.error('Connection Error', {
+          description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
+          duration: 5000,
+        });
+      }
     } finally {
-      setIsConnecting(false);
+      resetConnectionState();
+    }
+  };
+
+  const handleCancelConnectionAttempt = async () => {
+    if (!isConnecting) {
+      onOpenChange(false);
+      return;
+    }
+
+    if (isCancelling) {
+      return;
+    }
+
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) {
+      resetConnectionState();
+      return;
+    }
+
+    cancelRequestedRef.current = true;
+    setIsCancelling(true);
+
+    try {
+      const response = await invoke<{ success: boolean; error?: string }>('ssh_cancel_connect', {
+        session_id: sessionId
+      });
+      if (response.success) {
+        toast.info('Cancelling connection...');
+      } else if (response.error) {
+        toast.info(response.error);
+      }
+    } catch (error) {
+      console.error('Failed to cancel connection:', error);
+      cancelRequestedRef.current = false;
+      toast.error('Unable to cancel connection', {
+        description: error instanceof Error ? error.message : 'Please try again in a moment.',
+      });
+      setIsCancelling(false);
     }
   };
 
@@ -701,8 +764,12 @@ export function ConnectionDialog({
 
             {/* Action Buttons */}
             <div className="flex justify-between">
-              <Button variant="ghost" onClick={() => onOpenChange(false)}>
-                Cancel
+              <Button 
+                variant="ghost" 
+                onClick={handleCancelConnectionAttempt}
+                disabled={isCancelling}
+              >
+                {isConnecting ? (isCancelling ? 'Cancelling...' : 'Stop Connecting') : 'Cancel'}
               </Button>
               <Button onClick={handleConnect} disabled={isConnecting} className="min-w-[120px]">
                 {isConnecting ? 'Connecting...' : editingSession ? 'Update Session' : 'Connect'}
