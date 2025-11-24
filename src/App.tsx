@@ -71,6 +71,9 @@ function AppContent() {
     toggleRightSidebar,
     toggleBottomPanel,
     toggleZenMode,
+    setLeftSidebarSize,
+    setRightSidebarSize,
+    setBottomPanelSize,
     applyPreset,
   } = useLayout();
 
@@ -648,7 +651,12 @@ function AppContent() {
           {/* Left Sidebar - Session Manager with integrated Connection Details */}
           {layout.leftSidebarVisible && (
             <>
-              <ResizablePanel defaultSize={layout.leftSidebarSize} minSize={12} maxSize={30}>
+              <ResizablePanel 
+                defaultSize={layout.leftSidebarSize} 
+                minSize={12} 
+                maxSize={30}
+                onResize={(size) => setLeftSidebarSize(size)}
+              >
                 <SessionManager 
                   onSessionSelect={handleSessionSelect}
                   onSessionConnect={handleSessionConnect}
@@ -699,7 +707,12 @@ function AppContent() {
                             <ResizableHandle />
                             
                             {/* File Browser Panel */}
-                            <ResizablePanel defaultSize={layout.bottomPanelSize} minSize={20} maxSize={50}>
+                            <ResizablePanel 
+                              defaultSize={layout.bottomPanelSize} 
+                              minSize={20} 
+                              maxSize={50}
+                              onResize={(size) => setBottomPanelSize(size)}
+                            >
                               <IntegratedFileBrowser
                                 sessionId={tab.id}
                                 host={tab.host}
@@ -727,7 +740,12 @@ function AppContent() {
               <ResizableHandle />
               
               {/* Right Sidebar - Tabs for Monitor/Logs */}
-              <ResizablePanel defaultSize={layout.rightSidebarSize} minSize={15} maxSize={30}>
+              <ResizablePanel 
+                defaultSize={layout.rightSidebarSize} 
+                minSize={15} 
+                maxSize={30}
+                onResize={(size) => setRightSidebarSize(size)}
+              >
                 <Tabs defaultValue="monitor" className="h-full flex flex-col">
                   <TabsList className="inline-flex w-auto mx-2 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
