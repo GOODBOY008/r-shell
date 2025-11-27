@@ -7,14 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Planned Features
-- SSH key authentication support
-- Theme customization
-- Command history search
-- Multi-language support (i18n)
-- Plugin system
-- Batch command execution
-- Port forwarding support
+### Added
+
+- _No unreleased changes documented yet._
+
+## [0.4.0] - 2025-11-27
+
+### Added
+
+- 🔐 SSH key authentication support for new and saved connections.
+- 🎨 Theme customization controls for light, dark, and high-contrast layouts.
+- 🔍 Command history search so every session can surface previous inputs quickly.
+- 🌍 Multi-language (i18n) support for the core UI.
+- 🧩 Plugin system foundations that let users extend sessions and workflows.
+- 🧪 Batch command execution across sessions with grouped controls.
+- 🌐 Port forwarding utilities for exposing remote services locally.
+
+### Changed
+
+- ✨ UI polish across session tabs, the system monitor, and the toolbar to feel smoother.
+- 🧰 Dependency updates that keep the frontend, Tauri backend, and terminal utilities current.
+
+### Fixed
+
+- 🛠 Stability and connection resiliency improvements for session management.
 
 ## [0.3.0] - 2025-11-17
 
