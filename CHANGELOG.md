@@ -11,6 +11,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.5.0] - 2025-12-23
+
+### Added
+
+- 🔄 **Duplicate SSH Connection Tabs**: Right-click any active tab to duplicate it and create a new connection to the same server
+  - Duplicated tabs appear right after the original tab
+  - Full session state persistence - duplicates are restored on app restart
+  - Maintains correct tab order and names across app restarts
+  - Accessible via context menu (right-click on tab) or Session menu
+  - Smart credential handling - reuses saved credentials from the original session
+  - Support for chaining - can duplicate already-duplicated tabs
+
+- 📡 **Enhanced Network Latency Monitoring**: Real-time SSH connection latency measurement
+  - Live latency statistics displayed in system monitor
+  - Helps identify network performance issues
+  - Integrated with existing system monitoring
+
+- 🎨 **Layout Panel Resize State Management**: Panel sizes are now remembered
+  - Resizable panels maintain their size across sessions
+  - Smooth resizing experience with state persistence
+  - Applies to left sidebar, right sidebar, and bottom panel
+
+- ⚡ **Improved Session Restoration**: Enhanced overlay with detailed progress
+  - Real-time progress indicator showing which session is being restored
+  - Current target display with host and username information
+  - Visual progress bar with percentage completion
+  - Better error handling and reporting for failed restorations
+
+- 🚫 **Cancel Connection Functionality**: Ability to cancel in-progress connections
+  - Stop connection attempts that are taking too long
+  - Clean cancellation without leaving orphaned connections
+  - Improved connection state management
+
+### Changed
+
+- 📊 Improved session restoration UI with more informative feedback
+- 🔧 Enhanced connection handling with better error recovery
+- ✨ UI polish for connection dialogs and session management
+
+### Fixed
+
+- 🐛 Connection stability improvements
+- 🔄 Better handling of duplicate session credentials
+- 📁 Session state persistence edge cases
+
 ## [0.4.0] - 2025-11-27
 
 ### Added
