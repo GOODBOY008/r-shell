@@ -974,7 +974,8 @@ done
     }
 }
 
-// Network latency monitoring (ping test)
+
+// Network latency monitoring (SSH connection latency)
 #[derive(Debug, serde::Serialize)]
 pub struct LatencyResponse {
     pub success: bool,
@@ -995,42 +996,38 @@ pub async fn get_network_latency(
 
     let client = session.read().await;
     
-    // Default to pinging gateway if no target specified
-    let ping_target = target.unwrap_or_else(|| "8.8.8.8".to_string());
+    // Measure SSH connection latency by timing a simple command execution
+    // This gives us the round-trip time between client and remote server
+    let start = std::time::Instant::now();
     
-    // Use ping with count=1 and timeout=1 second
-    let command = format!("ping -c 1 -W 1 {} 2>&1 | grep -oP 'time=\\K[0-9.]+' || echo 'timeout'", ping_target);
-    
-    match client.execute_command(&command).await {
+    // Execute a lightweight command (echo) to measure latency
+    match client.execute_command("echo ping").await {
         Ok(output) => {
-            let trimmed = output.trim();
+            let duration = start.elapsed();
+            let latency_ms = duration.as_secs_f64() * 1000.0;
             
-            if trimmed == "timeout" || trimmed.is_empty() {
+            // Verify the command executed successfully
+            if output.trim() == "ping" {
+                Ok(LatencyResponse {
+                    success: true,
+                    latency_ms: Some(latency_ms),
+                    error: None,
+                })
+            } else {
                 Ok(LatencyResponse {
                     success: false,
                     latency_ms: None,
-                    error: Some("Ping timeout or unreachable".to_string()),
+                    error: Some("Command verification failed".to_string()),
                 })
-            } else {
-                match trimmed.parse::<f64>() {
-                    Ok(latency) => Ok(LatencyResponse {
-                        success: true,
-                        latency_ms: Some(latency),
-                        error: None,
-                    }),
-                    Err(_) => Ok(LatencyResponse {
-                        success: false,
-                        latency_ms: None,
-                        error: Some("Failed to parse latency".to_string()),
-                    }),
-                }
             }
         }
-        Err(e) => Ok(LatencyResponse {
-            success: false,
-            latency_ms: None,
-            error: Some(e.to_string()),
-        }),
+        Err(e) => {
+            Ok(LatencyResponse {
+                success: false,
+                latency_ms: None,
+                error: Some(format!("SSH connection error: {}", e)),
+            })
+        }
     }
 }
 
