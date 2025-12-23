@@ -416,6 +416,7 @@ export interface ActiveSessionState {
   tabId: string;
   sessionId: string;
   order: number;
+  originalSessionId?: string; // For duplicated tabs, reference to the original session
 }
 
 export class ActiveSessionsManager {

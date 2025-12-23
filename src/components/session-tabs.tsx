@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Plus, XCircle, ArrowRight, ArrowLeft } from 'lucide-react';
+import { X, Plus, XCircle, ArrowRight, ArrowLeft, Copy } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   ContextMenu,
@@ -21,6 +21,7 @@ interface SessionTabsProps {
   onTabSelect: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
   onNewTab: () => void;
+  onDuplicateTab?: (tabId: string) => void;
   onCloseAll?: () => void;
   onCloseOthers?: (tabId: string) => void;
   onCloseToRight?: (tabId: string) => void;
@@ -32,6 +33,7 @@ export function SessionTabs({
   onTabSelect, 
   onTabClose, 
   onNewTab,
+  onDuplicateTab,
   onCloseAll,
   onCloseOthers,
   onCloseToRight,
@@ -72,6 +74,15 @@ export function SessionTabs({
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent>
+              {onDuplicateTab && (
+                <>
+                  <ContextMenuItem onClick={() => onDuplicateTab(tab.id)}>
+                    <Copy className="mr-2 h-4 w-4" />
+                    Duplicate Tab
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              )}
               <ContextMenuItem onClick={() => onTabClose(tab.id)}>
                 <X className="mr-2 h-4 w-4" />
                 Close Tab

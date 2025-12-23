@@ -46,6 +46,7 @@ interface SessionTab {
   host?: string;
   username?: string;
   isActive: boolean;
+  originalSessionId?: string; // Reference to original session for duplicated tabs
 }
 
 function AppContent() {
@@ -113,13 +114,16 @@ function AppContent() {
       // Restore sessions sequentially with delay for proper initialization
       for (let i = 0; i < sortedSessions.length; i++) {
         const activeSession = sortedSessions[i];
-        const sessionData = SessionStorageManager.getSession(activeSession.sessionId);
+        
+        // For duplicated tabs, use the original session ID to get session data
+        const sessionIdToLoad = activeSession.originalSessionId || activeSession.sessionId;
+        const sessionData = SessionStorageManager.getSession(sessionIdToLoad);
         
         // Update progress
         setRestoringProgress({ current: i + 1, total: sortedSessions.length });
         
         if (!sessionData) {
-          console.warn(`Session ${activeSession.sessionId} not found in storage`);
+          console.warn(`Session ${sessionIdToLoad} not found in storage`);
           failedCount++;
           continue;
         }
@@ -142,12 +146,12 @@ function AppContent() {
         });
 
         try {
-          // Establish SSH connection
+          // Establish SSH connection using the unique tab ID (preserve duplicated tab IDs)
           const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
             'ssh_connect',
             {
               request: {
-                session_id: sessionData.id,
+                session_id: activeSession.sessionId, // Use the actual tab ID (which might be a duplicate ID)
                 host: sessionData.host,
                 port: sessionData.port || 22,
                 username: sessionData.username,
@@ -160,27 +164,30 @@ function AppContent() {
           );
 
           if (result.success) {
-            // Update last connected timestamp
-            SessionStorageManager.updateLastConnected(sessionData.id);
+            // Update last connected timestamp only for the original session
+            if (!activeSession.originalSessionId) {
+              SessionStorageManager.updateLastConnected(sessionData.id);
+            }
             
             // Mark first tab as active
             const isFirstTab = i === 0;
             
             // Create the tab object
             const newTab: SessionTab = {
-              id: sessionData.id,
+              id: activeSession.sessionId, // Use the actual tab ID
               name: sessionData.name,
               protocol: sessionData.protocol,
               host: sessionData.host,
               username: sessionData.username,
-              isActive: isFirstTab
+              isActive: isFirstTab,
+              originalSessionId: activeSession.originalSessionId // Preserve original session ID for duplicates
             };
             
             // Add to restored tabs array
             restoredTabs.push(newTab);
             
             restoredCount++;
-            console.log(`✓ Restored session: ${sessionData.name}`);
+            console.log(`✓ Restored session: ${sessionData.name}${activeSession.originalSessionId ? ' (duplicate)' : ''}`);
             
             // CRITICAL: Wait for terminal initialization before proceeding to next session
             // Each terminal needs time to:
@@ -251,6 +258,7 @@ function AppContent() {
         tabId: tab.id,
         sessionId: tab.id,
         order: index,
+        originalSessionId: tab.originalSessionId, // Save reference to original session for duplicated tabs
       }));
       ActiveSessionsManager.saveActiveSessions(activeSessions);
     } else {
@@ -481,6 +489,92 @@ function AppContent() {
     setEditingSession(null);
   }, []);
 
+  const handleDuplicateTab = useCallback(async (tabId: string) => {
+    const tabToDuplicate = tabs.find(tab => tab.id === tabId);
+    if (!tabToDuplicate) return;
+
+    // Get the original session ID (in case this is already a duplicated tab)
+    const originalSessionId = tabToDuplicate.originalSessionId || tabId;
+    
+    // Get the session data from storage using the original session ID
+    const sessionData = SessionStorageManager.getSession(originalSessionId);
+    if (!sessionData) {
+      toast.error('Cannot Duplicate Tab', {
+        description: 'Session data not found. Please create a new connection.',
+      });
+      return;
+    }
+
+    // Check if we have authentication credentials saved
+    const hasCredentials = sessionData.authMethod === 'password' 
+      ? !!sessionData.password 
+      : !!sessionData.privateKeyPath;
+    
+    if (!hasCredentials) {
+      toast.error('Cannot Duplicate Tab', {
+        description: 'No saved credentials found. Please connect manually.',
+      });
+      return;
+    }
+
+    try {
+      // Generate a unique ID for the duplicated tab
+      const duplicateId = `${originalSessionId}-dup-${Date.now()}`;
+      
+      // Establish SSH connection for the duplicate
+      const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+        'ssh_connect',
+        {
+          request: {
+            session_id: duplicateId,
+            host: sessionData.host,
+            port: sessionData.port || 22,
+            username: sessionData.username,
+            auth_method: sessionData.authMethod || 'password',
+            password: sessionData.password || '',
+            key_path: sessionData.privateKeyPath || null,
+            passphrase: sessionData.passphrase || null,
+          }
+        }
+      );
+
+      if (result.success) {
+        // Create a new tab for the duplicated connection
+        const duplicatedTab: SessionTab = {
+          id: duplicateId,
+          name: tabToDuplicate.name,
+          protocol: tabToDuplicate.protocol,
+          host: tabToDuplicate.host,
+          username: tabToDuplicate.username,
+          isActive: true,
+          originalSessionId: originalSessionId // Store reference to original session
+        };
+        
+        // Insert the duplicated tab right after the original tab
+        setTabs(prev => {
+          const tabIndex = prev.findIndex(tab => tab.id === tabId);
+          const newTabs = [...prev.map(tab => ({ ...tab, isActive: false }))];
+          newTabs.splice(tabIndex + 1, 0, duplicatedTab);
+          return newTabs;
+        });
+        setActiveTabId(duplicateId);
+        
+        toast.success('Tab Duplicated', {
+          description: `Successfully duplicated ${tabToDuplicate.name}`,
+        });
+      } else {
+        toast.error('Duplication Failed', {
+          description: result.error || 'Unable to establish connection for the duplicated tab.',
+        });
+      }
+    } catch (error) {
+      console.error('Error duplicating tab:', error);
+      toast.error('Duplication Error', {
+        description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+      });
+    }
+  }, [tabs]);
+
   const handleConnectionDialogConnect = useCallback((config: SessionConfig) => {
     const newTab: SessionTab = {
       id: config.id || `session-${Date.now()}`,
@@ -613,17 +707,8 @@ function AppContent() {
           }
         }}
         onCloneTab={() => {
-          if (activeTab) {
-            const clonedTab: SessionTab = {
-              id: `clone-${Date.now()}`,
-              name: `${activeTab.name} (2)`,
-              protocol: activeTab.protocol,
-              host: activeTab.host,
-              username: activeTab.username,
-              isActive: true
-            };
-            setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), clonedTab]);
-            setActiveTabId(clonedTab.id);
+          if (activeTabId) {
+            handleDuplicateTab(activeTabId);
           }
         }}
         onOpenSettings={handleOpenSettings}
@@ -678,6 +763,7 @@ function AppContent() {
                 onTabSelect={handleTabSelect}
                 onTabClose={handleTabClose}
                 onNewTab={handleNewTab}
+                onDuplicateTab={handleDuplicateTab}
                 onCloseAll={handleCloseAll}
                 onCloseOthers={handleCloseOthers}
                 onCloseToRight={handleCloseToRight}
