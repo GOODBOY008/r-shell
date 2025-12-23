@@ -47,12 +47,41 @@ R-Shell is a desktop SSH client that provides a beautiful and intuitive interfac
 
 ## Features
 
-- 🖥️ **Multi-Session Management**: Handle multiple SSH sessions with tabbed interface
-- 📁 **Integrated File Browser**: Browse and manage remote files directly
-- 📊 **System Monitor**: Real-time monitoring of remote system resources
-- 🔐 **Secure Connections**: Support for SSH, SFTP, and other protocols
-- 🎨 **Modern UI**: Built with Radix UI components and Tailwind CSS
-- ⚡ **Fast & Lightweight**: Powered by Tauri for native performance
+### 🔌 Connection Management
+- **Multi-Session Support**: Manage multiple SSH connections simultaneously with an intuitive tabbed interface
+- **Connection Profiles**: Save and organize your SSH connection profiles for quick access
+- **Session Persistence**: Automatically save and restore your sessions across application restarts
+- **Secure Authentication**: Support for password and SSH key-based authentication
+
+### 💻 Terminal Experience
+- **Full-Featured PTY Terminal**: Powered by xterm.js with complete terminal emulation
+- **Customizable Themes**: Choose from multiple terminal color schemes and appearance settings
+- **Keyboard Shortcuts**: Extensive keyboard shortcuts for improved productivity
+- **Terminal Addons**: Advanced features including search, web links, and fit addon support
+
+### 📁 File Management
+- **Integrated SFTP Browser**: Browse, upload, and download files directly from the interface
+- **Drag-and-Drop Support**: Easily transfer files between local and remote systems
+- **File Operations**: Complete file management with rename, delete, move, and permission editing
+- **Dual-Panel View**: Side-by-side local and remote file browsing
+
+### 📊 System Monitoring
+- **Real-Time Metrics**: Monitor CPU, memory, disk, and network usage in real-time
+- **Resource Visualization**: Beautiful charts and graphs using Recharts
+- **Network Monitor**: Track network traffic and connection statistics
+- **Performance Logs**: View detailed system logs and application events
+
+### 🎨 User Interface
+- **Modern Design**: Clean and intuitive interface built with Radix UI primitives
+- **Responsive Layout**: Resizable panels and flexible workspace arrangement
+- **Dark/Light Themes**: Support for multiple UI themes
+- **Accessibility**: Built with accessibility in mind using WAI-ARIA compliant components
+
+### ⚡ Performance
+- **Native Speed**: Powered by Tauri for true native performance
+- **Low Memory Footprint**: Efficient resource usage compared to Electron-based alternatives
+- **Fast Startup**: Quick application launch and connection establishment
+- **Cross-Platform**: Works seamlessly on Windows, macOS, and Linux
 
 ## Tech Stack
 
