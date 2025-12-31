@@ -60,6 +60,9 @@ function AppContent() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<SessionConfig | null>(null);
   
+  // Appearance key to trigger terminal background updates when settings change
+  const [appearanceKey, setAppearanceKey] = useState(0);
+  
   // Restoration state
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoringProgress, setRestoringProgress] = useState({ current: 0, total: 0 });
@@ -907,6 +910,7 @@ function AppContent() {
                             sessionName={tab.name}
                             host={tab.host}
                             username={tab.username}
+                            appearanceKey={appearanceKey}
                           />
                         </ResizablePanel>
                         
@@ -1011,6 +1015,7 @@ function AppContent() {
       <SettingsModal
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
+        onAppearanceChange={() => setAppearanceKey(k => k + 1)}
       />
       
       <Toaster richColors position="top-right" />

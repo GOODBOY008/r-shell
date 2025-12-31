@@ -327,10 +327,17 @@ export function PtyTerminal({
       
       term.dispose();
     };
-  }, [sessionId, sessionName, host, username, appearanceKey]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, sessionName, host, username]);
 
-  // Get appearance settings for rendering
-  const appearance = React.useMemo(() => loadAppearanceSettings(), [appearanceKey]);
+  // Get appearance settings for rendering - reloads when appearanceKey changes
+  const [appearance, setAppearance] = React.useState(() => loadAppearanceSettings());
+  
+  // Update appearance when appearanceKey changes (settings saved)
+  React.useEffect(() => {
+    const newAppearance = loadAppearanceSettings();
+    setAppearance(newAppearance);
+  }, [appearanceKey]);
 
   return (
     <div 
