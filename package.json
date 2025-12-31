@@ -36,7 +36,7 @@
     "@radix-ui/react-toggle": "^1.1.2",
     "@radix-ui/react-toggle-group": "^1.1.2",
     "@radix-ui/react-tooltip": "^1.1.8",
-    "@tauri-apps/api": "^2.1",
+    "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-opener": "^2.1",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-clipboard": "^0.1.0",
@@ -66,7 +66,7 @@
     "xterm": "^5.3.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.1",
+    "@tauri-apps/cli": "^2.9.6",
     "@types/node": "^20.10.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
