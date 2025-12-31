@@ -32,6 +32,7 @@ import {
   saveAppearanceSettings,
   terminalThemes 
 } from '../lib/terminal-config';
+import { applyTheme, ThemeMode } from '../lib/utils';
 
 interface SettingsModalProps {
   open: boolean;
@@ -86,6 +87,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     if (open) {
       const appearance = loadAppearanceSettings();
       setTerminalAppearance(appearance);
+      
+      // Load other settings from localStorage
+      try {
+        const savedSettings = localStorage.getItem('sshClientSettings');
+        if (savedSettings) {
+          const parsed = JSON.parse(savedSettings);
+          setSettings(prev => ({ ...prev, ...parsed }));
+        }
+      } catch {
+        // Ignore parsing errors
+      }
     }
   }, [open]);
 
@@ -108,6 +120,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     if (onAppearanceChange) {
       onAppearanceChange(terminalAppearance);
     }
+    
+    // Apply the theme immediately
+    applyTheme(settings.theme as ThemeMode);
     
     // Save other settings to localStorage
     localStorage.setItem('sshClientSettings', JSON.stringify(settings));
@@ -147,6 +162,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
         checkUpdates: true,
         telemetry: false
       });
+      
+      // Apply default theme
+      applyTheme('dark');
     }
   };
 
@@ -665,7 +683,14 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Application Theme</Label>
-                  <Select value={settings.theme} onValueChange={(value) => updateSetting('theme', value)}>
+                  <Select 
+                    value={settings.theme} 
+                    onValueChange={(value) => {
+                      updateSetting('theme', value);
+                      // Apply theme immediately for instant preview
+                      applyTheme(value as ThemeMode);
+                    }}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
