@@ -20,7 +20,10 @@ import {
   Bell,
   Clock,
   HardDrive,
-  User
+  User,
+  Image,
+  Upload,
+  X
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -372,9 +375,124 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                   </div>
                 )}
 
+                <Separator />
+
+                {/* Background Image Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Image className="h-4 w-4" />
+                    <Label className="text-base font-medium">Background Image</Label>
+                  </div>
+                  
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      id="background-image-upload"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          // Check file size (max 5MB)
+                          if (file.size > 5 * 1024 * 1024) {
+                            alert('Image must be less than 5MB');
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            const dataUrl = event.target?.result as string;
+                            updateTerminalAppearance('backgroundImage', dataUrl);
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => document.getElementById('background-image-upload')?.click()}
+                      className="gap-2"
+                    >
+                      <Upload className="h-4 w-4" />
+                      {terminalAppearance.backgroundImage ? 'Change Image' : 'Upload Image'}
+                    </Button>
+                    {terminalAppearance.backgroundImage && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => updateTerminalAppearance('backgroundImage', '')}
+                        className="gap-2 text-destructive hover:text-destructive"
+                      >
+                        <X className="h-4 w-4" />
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+
+                  {terminalAppearance.backgroundImage && (
+                    <div className="space-y-4 pl-0">
+                      <div className="flex items-center gap-3">
+                        <div className="w-16 h-16 rounded border overflow-hidden flex-shrink-0">
+                          <img 
+                            src={terminalAppearance.backgroundImage} 
+                            alt="Background preview" 
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Background image will be displayed behind the terminal text.
+                          Adjust opacity and blur for better readability.
+                        </p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Image Opacity: {terminalAppearance.backgroundImageOpacity}%</Label>
+                        <Slider
+                          value={[terminalAppearance.backgroundImageOpacity]}
+                          onValueChange={([value]) => updateTerminalAppearance('backgroundImageOpacity', value)}
+                          min={5}
+                          max={100}
+                          step={5}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Image Blur: {terminalAppearance.backgroundImageBlur}px</Label>
+                        <Slider
+                          value={[terminalAppearance.backgroundImageBlur]}
+                          onValueChange={([value]) => updateTerminalAppearance('backgroundImageBlur', value)}
+                          min={0}
+                          max={20}
+                          step={1}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Image Position</Label>
+                        <Select 
+                          value={terminalAppearance.backgroundImagePosition} 
+                          onValueChange={(value: 'cover' | 'contain' | 'center' | 'tile') => updateTerminalAppearance('backgroundImagePosition', value)}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="cover">Cover (fill & crop)</SelectItem>
+                            <SelectItem value="contain">Contain (fit inside)</SelectItem>
+                            <SelectItem value="center">Center (original size)</SelectItem>
+                            <SelectItem value="tile">Tile (repeat)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <Separator />
+
                 <div className="p-4 bg-muted rounded-lg">
                   <div 
-                    className="font-mono text-sm p-3 rounded"
+                    className="font-mono text-sm p-3 rounded relative overflow-hidden"
                     style={{
                       fontFamily: terminalAppearance.fontFamily,
                       fontSize: `${terminalAppearance.fontSize}px`,
@@ -385,10 +503,26 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                       opacity: terminalAppearance.allowTransparency ? terminalAppearance.opacity / 100 : 1,
                     }}
                   >
-                    <div style={{ color: terminalThemes[terminalAppearance.theme]?.green }}>user@host</div>
-                    <div>$ ls -la</div>
-                    <div style={{ color: terminalThemes[terminalAppearance.theme]?.blue }}>drwxr-xr-x</div>
-                    <div style={{ color: terminalThemes[terminalAppearance.theme]?.yellow }}>-rw-r--r--</div>
+                    {/* Background image layer */}
+                    {terminalAppearance.backgroundImage && (
+                      <div 
+                        className="absolute inset-0 pointer-events-none"
+                        style={{
+                          backgroundImage: `url(${terminalAppearance.backgroundImage})`,
+                          backgroundSize: terminalAppearance.backgroundImagePosition === 'tile' ? 'auto' : terminalAppearance.backgroundImagePosition,
+                          backgroundPosition: 'center',
+                          backgroundRepeat: terminalAppearance.backgroundImagePosition === 'tile' ? 'repeat' : 'no-repeat',
+                          opacity: terminalAppearance.backgroundImageOpacity / 100,
+                          filter: terminalAppearance.backgroundImageBlur > 0 ? `blur(${terminalAppearance.backgroundImageBlur}px)` : 'none',
+                        }}
+                      />
+                    )}
+                    <div className="relative z-10">
+                      <div style={{ color: terminalThemes[terminalAppearance.theme]?.green }}>user@host</div>
+                      <div>$ ls -la</div>
+                      <div style={{ color: terminalThemes[terminalAppearance.theme]?.blue }}>drwxr-xr-x</div>
+                      <div style={{ color: terminalThemes[terminalAppearance.theme]?.yellow }}>-rw-r--r--</div>
+                    </div>
                   </div>
                 </div>
               </CardContent>

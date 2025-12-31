@@ -64,14 +64,20 @@ export function PtyTerminal({
     term.open(terminalRef.current);
     
     // Load WebGL renderer for better performance
-    try {
-      const webglAddon = new WebglAddon();
-      term.loadAddon(webglAddon);
-      rendererRef.current = 'webgl';
-      console.log('[PTY Terminal] WebGL renderer loaded');
-    } catch (e) {
+    // NOTE: WebGL doesn't support transparency, so skip it when background image is set
+    if (!appearance.backgroundImage) {
+      try {
+        const webglAddon = new WebglAddon();
+        term.loadAddon(webglAddon);
+        rendererRef.current = 'webgl';
+        console.log('[PTY Terminal] WebGL renderer loaded');
+      } catch (e) {
+        rendererRef.current = 'canvas';
+        console.warn('[PTY Terminal] WebGL not supported, falling back to canvas:', e);
+      }
+    } else {
       rendererRef.current = 'canvas';
-      console.warn('[PTY Terminal] WebGL not supported, falling back to canvas:', e);
+      console.log('[PTY Terminal] Using canvas renderer (background image requires transparency)');
     }
     
     fitAddon.fit();
@@ -323,19 +329,34 @@ export function PtyTerminal({
     };
   }, [sessionId, sessionName, host, username, appearanceKey]);
 
+  // Get appearance settings for rendering
+  const appearance = React.useMemo(() => loadAppearanceSettings(), [appearanceKey]);
+
   return (
     <div 
       ref={containerRef}
-      className="relative h-full w-full terminal-no-scrollbar"
+      className="relative h-full w-full terminal-no-scrollbar overflow-hidden"
       onClick={() => xtermRef.current?.focus()}
       style={{
-        opacity: (() => {
-          const appearance = loadAppearanceSettings();
-          return appearance.allowTransparency ? appearance.opacity / 100 : 1;
-        })(),
+        opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1,
       }}
     >
-      <div ref={terminalRef} className="h-full w-full" />
+      {/* Background image layer */}
+      {appearance.backgroundImage && (
+        <div 
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage: `url(${appearance.backgroundImage})`,
+            backgroundSize: appearance.backgroundImagePosition === 'tile' ? 'auto' : appearance.backgroundImagePosition,
+            backgroundPosition: 'center',
+            backgroundRepeat: appearance.backgroundImagePosition === 'tile' ? 'repeat' : 'no-repeat',
+            opacity: appearance.backgroundImageOpacity / 100,
+            filter: appearance.backgroundImageBlur > 0 ? `blur(${appearance.backgroundImageBlur}px)` : 'none',
+            zIndex: 0,
+          }}
+        />
+      )}
+      <div ref={terminalRef} className="h-full w-full relative z-10" />
       <style>{`
         .terminal-no-scrollbar .xterm-viewport {
           overflow-y: hidden !important;
@@ -347,6 +368,32 @@ export function PtyTerminal({
           -ms-overflow-style: none;
           scrollbar-width: none;
         }
+        /* Make xterm background transparent when background image is set */
+        ${appearance.backgroundImage ? `
+        .terminal-no-scrollbar .xterm {
+          background-color: transparent !important;
+          background: transparent !important;
+        }
+        .terminal-no-scrollbar .xterm-viewport {
+          background-color: transparent !important;
+          background: transparent !important;
+        }
+        .terminal-no-scrollbar .xterm-screen {
+          background-color: transparent !important;
+          background: transparent !important;
+        }
+        .terminal-no-scrollbar .xterm-rows {
+          background-color: transparent !important;
+          background: transparent !important;
+        }
+        .terminal-no-scrollbar canvas {
+          background-color: transparent !important;
+          background: transparent !important;
+        }
+        .terminal-no-scrollbar .xterm-helper-textarea {
+          background-color: transparent !important;
+        }
+        ` : ''}
       `}</style>
     </div>
   );

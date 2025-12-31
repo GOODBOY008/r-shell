@@ -24,6 +24,11 @@ export interface TerminalAppearanceSettings {
   scrollback: number;
   allowTransparency: boolean;
   opacity: number;
+  // Background image settings
+  backgroundImage: string; // Base64 data URL or empty string
+  backgroundImageOpacity: number; // 0-100
+  backgroundImageBlur: number; // 0-20 pixels
+  backgroundImagePosition: 'cover' | 'contain' | 'center' | 'tile';
 }
 
 export const defaultTerminalTheme: ITheme = {
@@ -262,6 +267,11 @@ export const defaultAppearanceSettings: TerminalAppearanceSettings = {
   scrollback: 10000,
   allowTransparency: false,
   opacity: 100,
+  // Background image defaults
+  backgroundImage: '',
+  backgroundImageOpacity: 30,
+  backgroundImageBlur: 0,
+  backgroundImagePosition: 'cover',
 };
 
 export const defaultTerminalOptions: ITerminalOptions = {
@@ -286,6 +296,9 @@ export const defaultTerminalOptions: ITerminalOptions = {
 export function getTerminalOptions(appearance: TerminalAppearanceSettings): ITerminalOptions {
   const theme = terminalThemes[appearance.theme] || defaultTerminalTheme;
   
+  // Enable transparency if either allowTransparency is on OR a background image is set
+  const needsTransparency = appearance.allowTransparency || !!appearance.backgroundImage;
+  
   return {
     ...defaultTerminalOptions,
     fontSize: appearance.fontSize,
@@ -295,10 +308,10 @@ export function getTerminalOptions(appearance: TerminalAppearanceSettings): ITer
     cursorStyle: appearance.cursorStyle,
     cursorBlink: appearance.cursorBlink,
     scrollback: appearance.scrollback,
-    allowTransparency: appearance.allowTransparency,
-    theme: appearance.allowTransparency ? {
+    allowTransparency: needsTransparency,
+    theme: needsTransparency ? {
       ...theme,
-      background: undefined, // Allow transparency
+      background: '#00000000', // Fully transparent background
     } : theme,
   };
 }
