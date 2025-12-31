@@ -22,7 +22,10 @@ import {
   PanelBottomClose,
   PanelBottomOpen,
   Maximize2,
-  LayoutGrid
+  LayoutGrid,
+  Clock,
+  Server,
+  Zap
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import {
@@ -34,6 +37,15 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 
+export interface RecentSession {
+  id: string;
+  name: string;
+  host: string;
+  username: string;
+  port?: number;
+  lastConnected?: string;
+}
+
 interface ToolbarProps {
   onNewSession?: () => void;
   onOpenSession?: () => void;
@@ -44,10 +56,28 @@ interface ToolbarProps {
   onToggleBottomPanel?: () => void;
   onToggleZenMode?: () => void;
   onApplyPreset?: (preset: string) => void;
+  onQuickConnect?: (sessionId: string) => void;
+  recentSessions?: RecentSession[];
   leftSidebarVisible?: boolean;
   rightSidebarVisible?: boolean;
   bottomPanelVisible?: boolean;
   zenMode?: boolean;
+}
+
+function formatLastConnected(dateString?: string): string {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
 }
 
 export function Toolbar({ 
@@ -60,6 +90,8 @@ export function Toolbar({
   onToggleBottomPanel,
   onToggleZenMode,
   onApplyPreset,
+  onQuickConnect,
+  recentSessions = [],
   leftSidebarVisible,
   rightSidebarVisible,
   bottomPanelVisible,
@@ -85,6 +117,64 @@ export function Toolbar({
           </TooltipTrigger>
           <TooltipContent>Open Session</TooltipContent>
         </Tooltip>
+
+        {/* Quick Connect Dropdown */}
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className="gap-1">
+                  <Zap className="w-4 h-4" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent>Quick Connect</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="start" className="w-72">
+            <DropdownMenuLabel className="flex items-center gap-2">
+              <Clock className="w-4 h-4" />
+              Recent Connections
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {recentSessions.length > 0 ? (
+              recentSessions.map((session) => (
+                <DropdownMenuItem
+                  key={session.id}
+                  onClick={() => onQuickConnect?.(session.id)}
+                  className="flex items-start gap-3 py-2.5 cursor-pointer"
+                >
+                  <Server className="w-4 h-4 mt-0.5 text-muted-foreground flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{session.name}</div>
+                    <div className="text-xs text-muted-foreground truncate">
+                      {session.username}@{session.host}{session.port && session.port !== 22 ? `:${session.port}` : ''}
+                    </div>
+                  </div>
+                  {session.lastConnected && (
+                    <span className="text-xs text-muted-foreground flex-shrink-0">
+                      {formatLastConnected(session.lastConnected)}
+                    </span>
+                  )}
+                </DropdownMenuItem>
+              ))
+            ) : (
+              <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+                <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                <p>No recent connections</p>
+                <p className="text-xs mt-1">Connect to a server to see it here</p>
+              </div>
+            )}
+            {recentSessions.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={onNewSession} className="text-primary">
+                  <Plus className="w-4 h-4 mr-2" />
+                  New Connection
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
 {/* 
         <Tooltip>
           <TooltipTrigger asChild>

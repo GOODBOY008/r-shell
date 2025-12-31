@@ -597,6 +597,126 @@ function AppContent() {
     setSftpPanelOpen(true);
   }, []);
 
+  // Get recent sessions for quick connect
+  const recentSessions = useMemo(() => {
+    return SessionStorageManager.getRecentSessions(8).map(session => ({
+      id: session.id,
+      name: session.name,
+      host: session.host,
+      username: session.username,
+      port: session.port,
+      lastConnected: session.lastConnected,
+    }));
+  }, [tabs]); // Refresh when tabs change (new connection made)
+
+  // Quick connect handler - connects to a recent session by ID
+  const handleQuickConnect = useCallback(async (sessionId: string) => {
+    // Check if already connected
+    const existingTab = tabs.find(tab => tab.id === sessionId || tab.originalSessionId === sessionId);
+    if (existingTab) {
+      // Just switch to existing tab
+      handleTabSelect(existingTab.id);
+      toast.info('Already Connected', {
+        description: `Switched to existing ${existingTab.name} session`,
+      });
+      return;
+    }
+
+    // Load session data
+    const sessionData = SessionStorageManager.getSession(sessionId);
+    if (!sessionData) {
+      toast.error('Session Not Found', {
+        description: 'The session could not be found. It may have been deleted.',
+      });
+      return;
+    }
+
+    // Check if we have authentication credentials saved
+    const hasCredentials = sessionData.authMethod === 'password' 
+      ? !!sessionData.password 
+      : !!sessionData.privateKeyPath;
+
+    if (!hasCredentials) {
+      // No saved credentials - open connection dialog with pre-filled data
+      setEditingSession({
+        id: sessionData.id,
+        name: sessionData.name,
+        protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+        host: sessionData.host,
+        port: sessionData.port,
+        username: sessionData.username,
+        authMethod: sessionData.authMethod || 'password',
+      });
+      setConnectionDialogOpen(true);
+      return;
+    }
+
+    // Connect using saved credentials
+    try {
+      const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+        'ssh_connect',
+        {
+          request: {
+            session_id: sessionData.id,
+            host: sessionData.host,
+            port: sessionData.port || 22,
+            username: sessionData.username,
+            auth_method: sessionData.authMethod || 'password',
+            password: sessionData.password || '',
+            key_path: sessionData.privateKeyPath || null,
+            passphrase: sessionData.passphrase || null,
+          }
+        }
+      );
+
+      if (result.success) {
+        // Update last connected timestamp
+        SessionStorageManager.updateLastConnected(sessionData.id);
+        
+        // Create the tab after successful connection
+        const config: SessionConfig = {
+          id: sessionData.id,
+          name: sessionData.name,
+          protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+          host: sessionData.host,
+          port: sessionData.port,
+          username: sessionData.username,
+          authMethod: sessionData.authMethod || 'password',
+          password: sessionData.password,
+          privateKeyPath: sessionData.privateKeyPath,
+          passphrase: sessionData.passphrase,
+        };
+        
+        handleConnectionDialogConnect(config);
+        
+        toast.success('Quick Connected', {
+          description: `Connected to ${sessionData.name}`,
+        });
+      } else {
+        console.error('Quick connect failed:', result.error);
+        toast.error('Connection Failed', {
+          description: result.error || 'Unable to connect. Please try again.',
+        });
+        // Open dialog for manual retry
+        setEditingSession({
+          id: sessionData.id,
+          name: sessionData.name,
+          protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+          host: sessionData.host,
+          port: sessionData.port,
+          username: sessionData.username,
+          authMethod: sessionData.authMethod || 'password',
+        });
+        setConnectionDialogOpen(true);
+      }
+    } catch (error) {
+      console.error('Quick connect error:', error);
+      toast.error('Connection Error', {
+        description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+      });
+    }
+  }, [tabs, handleTabSelect, handleConnectionDialogConnect]);
+
   const activeTab = tabs.find(tab => tab.id === activeTabId);
   const activeSession = activeTab ? {
     name: activeTab.name,
@@ -725,6 +845,8 @@ function AppContent() {
         onToggleBottomPanel={toggleBottomPanel}
         onToggleZenMode={toggleZenMode}
         onApplyPreset={applyPreset}
+        onQuickConnect={handleQuickConnect}
+        recentSessions={recentSessions}
         leftSidebarVisible={layout.leftSidebarVisible}
         rightSidebarVisible={layout.rightSidebarVisible}
         bottomPanelVisible={layout.bottomPanelVisible}
