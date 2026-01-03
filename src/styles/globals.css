@@ -120,20 +120,10 @@
   --color-sidebar-ring: var(--sidebar-ring);
 }
 
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-
-  body {
-    @apply bg-background text-foreground;
-  }
-}
 
 /**
  * Base typography. This is not applied to elements which have an ancestor with a Tailwind text class.
  */
-@layer base {
   :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) {
     h1 {
       font-size: var(--text-2xl);
@@ -183,7 +173,6 @@
       line-height: 1.5;
     }
   }
-}
 
 html {
   font-size: var(--font-size);
@@ -224,4 +213,52 @@ html {
 
 [role="tabpanel"] {
   animation: fade-in 0.2s ease-out;
+}
+
+/* Custom scrollbar styling for light and dark mode */
+* {
+  scrollbar-width: thin !important;
+  scrollbar-color: rgba(156, 163, 175, 0.5) transparent !important;
+}
+
+.dark * {
+  scrollbar-color: rgba(229, 231, 235, 0.8) rgba(55, 65, 81, 0.4) !important;
+}
+
+/* Webkit browsers (Chrome, Safari, Edge) */
+*::-webkit-scrollbar {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent !important;
+  border-radius: 10px !important;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(156, 163, 175, 0.5) !important;
+  border-radius: 10px !important;
+  border: 3px solid transparent !important;
+  background-clip: padding-box !important;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(156, 163, 175, 0.7) !important;
+}
+
+.dark *::-webkit-scrollbar-track {
+  background: rgba(31, 41, 55, 0.5) !important;
+  border-radius: 10px !important;
+}
+
+.dark *::-webkit-scrollbar-thumb {
+  background-color: rgba(229, 231, 235, 0.8) !important;
+  border: 3px solid rgba(31, 41, 55, 0.5) !important;
+  background-clip: padding-box !important;
+  border-radius: 10px !important;
+}
+
+.dark *::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(243, 244, 246, 0.9) !important;
 }
