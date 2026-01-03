@@ -11,6 +11,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.6.0] - 2026-01-03
+
+### Added
+
+- ⚡ **Quick Connect Dropdown**: Fast access to recently connected servers
+  - Dropdown menu for quick reconnection to recent servers
+  - Streamlined workflow for frequently used connections
+  - Reduces time needed to establish common connections
+
+- 🎨 **Terminal Background Image Support**: Customizable terminal appearance
+  - Add background images to terminal windows
+  - Configurable background settings in terminal preferences
+  - Enhance visual customization of your workspace
+
+- 🌓 **Enhanced Theme Management**: Comprehensive theme system with persistence
+  - localStorage-based settings persistence across sessions
+  - Theme preferences automatically saved and restored
+  - Improved theme consistency throughout the application
+
+- ✨ **UI Component Enhancements**:
+  - Updated slider components with new color scheme
+  - Updated switch components with refined styling
+  - Enhanced scrollbar styles for better appearance
+  - Improved visual experience in both light and dark modes
+  - Dynamic terminal appearance updates based on settings changes
+
+### Changed
+
+- 📦 Updated @tauri-apps/api to version 2.9.1
+- 📦 Updated @tauri-apps/cli to version 2.9.6
+- 🎨 Improved visual consistency across all UI components
+- ⚙️ Better integration between settings and terminal appearance
+
+### Fixed
+
+- 🐛 Theme persistence issues resolved
+- 🎨 Scrollbar rendering improvements
+- ✨ Settings modal synchronization with terminal display
+
 ## [0.5.0] - 2025-12-23
 
 ### Added
