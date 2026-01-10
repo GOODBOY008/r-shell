@@ -11,6 +11,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.6.1] - 2026-01-10
+
+### Added
+
+- 🍺 **Homebrew Distribution**: Official Homebrew cask support for macOS
+  - Easy installation via `brew install --cask r-shell`
+  - Automated release workflow with checksum generation
+  - Auto-updating Homebrew tap on new releases
+  - Support for both Intel and Apple Silicon Macs
+
+### Changed
+
+- 📦 **Release Pipeline Improvements**:
+  - Added SHA256 checksum generation for all release assets
+  - Automated Homebrew tap updates via GitHub Actions
+  - Enhanced release workflow with proper dependency management
+  - Improved release asset naming and organization
+
+- 📚 **Documentation Updates**:
+  - Updated README with Homebrew installation instructions
+  - Cleaned up obsolete documentation files
+  - Streamlined project documentation structure
+
+### Infrastructure
+
+- ✨ Created `homebrew-tap` repository for distribution
+- 🔄 Automated cask formula updates on releases
+- 🔐 Secure token-based repository dispatch for tap updates
+- 📊 Enhanced CI/CD pipeline for release management
+
 ## [0.6.0] - 2026-01-03
 
 ### Added

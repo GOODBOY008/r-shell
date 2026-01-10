@@ -136,7 +136,47 @@ r-shell/
 └── index.html             # HTML entry point
 ```
 
-## Getting Started
+## Installation
+
+### 🍺 Homebrew (macOS - Recommended)
+
+The easiest way to install r-shell on macOS:
+
+```bash
+# Add the tap
+brew tap GOODBOY008/tap
+
+# Install r-shell
+brew install --cask r-shell
+```
+
+**Update to the latest version:**
+
+```bash
+brew upgrade --cask r-shell
+```
+
+**Uninstall:**
+
+```bash
+# Remove the app
+brew uninstall --cask r-shell
+
+# Remove all app data
+brew uninstall --zap --cask r-shell
+```
+
+### 📦 Download Releases
+
+Download pre-built binaries from the [Releases](https://github.com/GOODBOY008/r-shell/releases) page:
+
+- **macOS**: 
+  - Apple Silicon: `r-shell_x.x.x_aarch64.dmg`
+  - Intel: `r-shell_x.x.x_x64.dmg`
+- **Windows**: `r-shell_x.x.x_x64-setup.exe`
+- **Linux**: `r-shell_x.x.x_amd64.AppImage` or `.deb`
+
+## Getting Started (Development)
 
 ### Prerequisites
 
@@ -144,11 +184,11 @@ r-shell/
 - pnpm (recommended) or npm
 - Rust and Cargo (for Tauri)
 
-### Installation
+### Build from Source
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/GOODBOY008/r-shell.git
 cd r-shell
 ```
 
