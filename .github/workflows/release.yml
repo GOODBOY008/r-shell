@@ -83,3 +83,53 @@ jobs:
           prerelease: false
           includeUpdaterJson: false
           args: ${{ matrix.args }}
+
+  # Generate SHA256 checksums for Homebrew
+  generate-checksums:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Wait for release assets
+        run: sleep 30
+
+      - name: Download release assets
+        uses: robinraju/release-downloader@v1.11
+        with:
+          tag: ${{ github.ref_name }}
+          fileName: '*.dmg'
+          out-file-path: assets
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd assets
+          echo "# SHA256 Checksums for r-shell ${{ github.ref_name }}" > checksums.txt
+          echo "" >> checksums.txt
+          for f in *.dmg; do
+            if [ -f "$f" ]; then
+              sha256sum "$f" | tee -a checksums.txt
+            fi
+          done
+
+      - name: Upload checksums to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: assets/checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Update Homebrew tap (requires HOMEBREW_TAP_TOKEN secret)
+  update-homebrew:
+    needs: generate-checksums
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta')
+    steps:
+      - name: Update Homebrew Cask
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          repository: GOODBOY008/homebrew-tap
+          event-type: update-cask
+          client-payload: '{"version": "${{ github.ref_name }}", "repository": "${{ github.repository }}"}'
