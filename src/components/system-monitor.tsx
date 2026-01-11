@@ -650,7 +650,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
               {/* Usage History Chart */}
               <div>
                 <div className="text-[9px] text-muted-foreground mb-1">History</div>
-                <div className="h-24">
+                <div className="h-24 text-foreground">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart 
                       data={networkHistory.map(item => ({
@@ -674,14 +674,14 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                       <XAxis 
                         dataKey="time"
                         axisLine={true}
-                        tick={{ fontSize: 8, fill: 'hsl(var(--muted-foreground))' }}
+                        tick={{ fontSize: 8, fill: 'currentColor' }}
                         stroke="hsl(var(--muted-foreground))"
                         tickLine={false}
                         interval="preserveStartEnd"
                         minTickGap={50}
                       />
                       <YAxis 
-                        tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
+                        tick={{ fontSize: 9, fill: 'currentColor' }}
                         stroke="hsl(var(--muted-foreground))"
                         domain={[-1500, 1500]}
                         ticks={[-1228.8, -614.4, 0, 614.4, 1228.8]}
@@ -745,7 +745,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
           </div>
           <Card>
             <CardContent className="p-2">
-              <div className="h-24">
+              <div className="h-24 text-foreground">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={latencyData} margin={{ top: 5, right: 2, left: -10, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
@@ -757,12 +757,12 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                     </defs>
                     <XAxis 
                       dataKey="time" 
-                      tick={{ fontSize: 8, fill: 'hsl(var(--muted-foreground))' }}
+                      tick={{ fontSize: 8, fill: 'currentColor' }}
                       stroke="hsl(var(--muted-foreground))"
                       strokeWidth={0.5}
                     />
                     <YAxis 
-                      tick={{ fontSize: 8, fill: 'hsl(var(--muted-foreground))' }}
+                      tick={{ fontSize: 8, fill: 'currentColor' }}
                       stroke="hsl(var(--muted-foreground))"
                       strokeWidth={0.5}
                       width={30}
