@@ -857,11 +857,13 @@ function AppContent() {
       />
       
       <div className="flex-1 flex overflow-hidden">
-        <ResizablePanelGroup direction="horizontal" storageKey="r-shell-main-layout">
+        <ResizablePanelGroup direction="horizontal" autoSaveId="r-shell-main-layout">
           {/* Left Sidebar - Session Manager with integrated Connection Details */}
           {layout.leftSidebarVisible && (
             <>
               <ResizablePanel 
+                id="left-sidebar"
+                order={1}
                 defaultSize={layout.leftSidebarSize} 
                 minSize={12} 
                 maxSize={30}
@@ -881,7 +883,12 @@ function AppContent() {
           )}
           
           {/* Main Content */}
-          <ResizablePanel minSize={30}>
+          <ResizablePanel 
+            id="main-content"
+            order={2}
+            defaultSize={100 - (layout.leftSidebarVisible ? layout.leftSidebarSize : 0) - (layout.rightSidebarVisible ? layout.rightSidebarSize : 0)}
+            minSize={30}
+          >
             <div className="h-full flex flex-col">
               <SessionTabs 
                 tabs={tabs}
@@ -902,9 +909,9 @@ function AppContent() {
                       key={tab.id}
                       style={{ display: tab.id === activeTabId ? 'flex' : 'none', height: '100%', flexDirection: 'column', flex: 1 }}
                     >
-                      <ResizablePanelGroup direction="vertical" className="flex-1" storageKey={`r-shell-terminal-${tab.id}`}>
+                      <ResizablePanelGroup direction="vertical" className="flex-1" autoSaveId={`r-shell-terminal-${tab.id}`}>
                         {/* Terminal Panel */}
-                        <ResizablePanel defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
+                        <ResizablePanel id="terminal" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
                           <PtyTerminal 
                             sessionId={tab.id}
                             sessionName={tab.name}
@@ -920,6 +927,8 @@ function AppContent() {
                             
                             {/* File Browser Panel */}
                             <ResizablePanel 
+                              id="file-browser"
+                              order={2}
                               defaultSize={layout.bottomPanelSize} 
                               minSize={20} 
                               maxSize={50}
@@ -953,6 +962,8 @@ function AppContent() {
               
               {/* Right Sidebar - Tabs for Monitor/Logs */}
               <ResizablePanel 
+                id="right-sidebar"
+                order={3}
                 defaultSize={layout.rightSidebarSize} 
                 minSize={15} 
                 maxSize={30}

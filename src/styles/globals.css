@@ -262,3 +262,12 @@ html {
 .dark *::-webkit-scrollbar-thumb:hover {
   background-color: rgba(243, 244, 246, 0.9) !important;
 }
+
+/* Resizable handle cursor styles */
+[data-slot="resizable-handle"] {
+  cursor: col-resize !important;
+}
+
+[data-slot="resizable-handle"][data-panel-group-direction="vertical"] {
+  cursor: row-resize !important;
+}

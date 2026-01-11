@@ -6,15 +6,10 @@ import * as ResizablePrimitive from "react-resizable-panels";
 
 import { cn } from "./utils";
 
-interface ResizablePanelGroupProps extends React.ComponentProps<typeof ResizablePrimitive.PanelGroup> {
-  storageKey?: string;
-}
-
 function ResizablePanelGroup({
   className,
-  storageKey,
   ...props
-}: ResizablePanelGroupProps) {
+}: React.ComponentProps<typeof ResizablePrimitive.PanelGroup>) {
   return (
     <ResizablePrimitive.PanelGroup
       data-slot="resizable-panel-group"
@@ -22,16 +17,6 @@ function ResizablePanelGroup({
         "flex h-full w-full data-[panel-group-direction=vertical]:flex-col",
         className,
       )}
-      storage={storageKey ? {
-        getItem: (name: string) => {
-          const item = localStorage.getItem(name);
-          return item ? JSON.parse(item) : null;
-        },
-        setItem: (name: string, value: string) => {
-          localStorage.setItem(name, JSON.stringify(value));
-        },
-      } : undefined}
-      autoSaveId={storageKey}
       {...props}
     />
   );
@@ -54,7 +39,25 @@ function ResizableHandle({
     <ResizablePrimitive.PanelResizeHandle
       data-slot="resizable-handle"
       className={cn(
-        "bg-border focus-visible:ring-ring relative flex w-px items-center justify-center after:absolute after:inset-y-0 after:left-1/2 after:w-1 after:-translate-x-1/2 focus-visible:ring-1 focus-visible:ring-offset-1 focus-visible:outline-hidden data-[panel-group-direction=vertical]:h-px data-[panel-group-direction=vertical]:w-full data-[panel-group-direction=vertical]:after:left-0 data-[panel-group-direction=vertical]:after:h-1 data-[panel-group-direction=vertical]:after:w-full data-[panel-group-direction=vertical]:after:-translate-y-1/2 data-[panel-group-direction=vertical]:after:translate-x-0 [&[data-panel-group-direction=vertical]>div]:rotate-90",
+        // Base styles - transparent background, wide hit area
+        "group relative flex items-center justify-center",
+        // Horizontal resize (default)
+        "w-[6px]",
+        // The visible line - centered, appears on hover
+        "before:absolute before:inset-y-0 before:left-1/2 before:w-[2px] before:-translate-x-1/2",
+        "before:bg-transparent before:transition-colors before:duration-150",
+        "hover:before:bg-primary active:before:bg-primary",
+        "data-[resize-handle-state=drag]:before:bg-primary",
+        // Focus styles
+        "focus-visible:outline-hidden focus-visible:before:bg-primary",
+        // Vertical resize overrides
+        "data-[panel-group-direction=vertical]:h-[6px] data-[panel-group-direction=vertical]:w-full",
+        "data-[panel-group-direction=vertical]:before:inset-x-0 data-[panel-group-direction=vertical]:before:inset-y-auto",
+        "data-[panel-group-direction=vertical]:before:top-1/2 data-[panel-group-direction=vertical]:before:left-0",
+        "data-[panel-group-direction=vertical]:before:h-[2px] data-[panel-group-direction=vertical]:before:w-full",
+        "data-[panel-group-direction=vertical]:before:-translate-y-1/2 data-[panel-group-direction=vertical]:before:translate-x-0",
+        // Rotate handle icon for vertical
+        "[&[data-panel-group-direction=vertical]>div]:rotate-90",
         className,
       )}
       {...props}
