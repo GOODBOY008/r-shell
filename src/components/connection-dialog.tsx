@@ -104,15 +104,21 @@ export function ConnectionDialog({
   const sessionIdRef = useRef<string | null>(null);
   const cancelRequestedRef = useRef(false);
 
-  // Load saved profiles and folders when dialog opens
+  // Reset connection state and load saved profiles when dialog opens/closes
   useEffect(() => {
     if (open) {
+      // Reset connection state when dialog opens
+      resetConnectionState();
+      
       setSavedProfiles(ConnectionProfileManager.getProfiles());
       
       // Load all available folders
       const folders = SessionStorageManager.getFolders();
       const folderPaths = folders.map(f => f.path).sort();
       setAvailableFolders(folderPaths);
+    } else {
+      // Reset connection state when dialog closes
+      resetConnectionState();
     }
   }, [open]);
 
@@ -325,20 +331,19 @@ export function ConnectionDialog({
 
     try {
       const response = await invoke<{ success: boolean; error?: string }>('ssh_cancel_connect', {
-        session_id: sessionId
+        sessionId
       });
       if (response.success) {
-        toast.info('Cancelling connection...');
-      } else if (response.error) {
-        toast.info(response.error);
+        toast.info('Connection cancelled');
       }
+      // Whether successful or not, we want to reset the state
+      // The user clicked cancel, so we should stop the "connecting" state
     } catch (error) {
       console.error('Failed to cancel connection:', error);
-      cancelRequestedRef.current = false;
-      toast.error('Unable to cancel connection', {
-        description: error instanceof Error ? error.message : 'Please try again in a moment.',
-      });
-      setIsCancelling(false);
+      // Don't show error toast - user just wants to stop, we'll reset the state
+    } finally {
+      // Always reset the state when user requests cancel
+      resetConnectionState();
     }
   };
 
@@ -346,8 +351,21 @@ export function ConnectionDialog({
     setConfig(prev => ({ ...prev, ...updates }));
   };
 
+  const handleOpenChange = (newOpen: boolean) => {
+    // If trying to close while connecting, cancel first then close
+    if (!newOpen && isConnecting) {
+      // Cancel connection and then close
+      handleCancelConnectionAttempt().then(() => {
+        resetConnectionState();
+        onOpenChange(false);
+      });
+      return;
+    }
+    onOpenChange(newOpen);
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
@@ -765,13 +783,13 @@ export function ConnectionDialog({
             {/* Action Buttons */}
             <div className="flex justify-between">
               <Button 
-                variant="ghost" 
+                variant={isConnecting ? "destructive" : "ghost"}
                 onClick={handleCancelConnectionAttempt}
                 disabled={isCancelling}
               >
-                {isConnecting ? (isCancelling ? 'Cancelling...' : 'Stop Connecting') : 'Cancel'}
+                {isConnecting ? (isCancelling ? 'Cancelling...' : 'Stop') : 'Cancel'}
               </Button>
-              <Button onClick={handleConnect} disabled={isConnecting} className="min-w-[120px]">
+              <Button onClick={handleConnect} disabled={isConnecting || isCancelling} className="min-w-[120px]">
                 {isConnecting ? 'Connecting...' : editingSession ? 'Update Session' : 'Connect'}
               </Button>
             </div>
