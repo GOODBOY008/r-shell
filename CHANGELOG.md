@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.2] - 2026-01-17
 
+### Added
+
+- 💾 **Panel Auto-Save**: Resizable panels now automatically save their sizes to localStorage
+  - Remembers panel dimensions across sessions
+  - Per-panel-group persistence for customized layouts
+  - Improved user experience with layout state preservation
+
 ### Fixed
 
 - 📁 **Session Folder Selection**: Fixed folder dropdown in connection dialog
@@ -21,7 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Consistent folder display with session manager tree structure
   - Improved folder selection UI with cleaner presentation
 
+- 🎨 **Chart Theming**: Updated chart text color to use `currentColor`
+  - Better support for light/dark theme transitions
+  - More consistent visual appearance across themes
+  - Fixed chart text readability issues
+
+- 🔌 **Connection Dialog State**: Reset connection state on dialog open/close
+  - Improved cancel button behavior during connection attempts
+  - Better state cleanup when dismissing dialog
+  - Enhanced connection workflow reliability
+
 ### Changed
+
+- 🖱️ **Resizable Panel Cursors**: Improved cursor styles for better visual feedback
+  - Enhanced resize handle visibility and interaction
+  - More intuitive drag experience
+  - Added custom cursor styles for horizontal/vertical resize
 
 - 🔧 **Session Storage**: Added `getValidFolders()` method to filter orphaned folders
   - Better synchronization between connection dialog and session manager
