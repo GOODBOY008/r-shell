@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.6.2] - 2026-01-17
+
+### Fixed
+
+- 📁 **Session Folder Selection**: Fixed folder dropdown in connection dialog
+  - Now shows only valid folders from the session manager hierarchy
+  - Filters out orphaned or deleted folders
+  - Consistent folder display with session manager tree structure
+  - Improved folder selection UI with cleaner presentation
+
+### Changed
+
+- 🔧 **Session Storage**: Added `getValidFolders()` method to filter orphaned folders
+  - Better synchronization between connection dialog and session manager
+  - More reliable folder hierarchy management
+
 ## [0.6.1] - 2026-01-10
 
 ### Added
