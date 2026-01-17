@@ -279,6 +279,13 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 We welcome contributions from the community! This project is an experiment in AI-assisted development, and we're excited to see how the community can enhance it.
 
+**Quick Links:**
+- [Contributing Guidelines](CONTRIBUTING.md) - How to contribute
+- [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
+- [Version Bump Guide](docs/VERSION_BUMP.md) - How to bump versions
+- [Layout Guide](LAYOUT_GUIDE.md) - Understanding the layout system
+- [Quick Start](QUICKSTART.md) - Development setup
+
 ### How to Contribute
 
 1. **Fork the repository**

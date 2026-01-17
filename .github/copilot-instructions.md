@@ -68,6 +68,21 @@ cd src-tauri && cargo test
 pnpm test:e2e
 ```
 
+### Version Bumping
+```bash
+# Bump patch version (0.6.2 → 0.6.3)
+pnpm run version:patch
+
+# Bump minor version (0.6.2 → 0.7.0)
+pnpm run version:minor
+
+# Bump major version (0.6.2 → 1.0.0)
+pnpm run version:major
+```
+- Script updates: package.json, Cargo.toml, Cargo.lock, tauri.conf.json, CHANGELOG.md
+- Auto-creates git commit with template CHANGELOG entry
+- See [docs/VERSION_BUMP.md](docs/VERSION_BUMP.md) for full guide
+
 ### Adding Tauri Commands
 1. Define function in [commands.rs](src-tauri/src/commands.rs) with `#[tauri::command]`
 2. Add to `invoke_handler![]` in [lib.rs](src-tauri/src/lib.rs#L34-L51)
