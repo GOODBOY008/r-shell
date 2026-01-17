@@ -243,6 +243,28 @@ export class SessionStorageManager {
   }
 
   /**
+   * Get all valid folders that are part of the tree hierarchy
+   * This excludes orphaned folders that don't have a valid parent chain
+   */
+  static getValidFolders(): SessionFolder[] {
+    const allFolders = this.getFolders();
+    const validPaths = new Set<string>();
+    
+    // Recursively collect valid folder paths starting from root
+    const collectValidPaths = (parentPath?: string) => {
+      const children = allFolders.filter(f => f.parentPath === parentPath);
+      for (const child of children) {
+        validPaths.add(child.path);
+        collectValidPaths(child.path);
+      }
+    };
+    
+    collectValidPaths(undefined);
+    
+    return allFolders.filter(f => validPaths.has(f.path));
+  }
+
+  /**
    * Build hierarchical session tree
    */
   static buildSessionTree(activeSessions: Set<string> = new Set()): SessionTreeNode[] {

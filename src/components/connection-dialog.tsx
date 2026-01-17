@@ -112,8 +112,8 @@ export function ConnectionDialog({
       
       setSavedProfiles(ConnectionProfileManager.getProfiles());
       
-      // Load all available folders
-      const folders = SessionStorageManager.getFolders();
+      // Load only valid folders from session manager (excludes orphaned/deleted folders)
+      const folders = SessionStorageManager.getValidFolders();
       const folderPaths = folders.map(f => f.path).sort();
       setAvailableFolders(folderPaths);
     } else {
@@ -747,31 +747,16 @@ export function ConnectionDialog({
               </div>
               {saveAsSession && (
                 <Select value={sessionFolder} onValueChange={setSessionFolder}>
-                  <SelectTrigger className="w-[240px] h-8">
+                  <SelectTrigger className="w-[200px] h-8">
                     <SelectValue placeholder="Select folder" />
                   </SelectTrigger>
-                  <SelectContent className="max-h-[300px]">
+                  <SelectContent>
                     {availableFolders.length > 0 ? (
-                      availableFolders.map((folder) => {
-                        // Calculate indentation level based on folder depth
-                        const depth = folder.split('/').length - 1;
-                        const displayName = folder.split('/').pop() || folder;
-                        // Use proper visual hierarchy indicators
-                        const prefix = depth === 0 ? '' : '└─ '.padStart(depth * 3, '  ');
-                        
-                        return (
-                          <SelectItem 
-                            key={folder} 
-                            value={folder}
-                            className="font-mono text-xs"
-                          >
-                            <span className="flex items-center gap-1">
-                              <span className="text-muted-foreground">{prefix}</span>
-                              <span>{displayName}</span>
-                            </span>
-                          </SelectItem>
-                        );
-                      })
+                      availableFolders.map((folder) => (
+                        <SelectItem key={folder} value={folder}>
+                          {folder}
+                        </SelectItem>
+                      ))
                     ) : (
                       <SelectItem value="All Sessions">All Sessions</SelectItem>
                     )}
