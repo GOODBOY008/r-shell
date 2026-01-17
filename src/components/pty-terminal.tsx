@@ -35,6 +35,8 @@ export function PtyTerminal({
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  // Track whether terminal was created with background image (determines renderer choice)
+  const hadBackgroundImageRef = React.useRef<boolean | null>(null);
   
   // Flow control - inspired by ttyd
   const flowControlRef = React.useRef({
@@ -44,6 +46,21 @@ export function PtyTerminal({
     highWater: 5,
     lowWater: 2,
   });
+
+  // Get appearance settings - reloads when appearanceKey changes
+  const appearance = React.useMemo(() => loadAppearanceSettings(), [appearanceKey]);
+  
+  // Track whether we need to switch renderers due to background image change
+  // This is necessary because WebGL renderer doesn't support transparency
+  const hasBackgroundImage = !!appearance.backgroundImage;
+  
+  // Use a key that only changes when we need to switch renderers
+  const terminalKey = React.useMemo(() => {
+    // Update the ref to track current state
+    const key = hasBackgroundImage ? 'bg' : 'no-bg';
+    hadBackgroundImageRef.current = hasBackgroundImage;
+    return key;
+  }, [hasBackgroundImage]);
   
   React.useEffect(() => {
     if (!terminalRef.current) return;
@@ -327,17 +344,10 @@ export function PtyTerminal({
       
       term.dispose();
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, sessionName, host, username]);
-
-  // Get appearance settings for rendering - reloads when appearanceKey changes
-  const [appearance, setAppearance] = React.useState(() => loadAppearanceSettings());
-  
-  // Update appearance when appearanceKey changes (settings saved)
-  React.useEffect(() => {
-    const newAppearance = loadAppearanceSettings();
-    setAppearance(newAppearance);
-  }, [appearanceKey]);
+  // Re-run when terminalKey changes (background image added/removed)
+  // This is necessary because WebGL renderer doesn't support transparency
+  // and we need to switch to canvas renderer when background image is set
+  }, [sessionId, sessionName, host, username, terminalKey]);
 
   return (
     <div 
