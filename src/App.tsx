@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MenuBar } from './components/menu-bar';
 import { Toolbar } from './components/toolbar';
-import { SessionManager } from './components/session-manager';
+import { ConnectionManager } from './components/connection-manager';
 import { SessionTabs } from './components/session-tabs';
 import { PtyTerminal } from './components/pty-terminal';
 import { SystemMonitor } from './components/system-monitor';
@@ -579,21 +579,64 @@ function AppContent() {
   }, [tabs]);
 
   const handleConnectionDialogConnect = useCallback((config: SessionConfig) => {
-    const newTab: SessionTab = {
-      id: config.id || `session-${Date.now()}`,
-      name: config.name,
-      protocol: config.protocol,
-      host: config.host,
-      username: config.username,
-      isActive: true
-    };
+    const tabId = config.id || `session-${Date.now()}`;
     
-    setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), newTab]);
-    setActiveTabId(newTab.id);
-  }, []);
+    // Check if a tab with this ID already exists
+    const existingTab = tabs.find(tab => tab.id === tabId);
+    
+    if (existingTab) {
+      // Tab exists - update its info and activate it
+      setTabs(prev => prev.map(tab => 
+        tab.id === tabId 
+          ? { ...tab, name: config.name, host: config.host, username: config.username, isActive: true }
+          : { ...tab, isActive: false }
+      ));
+      setActiveTabId(tabId);
+    } else {
+      // Create new tab
+      const newTab: SessionTab = {
+        id: tabId,
+        name: config.name,
+        protocol: config.protocol,
+        host: config.host,
+        username: config.username,
+        isActive: true
+      };
+      
+      setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), newTab]);
+      setActiveTabId(newTab.id);
+    }
+  }, [tabs]);
 
   const handleOpenSettings = useCallback(() => {
     setSettingsModalOpen(true);
+  }, []);
+
+  // Handle editing a session from the connection manager
+  const handleEditSession = useCallback((session: SessionNode) => {
+    if (session.type === 'session') {
+      // Load the full session data from storage
+      const sessionData = SessionStorageManager.getSession(session.id);
+      if (sessionData) {
+        setEditingSession({
+          id: sessionData.id,
+          name: sessionData.name,
+          protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+          host: sessionData.host,
+          port: sessionData.port,
+          username: sessionData.username,
+          authMethod: sessionData.authMethod || 'password',
+          password: sessionData.password,
+          privateKeyPath: sessionData.privateKeyPath,
+          passphrase: sessionData.passphrase,
+        });
+        setConnectionDialogOpen(true);
+      } else {
+        toast.error('Session Not Found', {
+          description: 'The session data could not be loaded.',
+        });
+      }
+    }
   }, []);
 
   const handleOpenSFTP = useCallback(() => {
@@ -858,7 +901,7 @@ function AppContent() {
       
       <div className="flex-1 flex overflow-hidden">
         <ResizablePanelGroup direction="horizontal" autoSaveId="r-shell-main-layout">
-          {/* Left Sidebar - Session Manager with integrated Connection Details */}
+          {/* Left Sidebar - Connection Manager with integrated Connection Details */}
           {layout.leftSidebarVisible && (
             <>
               <ResizablePanel 
@@ -869,12 +912,13 @@ function AppContent() {
                 maxSize={30}
                 onResize={(size) => setLeftSidebarSize(size)}
               >
-                <SessionManager 
+                <ConnectionManager 
                   onSessionSelect={handleSessionSelect}
                   onSessionConnect={handleSessionConnect}
                   selectedSessionId={selectedSession?.id || null}
                   activeSessions={new Set(tabs.map(tab => tab.id))}
                   onNewConnection={handleNewTab}
+                  onEditSession={handleEditSession}
                 />
               </ResizablePanel>
               

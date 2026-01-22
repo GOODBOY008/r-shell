@@ -116,6 +116,37 @@ export class SessionStorageManager {
   }
 
   /**
+   * Save a new session with a specific ID
+   * This is used to ensure the session ID matches the tab ID for proper tracking
+   */
+  static saveSessionWithId(id: string, session: Omit<SessionData, 'id' | 'createdAt'>): SessionData {
+    const sessions = this.getSessions();
+    
+    // Check if session with this ID already exists
+    const existingIndex = sessions.findIndex(s => s.id === id);
+    
+    const newSession: SessionData = {
+      ...session,
+      id,
+      createdAt: new Date().toISOString(),
+      lastConnected: new Date().toISOString(),
+      folder: session.folder || 'All Sessions',
+    };
+    
+    if (existingIndex !== -1) {
+      // Update existing session
+      sessions[existingIndex] = newSession;
+    } else {
+      // Add new session
+      sessions.push(newSession);
+    }
+    
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
+    
+    return newSession;
+  }
+
+  /**
    * Update an existing session
    */
   static updateSession(id: string, updates: Partial<Omit<SessionData, 'id' | 'createdAt'>>): SessionData | null {

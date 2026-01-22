@@ -72,7 +72,7 @@ export function ConnectionDialog({
   onConnect, 
   editingSession 
 }: ConnectionDialogProps) {
-  const [config, setConfig] = useState<SessionConfig>({
+  const defaultConfig: SessionConfig = {
     name: '',
     protocol: 'SSH',
     host: '',
@@ -90,9 +90,10 @@ export function ConnectionDialog({
     compression: true,
     keepAlive: true,
     keepAliveInterval: 60,
-    serverAliveCountMax: 3,
-    ...editingSession
-  });
+    serverAliveCountMax: 3
+  };
+
+  const [config, setConfig] = useState<SessionConfig>(defaultConfig);
 
   const [isConnecting, setIsConnecting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -112,15 +113,29 @@ export function ConnectionDialog({
       
       setSavedProfiles(ConnectionProfileManager.getProfiles());
       
-      // Load only valid folders from session manager (excludes orphaned/deleted folders)
+      // Load only valid folders from connection manager (excludes orphaned/deleted folders)
       const folders = SessionStorageManager.getValidFolders();
       const folderPaths = folders.map(f => f.path).sort();
       setAvailableFolders(folderPaths);
+      
+      // Load editing session data into config when dialog opens
+      if (editingSession) {
+        setConfig({
+          ...defaultConfig,
+          ...editingSession
+        });
+        // When editing, don't show "save as session" since it already exists
+        setSaveAsSession(false);
+      } else {
+        // Reset to defaults for new session
+        setConfig(defaultConfig);
+        setSaveAsSession(true);
+      }
     } else {
       // Reset connection state when dialog closes
       resetConnectionState();
     }
-  }, [open]);
+  }, [open, editingSession]);
 
   const handleSaveProfile = () => {
     try {
@@ -233,9 +248,25 @@ export function ConnectionDialog({
       );
 
       if (result.success) {
-        // Save session if checkbox is checked
-        if (saveAsSession) {
-          SessionStorageManager.saveSession({
+        // Save or update session based on whether we're editing or creating new
+        if (editingSession?.id) {
+          // Update existing session with new connection details
+          SessionStorageManager.updateSession(editingSession.id, {
+            name: config.name,
+            host: config.host,
+            port: config.port || 22,
+            username: config.username,
+            protocol: config.protocol,
+            authMethod: config.authMethod,
+            password: config.password,
+            privateKeyPath: config.privateKeyPath,
+            passphrase: config.passphrase,
+            lastConnected: new Date().toISOString(),
+          });
+        } else if (saveAsSession) {
+          // Save new session with the same ID used for the SSH connection
+          // This ensures the tab ID matches the session ID in storage
+          SessionStorageManager.saveSessionWithId(sessionId, {
             name: config.name,
             host: config.host,
             port: config.port || 22,
@@ -247,11 +278,6 @@ export function ConnectionDialog({
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
           });
-        }
-
-        // Update last connected timestamp if editing existing session
-        if (editingSession?.id) {
-          SessionStorageManager.updateLastConnected(editingSession.id);
         }
 
         onConnect({
@@ -731,51 +757,53 @@ export function ConnectionDialog({
 
         </Tabs>
 
-        <DialogFooter className="px-6 py-4 border-t bg-muted/30">
+        <DialogFooter className="px-6 py-4 border-t bg-muted/30 flex-col sm:flex-col">
           <div className="flex flex-col gap-3 w-full">
-            {/* Save as Session Option */}
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="save-session"
-                  checked={saveAsSession}
-                  onCheckedChange={setSaveAsSession}
-                />
-                <Label htmlFor="save-session" className="text-sm cursor-pointer">
-                  Save as persistent session
-                </Label>
+            {/* Save as Session Option - Only show for new sessions */}
+            {!editingSession && (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="save-session"
+                    checked={saveAsSession}
+                    onCheckedChange={setSaveAsSession}
+                  />
+                  <Label htmlFor="save-session" className="text-sm cursor-pointer">
+                    Save as persistent session
+                  </Label>
+                </div>
+                {saveAsSession && (
+                  <Select value={sessionFolder} onValueChange={setSessionFolder}>
+                    <SelectTrigger className="w-[200px] h-8">
+                      <SelectValue placeholder="Select folder" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableFolders.length > 0 ? (
+                        availableFolders.map((folder) => (
+                          <SelectItem key={folder} value={folder}>
+                            {folder}
+                          </SelectItem>
+                        ))
+                      ) : (
+                        <SelectItem value="All Sessions">All Sessions</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
-              {saveAsSession && (
-                <Select value={sessionFolder} onValueChange={setSessionFolder}>
-                  <SelectTrigger className="w-[200px] h-8">
-                    <SelectValue placeholder="Select folder" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableFolders.length > 0 ? (
-                      availableFolders.map((folder) => (
-                        <SelectItem key={folder} value={folder}>
-                          {folder}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <SelectItem value="All Sessions">All Sessions</SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
+            )}
 
             {/* Action Buttons */}
-            <div className="flex justify-between">
+            <div className="flex justify-end gap-2">
               <Button 
-                variant={isConnecting ? "destructive" : "ghost"}
+                variant={isConnecting ? "destructive" : "outline"}
                 onClick={handleCancelConnectionAttempt}
                 disabled={isCancelling}
               >
                 {isConnecting ? (isCancelling ? 'Cancelling...' : 'Stop') : 'Cancel'}
               </Button>
-              <Button onClick={handleConnect} disabled={isConnecting || isCancelling} className="min-w-[120px]">
-                {isConnecting ? 'Connecting...' : editingSession ? 'Update Session' : 'Connect'}
+              <Button onClick={handleConnect} disabled={isConnecting || isCancelling} className="min-w-[140px]">
+                {isConnecting ? 'Connecting...' : editingSession ? 'Update & Connect' : 'Connect'}
               </Button>
             </div>
           </div>

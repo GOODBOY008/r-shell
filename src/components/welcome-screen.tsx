@@ -33,7 +33,7 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
     },
     {
       icon: FolderTree,
-      title: 'Session Manager',
+      title: 'Connection Manager',
       description: 'Organize your connections',
       action: () => {},
       variant: 'outline' as const,
@@ -192,7 +192,7 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
                 <ul className="space-y-1.5 text-xs text-muted-foreground">
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">•</span>
-                    <span><strong>Session Manager:</strong> Use the left sidebar to organize your connections into folders</span>
+                    <span><strong>Connection Manager:</strong> Use the left sidebar to organize your connections into folders</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">•</span>
@@ -223,7 +223,7 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
             Create New Session
           </Button>
           <p className="text-xs text-muted-foreground mt-2">
-            or select an existing session from the Session Manager
+            or select an existing session from the Connection Manager
           </p>
         </div>
       </div>

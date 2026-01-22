@@ -4,6 +4,7 @@ use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
@@ -61,7 +62,15 @@ impl SshClient {
 
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
         let ssh_config = client::Config::default();
-        let mut ssh_session = client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client).await
+        
+        // Connection timeout: 3 seconds
+        let connection_timeout = Duration::from_secs(3);
+        
+        let mut ssh_session = tokio::time::timeout(
+            connection_timeout,
+            client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client)
+        ).await
+            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
             .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?;
 
         let authenticated = match &config.auth_method {

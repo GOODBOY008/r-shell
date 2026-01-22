@@ -45,7 +45,7 @@ interface MenuBarProps {
   onPaste?: () => void;
   onSelectAll?: () => void;
   onFind?: () => void;
-  onToggleSessionManager?: () => void;
+  onToggleConnectionManager?: () => void;
   onToggleSystemMonitor?: () => void;
   onToggleFullscreen?: () => void;
   onOpenSettings?: () => void;
@@ -68,7 +68,7 @@ export function MenuBar({
   onPaste,
   onSelectAll,
   onFind,
-  onToggleSessionManager,
+  onToggleConnectionManager,
   onToggleSystemMonitor,
   onToggleFullscreen,
   onOpenSettings,
@@ -231,9 +231,9 @@ export function MenuBar({
           <Button variant="ghost" size="sm">View</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onClick={onToggleSessionManager}>
+          <DropdownMenuItem onClick={onToggleConnectionManager}>
             <FolderTree className="mr-2 h-4 w-4" />
-            Session Manager
+            Connection Manager
             <DropdownMenuShortcut>F9</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onToggleSystemMonitor}>

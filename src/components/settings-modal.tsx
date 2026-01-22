@@ -64,7 +64,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     
     // Interface settings
     theme: 'dark',
-    showSessionManager: true,
+    showConnectionManager: true,
     showSystemMonitor: true,
     showStatusBar: true,
     enableNotifications: true,
@@ -149,7 +149,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
         savePasswords: false,
         autoLockTimeout: 30,
         theme: 'dark',
-        showSessionManager: true,
+        showConnectionManager: true,
         showSystemMonitor: true,
         showStatusBar: true,
         enableNotifications: true,
@@ -708,10 +708,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                   <Label>Panel Visibility</Label>
                   
                   <div className="flex items-center justify-between">
-                    <span>Session Manager</span>
+                    <span>Connection Manager</span>
                     <Switch
-                      checked={settings.showSessionManager}
-                      onCheckedChange={(checked) => updateSetting('showSessionManager', checked)}
+                      checked={settings.showConnectionManager}
+                      onCheckedChange={(checked) => updateSetting('showConnectionManager', checked)}
                     />
                   </div>
                   

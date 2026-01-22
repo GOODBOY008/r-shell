@@ -53,7 +53,7 @@ export const createLayoutShortcuts = (actions: {
     key: 'b',
     ctrlKey: true,
     handler: actions.toggleLeftSidebar,
-    description: 'Toggle Session Manager (Left Sidebar)',
+    description: 'Toggle Connection Manager (Left Sidebar)',
   },
   {
     key: 'j',
@@ -77,6 +77,6 @@ export const createLayoutShortcuts = (actions: {
     key: '\\',
     ctrlKey: true,
     handler: actions.toggleLeftSidebar,
-    description: 'Toggle Session Manager (Alternative)',
+    description: 'Toggle Connection Manager (Alternative)',
   },
 ];

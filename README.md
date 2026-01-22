@@ -107,7 +107,7 @@ r-shell/
 │   │   ├── ui/            # Reusable UI components (Radix-based)
 │   │   ├── pty-terminal.tsx        # PTY terminal with xterm.js
 │   │   ├── integrated-file-browser.tsx  # SFTP file browser
-│   │   ├── session-manager.tsx     # Connection management
+│   │   ├── connection-manager.tsx   # Connection management
 │   │   ├── system-monitor.tsx      # Real-time metrics
 │   │   ├── connection-dialog.tsx   # SSH connection form
 │   │   ├── session-tabs.tsx        # Tab navigation
@@ -242,12 +242,12 @@ Provides terminal emulation with:
 - Terminal themes
 - Copy/paste support
 
-#### Session Manager
+#### Connection Manager
 Tree-view interface for:
-- Organizing connections
+- Organizing connections into folders
 - Quick connection access
-- Folder-based grouping
-- Connection details
+- Edit, duplicate, and delete connections
+- Connection status indicators (green dot for active)
 
 #### File Browser
 Integrated file management:

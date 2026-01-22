@@ -49,7 +49,7 @@ interface SessionNode {
   isExpanded?: boolean;
 }
 
-interface SessionManagerProps {
+interface ConnectionManagerProps {
   onSessionSelect: (session: SessionNode) => void;
   onSessionConnect?: (session: SessionNode) => void; // Connect to session (double-click or context menu)
   selectedSessionId: string | null;
@@ -60,7 +60,7 @@ interface SessionManagerProps {
   onDuplicateSession?: (session: SessionNode) => void; // Callback to duplicate session
 }
 
-export function SessionManager({ 
+export function ConnectionManager({ 
   onSessionSelect, 
   onSessionConnect,
   selectedSessionId, 
@@ -69,7 +69,7 @@ export function SessionManager({
   onEditSession,
   onDeleteSession,
   onDuplicateSession
-}: SessionManagerProps) {
+}: ConnectionManagerProps) {
   // Load sessions from storage
   const loadSessions = (): SessionNode[] => {
     const tree = SessionStorageManager.buildSessionTree(activeSessions);
@@ -543,7 +543,7 @@ export function SessionManager({
       {/* Session Browser */}
       <div className="flex-1 min-h-0 flex flex-col">
         <div className="p-3 border-b border-border flex items-center justify-between">
-          <h3 className="font-medium">Session Manager</h3>
+          <h3 className="font-medium">Connection Manager</h3>
           <Button
             variant="ghost"
             size="sm"

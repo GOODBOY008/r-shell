@@ -92,7 +92,7 @@ export class LayoutManager {
       },
       {
         name: 'Focus Mode',
-        description: 'Terminal with session manager only',
+        description: 'Terminal with connection manager only',
         config: {
           leftSidebarVisible: true,
           leftSidebarSize: 15,

@@ -288,7 +288,7 @@ export function Toolbar({
               {leftSidebarVisible ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{leftSidebarVisible ? 'Hide' : 'Show'} Session Manager</TooltipContent>
+          <TooltipContent>{leftSidebarVisible ? 'Hide' : 'Show'} Connection Manager</TooltipContent>
         </Tooltip>
 
         <Tooltip>
