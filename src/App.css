@@ -21,6 +21,7 @@ body {
   height: 100vh;
 }
 
+a {
   color: #646cff;
   text-decoration: inherit;
 }
