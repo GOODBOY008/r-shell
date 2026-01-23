@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.6.3] - 2026-01-23
+
+### Added
+
+- ✏️ **Session Editing**: Added ability to edit existing sessions from connection manager
+  - Load existing session details into connection dialog
+  - Update session configurations with proper form state
+  - Automatically activate existing tabs when editing connections
+  - Loading states and error handling for edit operations
+
+- ⏱️ **Connection Timeout**: Added 3-second timeout for SSH client connections
+  - Better error handling for unresponsive connections
+  - Prevents indefinite connection attempts
+  - Improved user feedback during connection failures
+
+### Fixed
+
+- 🖼️ **Terminal Background Image**: Fixed background images not appearing on already-opened terminals
+  - Properly switches from WebGL to canvas renderer when background image is added
+  - Avoids unnecessary terminal re-creation for other appearance changes
+  - Fixed issue where images only showed at edges while main area remained dark
+  - Smart renderer selection based on background image state
+
+### Changed
+
+- 🔄 **UI Terminology Update**: Renamed "Session Manager" to "Connection Manager" throughout the application
+  - Updated all UI labels, tooltips, and menu items for consistency
+  - Renamed SessionManager component to ConnectionManager
+  - Updated keyboard shortcuts and settings to reflect new naming
+  - More accurate terminology for managing SSH connections
+
+- 🗂️ **Tab Management**: Enhanced tab handling for connection dialog
+  - Updates and activates existing tabs when confirming connection
+  - Hides "Save as session" option when editing existing sessions
+  - Better session update workflow
+
+- 📚 **Documentation**: Updated README to reflect connection manager naming
+
 ## [0.6.2] - 2026-01-17
 
 ### Added
