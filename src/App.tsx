@@ -47,6 +47,7 @@ interface SessionTab {
   username?: string;
   isActive: boolean;
   originalSessionId?: string; // Reference to original session for duplicated tabs
+  connectionStatus: 'connected' | 'connecting' | 'disconnected';
 }
 
 function AppContent() {
@@ -183,7 +184,8 @@ function AppContent() {
               host: sessionData.host,
               username: sessionData.username,
               isActive: isFirstTab,
-              originalSessionId: activeSession.originalSessionId // Preserve original session ID for duplicates
+              originalSessionId: activeSession.originalSessionId, // Preserve original session ID for duplicates
+              connectionStatus: 'connecting' // Will be updated when PTY session is established
             };
             
             // Add to restored tabs array
@@ -389,7 +391,8 @@ function AppContent() {
           protocol: session.protocol,
           host: session.host,
           username: session.username,
-          isActive: true
+          isActive: true,
+          connectionStatus: 'connecting'
         };
         
         // Deactivate other tabs and add new one
@@ -440,6 +443,16 @@ function AppContent() {
       setTabs(remainingTabs);
     }
   }, [tabs, activeTabId]);
+
+  // Handle connection status changes from terminal
+  const handleConnectionStatusChange = useCallback((sessionId: string, status: 'connected' | 'connecting' | 'disconnected') => {
+    console.log(`[App] Connection status changed for ${sessionId}: ${status}`);
+    setTabs(prev => prev.map(tab => 
+      tab.id === sessionId 
+        ? { ...tab, connectionStatus: status }
+        : tab
+    ));
+  }, []);
 
   const handleCloseAll = useCallback(() => {
     setTabs([]);
@@ -550,7 +563,8 @@ function AppContent() {
           host: tabToDuplicate.host,
           username: tabToDuplicate.username,
           isActive: true,
-          originalSessionId: originalSessionId // Store reference to original session
+          originalSessionId: originalSessionId, // Store reference to original session
+          connectionStatus: 'connecting'
         };
         
         // Insert the duplicated tab right after the original tab
@@ -585,10 +599,10 @@ function AppContent() {
     const existingTab = tabs.find(tab => tab.id === tabId);
     
     if (existingTab) {
-      // Tab exists - update its info and activate it
+      // Tab exists - update its info and activate it (reset connection status to connecting)
       setTabs(prev => prev.map(tab => 
         tab.id === tabId 
-          ? { ...tab, name: config.name, host: config.host, username: config.username, isActive: true }
+          ? { ...tab, name: config.name, host: config.host, username: config.username, isActive: true, connectionStatus: 'connecting' as const }
           : { ...tab, isActive: false }
       ));
       setActiveTabId(tabId);
@@ -600,7 +614,8 @@ function AppContent() {
         protocol: config.protocol,
         host: config.host,
         username: config.username,
-        isActive: true
+        isActive: true,
+        connectionStatus: 'connecting'
       };
       
       setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), newTab]);
@@ -768,7 +783,7 @@ function AppContent() {
     name: activeTab.name,
     protocol: activeTab.protocol || 'SSH',
     host: activeTab.host,
-    status: 'connected' as const
+    status: activeTab.connectionStatus || 'connected'
   } : undefined;
 
   const restoringPercent = useMemo(() => {
@@ -962,6 +977,7 @@ function AppContent() {
                             host={tab.host}
                             username={tab.username}
                             appearanceKey={appearanceKey}
+                            onConnectionStatusChange={handleConnectionStatusChange}
                           />
                         </ResizablePanel>
                         

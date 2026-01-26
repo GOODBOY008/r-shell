@@ -14,6 +14,7 @@ interface SessionTab {
   name: string;
   protocol?: string;
   isActive: boolean;
+  connectionStatus?: 'connected' | 'connecting' | 'disconnected';
 }
 
 interface SessionTabsProps {
@@ -53,6 +54,9 @@ export function SessionTabs({
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <div className={`w-2 h-2 rounded-full ${
+                    tab.connectionStatus === 'connected' ? 'bg-green-500' : 
+                    tab.connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' : 
+                    tab.connectionStatus === 'disconnected' ? 'bg-red-500' :
                     tab.protocol === 'SSH' ? 'bg-green-500' : 
                     tab.protocol === 'PowerShell' ? 'bg-blue-500' : 
                     'bg-gray-500'

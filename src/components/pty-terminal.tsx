@@ -12,6 +12,7 @@ interface PtyTerminalProps {
   host?: string;
   username?: string;
   appearanceKey?: number; // Key to force re-render when appearance changes
+  onConnectionStatusChange?: (sessionId: string, status: 'connected' | 'connecting' | 'disconnected') => void;
 }
 
 /**
@@ -27,7 +28,8 @@ export function PtyTerminal({
   sessionName, 
   host = 'localhost', 
   username = 'user',
-  appearanceKey = 0
+  appearanceKey = 0,
+  onConnectionStatusChange
 }: PtyTerminalProps) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
@@ -37,6 +39,8 @@ export function PtyTerminal({
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   // Track whether terminal was created with background image (determines renderer choice)
   const hadBackgroundImageRef = React.useRef<boolean | null>(null);
+  // Track connection status to avoid duplicate notifications
+  const connectionStatusRef = React.useRef<'connected' | 'connecting' | 'disconnected'>('connecting');
   
   // Flow control - inspired by ttyd
   const flowControlRef = React.useRef({
@@ -150,6 +154,12 @@ export function PtyTerminal({
       // CRITICAL: Wait for terminal to be properly sized before starting PTY
       await waitForProperSize();
       
+      // Notify parent that we're connecting
+      if (connectionStatusRef.current !== 'connecting') {
+        connectionStatusRef.current = 'connecting';
+        onConnectionStatusChange?.(sessionId, 'connecting');
+      }
+      
       console.log(`[PTY Terminal] [${sessionId}] Connecting to WebSocket...`);
       const ws = new WebSocket('ws://127.0.0.1:9001');
       wsRef.current = ws;
@@ -180,6 +190,11 @@ export function PtyTerminal({
                 term.writeln('\x1b[32m✓ PTY session started\x1b[0m');
                 term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
                 term.write('\r\n');
+                // Notify parent that connection is now established
+                if (connectionStatusRef.current !== 'connected') {
+                  connectionStatusRef.current = 'connected';
+                  onConnectionStatusChange?.(sessionId, 'connected');
+                }
               }
               break;
               
@@ -230,6 +245,20 @@ export function PtyTerminal({
             case 'Error':
               console.error('[PTY Terminal] Error:', msg.message);
               term.write(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m\r\n`);
+              // Check if this is a connection-related error (case-insensitive)
+              const errorMsgLower = msg.message.toLowerCase();
+              if (errorMsgLower.includes('session not found') || 
+                  errorMsgLower.includes('ssh') || 
+                  errorMsgLower.includes('connection') ||
+                  errorMsgLower.includes('disconnected') ||
+                  errorMsgLower.includes('closed') ||
+                  errorMsgLower.includes('lost') ||
+                  errorMsgLower.includes('pty')) {
+                if (connectionStatusRef.current !== 'disconnected') {
+                  connectionStatusRef.current = 'disconnected';
+                  onConnectionStatusChange?.(sessionId, 'disconnected');
+                }
+              }
               break;
               
             default:
@@ -243,11 +272,21 @@ export function PtyTerminal({
       ws.onerror = (error) => {
         console.error('[PTY Terminal] WebSocket error:', error);
         term.write('\r\n\x1b[31m[WebSocket error]\x1b[0m\r\n');
+        // Report disconnected status on WebSocket error
+        if (connectionStatusRef.current !== 'disconnected') {
+          connectionStatusRef.current = 'disconnected';
+          onConnectionStatusChange?.(sessionId, 'disconnected');
+        }
       };
 
       ws.onclose = () => {
         console.log('[PTY Terminal] WebSocket closed');
         if (isRunning) {
+          // Report connecting status while attempting reconnect
+          if (connectionStatusRef.current !== 'connecting') {
+            connectionStatusRef.current = 'connecting';
+            onConnectionStatusChange?.(sessionId, 'connecting');
+          }
           term.write('\r\n\x1b[33m[Connection closed. Attempting to reconnect...]\x1b[0m\r\n');
           setTimeout(() => {
             if (isRunning) {

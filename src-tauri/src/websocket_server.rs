@@ -266,6 +266,13 @@ impl WebSocketServer {
                             }
                             Err(e) => {
                                 tracing::error!("Error reading from PTY: {}", e);
+                                // Notify frontend that the connection is lost
+                                let error_msg = WsMessage::Error {
+                                    message: format!("Connection lost: {}", e),
+                                };
+                                if let Ok(json) = serde_json::to_string(&error_msg) {
+                                    let _ = tx_clone.send(json);
+                                }
                                 break;
                             }
                         }
