@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Plus, XCircle, ArrowRight, ArrowLeft, Copy } from 'lucide-react';
+import { X, Plus, XCircle, ArrowRight, ArrowLeft, Copy, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   ContextMenu,
@@ -23,6 +23,7 @@ interface SessionTabsProps {
   onTabClose: (tabId: string) => void;
   onNewTab: () => void;
   onDuplicateTab?: (tabId: string) => void;
+  onReconnect?: (tabId: string) => void;
   onCloseAll?: () => void;
   onCloseOthers?: (tabId: string) => void;
   onCloseToRight?: (tabId: string) => void;
@@ -35,6 +36,7 @@ export function SessionTabs({
   onTabClose, 
   onNewTab,
   onDuplicateTab,
+  onReconnect,
   onCloseAll,
   onCloseOthers,
   onCloseToRight,
@@ -78,6 +80,16 @@ export function SessionTabs({
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent>
+              {/* Show Reconnect option when disconnected */}
+              {onReconnect && tab.connectionStatus === 'disconnected' && (
+                <>
+                  <ContextMenuItem onClick={() => onReconnect(tab.id)}>
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    Reconnect
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              )}
               {onDuplicateTab && (
                 <>
                   <ContextMenuItem onClick={() => onDuplicateTab(tab.id)}>

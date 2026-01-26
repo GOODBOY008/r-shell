@@ -48,6 +48,7 @@ interface SessionTab {
   isActive: boolean;
   originalSessionId?: string; // Reference to original session for duplicated tabs
   connectionStatus: 'connected' | 'connecting' | 'disconnected';
+  reconnectCount: number; // Used to force terminal remount on reconnection
 }
 
 function AppContent() {
@@ -185,7 +186,8 @@ function AppContent() {
               username: sessionData.username,
               isActive: isFirstTab,
               originalSessionId: activeSession.originalSessionId, // Preserve original session ID for duplicates
-              connectionStatus: 'connecting' // Will be updated when PTY session is established
+              connectionStatus: 'connecting', // Will be updated when PTY session is established
+              reconnectCount: 0
             };
             
             // Add to restored tabs array
@@ -392,7 +394,8 @@ function AppContent() {
           host: session.host,
           username: session.username,
           isActive: true,
-          connectionStatus: 'connecting'
+          connectionStatus: 'connecting',
+          reconnectCount: 0
         };
         
         // Deactivate other tabs and add new one
@@ -564,7 +567,8 @@ function AppContent() {
           username: tabToDuplicate.username,
           isActive: true,
           originalSessionId: originalSessionId, // Store reference to original session
-          connectionStatus: 'connecting'
+          connectionStatus: 'connecting',
+          reconnectCount: 0
         };
         
         // Insert the duplicated tab right after the original tab
@@ -592,6 +596,122 @@ function AppContent() {
     }
   }, [tabs]);
 
+  // Handle reconnecting a disconnected session
+  const handleReconnect = useCallback(async (tabId: string) => {
+    const tabToReconnect = tabs.find(tab => tab.id === tabId);
+    if (!tabToReconnect) return;
+
+    // Get the original session ID (in case this is a duplicated tab)
+    const originalSessionId = tabToReconnect.originalSessionId || tabId;
+    
+    // Get the session data from storage
+    const sessionData = SessionStorageManager.getSession(originalSessionId);
+    if (!sessionData) {
+      toast.error('Cannot Reconnect', {
+        description: 'Session data not found. Please create a new connection.',
+      });
+      return;
+    }
+
+    // Check if we have authentication credentials saved
+    const hasCredentials = sessionData.authMethod === 'password' 
+      ? !!sessionData.password 
+      : !!sessionData.privateKeyPath;
+    
+    if (!hasCredentials) {
+      toast.error('Cannot Reconnect', {
+        description: 'No saved credentials found. Please connect manually.',
+      });
+      // Open connection dialog with pre-filled data
+      setEditingSession({
+        id: originalSessionId,
+        name: sessionData.name,
+        protocol: sessionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+        host: sessionData.host,
+        port: sessionData.port,
+        username: sessionData.username,
+        authMethod: sessionData.authMethod || 'password',
+      });
+      setConnectionDialogOpen(true);
+      return;
+    }
+
+    // Update tab status to connecting
+    setTabs(prev => prev.map(tab => 
+      tab.id === tabId 
+        ? { ...tab, connectionStatus: 'connecting' as const }
+        : tab
+    ));
+
+    try {
+      // First, close the existing SSH session to clean up
+      try {
+        await invoke('ssh_disconnect', { sessionId: tabId });
+      } catch {
+        // Ignore errors when disconnecting - session might already be gone
+      }
+
+      // Establish new SSH connection
+      const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+        'ssh_connect',
+        {
+          request: {
+            session_id: tabId,
+            host: sessionData.host,
+            port: sessionData.port || 22,
+            username: sessionData.username,
+            auth_method: sessionData.authMethod || 'password',
+            password: sessionData.password || '',
+            key_path: sessionData.privateKeyPath || null,
+            passphrase: sessionData.passphrase || null,
+          }
+        }
+      );
+
+      if (result.success) {
+        // Update last connected timestamp
+        if (!tabToReconnect.originalSessionId) {
+          SessionStorageManager.updateLastConnected(originalSessionId);
+        }
+        
+        // Increment reconnectCount to force PtyTerminal to remount and create new PTY session
+        setTabs(prev => prev.map(tab => 
+          tab.id === tabId 
+            ? { ...tab, reconnectCount: tab.reconnectCount + 1 }
+            : tab
+        ));
+        
+        toast.success('Reconnected', {
+          description: `Successfully reconnected to ${tabToReconnect.name}`,
+        });
+      } else {
+        // Update tab status to disconnected
+        setTabs(prev => prev.map(tab => 
+          tab.id === tabId 
+            ? { ...tab, connectionStatus: 'disconnected' as const }
+            : tab
+        ));
+        
+        toast.error('Reconnection Failed', {
+          description: result.error || 'Unable to reconnect. Please try again.',
+        });
+      }
+    } catch (error) {
+      console.error('Error reconnecting:', error);
+      
+      // Update tab status to disconnected
+      setTabs(prev => prev.map(tab => 
+        tab.id === tabId 
+          ? { ...tab, connectionStatus: 'disconnected' as const }
+          : tab
+      ));
+      
+      toast.error('Reconnection Error', {
+        description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+      });
+    }
+  }, [tabs]);
+
   const handleConnectionDialogConnect = useCallback((config: SessionConfig) => {
     const tabId = config.id || `session-${Date.now()}`;
     
@@ -599,10 +719,10 @@ function AppContent() {
     const existingTab = tabs.find(tab => tab.id === tabId);
     
     if (existingTab) {
-      // Tab exists - update its info and activate it (reset connection status to connecting)
+      // Tab exists - update its info and activate it (reset connection status to connecting, increment reconnectCount)
       setTabs(prev => prev.map(tab => 
         tab.id === tabId 
-          ? { ...tab, name: config.name, host: config.host, username: config.username, isActive: true, connectionStatus: 'connecting' as const }
+          ? { ...tab, name: config.name, host: config.host, username: config.username, isActive: true, connectionStatus: 'connecting' as const, reconnectCount: tab.reconnectCount + 1 }
           : { ...tab, isActive: false }
       ));
       setActiveTabId(tabId);
@@ -615,7 +735,8 @@ function AppContent() {
         host: config.host,
         username: config.username,
         isActive: true,
-        connectionStatus: 'connecting'
+        connectionStatus: 'connecting',
+        reconnectCount: 0
       };
       
       setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), newTab]);
@@ -955,6 +1076,7 @@ function AppContent() {
                 onTabClose={handleTabClose}
                 onNewTab={handleNewTab}
                 onDuplicateTab={handleDuplicateTab}
+                onReconnect={handleReconnect}
                 onCloseAll={handleCloseAll}
                 onCloseOthers={handleCloseOthers}
                 onCloseToRight={handleCloseToRight}
@@ -972,6 +1094,7 @@ function AppContent() {
                         {/* Terminal Panel */}
                         <ResizablePanel id="terminal" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
                           <PtyTerminal 
+                            key={`${tab.id}-${tab.reconnectCount}`}
                             sessionId={tab.id}
                             sessionName={tab.name}
                             host={tab.host}
