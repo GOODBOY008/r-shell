@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Activity, Terminal, HardDrive, Network, ArrowDownUp, Gauge, X, ArrowDown } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Progress } from './ui/progress';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
@@ -70,6 +71,12 @@ interface NetworkHistoryData {
   download: number;
   upload: number;
   timestamp: number;
+}
+
+interface InterfaceBandwidth {
+  interface: string;
+  rx_bytes_per_sec: number;
+  tx_bytes_per_sec: number;
 }
 
 // Global utility functions for percentage color coding
@@ -307,12 +314,18 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     downloadFormatted: '0 KB/s'
   });
   const [networkHistory, setNetworkHistory] = useState<NetworkHistoryData[]>([]);
+  const [networkInterfaces, setNetworkInterfaces] = useState<string[]>([]);
+  const [selectedInterface, setSelectedInterface] = useState<string>('all');
+  const [interfaceBandwidthMap, setInterfaceBandwidthMap] = useState<Map<string, InterfaceBandwidth>>(new Map());
 
   // Network usage monitoring - fetch real bandwidth data
   // OPTIMIZED: Use longer interval and request idle callback
   useEffect(() => {
     if (!sessionId) {
       setNetworkHistory([]);
+      setNetworkInterfaces([]);
+      setSelectedInterface('all');
+      setInterfaceBandwidthMap(new Map());
       return;
     }
 
@@ -329,14 +342,53 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         }>('get_network_bandwidth', { sessionId });
 
         if (result.success && result.bandwidth.length > 0) {
-          // Sum all interfaces for total bandwidth
+          // Update interface list and bandwidth map
+          const interfaceNames = result.bandwidth.map(iface => iface.interface);
+          setNetworkInterfaces(prevInterfaces => {
+            // Only update if interfaces changed
+            if (JSON.stringify(prevInterfaces) !== JSON.stringify(interfaceNames)) {
+              // Auto-select the first outbound interface (typically eth0, ens*, enp*)
+              // if no interface selected yet or if current selection is no longer available
+              setSelectedInterface(prev => {
+                if (prev === 'all' || !interfaceNames.includes(prev)) {
+                  // Find the primary outbound interface - prefer eth0, ens*, enp*, or first available
+                  const outboundInterface = interfaceNames.find(name => 
+                    name.startsWith('eth') || name.startsWith('ens') || name.startsWith('enp')
+                  ) || interfaceNames[0];
+                  return outboundInterface || 'all';
+                }
+                return prev;
+              });
+              return interfaceNames;
+            }
+            return prevInterfaces;
+          });
+
+          // Store bandwidth data per interface
+          const newBandwidthMap = new Map<string, InterfaceBandwidth>();
+          result.bandwidth.forEach(iface => {
+            newBandwidthMap.set(iface.interface, iface);
+          });
+          setInterfaceBandwidthMap(newBandwidthMap);
+
+          // Calculate bandwidth based on selected interface
           let totalDownload = 0;
           let totalUpload = 0;
           
-          result.bandwidth.forEach(iface => {
-            totalDownload += iface.rx_bytes_per_sec;
-            totalUpload += iface.tx_bytes_per_sec;
-          });
+          if (selectedInterface === 'all') {
+            // Sum all interfaces for total bandwidth
+            result.bandwidth.forEach(iface => {
+              totalDownload += iface.rx_bytes_per_sec;
+              totalUpload += iface.tx_bytes_per_sec;
+            });
+          } else {
+            // Use only selected interface
+            const selectedData = result.bandwidth.find(iface => iface.interface === selectedInterface);
+            if (selectedData) {
+              totalDownload = selectedData.rx_bytes_per_sec;
+              totalUpload = selectedData.tx_bytes_per_sec;
+            }
+          }
 
           // Convert bytes/sec to KB/s
           const downloadKBps = totalDownload / 1024;
@@ -389,7 +441,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [sessionId, selectedInterface]);
 
   // Network latency monitoring - fetch real ping data
   // OPTIMIZED: Longer interval, use idle callback
@@ -619,9 +671,32 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
 
         {/* Network Usage */}
         <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5">
-            <ArrowDownUp className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">Network Usage</h3>
+          <div className="flex items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <ArrowDownUp className="w-3 h-3 shrink-0" />
+              <h3 className="text-xs font-medium truncate">Network Usage</h3>
+            </div>
+            {networkInterfaces.length > 0 && (
+              <Select value={selectedInterface} onValueChange={(value) => {
+                setSelectedInterface(value);
+                // Clear history when switching interfaces
+                setNetworkHistory([]);
+              }}>
+                <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[100px] text-[9px] px-1.5 py-0">
+                  <SelectValue placeholder="Interface" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-[10px]">
+                    All
+                  </SelectItem>
+                  {networkInterfaces.map(iface => (
+                    <SelectItem key={iface} value={iface} className="text-[10px]">
+                      {iface}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </div>
           <Card>
             <CardContent className="p-2 space-y-2">
