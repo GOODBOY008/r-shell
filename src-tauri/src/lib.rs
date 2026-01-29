@@ -6,6 +6,10 @@ mod websocket_server;
 use session_manager::SessionManager;
 use websocket_server::WebSocketServer;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU16;
+
+// Global atomic to store the WebSocket port (shared between backend and frontend)
+pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -20,9 +24,9 @@ pub fn run() {
         .setup({
             let session_manager_clone = session_manager.clone();
             move |_app| {
-                // Start WebSocket server for terminal I/O on port 9001
-                // This runs after Tauri's async runtime is initialized
-                let ws_server = Arc::new(WebSocketServer::new(session_manager_clone, 9001));
+                // Start WebSocket server for terminal I/O
+                // Try ports 9001-9010 to avoid conflicts with other instances
+                let ws_server = Arc::new(WebSocketServer::new(session_manager_clone));
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = ws_server.start().await {
                         tracing::error!("WebSocket server error: {}", e);
@@ -60,8 +64,9 @@ pub fn run() {
             commands::copy_file,
             commands::detect_gpu,
             commands::get_gpu_stats,
+            commands::get_websocket_port,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
-            // WebSocket server runs on ws://127.0.0.1:9001
+            // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

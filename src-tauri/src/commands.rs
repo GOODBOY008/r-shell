@@ -1682,7 +1682,24 @@ done
     })
 }
 
+// ========== WebSocket Port ==========
+
+/// Get the dynamically assigned WebSocket port for PTY terminal connections
+#[tauri::command]
+pub async fn get_websocket_port() -> Result<u16, String> {
+    use crate::WEBSOCKET_PORT;
+    use std::sync::atomic::Ordering;
+    
+    let port = WEBSOCKET_PORT.load(Ordering::SeqCst);
+    if port == 0 {
+        Err("WebSocket server not yet started".to_string())
+    } else {
+        Ok(port)
+    }
+}
+
 // ========== PTY Session ==========
 // PTY terminal I/O now uses WebSocket instead of IPC for better performance
-// WebSocket server runs on ws://127.0.0.1:9001
+// WebSocket server runs on a dynamically assigned port (9001-9010)
+// Use get_websocket_port() command to get the actual port
 // See src/websocket_server.rs for implementation

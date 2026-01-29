@@ -1,9 +1,11 @@
 use crate::session_manager::SessionManager;
+use crate::WEBSOCKET_PORT;
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -42,23 +44,43 @@ pub enum WsMessage {
 /// Handles bidirectional communication between frontend and PTY sessions
 pub struct WebSocketServer {
     session_manager: Arc<SessionManager>,
-    port: u16,
 }
 
 impl WebSocketServer {
-    pub fn new(session_manager: Arc<SessionManager>, port: u16) -> Self {
+    pub fn new(session_manager: Arc<SessionManager>) -> Self {
         Self {
             session_manager,
-            port,
         }
     }
 
-    /// Start the WebSocket server
+    /// Start the WebSocket server, trying ports 9001-9010 to find an available one
     pub async fn start(self: Arc<Self>) -> Result<()> {
-        let addr: SocketAddr = format!("127.0.0.1:{}", self.port).parse()?;
-        let listener = TcpListener::bind(&addr).await?;
+        // Try ports 9001-9010 to find an available one
+        let mut listener = None;
+        let mut bound_port = 0u16;
         
-        tracing::info!("WebSocket server listening on {}", addr);
+        for port in 9001..=9010 {
+            let addr: SocketAddr = format!("127.0.0.1:{}", port).parse()?;
+            match TcpListener::bind(&addr).await {
+                Ok(l) => {
+                    tracing::info!("WebSocket server listening on {}", addr);
+                    listener = Some(l);
+                    bound_port = port;
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("Port {} unavailable: {}, trying next...", port, e);
+                }
+            }
+        }
+        
+        let listener = listener.ok_or_else(|| {
+            anyhow::anyhow!("Failed to bind to any port in range 9001-9010")
+        })?;
+        
+        // Store the bound port in the global atomic for frontend to query
+        WEBSOCKET_PORT.store(bound_port, Ordering::SeqCst);
+        tracing::info!("WebSocket port stored: {}", bound_port);
 
         loop {
             match listener.accept().await {

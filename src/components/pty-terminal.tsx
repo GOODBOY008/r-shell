@@ -3,6 +3,7 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { invoke } from '@tauri-apps/api/core';
 import { loadAppearanceSettings, getTerminalOptions } from '../lib/terminal-config';
 import '@xterm/xterm/css/xterm.css';
 
@@ -160,8 +161,17 @@ export function PtyTerminal({
         onConnectionStatusChange?.(sessionId, 'connecting');
       }
       
+      // Get the dynamically assigned WebSocket port from the backend
+      let wsPort = 9001; // fallback default
+      try {
+        wsPort = await invoke<number>('get_websocket_port');
+        console.log(`[PTY Terminal] [${sessionId}] WebSocket port: ${wsPort}`);
+      } catch (e) {
+        console.warn(`[PTY Terminal] [${sessionId}] Failed to get WebSocket port, using default:`, e);
+      }
+      
       console.log(`[PTY Terminal] [${sessionId}] Connecting to WebSocket...`);
-      const ws = new WebSocket('ws://127.0.0.1:9001');
+      const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
