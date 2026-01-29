@@ -794,6 +794,9 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                                 </span>
                               </div>
                               <Progress value={gpu.memory_percent} className={`h-1 ${getProgressColor(gpu.memory_percent)}`} />
+                              <div className="text-[8px] text-muted-foreground text-right">
+                                {gpu.memory_used.toLocaleString()} MiB / {gpu.memory_total.toLocaleString()} MiB
+                              </div>
                             </div>
                           </div>
                           
