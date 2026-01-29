@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Activity, Terminal, HardDrive, Network, ArrowDownUp, Gauge, X, ArrowDown } from 'lucide-react';
+import { Activity, Terminal, HardDrive, Network, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Progress } from './ui/progress';
@@ -79,6 +79,63 @@ interface InterfaceBandwidth {
   tx_bytes_per_sec: number;
 }
 
+// GPU Types
+type GpuVendor = 'nvidia' | 'amd' | 'unknown';
+
+interface GpuInfo {
+  index: number;
+  name: string;
+  vendor: GpuVendor;
+  driver_version?: string;
+  cuda_version?: string;
+}
+
+interface GpuStats {
+  index: number;
+  name: string;
+  vendor: GpuVendor;
+  utilization: number;
+  memory_used: number;      // MiB
+  memory_total: number;     // MiB
+  memory_percent: number;
+  temperature?: number;     // Celsius
+  power_draw?: number;      // Watts
+  power_limit?: number;     // Watts
+  fan_speed?: number;       // %
+  encoder_util?: number;    // %
+  decoder_util?: number;    // %
+}
+
+interface GpuDetectionResult {
+  available: boolean;
+  vendor: GpuVendor;
+  gpus: GpuInfo[];
+  detection_method: string;
+}
+
+interface GpuHistoryData {
+  time: string;
+  utilization: number;
+  memory: number;
+  temperature?: number;
+  timestamp: number;
+}
+
+// GPU color thresholds
+const getGpuTempColor = (temp: number): string => {
+  if (temp >= 85) return 'text-red-500';
+  if (temp >= 75) return 'text-orange-500';
+  if (temp >= 60) return 'text-yellow-500';
+  return 'text-green-500';
+};
+
+const getGpuTempProgressColor = (temp: number): string => {
+  if (temp >= 85) return '[&>div]:bg-red-500';
+  if (temp >= 75) return '[&>div]:bg-orange-500';
+  if (temp >= 60) return '[&>div]:bg-yellow-500';
+  return '[&>div]:bg-green-500';
+};
+
 // Global utility functions for percentage color coding
 const getUsageColor = (usage: number): string => {
   if (usage >= 90) return 'text-red-500';
@@ -105,6 +162,13 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
   const [processToKill, setProcessToKill] = useState<Process | null>(null);
   const [processSortBy, setProcessSortBy] = useState<'cpu' | 'mem'>('cpu');
   const [disks, setDisks] = useState<DiskUsage[]>([]);
+
+  // GPU State
+  const [gpuDetection, setGpuDetection] = useState<GpuDetectionResult | null>(null);
+  const [gpuStats, setGpuStats] = useState<GpuStats[]>([]);
+  const [selectedGpuIndex, setSelectedGpuIndex] = useState<number>(0);
+  const [gpuHistory, setGpuHistory] = useState<Map<number, GpuHistoryData[]>>(new Map());
+  const [gpuDetectionDone, setGpuDetectionDone] = useState<boolean>(false);
 
   // Fetch system stats from backend
   const fetchSystemStats = async () => {
@@ -305,6 +369,104 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     
     return () => clearInterval(interval);
   }, [sessionId]);
+
+  // GPU Detection - runs once per session
+  const fetchGpuDetection = async () => {
+    if (!sessionId) return;
+    
+    try {
+      const result = await invoke<GpuDetectionResult>('detect_gpu', { sessionId });
+      setGpuDetection(result);
+      setGpuDetectionDone(true);
+      
+      if (result.available && result.gpus.length > 0) {
+        setSelectedGpuIndex(result.gpus[0].index);
+      }
+    } catch (error) {
+      console.error('Failed to detect GPU:', error);
+      setGpuDetection({
+        available: false,
+        vendor: 'unknown',
+        gpus: [],
+        detection_method: 'none'
+      });
+      setGpuDetectionDone(true);
+    }
+  };
+
+  // GPU Stats fetching
+  const fetchGpuStats = async () => {
+    if (!sessionId || !gpuDetection?.available) return;
+    
+    try {
+      const result = await invoke<{
+        success: boolean;
+        gpus: GpuStats[];
+        error?: string;
+      }>('get_gpu_stats', { sessionId });
+      
+      if (result.success && result.gpus.length > 0) {
+        setGpuStats(result.gpus);
+        
+        // Update history for each GPU
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString().slice(0, 8);
+        
+        setGpuHistory(prev => {
+          const newHistory = new Map(prev);
+          result.gpus.forEach(gpu => {
+            const history = newHistory.get(gpu.index) || [];
+            const newPoint: GpuHistoryData = {
+              time: timeStr,
+              utilization: gpu.utilization,
+              memory: gpu.memory_percent,
+              temperature: gpu.temperature,
+              timestamp: now.getTime()
+            };
+            // Keep last 60 data points (5 minutes at 5s intervals)
+            newHistory.set(gpu.index, [...history, newPoint].slice(-60));
+          });
+          return newHistory;
+        });
+      }
+    } catch (error) {
+      console.error('Failed to fetch GPU stats:', error);
+    }
+  };
+
+  // GPU detection effect - runs once per session connect
+  useEffect(() => {
+    if (!sessionId) {
+      setGpuDetection(null);
+      setGpuStats([]);
+      setGpuHistory(new Map());
+      setGpuDetectionDone(false);
+      return;
+    }
+    
+    // Reset and detect on new session
+    setGpuDetectionDone(false);
+    fetchGpuDetection();
+  }, [sessionId]);
+
+  // GPU stats polling - only if GPU detected
+  useEffect(() => {
+    if (!sessionId || !gpuDetection?.available) return;
+    
+    // Initial fetch
+    fetchGpuStats();
+    
+    // Poll every 5 seconds
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => fetchGpuStats());
+      } else {
+        fetchGpuStats();
+      }
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [sessionId, gpuDetection?.available]);
 
   const [latencyData, setLatencyData] = useState<LatencyData[]>([]);
   const [networkUsage, setNetworkUsage] = useState<NetworkUsage>({
@@ -554,6 +716,292 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
             </CardContent>
           </Card>
         </div>
+
+        {/* GPU Monitor */}
+        {gpuDetectionDone && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <Cpu className="w-3 h-3 shrink-0" />
+                <h3 className="text-xs font-medium truncate">GPU Monitor</h3>
+              </div>
+              {gpuDetection?.available && gpuDetection.gpus.length > 1 && (
+                <Select 
+                  value={selectedGpuIndex.toString()} 
+                  onValueChange={(value) => setSelectedGpuIndex(parseInt(value))}
+                >
+                  <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[120px] text-[9px] px-1.5 py-0">
+                    <SelectValue placeholder="GPU" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {gpuDetection.gpus.map(gpu => (
+                      <SelectItem key={gpu.index} value={gpu.index.toString()} className="text-[10px]">
+                        GPU {gpu.index}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            <Card>
+              <CardContent className="p-2">
+                {!gpuDetection?.available ? (
+                  <div className="text-[10px] text-muted-foreground space-y-1">
+                    <p>No GPU detected or drivers not installed.</p>
+                    <p className="text-[9px]">Supported: NVIDIA (nvidia-smi), AMD (rocm-smi/sysfs)</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {/* GPU Info Header */}
+                    {(() => {
+                      const currentGpu = gpuStats.find(g => g.index === selectedGpuIndex) || gpuStats[0];
+                      const gpuInfo = gpuDetection.gpus.find(g => g.index === selectedGpuIndex) || gpuDetection.gpus[0];
+                      
+                      if (!currentGpu) {
+                        return <div className="text-[10px] text-muted-foreground">Loading GPU stats...</div>;
+                      }
+                      
+                      return (
+                        <>
+                          {/* GPU Name & Badges */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[10px] font-medium truncate" title={currentGpu.name}>
+                              {currentGpu.name}
+                            </span>
+                            <Badge variant="outline" className="text-[8px] px-1 py-0 h-4">
+                              {currentGpu.vendor === 'nvidia' ? 'NVIDIA' : currentGpu.vendor === 'amd' ? 'AMD' : 'Unknown'}
+                            </Badge>
+                            {gpuInfo?.driver_version && (
+                              <Badge variant="secondary" className="text-[8px] px-1 py-0 h-4">
+                                {gpuInfo.driver_version}
+                              </Badge>
+                            )}
+                            {gpuInfo?.cuda_version && (
+                              <Badge variant="secondary" className="text-[8px] px-1 py-0 h-4">
+                                CUDA {gpuInfo.cuda_version}
+                              </Badge>
+                            )}
+                          </div>
+
+                          {/* GPU Utilization */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center gap-1">
+                              <span className="text-xs font-medium">GPU</span>
+                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.utilization)}`}>
+                                {currentGpu.utilization.toFixed(1)}%
+                              </span>
+                            </div>
+                            <Progress value={currentGpu.utilization} className={`h-1.5 ${getProgressColor(currentGpu.utilization)}`} />
+                          </div>
+
+                          {/* VRAM */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center gap-1">
+                              <span className="text-xs font-medium">VRAM</span>
+                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.memory_percent)}`}>
+                                {currentGpu.memory_percent.toFixed(1)}%
+                              </span>
+                            </div>
+                            <Progress value={currentGpu.memory_percent} className={`h-1.5 ${getProgressColor(currentGpu.memory_percent)}`} />
+                            <div className="text-[9px] text-muted-foreground text-right leading-tight">
+                              {currentGpu.memory_used} MiB / {currentGpu.memory_total} MiB
+                            </div>
+                          </div>
+
+                          {/* Temperature, Power, Fan in grid */}
+                          <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+                            {/* Temperature */}
+                            {currentGpu.temperature !== undefined && (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-muted-foreground">Temp</span>
+                                <span className={`font-semibold ${getGpuTempColor(currentGpu.temperature)}`}>
+                                  {currentGpu.temperature.toFixed(0)}°C
+                                </span>
+                              </div>
+                            )}
+                            
+                            {/* Power */}
+                            {currentGpu.power_draw !== undefined && (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-muted-foreground">Power</span>
+                                <span className="font-semibold">
+                                  {currentGpu.power_draw.toFixed(0)}W
+                                  {currentGpu.power_limit && (
+                                    <span className="text-muted-foreground font-normal">/{currentGpu.power_limit.toFixed(0)}W</span>
+                                  )}
+                                </span>
+                              </div>
+                            )}
+                            
+                            {/* Fan */}
+                            {currentGpu.fan_speed !== undefined && (
+                              <div className="flex flex-col gap-0.5">
+                                <span className="text-muted-foreground">Fan</span>
+                                <span className="font-semibold">{currentGpu.fan_speed.toFixed(0)}%</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Encoder/Decoder for NVIDIA */}
+                          {(currentGpu.encoder_util !== undefined || currentGpu.decoder_util !== undefined) && (
+                            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+                              {currentGpu.encoder_util !== undefined && (
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-muted-foreground">Encoder</span>
+                                  <span className={`font-semibold ${getUsageColor(currentGpu.encoder_util)}`}>
+                                    {currentGpu.encoder_util.toFixed(0)}%
+                                  </span>
+                                </div>
+                              )}
+                              {currentGpu.decoder_util !== undefined && (
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-muted-foreground">Decoder</span>
+                                  <span className={`font-semibold ${getUsageColor(currentGpu.decoder_util)}`}>
+                                    {currentGpu.decoder_util.toFixed(0)}%
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* GPU Usage History Chart */}
+                          {gpuHistory.get(selectedGpuIndex)?.length ? (
+                            <div>
+                              <div className="text-[9px] text-muted-foreground mb-1">Usage History</div>
+                              <div className="h-20 text-foreground">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <AreaChart 
+                                    data={gpuHistory.get(selectedGpuIndex) || []}
+                                    margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
+                                  >
+                                    <defs>
+                                      <linearGradient id="gpuUtilGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.3} />
+                                        <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.05} />
+                                      </linearGradient>
+                                      <linearGradient id="gpuMemGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.3} />
+                                        <stop offset="100%" stopColor="#06b6d4" stopOpacity={0.05} />
+                                      </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                                    <XAxis 
+                                      dataKey="time" 
+                                      tick={{ fontSize: 8, fill: 'currentColor' }}
+                                      stroke="hsl(var(--muted-foreground))"
+                                      strokeWidth={0.5}
+                                      interval="preserveStartEnd"
+                                      minTickGap={30}
+                                    />
+                                    <YAxis 
+                                      tick={{ fontSize: 8, fill: 'currentColor' }}
+                                      stroke="hsl(var(--muted-foreground))"
+                                      strokeWidth={0.5}
+                                      domain={[0, 100]}
+                                      ticks={[0, 50, 100]}
+                                      width={25}
+                                    />
+                                    <Tooltip 
+                                      contentStyle={{
+                                        backgroundColor: 'hsl(var(--popover))',
+                                        border: '1px solid hsl(var(--border))',
+                                        borderRadius: '6px',
+                                        fontSize: '11px'
+                                      }}
+                                      formatter={(value: any, name: string) => [
+                                        `${Number(value).toFixed(1)}%`,
+                                        name === 'utilization' ? 'GPU' : 'VRAM'
+                                      ]}
+                                    />
+                                    <Area
+                                      type="monotone"
+                                      dataKey="utilization"
+                                      stroke="#8b5cf6"
+                                      strokeWidth={2}
+                                      fill="url(#gpuUtilGradient)"
+                                      dot={false}
+                                    />
+                                    <Area
+                                      type="monotone"
+                                      dataKey="memory"
+                                      stroke="#06b6d4"
+                                      strokeWidth={2}
+                                      fill="url(#gpuMemGradient)"
+                                      dot={false}
+                                    />
+                                  </AreaChart>
+                                </ResponsiveContainer>
+                              </div>
+                              <div className="flex gap-3 justify-center mt-1">
+                                <div className="flex items-center gap-1">
+                                  <div className="w-2 h-2 rounded-full bg-[#8b5cf6]" />
+                                  <span className="text-[8px] text-muted-foreground">GPU</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <div className="w-2 h-2 rounded-full bg-[#06b6d4]" />
+                                  <span className="text-[8px] text-muted-foreground">VRAM</span>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {/* Temperature History Chart */}
+                          {gpuHistory.get(selectedGpuIndex)?.some(h => h.temperature !== undefined) && (
+                            <div>
+                              <div className="text-[9px] text-muted-foreground mb-1">Temperature History</div>
+                              <div className="h-16 text-foreground">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <LineChart 
+                                    data={gpuHistory.get(selectedGpuIndex) || []}
+                                    margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
+                                  >
+                                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                                    <XAxis 
+                                      dataKey="time" 
+                                      tick={{ fontSize: 8, fill: 'currentColor' }}
+                                      stroke="hsl(var(--muted-foreground))"
+                                      strokeWidth={0.5}
+                                      interval="preserveStartEnd"
+                                      minTickGap={30}
+                                    />
+                                    <YAxis 
+                                      tick={{ fontSize: 8, fill: 'currentColor' }}
+                                      stroke="hsl(var(--muted-foreground))"
+                                      strokeWidth={0.5}
+                                      domain={[30, 100]}
+                                      ticks={[40, 60, 80]}
+                                      width={25}
+                                    />
+                                    <Tooltip 
+                                      contentStyle={{
+                                        backgroundColor: 'hsl(var(--popover))',
+                                        border: '1px solid hsl(var(--border))',
+                                        borderRadius: '6px',
+                                        fontSize: '11px'
+                                      }}
+                                      formatter={(value: any) => [`${Number(value).toFixed(0)}°C`, 'Temp']}
+                                    />
+                                    <Line
+                                      type="monotone"
+                                      dataKey="temperature"
+                                      stroke="#f97316"
+                                      strokeWidth={2}
+                                      dot={false}
+                                    />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {/* Running Processes */}
         <div className="space-y-1.5">

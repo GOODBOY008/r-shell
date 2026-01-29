@@ -58,6 +58,8 @@ pub fn run() {
             commands::create_file,
             commands::read_file_content,
             commands::copy_file,
+            commands::detect_gpu,
+            commands::get_gpu_stats,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on ws://127.0.0.1:9001
         ])
