@@ -300,8 +300,50 @@ Add a new collapsible section in `SystemMonitor` after the "System Overview" sec
 ### Multi-GPU Support
 
 For systems with multiple GPUs, display:
-- Tabs or dropdown to switch between GPUs
-- Summary view showing all GPUs at a glance
+- Dropdown selector with "All" option at the top
+- "All" view: Compact summary cards for each GPU with combined history chart
+- Individual GPU view: Full detailed metrics with dedicated charts
+
+#### "All" GPU View Layout
+
+When "All" is selected, display compact cards for each GPU:
+
+```
+┌─────────────────────────────────────┐
+│ 🎮 GPU Monitor            [All ▼]  │
+├─────────────────────────────────────┤
+│ ┌─────────────────────────────────┐ │
+│ │ GPU 0: RTX 4090                 │ │
+│ │ GPU ████████░░ 78%  VRAM ██████░ 65% │
+│ │ 72°C  320W/450W  Fan 65%        │ │
+│ └─────────────────────────────────┘ │
+│ ┌─────────────────────────────────┐ │
+│ │ GPU 1: RTX 4090                 │ │
+│ │ GPU ██████░░░░ 55%  VRAM ████░░░ 42% │
+│ │ 68°C  280W/450W  Fan 55%        │ │
+│ └─────────────────────────────────┘ │
+│                                     │
+│ Combined Usage History              │
+│ [Multi-line chart for all GPUs]     │
+│ ─── GPU 0  ─── GPU 1               │
+└─────────────────────────────────────┘
+```
+
+#### GPU Selection Behavior
+
+| Selection | View Type | History Chart |
+|-----------|-----------|---------------|
+| "All" | Compact summary cards for each GPU | Combined multi-line chart with different colors per GPU |
+| GPU X | Full detailed view with all metrics | Single GPU area chart (current) |
+
+#### Multi-GPU Chart Colors
+
+| GPU | Color | Hex |
+|-----|-------|-----|
+| GPU 0 | Purple | #8b5cf6 |
+| GPU 1 | Cyan | #06b6d4 |
+| GPU 2 | Orange | #f97316 |
+| GPU 3 | Green | #22c55e |
 
 ### No GPU State
 

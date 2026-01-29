@@ -166,9 +166,12 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
   // GPU State
   const [gpuDetection, setGpuDetection] = useState<GpuDetectionResult | null>(null);
   const [gpuStats, setGpuStats] = useState<GpuStats[]>([]);
-  const [selectedGpuIndex, setSelectedGpuIndex] = useState<number>(0);
+  const [selectedGpuIndex, setSelectedGpuIndex] = useState<number | 'all'>('all');
   const [gpuHistory, setGpuHistory] = useState<Map<number, GpuHistoryData[]>>(new Map());
   const [gpuDetectionDone, setGpuDetectionDone] = useState<boolean>(false);
+
+  // GPU colors for multi-GPU chart
+  const GPU_COLORS = ['#8b5cf6', '#06b6d4', '#f97316', '#22c55e', '#ec4899', '#eab308'];
 
   // Fetch system stats from backend
   const fetchSystemStats = async () => {
@@ -380,7 +383,8 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
       setGpuDetectionDone(true);
       
       if (result.available && result.gpus.length > 0) {
-        setSelectedGpuIndex(result.gpus[0].index);
+        // Default to "all" for multi-GPU, or first GPU for single
+        setSelectedGpuIndex(result.gpus.length > 1 ? 'all' : result.gpus[0].index);
       }
     } catch (error) {
       console.error('Failed to detect GPU:', error);
@@ -728,12 +732,15 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
               {gpuDetection?.available && gpuDetection.gpus.length > 1 && (
                 <Select 
                   value={selectedGpuIndex.toString()} 
-                  onValueChange={(value) => setSelectedGpuIndex(parseInt(value))}
+                  onValueChange={(value) => setSelectedGpuIndex(value === 'all' ? 'all' : parseInt(value))}
                 >
                   <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[120px] text-[9px] px-1.5 py-0">
                     <SelectValue placeholder="GPU" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="all" className="text-[10px]">
+                      All
+                    </SelectItem>
                     {gpuDetection.gpus.map(gpu => (
                       <SelectItem key={gpu.index} value={gpu.index.toString()} className="text-[10px]">
                         GPU {gpu.index}
@@ -750,7 +757,136 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                     <p>No GPU detected or drivers not installed.</p>
                     <p className="text-[9px]">Supported: NVIDIA (nvidia-smi), AMD (rocm-smi/sysfs)</p>
                   </div>
+                ) : selectedGpuIndex === 'all' ? (
+                  /* "All" GPU View - Compact Summary Cards */
+                  <div className="space-y-2">
+                    {gpuStats.map((gpu, idx) => {
+                      const gpuInfo = gpuDetection.gpus.find(g => g.index === gpu.index);
+                      return (
+                        <div key={gpu.index} className="border rounded p-1.5 space-y-1">
+                          {/* GPU Name Row */}
+                          <div className="flex items-center gap-1.5">
+                            <div 
+                              className="w-2 h-2 rounded-full shrink-0" 
+                              style={{ backgroundColor: GPU_COLORS[idx % GPU_COLORS.length] }}
+                            />
+                            <span className="text-[10px] font-medium truncate">
+                              GPU {gpu.index}: {gpu.name}
+                            </span>
+                          </div>
+                          
+                          {/* Utilization & VRAM Row */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-0.5">
+                              <div className="flex justify-between text-[9px]">
+                                <span className="text-muted-foreground">GPU</span>
+                                <span className={`font-semibold ${getUsageColor(gpu.utilization)}`}>
+                                  {gpu.utilization.toFixed(0)}%
+                                </span>
+                              </div>
+                              <Progress value={gpu.utilization} className={`h-1 ${getProgressColor(gpu.utilization)}`} />
+                            </div>
+                            <div className="space-y-0.5">
+                              <div className="flex justify-between text-[9px]">
+                                <span className="text-muted-foreground">VRAM</span>
+                                <span className={`font-semibold ${getUsageColor(gpu.memory_percent)}`}>
+                                  {gpu.memory_percent.toFixed(0)}%
+                                </span>
+                              </div>
+                              <Progress value={gpu.memory_percent} className={`h-1 ${getProgressColor(gpu.memory_percent)}`} />
+                            </div>
+                          </div>
+                          
+                          {/* Stats Row */}
+                          <div className="flex gap-2 text-[9px] text-muted-foreground">
+                            {gpu.temperature !== undefined && (
+                              <span className={getGpuTempColor(gpu.temperature)}>
+                                {gpu.temperature.toFixed(0)}°C
+                              </span>
+                            )}
+                            {gpu.power_draw !== undefined && (
+                              <span>
+                                {gpu.power_draw.toFixed(0)}W
+                                {gpu.power_limit && `/${gpu.power_limit.toFixed(0)}W`}
+                              </span>
+                            )}
+                            {gpu.fan_speed !== undefined && (
+                              <span>Fan {gpu.fan_speed.toFixed(0)}%</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    
+                    {/* Combined Usage History Chart for All GPUs */}
+                    {gpuStats.length > 0 && gpuHistory.size > 0 && (
+                      <div>
+                        <div className="text-[9px] text-muted-foreground mb-1">Combined Usage History</div>
+                        <div className="h-24 text-foreground">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart margin={{ top: 5, right: 2, left: 0, bottom: 5 }}>
+                              <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                              <XAxis 
+                                dataKey="time"
+                                type="category"
+                                allowDuplicatedCategory={false}
+                                tick={{ fontSize: 8, fill: 'currentColor' }}
+                                stroke="hsl(var(--muted-foreground))"
+                                strokeWidth={0.5}
+                                interval="preserveStartEnd"
+                                minTickGap={30}
+                              />
+                              <YAxis 
+                                tick={{ fontSize: 8, fill: 'currentColor' }}
+                                stroke="hsl(var(--muted-foreground))"
+                                strokeWidth={0.5}
+                                domain={[0, 100]}
+                                ticks={[0, 50, 100]}
+                                width={25}
+                              />
+                              <Tooltip 
+                                contentStyle={{
+                                  backgroundColor: 'hsl(var(--popover))',
+                                  border: '1px solid hsl(var(--border))',
+                                  borderRadius: '6px',
+                                  fontSize: '11px'
+                                }}
+                                formatter={(value: any, name: string) => [`${Number(value).toFixed(1)}%`, name]}
+                              />
+                              {gpuStats.map((gpu, idx) => {
+                                const history = gpuHistory.get(gpu.index) || [];
+                                return (
+                                  <Line
+                                    key={gpu.index}
+                                    data={history}
+                                    dataKey="utilization"
+                                    name={`GPU ${gpu.index}`}
+                                    type="monotone"
+                                    stroke={GPU_COLORS[idx % GPU_COLORS.length]}
+                                    strokeWidth={2}
+                                    dot={false}
+                                  />
+                                );
+                              })}
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="flex gap-3 justify-center mt-1 flex-wrap">
+                          {gpuStats.map((gpu, idx) => (
+                            <div key={gpu.index} className="flex items-center gap-1">
+                              <div 
+                                className="w-2 h-2 rounded-full" 
+                                style={{ backgroundColor: GPU_COLORS[idx % GPU_COLORS.length] }}
+                              />
+                              <span className="text-[8px] text-muted-foreground">GPU {gpu.index}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 ) : (
+                  /* Single GPU Detailed View */
                   <div className="space-y-2">
                     {/* GPU Info Header */}
                     {(() => {
@@ -865,13 +1001,13 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                           )}
 
                           {/* GPU Usage History Chart */}
-                          {gpuHistory.get(selectedGpuIndex)?.length ? (
+                          {gpuHistory.get(currentGpu.index)?.length ? (
                             <div>
                               <div className="text-[9px] text-muted-foreground mb-1">Usage History</div>
                               <div className="h-20 text-foreground">
                                 <ResponsiveContainer width="100%" height="100%">
                                   <AreaChart 
-                                    data={gpuHistory.get(selectedGpuIndex) || []}
+                                    data={gpuHistory.get(currentGpu.index) || []}
                                     margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
                                   >
                                     <defs>
@@ -946,13 +1082,13 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
                           ) : null}
 
                           {/* Temperature History Chart */}
-                          {gpuHistory.get(selectedGpuIndex)?.some(h => h.temperature !== undefined) && (
+                          {gpuHistory.get(currentGpu.index)?.some(h => h.temperature !== undefined) && (
                             <div>
                               <div className="text-[9px] text-muted-foreground mb-1">Temperature History</div>
                               <div className="h-16 text-foreground">
                                 <ResponsiveContainer width="100%" height="100%">
                                   <LineChart 
-                                    data={gpuHistory.get(selectedGpuIndex) || []}
+                                    data={gpuHistory.get(currentGpu.index) || []}
                                     margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
                                   >
                                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
