@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.6.4] - 2026-01-29
+
+### Added
+
+- 🎮 **GPU Monitoring**: Full GPU detection and monitoring functionality
+  - Multi-GPU support with dropdown selection for systems with multiple GPUs
+  - Real-time GPU usage, memory, and temperature monitoring
+  - Combined usage history chart showing all GPUs together
+  - Automatic GPU detection via system commands
+
+- 🌐 **Network Interface Selection**: Enhanced network bandwidth monitoring
+  - Dropdown selection to choose specific network interfaces
+  - Monitor individual interface traffic (Wi-Fi, Ethernet, etc.)
+  - Better visibility into network activity per interface
+
+- 🔄 **Session Reconnect**: Added reconnect functionality to session tabs
+  - Quick reconnect button for disconnected sessions
+  - Reconnect count tracking to monitor connection stability
+  - Improved session recovery workflow
+
+- 📊 **Connection Status Management**: Enhanced terminal session status tracking
+  - Real-time connection status indicators
+  - Better visibility into session health
+  - Improved disconnect/reconnect handling
+
+### Fixed
+
+- 🎨 **CSS Syntax**: Corrected anchor tag styling syntax issue_
+
 ## [0.6.3] - 2026-01-23
 
 ### Added
