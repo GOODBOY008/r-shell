@@ -66,7 +66,8 @@ R-Shell is a desktop SSH client that provides a beautiful and intuitive interfac
 - **Dual-Panel View**: Side-by-side local and remote file browsing
 
 ### 📊 System Monitoring
-- **Real-Time Metrics**: Monitor CPU, memory, disk, and network usage in real-time
+- **Real-Time Metrics**: Monitor CPU, memory, GPU, disk, and network usage in real-time
+- **GPU Monitoring**: Track NVIDIA and AMD GPU utilization, memory, temperature, and power consumption
 - **Resource Visualization**: Beautiful charts and graphs using Recharts
 - **Network Monitor**: Track network traffic and connection statistics
 - **Performance Logs**: View detailed system logs and application events
