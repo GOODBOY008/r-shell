@@ -12,7 +12,9 @@ import {
   Download, 
   RefreshCw, 
   Home, 
-  ArrowUp, 
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
   MoreHorizontal,
   Trash2,
   Plus,
@@ -109,6 +111,12 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     owner: 110
   });
   const [resizingColumn, setResizingColumn] = useState<string | null>(null);
+  
+  // Sort state
+  type SortField = 'name' | 'size' | 'modified' | 'permissions' | 'owner';
+  type SortDirection = 'asc' | 'desc';
+  const [sortField, setSortField] = useState<SortField>('name');
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   
   // Drag and drop state
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -942,6 +950,49 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     file.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  // Sort files (directories first, then by selected field)
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  const sortedFiles = [...filteredFiles].sort((a, b) => {
+    // Always keep ".." at the top
+    if (a.name === '..') return -1;
+    if (b.name === '..') return 1;
+    
+    // Always keep directories before files (unless sorting by type explicitly)
+    if (a.type !== b.type) {
+      return a.type === 'directory' ? -1 : 1;
+    }
+    
+    let comparison = 0;
+    
+    switch (sortField) {
+      case 'name':
+        comparison = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        break;
+      case 'size':
+        comparison = a.size - b.size;
+        break;
+      case 'modified':
+        comparison = new Date(a.modified).getTime() - new Date(b.modified).getTime();
+        break;
+      case 'permissions':
+        comparison = a.permissions.localeCompare(b.permissions);
+        break;
+      case 'owner':
+        comparison = a.owner.localeCompare(b.owner);
+        break;
+    }
+    
+    return sortDirection === 'asc' ? comparison : -comparison;
+  });
+
   // Count actual files/folders (excluding ".." navigation entry)
   const actualItemCount = filteredFiles.filter(file => file.name !== '..').length;
 
@@ -1031,49 +1082,88 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
                 <div 
                   className="flex gap-2 px-2 py-1 text-xs font-medium text-muted-foreground border-b bg-muted/30 sticky top-0"
                 >
-                  <div className="flex items-center relative" style={{ width: `${columnWidths.name}px` }}>
+                  <div 
+                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                    style={{ width: `${columnWidths.name}px` }}
+                    onClick={() => handleSort('name')}
+                  >
                     <span>Name</span>
+                    {sortField === 'name' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
                     <div 
                       className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
                       onMouseDown={(e) => handleResizeStart('name', e)}
+                      onClick={(e) => e.stopPropagation()}
                     >
                       <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
                     </div>
                   </div>
-                  <div className="flex items-center relative" style={{ width: `${columnWidths.size}px` }}>
+                  <div 
+                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                    style={{ width: `${columnWidths.size}px` }}
+                    onClick={() => handleSort('size')}
+                  >
                     <span>Size</span>
+                    {sortField === 'size' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
                     <div 
                       className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
                       onMouseDown={(e) => handleResizeStart('size', e)}
+                      onClick={(e) => e.stopPropagation()}
                     >
                       <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
                     </div>
                   </div>
-                  <div className="flex items-center relative" style={{ width: `${columnWidths.modified}px` }}>
+                  <div 
+                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                    style={{ width: `${columnWidths.modified}px` }}
+                    onClick={() => handleSort('modified')}
+                  >
                     <span>Modified</span>
+                    {sortField === 'modified' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
                     <div 
                       className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
                       onMouseDown={(e) => handleResizeStart('modified', e)}
+                      onClick={(e) => e.stopPropagation()}
                     >
                       <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
                     </div>
                   </div>
-                  <div className="flex items-center relative" style={{ width: `${columnWidths.permissions}px` }}>
+                  <div 
+                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                    style={{ width: `${columnWidths.permissions}px` }}
+                    onClick={() => handleSort('permissions')}
+                  >
                     <span>Permissions</span>
+                    {sortField === 'permissions' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
                     <div 
                       className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
                       onMouseDown={(e) => handleResizeStart('permissions', e)}
+                      onClick={(e) => e.stopPropagation()}
                     >
                       <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
                     </div>
                   </div>
-                  <div style={{ width: `${columnWidths.owner}px` }}>
+                  <div 
+                    className="flex items-center cursor-pointer hover:text-foreground select-none" 
+                    style={{ width: `${columnWidths.owner}px` }}
+                    onClick={() => handleSort('owner')}
+                  >
                     <span>Owner</span>
+                    {sortField === 'owner' ? (
+                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
                   </div>
                 </div>
             
             {/* File Rows */}
-            {filteredFiles.map((file, index) => (
+            {sortedFiles.map((file, index) => (
               <ContextMenu key={index}>
                 <ContextMenuTrigger asChild>
                   <div
