@@ -25,6 +25,16 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/GOODBOY008/r-shell/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDEyREE0MDUyMUUzNzIzOTUKUldTVkl6Y2VVa0RhRXBTZUNuMzgrQ3ljR0hVUDRDWHd5R0dPcVQwVzlnY0pIb3pFcXV5OFJ2MlIK"
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",

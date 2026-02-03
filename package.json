@@ -41,6 +41,7 @@
     "@radix-ui/react-tooltip": "^1.1.8",
     "@tauri-apps/api": "^2.9.1",
     "@tauri-apps/plugin-opener": "^2.1",
+    "@tauri-apps/plugin-updater": "^2.1.1",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-clipboard": "^0.1.0",
     "@xterm/addon-fit": "^0.10.0",

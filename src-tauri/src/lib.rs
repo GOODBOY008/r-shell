@@ -20,6 +20,7 @@ pub fn run() {
     let session_manager = Arc::new(SessionManager::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup({
             let session_manager_clone = session_manager.clone();

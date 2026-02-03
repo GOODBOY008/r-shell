@@ -14,6 +14,7 @@ import { SFTPPanel } from './components/sftp-panel';
 import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
+import { UpdateChecker } from './components/update-checker';
 import { ActiveSessionsManager, SessionStorageManager } from './lib/session-storage';
 import { TerminalAppearanceSettings } from './lib/terminal-config';
 import { useLayout, LayoutProvider } from './lib/layout-context';
@@ -61,6 +62,7 @@ function AppContent() {
   const [sftpPanelOpen, setSftpPanelOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<SessionConfig | null>(null);
+  const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
   
   // Appearance key to trigger terminal background updates when settings change
   const [appearanceKey, setAppearanceKey] = useState(0);
@@ -926,6 +928,7 @@ function AppContent() {
 
   return (
     <div className="h-screen flex flex-col bg-background">
+      <UpdateChecker checkSignal={updateCheckSignal} />
       {/* Session Restoration Loading Overlay */}
       {isRestoring && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
@@ -1015,6 +1018,7 @@ function AppContent() {
         }}
         onOpenSettings={handleOpenSettings}
         onOpenSFTP={handleOpenSFTP}
+        onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
         hasActiveSession={!!activeTab}
         canPaste={true}
       />
