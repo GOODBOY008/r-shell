@@ -3,8 +3,12 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { SearchAddon } from '@xterm/addon-search';
 import { invoke } from '@tauri-apps/api/core';
 import { loadAppearanceSettings, getTerminalOptions } from '../lib/terminal-config';
+import { TerminalContextMenu } from './terminal/terminal-context-menu';
+import { TerminalSearchBar } from './terminal/terminal-search-bar';
+import { toast } from 'sonner';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -35,9 +39,16 @@ export function PtyTerminal({
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
+  const searchRef = React.useRef<SearchAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  
+  // Search bar state
+  const [searchVisible, setSearchVisible] = React.useState(false);
+  const [searchFocusTrigger, setSearchFocusTrigger] = React.useState(0);
+  const [hasSelection, setHasSelection] = React.useState(false);
+  
   // Track whether terminal was created with background image (determines renderer choice)
   const hadBackgroundImageRef = React.useRef<boolean | null>(null);
   // Track connection status to avoid duplicate notifications
@@ -79,9 +90,11 @@ export function PtyTerminal({
 
     const fitAddon = new FitAddon();
     const webLinks = new WebLinksAddon();
+    const searchAddon = new SearchAddon();
     
     term.loadAddon(fitAddon);
     term.loadAddon(webLinks);
+    term.loadAddon(searchAddon);
     
     term.open(terminalRef.current);
     
@@ -107,9 +120,84 @@ export function PtyTerminal({
     // Store refs
     xtermRef.current = term;
     fitRef.current = fitAddon;
+    searchRef.current = searchAddon;
 
     // Focus terminal to enable keyboard input
     term.focus();
+    
+    // Track selection changes for context menu
+    term.onSelectionChange(() => {
+      setHasSelection(term.hasSelection());
+    });
+    
+    // Custom key event handler to allow certain shortcuts to pass through to the app
+    term.attachCustomKeyEventHandler((event) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const modKey = isMac ? event.metaKey : event.ctrlKey;
+      const key = event.key.toLowerCase();
+      
+      // Handle copy shortcut
+      if (modKey && key === 'c' && term.hasSelection()) {
+        // Allow copy to happen
+        const selection = term.getSelection();
+        navigator.clipboard.writeText(selection).catch(() => {
+          console.error('Failed to copy');
+        });
+        return false;
+      }
+      
+      // Handle paste shortcut
+      if (modKey && key === 'v') {
+        event.preventDefault();
+        navigator.clipboard.readText().then((text) => {
+          const ws = wsRef.current;
+          if (ws && ws.readyState === WebSocket.OPEN && text) {
+            const encoder = new TextEncoder();
+            const dataBytes = Array.from(encoder.encode(text));
+            ws.send(JSON.stringify({
+              type: 'Input',
+              session_id: sessionId,
+              data: dataBytes,
+            }));
+          }
+        }).catch(() => {
+          console.error('Failed to paste');
+        });
+        return false;
+      }
+      
+      // Handle search shortcut
+      if (modKey && key === 'f') {
+        event.preventDefault();
+        setSearchVisible(true);
+        setSearchFocusTrigger(prev => prev + 1);
+        return false;
+      }
+      
+      // Handle select all shortcut
+      if (modKey && key === 'a') {
+        event.preventDefault();
+        term.selectAll();
+        return false;
+      }
+      
+      // Handle F3 for search navigation
+      if (event.key === 'F3') {
+        event.preventDefault();
+        const search = searchRef.current;
+        if (search) {
+          if (event.shiftKey) {
+            search.findPrevious('', { caseSensitive: false, regex: false });
+          } else {
+            search.findNext('', { caseSensitive: false, regex: false });
+          }
+        }
+        return false;
+      }
+      
+      // Let terminal handle all other keys normally
+      return true;
+    });
 
     // Welcome message
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
@@ -398,11 +486,142 @@ export function PtyTerminal({
   // and we need to switch to canvas renderer when background image is set
   }, [sessionId, sessionName, host, username, terminalKey]);
 
+  // Context menu handlers
+  const handleCopy = React.useCallback(() => {
+    const term = xtermRef.current;
+    if (term?.hasSelection()) {
+      const selection = term.getSelection();
+      navigator.clipboard.writeText(selection).then(() => {
+        toast.success('Copied to clipboard');
+      }).catch(() => {
+        toast.error('Failed to copy to clipboard');
+      });
+    }
+  }, []);
+
+  const handlePaste = React.useCallback(async () => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      toast.error('Terminal not connected');
+      return;
+    }
+    
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) {
+        // Convert string to bytes for binary data
+        const encoder = new TextEncoder();
+        const dataBytes = Array.from(encoder.encode(text));
+        
+        const inputMsg = {
+          type: 'Input',
+          session_id: sessionId,
+          data: dataBytes,
+        };
+        
+        ws.send(JSON.stringify(inputMsg));
+      }
+    } catch (error) {
+      toast.error('Failed to read from clipboard');
+    }
+  }, [sessionId]);
+
+  const handleClear = React.useCallback(() => {
+    xtermRef.current?.clear();
+  }, []);
+
+  const handleClearScrollback = React.useCallback(() => {
+    const term = xtermRef.current;
+    if (term) {
+      term.clear();
+      // Note: clearScrollback method doesn't exist in newer xterm versions
+      // clear() already clears both viewport and scrollback
+    }
+  }, []);
+
+  const handleSearch = React.useCallback(() => {
+    setSearchVisible(true);
+    setSearchFocusTrigger(prev => prev + 1);
+  }, []);
+
+  const handleFindNext = React.useCallback(() => {
+    const search = searchRef.current;
+    if (search) {
+      // Search addon will use the last search query
+      search.findNext('', { caseSensitive: false, regex: false });
+    }
+  }, []);
+
+  const handleFindPrevious = React.useCallback(() => {
+    const search = searchRef.current;
+    if (search) {
+      search.findPrevious('', { caseSensitive: false, regex: false });
+    }
+  }, []);
+
+  const handleSelectAll = React.useCallback(() => {
+    xtermRef.current?.selectAll();
+  }, []);
+
+  const handleSaveToFile = React.useCallback(async () => {
+    const term = xtermRef.current;
+    if (!term) return;
+
+    try {
+      // Get all buffer content
+      const buffer = term.buffer.active;
+      let content = '';
+      
+      for (let i = 0; i < buffer.length; i++) {
+        const line = buffer.getLine(i);
+        if (line) {
+          content += line.translateToString(true) + '\n';
+        }
+      }
+
+      // Create blob and download
+      const blob = new Blob([content], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `terminal-output-${new Date().toISOString().slice(0, 10)}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      toast.success('Terminal output saved');
+    } catch (error) {
+      toast.error('Failed to save output');
+      console.error('Save error:', error);
+    }
+  }, []);
+
   return (
+    <TerminalContextMenu
+      onCopy={handleCopy}
+      onPaste={handlePaste}
+      onClear={handleClear}
+      onClearScrollback={handleClearScrollback}
+      onSearch={handleSearch}
+      onFindNext={handleFindNext}
+      onFindPrevious={handleFindPrevious}
+      onSelectAll={handleSelectAll}
+      onSaveToFile={handleSaveToFile}
+      hasSelection={hasSelection}
+      searchActive={searchVisible}
+    >
     <div 
       ref={containerRef}
       className="relative h-full w-full terminal-no-scrollbar overflow-hidden"
-      onClick={() => xtermRef.current?.focus()}
+      onClick={(e) => {
+        // Don't refocus terminal if clicking on search bar or other interactive elements
+        const target = e.target as HTMLElement;
+        if (target.closest('[data-search-bar]')) {
+          return;
+        }
+        xtermRef.current?.focus();
+      }}
       style={{
         opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1,
       }}
@@ -422,6 +641,17 @@ export function PtyTerminal({
           }}
         />
       )}
+      
+      {/* Search bar */}
+      {searchRef.current && (
+        <TerminalSearchBar
+          searchAddon={searchRef.current}
+          visible={searchVisible}
+          focusTrigger={searchFocusTrigger}
+          onClose={() => setSearchVisible(false)}
+        />
+      )}
+      
       <div ref={terminalRef} className="h-full w-full relative z-10" />
       <style>{`
         .terminal-no-scrollbar .xterm-viewport {
@@ -462,5 +692,6 @@ export function PtyTerminal({
         ` : ''}
       `}</style>
     </div>
+    </TerminalContextMenu>
   );
 }
