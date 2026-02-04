@@ -5,7 +5,7 @@ R-Shell now includes a comprehensive layout management system similar to VS Code
 ## Features
 
 ### 🎨 Panel Management
-- **Left Sidebar** - Session Manager
+- **Left Sidebar** - Connection Manager
 - **Bottom Panel** - Integrated File Browser
 - **Right Sidebar** - System Monitor & Logs
 - **Zen Mode** - Distraction-free terminal experience
@@ -15,7 +15,7 @@ R-Shell now includes a comprehensive layout management system similar to VS Code
 #### Toolbar Buttons
 The toolbar includes dedicated buttons for layout control:
 
-- **Panel Left** - Toggle Session Manager sidebar
+- **Panel Left** - Toggle Connection Manager sidebar
 - **Panel Bottom** - Toggle File Browser panel
 - **Panel Right** - Toggle Monitor/Logs sidebar
 - **Maximize** - Toggle Zen Mode
@@ -26,11 +26,11 @@ Like VS Code, R-Shell supports keyboard shortcuts for quick layout changes:
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+B` | Toggle Session Manager (Left Sidebar) |
+| `Ctrl+B` | Toggle Connection Manager (Left Sidebar) |
 | `Ctrl+J` | Toggle File Browser (Bottom Panel) |
 | `Ctrl+M` | Toggle Monitor Panel (Right Sidebar) |
 | `Ctrl+Z` | Toggle Zen Mode |
-| `Ctrl+\` | Toggle Session Manager (Alternative) |
+| `Ctrl+\` | Toggle Connection Manager (Alternative) |
 
 ### 📐 Layout Presets
 
@@ -47,9 +47,9 @@ Access pre-configured layouts via the Layout Grid button:
    - Best for focused terminal work
 
 3. **Focus Mode**
-   - Only Session Manager + Terminal
+   - Only Connection Manager + Terminal
    - Reduced distractions
-   - Best for managing multiple sessions
+   - Best for managing multiple connections
 
 4. **Full Stack - All Panels**
    - All panels visible with larger sizes
@@ -66,7 +66,7 @@ Access pre-configured layouts via the Layout Grid button:
 - Panel sizes are automatically saved as you resize them
 - Sizes are restored when you reopen the application
 - Each panel group has its own storage key
-- Per-session terminal layouts are preserved
+- Per-connection terminal layouts are preserved
 
 ### 🔧 How It Works
 
@@ -179,4 +179,4 @@ Potential future additions:
 
 ---
 
-**Pro Tip**: Combine layout presets with session management for powerful workspace configurations!
+**Pro Tip**: Combine layout presets with connection management for powerful workspace configurations!

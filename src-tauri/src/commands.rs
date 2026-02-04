@@ -1,4 +1,4 @@
-use crate::session_manager::SessionManager;
+use crate::connection_manager::ConnectionManager;
 use crate::ssh::{AuthMethod, SshConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -6,7 +6,7 @@ use tauri::State;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectRequest {
-    pub session_id: String,
+    pub connection_id: String,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -52,7 +52,7 @@ pub struct CommandResponse {
 #[tauri::command]
 pub async fn ssh_connect(
     request: ConnectRequest,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
     let auth_method = match request.auth_method.as_str() {
         "password" => AuthMethod::Password {
@@ -72,10 +72,10 @@ pub async fn ssh_connect(
         auth_method,
     };
 
-    match state.create_session(request.session_id.clone(), config).await {
+    match state.create_connection(request.connection_id.clone(), config).await {
         Ok(_) => Ok(CommandResponse {
             success: true,
-            output: Some(format!("Connected: {}", request.session_id)),
+            output: Some(format!("Connected: {}", request.connection_id)),
             error: None,
         }),
         Err(e) => Ok(CommandResponse {
@@ -88,10 +88,10 @@ pub async fn ssh_connect(
 
 #[tauri::command]
 pub async fn ssh_cancel_connect(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
-    if state.cancel_pending_connection(&session_id).await {
+    if state.cancel_pending_connection(&connection_id).await {
         Ok(CommandResponse {
             success: true,
             output: Some("Connection cancelled".to_string()),
@@ -108,10 +108,10 @@ pub async fn ssh_cancel_connect(
 
 #[tauri::command]
 pub async fn ssh_disconnect(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
-    match state.close_session(&session_id).await {
+    match state.close_connection(&connection_id).await {
         Ok(_) => Ok(CommandResponse {
             success: true,
             output: Some("Disconnected".to_string()),
@@ -127,20 +127,20 @@ pub async fn ssh_disconnect(
 
 #[tauri::command]
 pub async fn ssh_execute_command(
-    session_id: String,
+    connection_id: String,
     command: String,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Transform interactive commands to batch mode
     let transformed_command = transform_interactive_command(&command);
-    
+
     match client.execute_command(&transformed_command).await {
         Ok(output) => Ok(CommandResponse {
             success: true,
@@ -150,13 +150,13 @@ pub async fn ssh_execute_command(
         Err(e) => {
             // Check if it's an interactive command that failed
             let error_msg = if is_interactive_command(&command) {
-                format!("{}\n\nNote: Interactive commands like '{}' may not work in this terminal. Try using batch mode alternatives.", 
-                    e, 
+                format!("{}\n\nNote: Interactive commands like '{}' may not work in this terminal. Try using batch mode alternatives.",
+                    e,
                     get_command_name(&command))
             } else {
                 e.to_string()
             };
-            
+
             Ok(CommandResponse {
                 success: false,
                 output: None,
@@ -169,17 +169,17 @@ pub async fn ssh_execute_command(
 // Helper function to transform interactive commands to batch mode
 fn transform_interactive_command(command: &str) -> String {
     let cmd = command.trim();
-    
+
     // Handle 'top' - convert to batch mode with 1 iteration
     if cmd == "top" || cmd.starts_with("top ") {
         return format!("{} -bn1", cmd);
     }
-    
+
     // Handle 'htop' - suggest alternative
     if cmd == "htop" || cmd.starts_with("htop ") {
         return "top -bn1".to_string();
     }
-    
+
     // Return original command if no transformation needed
     command.to_string()
 }
@@ -187,8 +187,8 @@ fn transform_interactive_command(command: &str) -> String {
 // Helper function to check if a command is interactive
 fn is_interactive_command(command: &str) -> bool {
     let cmd_name = get_command_name(command);
-    matches!(cmd_name.as_str(), 
-        "top" | "htop" | "vim" | "vi" | "nano" | "emacs" | 
+    matches!(cmd_name.as_str(),
+        "top" | "htop" | "vim" | "vi" | "nano" | "emacs" |
         "less" | "more" | "man" | "tmux" | "screen"
     )
 }
@@ -204,16 +204,16 @@ fn get_command_name(command: &str) -> String {
 
 #[tauri::command]
 pub async fn get_system_stats(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<SystemStats, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // CPU usage (percentage)
     let cpu_cmd = "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'";
     let cpu_percent = client
@@ -288,18 +288,18 @@ pub async fn get_system_stats(
 
 #[tauri::command]
 pub async fn list_files(
-    session_id: String,
+    connection_id: String,
     path: String,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<String, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
     let command = format!("ls -la --time-style=long-iso '{}'", path);
-    
+
     match client.execute_command(&command).await {
         Ok(output) => Ok(output),
         Err(e) => Err(e.to_string()),
@@ -308,7 +308,7 @@ pub async fn list_files(
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileTransferRequest {
-    pub session_id: String,
+    pub connection_id: String,
     pub local_path: String,
     pub remote_path: String,
     pub data: Option<Vec<u8>>, // For upload: file contents
@@ -325,15 +325,15 @@ pub struct FileTransferResponse {
 #[tauri::command]
 pub async fn sftp_download_file(
     request: FileTransferRequest,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
-    let session = state
-        .get_session(&request.session_id)
+    let connection = state
+        .get_connection(&request.connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // If local_path is empty, download to memory (for browser download)
     if request.local_path.is_empty() {
         match client.download_file_to_memory(&request.remote_path).await {
@@ -375,22 +375,22 @@ pub async fn sftp_download_file(
 #[tauri::command]
 pub async fn sftp_upload_file(
     request: FileTransferRequest,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
-    let session = state
-        .get_session(&request.session_id)
+    let connection = state
+        .get_connection(&request.connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // If data is provided, write directly; otherwise read from local_path
     let result = if let Some(data) = &request.data {
         client.upload_file_from_bytes(data, &request.remote_path).await
     } else {
         client.upload_file(&request.local_path, &request.remote_path).await
     };
-    
+
     match result {
         Ok(bytes) => Ok(FileTransferResponse {
             success: true,
@@ -410,18 +410,18 @@ pub async fn sftp_upload_file(
 // File operation commands
 #[tauri::command]
 pub async fn create_directory(
-    session_id: String,
+    connection_id: String,
     path: String,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<bool, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
     let command = format!("mkdir -p '{}'", path);
-    
+
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
         Err(e) => Err(e.to_string()),
@@ -430,23 +430,23 @@ pub async fn create_directory(
 
 #[tauri::command]
 pub async fn delete_file(
-    session_id: String,
+    connection_id: String,
     path: String,
     is_directory: bool,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<bool, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
     let command = if is_directory {
         format!("rm -rf '{}'", path)
     } else {
         format!("rm -f '{}'", path)
     };
-    
+
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
         Err(e) => Err(e.to_string()),
@@ -455,19 +455,19 @@ pub async fn delete_file(
 
 #[tauri::command]
 pub async fn rename_file(
-    session_id: String,
+    connection_id: String,
     old_path: String,
     new_path: String,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<bool, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
     let command = format!("mv '{}' '{}'", old_path, new_path);
-    
+
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
         Err(e) => Err(e.to_string()),
@@ -476,18 +476,18 @@ pub async fn rename_file(
 
 #[tauri::command]
 pub async fn create_file(
-    session_id: String,
+    connection_id: String,
     path: String,
     content: String,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<bool, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Upload the content as bytes
     match client.upload_file_from_bytes(content.as_bytes(), &path).await {
         Ok(_) => Ok(true),
@@ -497,18 +497,18 @@ pub async fn create_file(
 
 #[tauri::command]
 pub async fn read_file_content(
-    session_id: String,
+    connection_id: String,
     path: String,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<String, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
     let command = format!("cat '{}'", path);
-    
+
     match client.execute_command(&command).await {
         Ok(output) => Ok(output),
         Err(e) => Err(e.to_string()),
@@ -517,19 +517,19 @@ pub async fn read_file_content(
 
 #[tauri::command]
 pub async fn copy_file(
-    session_id: String,
+    connection_id: String,
     source_path: String,
     dest_path: String,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<bool, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
     let command = format!("cp -r '{}' '{}'", source_path, dest_path);
-    
+
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
         Err(e) => Err(e.to_string()),
@@ -554,17 +554,17 @@ pub struct ProcessListResponse {
 
 #[tauri::command]
 pub async fn get_processes(
-    session_id: String,
+    connection_id: String,
     sort_by: Option<String>,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<ProcessListResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Execute ps command to get process list
     // Using ps aux for detailed process information
     // Support sorting by cpu (default) or memory
@@ -573,11 +573,11 @@ pub async fn get_processes(
         _ => "-%cpu", // Default to CPU sorting
     };
     let command = format!("ps aux --sort={} | head -50", sort_option);
-    
+
     match client.execute_command(&command).await {
         Ok(output) => {
             let mut processes = Vec::new();
-            
+
             // Parse ps output (skip header line)
             for line in output.lines().skip(1) {
                 let parts: Vec<&str> = line.split_whitespace().collect();
@@ -591,7 +591,7 @@ pub async fn get_processes(
                     });
                 }
             }
-            
+
             Ok(ProcessListResponse {
                 success: true,
                 processes: Some(processes),
@@ -608,22 +608,22 @@ pub async fn get_processes(
 
 #[tauri::command]
 pub async fn kill_process(
-    session_id: String,
+    connection_id: String,
     pid: String,
     signal: Option<String>,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Default to SIGTERM (15), can also use SIGKILL (9)
     let sig = signal.unwrap_or_else(|| "15".to_string());
     let command = format!("kill -{} {}", sig, pid);
-    
+
     match client.execute_command(&command).await {
         Ok(output) => Ok(CommandResponse {
             success: true,
@@ -639,36 +639,36 @@ pub async fn kill_process(
 }
 
 #[tauri::command]
-pub async fn list_sessions(
-    state: State<'_, Arc<SessionManager>>,
+pub async fn list_connections(
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<Vec<String>, String> {
-    Ok(state.list_sessions().await)
+    Ok(state.list_connections().await)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TailLogRequest {
-    pub session_id: String,
+    pub connection_id: String,
     pub log_path: String,
     pub lines: Option<u32>, // Number of lines to show (default 50)
 }
 
 #[tauri::command]
 pub async fn tail_log(
-    session_id: String,
+    connection_id: String,
     log_path: String,
     lines: Option<u32>,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     let line_count = lines.unwrap_or(50);
     let command = format!("tail -n {} '{}'", line_count, log_path);
-    
+
     match client.execute_command(&command).await {
         Ok(output) => Ok(CommandResponse {
             success: true,
@@ -685,19 +685,19 @@ pub async fn tail_log(
 
 #[tauri::command]
 pub async fn list_log_files(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Common log directories
     let command = "find /var/log -type f -name '*.log' 2>/dev/null | head -50";
-    
+
     match client.execute_command(command).await {
         Ok(output) => Ok(CommandResponse {
             success: true,
@@ -731,16 +731,16 @@ pub struct NetworkStatsResponse {
 
 #[tauri::command]
 pub async fn get_network_stats(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<NetworkStatsResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Use /sys/class/net to get interface statistics
     let command = r#"
 for iface in /sys/class/net/*; do
@@ -754,16 +754,16 @@ for iface in /sys/class/net/*; do
     fi
 done
 "#;
-    
+
     match client.execute_command(command).await {
         Ok(output) => {
             let mut interfaces = Vec::new();
-            
+
             for line in output.lines() {
                 if line.trim().is_empty() {
                     continue;
                 }
-                
+
                 let parts: Vec<&str> = line.split(',').collect();
                 if parts.len() == 5 {
                     if let (Ok(rx_bytes), Ok(tx_bytes), Ok(rx_packets), Ok(tx_packets)) = (
@@ -782,7 +782,7 @@ done
                     }
                 }
             }
-            
+
             Ok(NetworkStatsResponse {
                 success: true,
                 interfaces,
@@ -816,42 +816,42 @@ pub struct ConnectionsResponse {
 
 #[tauri::command]
 pub async fn get_active_connections(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<ConnectionsResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Use ss command (modern replacement for netstat)
     // -t: TCP, -u: UDP, -n: numeric, -p: show process
     let command = "ss -tunp 2>/dev/null | tail -n +2 | head -50";
-    
+
     match client.execute_command(command).await {
         Ok(output) => {
             let mut connections = Vec::new();
-            
+
             for line in output.lines() {
                 if line.trim().is_empty() {
                     continue;
                 }
-                
+
                 // Parse ss output format: Proto Recv-Q Send-Q Local-Address:Port Peer-Address:Port Process
                 let parts: Vec<&str> = line.split_whitespace().collect();
                 if parts.len() >= 5 {
                     let protocol = parts[0].to_string();
                     let local_address = parts[4].to_string();
                     let remote_address = parts[5].to_string();
-                    let state = if parts.len() > 1 && parts[1] != "0" { 
-                        "ESTAB".to_string() 
-                    } else { 
-                        parts.get(1).unwrap_or(&"").to_string() 
+                    let state = if parts.len() > 1 && parts[1] != "0" {
+                        "ESTAB".to_string()
+                    } else {
+                        parts.get(1).unwrap_or(&"").to_string()
                     };
                     let pid_program = parts.get(6).unwrap_or(&"").to_string();
-                    
+
                     connections.push(NetworkConnection {
                         protocol,
                         local_address,
@@ -861,7 +861,7 @@ pub async fn get_active_connections(
                     });
                 }
             }
-            
+
             Ok(ConnectionsResponse {
                 success: true,
                 connections,
@@ -893,16 +893,16 @@ pub struct BandwidthResponse {
 
 #[tauri::command]
 pub async fn get_network_bandwidth(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<BandwidthResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Sample network stats twice with 1 second interval to calculate rates
     let command = r#"
 iface_list=""
@@ -925,21 +925,21 @@ for iface in $iface_list; do
     echo "$iface,$rx2,$tx2"
 done
 "#;
-    
+
     match client.execute_command(command).await {
         Ok(output) => {
             let lines: Vec<&str> = output.lines().collect();
             let mut bandwidth = Vec::new();
-            
+
             // Split into before and after measurements
             let mid = lines.len() / 2;
             let before = &lines[0..mid];
             let after = &lines[mid..];
-            
+
             for (before_line, after_line) in before.iter().zip(after.iter()) {
                 let before_parts: Vec<&str> = before_line.split(',').collect();
                 let after_parts: Vec<&str> = after_line.split(',').collect();
-                
+
                 if before_parts.len() == 3 && after_parts.len() == 3 && before_parts[0] == after_parts[0] {
                     if let (Ok(rx1), Ok(tx1), Ok(rx2), Ok(tx2)) = (
                         before_parts[1].parse::<f64>(),
@@ -950,7 +950,7 @@ done
                         // Calculate bytes per second
                         let rx_bytes_per_sec = rx2 - rx1;
                         let tx_bytes_per_sec = tx2 - tx1;
-                        
+
                         bandwidth.push(NetworkBandwidth {
                             interface: before_parts[0].to_string(),
                             rx_bytes_per_sec,
@@ -959,7 +959,7 @@ done
                     }
                 }
             }
-            
+
             Ok(BandwidthResponse {
                 success: true,
                 bandwidth,
@@ -985,27 +985,27 @@ pub struct LatencyResponse {
 
 #[tauri::command]
 pub async fn get_network_latency(
-    session_id: String,
+    connection_id: String,
     target: Option<String>,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<LatencyResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Measure SSH connection latency by timing a simple command execution
     // This gives us the round-trip time between client and remote server
     let start = std::time::Instant::now();
-    
+
     // Execute a lightweight command (echo) to measure latency
     match client.execute_command("echo ping").await {
         Ok(output) => {
             let duration = start.elapsed();
             let latency_ms = duration.as_secs_f64() * 1000.0;
-            
+
             // Verify the command executed successfully
             if output.trim() == "ping" {
                 Ok(LatencyResponse {
@@ -1051,36 +1051,36 @@ pub struct DiskUsageResponse {
 
 #[tauri::command]
 pub async fn get_disk_usage(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<DiskUsageResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
-    
+    let client = connection.read().await;
+
     // Use df command to get disk usage information
     // -h: human readable, -T: show filesystem type, exclude tmpfs and devtmpfs
     let command = "df -hT | grep -v 'tmpfs\\|devtmpfs\\|Filesystem' | awk '{print $1\"|\"$7\"|\"$3\"|\"$4\"|\"$5\"|\"$6}' | head -10";
-    
+
     match client.execute_command(command).await {
         Ok(output) => {
             let mut disks = Vec::new();
-            
+
             for line in output.lines() {
                 if line.trim().is_empty() {
                     continue;
                 }
-                
+
                 // Parse format: filesystem|mountpoint|size|used|avail|use%
                 let parts: Vec<&str> = line.split('|').collect();
                 if parts.len() == 6 {
                     // Parse usage percentage (remove % sign)
                     let usage_str = parts[5].trim_end_matches('%');
                     let usage = usage_str.parse::<u32>().unwrap_or(0);
-                    
+
                     disks.push(DiskInfo {
                         filesystem: parts[0].to_string(),
                         path: parts[1].to_string(),
@@ -1091,7 +1091,7 @@ pub async fn get_disk_usage(
                     });
                 }
             }
-            
+
             Ok(DiskUsageResponse {
                 success: true,
                 disks,
@@ -1108,7 +1108,7 @@ pub async fn get_disk_usage(
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TabCompletionRequest {
-    pub session_id: String,
+    pub connection_id: String,
     pub input: String,
     pub cursor_position: usize,
 }
@@ -1123,34 +1123,34 @@ pub struct TabCompletionResponse {
 
 #[tauri::command]
 pub async fn ssh_tab_complete(
-    session_id: String,
+    connection_id: String,
     input: String,
     cursor_position: usize,
-    state: State<'_, Arc<SessionManager>>,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<TabCompletionResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
 
     // Extract the word to complete (last word before cursor)
     let text_before_cursor = &input[..cursor_position.min(input.len())];
     let words: Vec<&str> = text_before_cursor.split_whitespace().collect();
     let word_to_complete = words.last().copied().unwrap_or("");
-    
+
     // Determine completion type
     let is_first_word = words.len() <= 1;
-    
+
     // Build completion command based on context
     let completion_cmd = if is_first_word {
         // Command completion: use compgen -c for commands
         format!("compgen -c {} 2>/dev/null || echo", word_to_complete)
     } else {
         // File/directory completion: use compgen -f for files
-        format!("compgen -f {} 2>/dev/null || ls -1ap {} 2>/dev/null | grep '^{}' || echo", 
-                word_to_complete, 
+        format!("compgen -f {} 2>/dev/null || ls -1ap {} 2>/dev/null | grep '^{}' || echo",
+                word_to_complete,
                 if word_to_complete.is_empty() { "." } else { word_to_complete },
                 word_to_complete)
     };
@@ -1267,15 +1267,15 @@ pub struct GpuStatsResponse {
 
 #[tauri::command]
 pub async fn detect_gpu(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<GpuDetectionResult, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
 
     // Check for NVIDIA GPU first (most common)
     let nvidia_check = client
@@ -1296,7 +1296,7 @@ pub async fn detect_gpu(
                     let index = parts[0].parse::<u32>().unwrap_or(0);
                     let name = parts[1].to_string();
                     let driver_version = parts.get(2).map(|s| s.to_string());
-                    
+
                     // Get CUDA version from nvidia-smi header (more reliable than query flag)
                     let cuda_version = client
                         .execute_command("nvidia-smi | sed -n 's/.*CUDA Version: \\([0-9.]*\\).*/\\1/p' | head -1")
@@ -1429,29 +1429,29 @@ pub async fn detect_gpu(
 
 #[tauri::command]
 pub async fn get_gpu_stats(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<GpuStatsResponse, String> {
-    let session = state
-        .get_session(&session_id)
+    let connection = state
+        .get_connection(&connection_id)
         .await
-        .ok_or("Session not found")?;
+        .ok_or("Connection not found")?;
 
-    let client = session.read().await;
+    let client = connection.read().await;
 
     // Try NVIDIA first
     let nvidia_cmd = "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,power.limit,fan.speed,utilization.encoder,utilization.decoder --format=csv,noheader,nounits 2>/dev/null";
-    
+
     if let Ok(output) = client.execute_command(nvidia_cmd).await {
         let output = output.trim();
         if !output.is_empty() && !output.contains("not found") && !output.contains("Failed") {
             let mut gpus = Vec::new();
-            
+
             for line in output.lines() {
                 if line.trim().is_empty() {
                     continue;
                 }
-                
+
                 let parts: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
                 if parts.len() >= 5 {
                     let index = parts[0].parse::<u32>().unwrap_or(0);
@@ -1464,7 +1464,7 @@ pub async fn get_gpu_stats(
                     } else {
                         0.0
                     };
-                    
+
                     let temperature = parts.get(5)
                         .and_then(|s| s.parse::<f64>().ok());
                     let power_draw = parts.get(6)
@@ -1508,14 +1508,14 @@ pub async fn get_gpu_stats(
 
     // Try AMD rocm-smi with JSON output
     let amd_rocm_cmd = "rocm-smi --showuse --showmeminfo vram --showtemp --showpower --showfan --json 2>/dev/null";
-    
+
     if let Ok(output) = client.execute_command(amd_rocm_cmd).await {
         let output = output.trim();
         if !output.is_empty() && output.starts_with('{') {
             // Parse JSON output from rocm-smi
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(output) {
                 let mut gpus = Vec::new();
-                
+
                 // rocm-smi JSON format varies, try to extract data
                 if let Some(obj) = json.as_object() {
                     for (key, value) in obj {
@@ -1523,38 +1523,38 @@ pub async fn get_gpu_stats(
                             let index = key.trim_start_matches("card")
                                 .parse::<u32>()
                                 .unwrap_or(0);
-                            
+
                             let utilization = value.get("GPU use (%)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok())
                                 .unwrap_or(0.0);
-                            
+
                             let memory_used = value.get("VRAM Total Used Memory (B)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .map(|b| b / (1024 * 1024)) // Convert to MiB
                                 .unwrap_or(0);
-                            
+
                             let memory_total = value.get("VRAM Total Memory (B)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .map(|b| b / (1024 * 1024))
                                 .unwrap_or(1);
-                            
+
                             let memory_percent = if memory_total > 0 {
                                 (memory_used as f64 / memory_total as f64) * 100.0
                             } else {
                                 0.0
                             };
-                            
+
                             let temperature = value.get("Temperature (Sensor edge) (C)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<f64>().ok());
-                            
+
                             let power_draw = value.get("Average Graphics Package Power (W)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<f64>().ok());
-                            
+
                             let fan_speed = value.get("Fan speed (%)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok());
@@ -1618,12 +1618,12 @@ done
         let output = output.trim();
         if !output.is_empty() {
             let mut gpus = Vec::new();
-            
+
             for line in output.lines() {
                 if line.trim().is_empty() {
                     continue;
                 }
-                
+
                 let parts: Vec<&str> = line.split('|').collect();
                 if parts.len() >= 8 {
                     let index = parts[0].parse::<u32>().unwrap_or(0);
@@ -1635,7 +1635,7 @@ done
                     } else {
                         0.0
                     };
-                    
+
                     // Temperature is in millidegrees
                     let temperature = parts[4].parse::<f64>().ok().map(|t| t / 1000.0);
                     // Power is in microwatts
@@ -1689,7 +1689,7 @@ done
 pub async fn get_websocket_port() -> Result<u16, String> {
     use crate::WEBSOCKET_PORT;
     use std::sync::atomic::Ordering;
-    
+
     let port = WEBSOCKET_PORT.load(Ordering::SeqCst);
     if port == 0 {
         Err("WebSocket server not yet started".to_string())
@@ -1698,7 +1698,7 @@ pub async fn get_websocket_port() -> Result<u16, String> {
     }
 }
 
-// ========== PTY Session ==========
+// ========== PTY Connection ==========
 // PTY terminal I/O now uses WebSocket instead of IPC for better performance
 // WebSocket server runs on a dynamically assigned port (9001-9010)
 // Use get_websocket_port() command to get the actual port

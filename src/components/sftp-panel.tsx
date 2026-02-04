@@ -41,7 +41,7 @@ import {
 interface SFTPPanelProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  sessionId?: string;
+  connectionId?: string;
   host?: string;
 }
 
@@ -69,7 +69,7 @@ interface TransferItem {
 export function SFTPPanel({
   open,
   onOpenChange,
-  sessionId,
+  connectionId,
   host,
 }: SFTPPanelProps) {
   const [currentPath, setCurrentPath] = useState("/home");
@@ -84,18 +84,18 @@ export function SFTPPanel({
 
   // Load files from remote server
   const loadRemoteFiles = async (path: string) => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     try {
       setLoading(true);
-      const result = await invoke<{ success: boolean; output?: string; error?: string }>(
+      const output = await invoke<string>(
         'list_files',
-        { sessionId: sessionId, path }
+        { connection_id: connectionId, path }
       );
       
-      if (result.success && result.output) {
+      if (output) {
         // Parse ls -la output to FileItem format
-        const lines = result.output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
+        const lines = output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
         const parsedFiles: FileItem[] = lines.map(line => {
           const parts = line.trim().split(/\s+/);
           if (parts.length < 9) return null;
@@ -145,10 +145,10 @@ export function SFTPPanel({
 
   // Load files when path changes or dialog opens
   useEffect(() => {
-    if (open && sessionId) {
+    if (open && connectionId) {
       loadRemoteFiles(currentPath);
     }
-  }, [open, sessionId, currentPath]);
+  }, [open, connectionId, currentPath]);
 
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 B";
@@ -203,7 +203,7 @@ export function SFTPPanel({
   };
 
   const handleDownload = async (file: FileItem) => {
-    if (!sessionId || file.type === "directory") return;
+    if (!connectionId || file.type === "directory") return;
     
     const transferId = `download-${Date.now()}`;
     const remotePath = `${currentPath}/${file.name}`;
@@ -227,9 +227,11 @@ export function SFTPPanel({
       const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
         'sftp_download_file',
         {
-          sessionId: sessionId,
-          remotePath: remotePath,
-          localPath: localPath
+          request: {
+            connection_id: connectionId,
+            remote_path: remotePath,
+            local_path: localPath
+          }
         }
       );
       
@@ -272,7 +274,7 @@ export function SFTPPanel({
     input.onchange = async (e) => {
       const target = e.target as HTMLInputElement;
       const files = target.files;
-      if (!files || files.length === 0 || !sessionId) return;
+      if (!files || files.length === 0 || !connectionId) return;
       
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
@@ -283,7 +285,7 @@ export function SFTPPanel({
   };
 
   const uploadFile = async (file: File) => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     const transferId = `upload-${Date.now()}-${file.name}`;
     const remotePath = `${currentPath}/${file.name}`;
@@ -309,10 +311,12 @@ export function SFTPPanel({
       const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
         'sftp_upload_file',
         {
-          sessionId: sessionId,
-          localPath: file.name, // Just the filename for display
-          remotePath: remotePath,
-          data: bytes
+          request: {
+            connection_id: connectionId,
+            local_path: file.name, // Just the filename for display
+            remote_path: remotePath,
+            data: bytes
+          }
         }
       );
       

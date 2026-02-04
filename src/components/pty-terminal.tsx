@@ -12,12 +12,12 @@ import { toast } from 'sonner';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
-  sessionId: string;
-  sessionName: string;
+  connectionId: string;
+  connectionName: string;
   host?: string;
   username?: string;
   appearanceKey?: number; // Key to force re-render when appearance changes
-  onConnectionStatusChange?: (sessionId: string, status: 'connected' | 'connecting' | 'disconnected') => void;
+  onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected') => void;
 }
 
 /**
@@ -29,8 +29,8 @@ interface PtyTerminalProps {
  * Communication is done via WebSocket for low-latency bidirectional streaming.
  */
 export function PtyTerminal({ 
-  sessionId, 
-  sessionName, 
+  connectionId,
+  connectionName,
   host = 'localhost', 
   username = 'user',
   appearanceKey = 0,
@@ -156,7 +156,7 @@ export function PtyTerminal({
             const dataBytes = Array.from(encoder.encode(text));
             ws.send(JSON.stringify({
               type: 'Input',
-              session_id: sessionId,
+              connection_id: connectionId,
               data: dataBytes,
             }));
           }
@@ -201,7 +201,7 @@ export function PtyTerminal({
 
     // Welcome message
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
-    term.writeln(`\x1b[1;36m  ${sessionName}\x1b[0m`);
+    term.writeln(`\x1b[1;36m  ${connectionName}\x1b[0m`);
     term.writeln(`\x1b[90m  ${username}@${host}\x1b[0m`);
     term.writeln(`\x1b[90m  Renderer: ${rendererRef.current.toUpperCase()}\x1b[0m`);
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
@@ -219,16 +219,16 @@ export function PtyTerminal({
           // Refit to get latest dimensions
           fitAddon.fit();
           
-          console.log(`[PTY Terminal] [${sessionId}] Current size: ${term.cols}x${term.rows}`);
+          console.log(`[PTY Terminal] [${connectionId}] Current size: ${term.cols}x${term.rows}`);
           
           // Consider terminal properly sized if it has reasonable dimensions
           // Typical minimum: 80x24, but we'll accept 40x10 as minimum
           if (term.cols >= 40 && term.rows >= 10) {
-            console.log(`[PTY Terminal] [${sessionId}] Terminal properly sized`);
+            console.log(`[PTY Terminal] [${connectionId}] Terminal properly sized`);
             resolve();
           } else {
             // Terminal still too small (probably hidden), retry after 100ms
-            console.log(`[PTY Terminal] [${sessionId}] Terminal too small, waiting...`);
+            console.log(`[PTY Terminal] [${connectionId}] Terminal too small, waiting...`);
             setTimeout(checkSize, 100);
           }
         };
@@ -246,34 +246,34 @@ export function PtyTerminal({
       // Notify parent that we're connecting
       if (connectionStatusRef.current !== 'connecting') {
         connectionStatusRef.current = 'connecting';
-        onConnectionStatusChange?.(sessionId, 'connecting');
+        onConnectionStatusChange?.(connectionId, 'connecting');
       }
       
       // Get the dynamically assigned WebSocket port from the backend
       let wsPort = 9001; // fallback default
       try {
         wsPort = await invoke<number>('get_websocket_port');
-        console.log(`[PTY Terminal] [${sessionId}] WebSocket port: ${wsPort}`);
+        console.log(`[PTY Terminal] [${connectionId}] WebSocket port: ${wsPort}`);
       } catch (e) {
-        console.warn(`[PTY Terminal] [${sessionId}] Failed to get WebSocket port, using default:`, e);
+        console.warn(`[PTY Terminal] [${connectionId}] Failed to get WebSocket port, using default:`, e);
       }
       
-      console.log(`[PTY Terminal] [${sessionId}] Connecting to WebSocket...`);
+      console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
       const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log(`[PTY Terminal] [${sessionId}] WebSocket connected`);
+        console.log(`[PTY Terminal] [${connectionId}] WebSocket connected`);
         term.writeln('\x1b[32m✓ WebSocket connected\x1b[0m');
         
         // Start PTY session
         const startMsg = {
           type: 'StartPty',
-          session_id: sessionId,
+          connection_id: connectionId,
           cols: term.cols,
           rows: term.rows,
         };
-        console.log(`[PTY Terminal] [${sessionId}] Starting PTY session with ${term.cols}x${term.rows}`);
+        console.log(`[PTY Terminal] [${connectionId}] Starting PTY connection with ${term.cols}x${term.rows}`);
         ws.send(JSON.stringify(startMsg));
       };
 
@@ -283,15 +283,15 @@ export function PtyTerminal({
           
           switch (msg.type) {
             case 'Success':
-              console.log(`[PTY Terminal] [${sessionId}]`, msg.message);
-              if (msg.message.includes('PTY session started')) {
-                term.writeln('\x1b[32m✓ PTY session started\x1b[0m');
+              console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
+              if (msg.message.includes('PTY connection started')) {
+                term.writeln('\x1b[32m✓ PTY connection started\x1b[0m');
                 term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
                 term.write('\r\n');
                 // Notify parent that connection is now established
                 if (connectionStatusRef.current !== 'connected') {
                   connectionStatusRef.current = 'connected';
-                  onConnectionStatusChange?.(sessionId, 'connected');
+                  onConnectionStatusChange?.(connectionId, 'connected');
                 }
               }
               break;
@@ -315,7 +315,7 @@ export function PtyTerminal({
                       if (ws && ws.readyState === WebSocket.OPEN) {
                         ws.send(JSON.stringify({
                           type: 'Resume',
-                          session_id: sessionId,
+                          connection_id: connectionId,
                         }));
                       }
                     }
@@ -329,7 +329,7 @@ export function PtyTerminal({
                     if (ws && ws.readyState === WebSocket.OPEN) {
                       ws.send(JSON.stringify({
                         type: 'Pause',
-                        session_id: sessionId,
+                        connection_id: connectionId,
                       }));
                     }
                   }
@@ -354,7 +354,7 @@ export function PtyTerminal({
                   errorMsgLower.includes('pty')) {
                 if (connectionStatusRef.current !== 'disconnected') {
                   connectionStatusRef.current = 'disconnected';
-                  onConnectionStatusChange?.(sessionId, 'disconnected');
+                  onConnectionStatusChange?.(connectionId, 'disconnected');
                 }
               }
               break;
@@ -373,7 +373,7 @@ export function PtyTerminal({
         // Report disconnected status on WebSocket error
         if (connectionStatusRef.current !== 'disconnected') {
           connectionStatusRef.current = 'disconnected';
-          onConnectionStatusChange?.(sessionId, 'disconnected');
+          onConnectionStatusChange?.(connectionId, 'disconnected');
         }
       };
 
@@ -383,7 +383,7 @@ export function PtyTerminal({
           // Report connecting status while attempting reconnect
           if (connectionStatusRef.current !== 'connecting') {
             connectionStatusRef.current = 'connecting';
-            onConnectionStatusChange?.(sessionId, 'connecting');
+            onConnectionStatusChange?.(connectionId, 'connecting');
           }
           term.write('\r\n\x1b[33m[Connection closed. Attempting to reconnect...]\x1b[0m\r\n');
           setTimeout(() => {
@@ -409,11 +409,11 @@ export function PtyTerminal({
       // Send as JSON message (matches server's Input message type)
       const inputMsg = {
         type: 'Input',
-        session_id: sessionId,
+        connection_id: connectionId,
         data: dataBytes,
       };
       
-      console.log(`[PTY Terminal] [${sessionId}] Sending input:`, data.length, 'chars');
+      console.log(`[PTY Terminal] [${connectionId}] Sending input:`, data.length, 'chars');
       ws.send(JSON.stringify(inputMsg));
     });
 
@@ -423,7 +423,7 @@ export function PtyTerminal({
       if (ws && ws.readyState === WebSocket.OPEN) {
         const resizeMsg = {
           type: 'Resize',
-          session_id: sessionId,
+          connection_id: connectionId,
           cols,
           rows,
         };
@@ -460,15 +460,15 @@ export function PtyTerminal({
 
     // Cleanup
     return () => {
-      console.log(`[PTY Terminal] [${sessionId}] Cleaning up`);
+      console.log(`[PTY Terminal] [${connectionId}] Cleaning up`);
       isRunning = false;
-      
-      // Close PTY session via WebSocket
+
+      // Close PTY connection via WebSocket
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         const closeMsg = {
           type: 'Close',
-          session_id: sessionId,
+          connection_id: connectionId,
         };
         ws.send(JSON.stringify(closeMsg));
         ws.close();
@@ -484,7 +484,7 @@ export function PtyTerminal({
   // Re-run when terminalKey changes (background image added/removed)
   // This is necessary because WebGL renderer doesn't support transparency
   // and we need to switch to canvas renderer when background image is set
-  }, [sessionId, sessionName, host, username, terminalKey]);
+  }, [connectionId, connectionName, host, username, terminalKey]);
 
   // Context menu handlers
   const handleCopy = React.useCallback(() => {
@@ -515,7 +515,7 @@ export function PtyTerminal({
         
         const inputMsg = {
           type: 'Input',
-          session_id: sessionId,
+          connection_id: connectionId,
           data: dataBytes,
         };
         
@@ -524,7 +524,7 @@ export function PtyTerminal({
     } catch (error) {
       toast.error('Failed to read from clipboard');
     }
-  }, [sessionId]);
+  }, [connectionId]);
 
   const handleClear = React.useCallback(() => {
     xtermRef.current?.clear();

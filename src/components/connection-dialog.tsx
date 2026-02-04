@@ -12,13 +12,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
-import { SessionStorageManager } from '../lib/session-storage';
+import { ConnectionStorageManager } from '../lib/connection-storage';
 import { toast } from 'sonner';
-import { 
-  Server, 
-  Shield, 
-  Key, 
-  Network, 
+import {
+  Server,
+  Shield,
+  Key,
+  Network,
   Terminal as TerminalIcon,
   FileText,
   Clock,
@@ -34,11 +34,11 @@ import {
 interface ConnectionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConnect: (config: SessionConfig) => void;
-  editingSession?: SessionConfig | null;
+  onConnect: (config: ConnectionConfig) => void;
+  editingConnection?: ConnectionConfig | null;
 }
 
-export interface SessionConfig {
+export interface ConnectionConfig {
   id?: string;
   name: string;
   protocol: 'SSH' | 'Telnet' | 'Raw' | 'Serial';
@@ -49,30 +49,30 @@ export interface SessionConfig {
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
-  
+
   // Advanced options
   proxyType?: 'none' | 'http' | 'socks4' | 'socks5';
   proxyHost?: string;
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
-  
+
   // SSH specific
   compression?: boolean;
   keepAlive?: boolean;
   keepAliveInterval?: number;
   serverAliveCountMax?: number;
-  
+
 
 }
 
-export function ConnectionDialog({ 
-  open, 
-  onOpenChange, 
-  onConnect, 
-  editingSession 
+export function ConnectionDialog({
+  open,
+  onOpenChange,
+  onConnect,
+  editingConnection
 }: ConnectionDialogProps) {
-  const defaultConfig: SessionConfig = {
+  const defaultConfig: ConnectionConfig = {
     name: '',
     protocol: 'SSH',
     host: '',
@@ -93,16 +93,16 @@ export function ConnectionDialog({
     serverAliveCountMax: 3
   };
 
-  const [config, setConfig] = useState<SessionConfig>(defaultConfig);
+  const [config, setConfig] = useState<ConnectionConfig>(defaultConfig);
 
   const [isConnecting, setIsConnecting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
   const [showSaveProfile, setShowSaveProfile] = useState(false);
-  const [saveAsSession, setSaveAsSession] = useState(true);
-  const [sessionFolder, setSessionFolder] = useState('All Sessions');
+  const [saveAsConnection, setSaveAsConnection] = useState(true);
+  const [connectionFolder, setConnectionFolder] = useState('All Connections');
   const [availableFolders, setAvailableFolders] = useState<string[]>([]);
-  const sessionIdRef = useRef<string | null>(null);
+  const connectionIdRef = useRef<string | null>(null);
   const cancelRequestedRef = useRef(false);
 
   // Reset connection state and load saved profiles when dialog opens/closes
@@ -110,32 +110,32 @@ export function ConnectionDialog({
     if (open) {
       // Reset connection state when dialog opens
       resetConnectionState();
-      
+
       setSavedProfiles(ConnectionProfileManager.getProfiles());
-      
+
       // Load only valid folders from connection manager (excludes orphaned/deleted folders)
-      const folders = SessionStorageManager.getValidFolders();
+      const folders = ConnectionStorageManager.getValidFolders();
       const folderPaths = folders.map(f => f.path).sort();
       setAvailableFolders(folderPaths);
-      
-      // Load editing session data into config when dialog opens
-      if (editingSession) {
+
+      // Load editing connection data into config when dialog opens
+      if (editingConnection) {
         setConfig({
           ...defaultConfig,
-          ...editingSession
+          ...editingConnection
         });
-        // When editing, don't show "save as session" since it already exists
-        setSaveAsSession(false);
+        // When editing, don't show "save as connection" since it already exists
+        setSaveAsConnection(false);
       } else {
-        // Reset to defaults for new session
+        // Reset to defaults for new connection
         setConfig(defaultConfig);
-        setSaveAsSession(true);
+        setSaveAsConnection(true);
       }
     } else {
       // Reset connection state when dialog closes
       resetConnectionState();
     }
-  }, [open, editingSession]);
+  }, [open, editingConnection]);
 
   const handleSaveProfile = () => {
     try {
@@ -188,7 +188,7 @@ export function ConnectionDialog({
   const resetConnectionState = () => {
     setIsConnecting(false);
     setIsCancelling(false);
-    sessionIdRef.current = null;
+    connectionIdRef.current = null;
     cancelRequestedRef.current = false;
   };
 
@@ -200,13 +200,13 @@ export function ConnectionDialog({
     setIsConnecting(true);
     setIsCancelling(false);
     cancelRequestedRef.current = false;
-    const sessionId = editingSession?.id || `session-${Date.now()}`;
-    sessionIdRef.current = sessionId;
-    
+    const connectionId = editingConnection?.id || `connection-${Date.now()}`;
+    connectionIdRef.current = connectionId;
+
     // Basic validation
     if (!config.name || !config.host || !config.username) {
       toast.error('Missing Required Fields', {
-        description: 'Please fill in all required fields: Session Name, Host, and Username.',
+        description: 'Please fill in all required fields: Connection Name, Host, and Username.',
       });
       resetConnectionState();
       return;
@@ -231,11 +231,11 @@ export function ConnectionDialog({
 
     try {
       // Actually connect to SSH server
-      const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+      const result = await invoke<{ success: boolean; error?: string }>(
         'ssh_connect',
         {
           request: {
-            session_id: sessionId,
+            connection_id: connectionId,
             host: config.host,
             port: config.port || 22,
             username: config.username,
@@ -248,10 +248,10 @@ export function ConnectionDialog({
       );
 
       if (result.success) {
-        // Save or update session based on whether we're editing or creating new
-        if (editingSession?.id) {
-          // Update existing session with new connection details
-          SessionStorageManager.updateSession(editingSession.id, {
+        // Save or update connection based on whether we're editing or creating new
+        if (editingConnection?.id) {
+          // Update existing connection with new connection details
+          ConnectionStorageManager.updateConnection(editingConnection.id, {
             name: config.name,
             host: config.host,
             port: config.port || 22,
@@ -263,16 +263,16 @@ export function ConnectionDialog({
             passphrase: config.passphrase,
             lastConnected: new Date().toISOString(),
           });
-        } else if (saveAsSession) {
-          // Save new session with the same ID used for the SSH connection
-          // This ensures the tab ID matches the session ID in storage
-          SessionStorageManager.saveSessionWithId(sessionId, {
+        } else if (saveAsConnection) {
+          // Save new connection with the same ID used for the SSH connection
+          // This ensures the tab ID matches the connection ID in storage
+          ConnectionStorageManager.saveConnectionWithId(connectionId, {
             name: config.name,
             host: config.host,
             port: config.port || 22,
             username: config.username,
             protocol: config.protocol,
-            folder: sessionFolder,
+            folder: connectionFolder,
             authMethod: config.authMethod,
             password: config.password,
             privateKeyPath: config.privateKeyPath,
@@ -282,12 +282,12 @@ export function ConnectionDialog({
 
         onConnect({
           ...config,
-          id: sessionId
+          id: connectionId
         });
         onOpenChange(false);
-        
-        // Reset form if creating new session
-        if (!editingSession) {
+
+        // Reset form if creating new connection
+        if (!editingConnection) {
           setConfig({
             name: '',
             protocol: 'SSH',
@@ -346,8 +346,8 @@ export function ConnectionDialog({
       return;
     }
 
-    const sessionId = sessionIdRef.current;
-    if (!sessionId) {
+    const connectionId = connectionIdRef.current;
+    if (!connectionId) {
       resetConnectionState();
       return;
     }
@@ -357,7 +357,7 @@ export function ConnectionDialog({
 
     try {
       const response = await invoke<{ success: boolean; error?: string }>('ssh_cancel_connect', {
-        sessionId
+        connection_id: connectionId
       });
       if (response.success) {
         toast.info('Connection cancelled');
@@ -373,7 +373,7 @@ export function ConnectionDialog({
     }
   };
 
-  const updateConfig = (updates: Partial<SessionConfig>) => {
+  const updateConfig = (updates: Partial<ConnectionConfig>) => {
     setConfig(prev => ({ ...prev, ...updates }));
   };
 
@@ -399,7 +399,7 @@ export function ConnectionDialog({
               <Server className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <div>{editingSession ? 'Edit Session' : 'New Session'}</div>
+              <div>{editingConnection ? 'Edit Connection' : 'New Connection'}</div>
               <DialogDescription className="mt-1">
                 Configure connection settings and authentication options
               </DialogDescription>
@@ -409,29 +409,29 @@ export function ConnectionDialog({
 
         <Tabs defaultValue="connection" className="flex-1 flex flex-col overflow-hidden">
           <TabsList className="w-full justify-start rounded-none border-b bg-transparent h-auto p-0 px-4 overflow-x-auto">
-            <TabsTrigger 
-              value="connection" 
+            <TabsTrigger
+              value="connection"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Server className="h-3.5 w-3.5" />
               <span>Connection</span>
             </TabsTrigger>
-            <TabsTrigger 
-              value="authentication" 
+            <TabsTrigger
+              value="authentication"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Shield className="h-3.5 w-3.5" />
               <span>Auth</span>
             </TabsTrigger>
-            <TabsTrigger 
-              value="proxy" 
+            <TabsTrigger
+              value="proxy"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Network className="h-3.5 w-3.5" />
               <span>Proxy</span>
             </TabsTrigger>
-            <TabsTrigger 
-              value="advanced" 
+            <TabsTrigger
+              value="advanced"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <TerminalIcon className="h-3.5 w-3.5" />
@@ -447,15 +447,15 @@ export function ConnectionDialog({
                   Basic Connection Settings
                 </CardTitle>
                 <CardDescription>
-                  Configure the basic connection parameters for your session.
+                  Configure the basic connection parameters for your connection.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="session-name">Session Name</Label>
+                    <Label htmlFor="connection-name">Connection Name</Label>
                     <Input
-                      id="session-name"
+                      id="connection-name"
                       placeholder="My Server"
                       value={config.name}
                       onChange={(e) => updateConfig({ name: e.target.value })}
@@ -463,13 +463,13 @@ export function ConnectionDialog({
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="protocol">Protocol</Label>
-                    <Select 
-                      value={config.protocol} 
-                      onValueChange={(value: SessionConfig['protocol']) => {
+                    <Select
+                      value={config.protocol}
+                      onValueChange={(value: ConnectionConfig['protocol']) => {
                         const defaultPorts = { SSH: 22, Telnet: 23, Raw: 23, Serial: 0 };
-                        updateConfig({ 
-                          protocol: value, 
-                          port: defaultPorts[value] 
+                        updateConfig({
+                          protocol: value,
+                          port: defaultPorts[value]
                         });
                       }}
                     >
@@ -534,9 +534,9 @@ export function ConnectionDialog({
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Authentication Method</Label>
-                  <Select 
-                    value={config.authMethod} 
-                    onValueChange={(value: SessionConfig['authMethod']) => updateConfig({ authMethod: value })}
+                  <Select
+                    value={config.authMethod}
+                    onValueChange={(value: ConnectionConfig['authMethod']) => updateConfig({ authMethod: value })}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -620,9 +620,9 @@ export function ConnectionDialog({
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Proxy Type</Label>
-                  <Select 
-                    value={config.proxyType} 
-                    onValueChange={(value: string) => updateConfig({ proxyType: value as SessionConfig['proxyType'] })}
+                  <Select
+                    value={config.proxyType}
+                    onValueChange={(value: string) => updateConfig({ proxyType: value as ConnectionConfig['proxyType'] })}
                   >
                     <SelectTrigger>
                       <SelectValue />
@@ -665,7 +665,6 @@ export function ConnectionDialog({
                         <Input
                           id="proxy-username"
                           placeholder="Optional"
-                          value={config.proxyUsername}
                           onChange={(e) => updateConfig({ proxyUsername: e.target.value })}
                         />
                       </div>
@@ -759,21 +758,21 @@ export function ConnectionDialog({
 
         <DialogFooter className="px-6 py-4 border-t bg-muted/30 flex-col sm:flex-col">
           <div className="flex flex-col gap-3 w-full">
-            {/* Save as Session Option - Only show for new sessions */}
-            {!editingSession && (
+            {/* Save as Connection Option - Only show for new connections */}
+            {!editingConnection && (
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Switch
-                    id="save-session"
-                    checked={saveAsSession}
-                    onCheckedChange={setSaveAsSession}
+                    id="save-connection"
+                    checked={saveAsConnection}
+                    onCheckedChange={setSaveAsConnection}
                   />
-                  <Label htmlFor="save-session" className="text-sm cursor-pointer">
-                    Save as persistent session
+                  <Label htmlFor="save-connection" className="text-sm cursor-pointer">
+                    Save as persistent connection
                   </Label>
                 </div>
-                {saveAsSession && (
-                  <Select value={sessionFolder} onValueChange={setSessionFolder}>
+                {saveAsConnection && (
+                  <Select value={connectionFolder} onValueChange={setConnectionFolder}>
                     <SelectTrigger className="w-[200px] h-8">
                       <SelectValue placeholder="Select folder" />
                     </SelectTrigger>
@@ -785,7 +784,7 @@ export function ConnectionDialog({
                           </SelectItem>
                         ))
                       ) : (
-                        <SelectItem value="All Sessions">All Sessions</SelectItem>
+                        <SelectItem value="All Connections">All Connections</SelectItem>
                       )}
                     </SelectContent>
                   </Select>
@@ -795,7 +794,7 @@ export function ConnectionDialog({
 
             {/* Action Buttons */}
             <div className="flex justify-end gap-2">
-              <Button 
+              <Button
                 variant={isConnecting ? "destructive" : "outline"}
                 onClick={handleCancelConnectionAttempt}
                 disabled={isCancelling}
@@ -803,7 +802,7 @@ export function ConnectionDialog({
                 {isConnecting ? (isCancelling ? 'Cancelling...' : 'Stop') : 'Cancel'}
               </Button>
               <Button onClick={handleConnect} disabled={isConnecting || isCancelling} className="min-w-[140px]">
-                {isConnecting ? 'Connecting...' : editingSession ? 'Update & Connect' : 'Connect'}
+                {isConnecting ? 'Connecting...' : editingConnection ? 'Update & Connect' : 'Connect'}
               </Button>
             </div>
           </div>

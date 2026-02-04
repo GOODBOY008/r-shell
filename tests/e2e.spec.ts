@@ -6,7 +6,7 @@ const TEST_USERNAME = 'testuser'; // Replace with your test username
 const TEST_PASSWORD = 'testpass'; // Replace with your test password
 
 test.describe('r-shell E2E Tests', () => {
-  test('should connect to SSH server and create session', async ({ page }) => {
+  test('should connect to SSH server and create connection', async ({ page }) => {
     // Navigate to the app
     await page.goto('http://localhost:1420');
 
@@ -31,7 +31,7 @@ test.describe('r-shell E2E Tests', () => {
     // Wait for connection to succeed and dialog to close
     await page.waitForSelector('button:has-text("Connect")', { state: 'hidden', timeout: 10000 });
 
-    // Verify session tab was created
+    // Verify connection tab was created
     await expect(page.locator('text=Test Server')).toBeVisible();
 
     // Verify terminal is visible

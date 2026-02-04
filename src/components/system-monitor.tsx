@@ -33,7 +33,7 @@ interface SystemStats {
 }
 
 interface SystemMonitorProps {
-  sessionId?: string;
+  connectionId?: string;
 }
 
 interface Process {
@@ -151,7 +151,7 @@ const getProgressColor = (usage: number): string => {
   return '[&>div]:bg-green-500';
 };
 
-export function SystemMonitor({ sessionId }: SystemMonitorProps) {
+export function SystemMonitor({ connectionId }: SystemMonitorProps) {
   const [stats, setStats] = useState<SystemStats>({
     cpu: 0,
     memory: 0,
@@ -175,7 +175,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
 
   // Fetch system stats from backend
   const fetchSystemStats = async () => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     try {
       const stats = await invoke<{
@@ -185,7 +185,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         disk: { total: string; used: string; available: string; use_percent: number };
         uptime: string;
         load_average?: string;
-      }>('get_system_stats', { sessionId });
+      }>('get_system_stats', { connectionId });
       
       // Calculate memory percentage
       const memoryPercent = stats.memory.total > 0 
@@ -215,7 +215,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
 
   // Fetch process list from backend
   const fetchProcesses = async () => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     try {
       const result = await invoke<{ 
@@ -229,7 +229,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         }>; 
         error?: string 
       }>('get_processes', { 
-        sessionId: sessionId,
+        connectionId,
         sortBy: processSortBy
       });
       
@@ -251,7 +251,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
 
   // Kill a process
   const handleKillProcess = async (process: Process) => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     try {
       const result = await invoke<{ 
@@ -259,9 +259,9 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
         output?: string; 
         error?: string 
       }>('kill_process', { 
-        sessionId: sessionId, 
-        pid: process.pid,
-        signal: 15 // SIGTERM
+        connectionId, 
+        pid: process.pid.toString(),
+        signal: '15' // SIGTERM
       });
       
       if (result.success) {
@@ -282,8 +282,8 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
   // Poll system stats every 3 seconds
   // OPTIMIZATION: Use longer intervals to reduce load on terminal
   useEffect(() => {
-    if (!sessionId) {
-      // Clear data when no session
+    if (!connectionId) {
+      // Clear data when no connection
       setStats({
         cpu: 0,
         memory: 0,
@@ -294,7 +294,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
       return;
     }
     
-    // Fetch immediately when session changes
+    // Fetch immediately when connection changes
     fetchSystemStats();
     fetchProcesses();
     
@@ -321,11 +321,11 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
       clearInterval(statsInterval);
       clearInterval(processInterval);
     };
-  }, [sessionId, processSortBy]); // Re-run when sessionId or sort changes
+  }, [connectionId, processSortBy]); // Re-run when connectionId or sort changes
 
   // Fetch disk usage data
   const fetchDiskUsage = async () => {
-    if (!sessionId) {
+    if (!connectionId) {
       setDisks([]);
       return;
     }
@@ -342,7 +342,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
           usage: number;
         }>;
         error?: string;
-      }>('get_disk_usage', { sessionId });
+      }>('get_disk_usage', { connectionId });
 
       if (result.success) {
         setDisks(result.disks);
@@ -354,10 +354,10 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     }
   };
 
-  // Fetch disk usage on mount and when session changes
+  // Fetch disk usage on mount and when connection changes
   // OPTIMIZED: Much longer interval - disk usage rarely changes
   useEffect(() => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     fetchDiskUsage();
     
@@ -371,14 +371,14 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     }, 60000);
     
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [connectionId]);
 
-  // GPU Detection - runs once per session
+  // GPU Detection - runs once per connection
   const fetchGpuDetection = async () => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     try {
-      const result = await invoke<GpuDetectionResult>('detect_gpu', { sessionId });
+      const result = await invoke<GpuDetectionResult>('detect_gpu', { connectionId });
       setGpuDetection(result);
       setGpuDetectionDone(true);
       
@@ -400,14 +400,14 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
 
   // GPU Stats fetching
   const fetchGpuStats = async () => {
-    if (!sessionId || !gpuDetection?.available) return;
+    if (!connectionId || !gpuDetection?.available) return;
     
     try {
       const result = await invoke<{
         success: boolean;
         gpus: GpuStats[];
         error?: string;
-      }>('get_gpu_stats', { sessionId });
+      }>('get_gpu_stats', { connectionId });
       
       if (result.success && result.gpus.length > 0) {
         setGpuStats(result.gpus);
@@ -438,9 +438,9 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     }
   };
 
-  // GPU detection effect - runs once per session connect
+  // GPU detection effect - runs once per connection connect
   useEffect(() => {
-    if (!sessionId) {
+    if (!connectionId) {
       setGpuDetection(null);
       setGpuStats([]);
       setGpuHistory(new Map());
@@ -448,14 +448,14 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
       return;
     }
     
-    // Reset and detect on new session
+    // Reset and detect on new connection
     setGpuDetectionDone(false);
     fetchGpuDetection();
-  }, [sessionId]);
+  }, [connectionId]);
 
   // GPU stats polling - only if GPU detected
   useEffect(() => {
-    if (!sessionId || !gpuDetection?.available) return;
+    if (!connectionId || !gpuDetection?.available) return;
     
     // Initial fetch
     fetchGpuStats();
@@ -470,7 +470,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     }, 5000);
     
     return () => clearInterval(interval);
-  }, [sessionId, gpuDetection?.available]);
+  }, [connectionId, gpuDetection?.available]);
 
   const [latencyData, setLatencyData] = useState<LatencyData[]>([]);
   const [networkUsage, setNetworkUsage] = useState<NetworkUsage>({
@@ -487,7 +487,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
   // Network usage monitoring - fetch real bandwidth data
   // OPTIMIZED: Use longer interval and request idle callback
   useEffect(() => {
-    if (!sessionId) {
+    if (!connectionId) {
       setNetworkHistory([]);
       setNetworkInterfaces([]);
       setSelectedInterface('all');
@@ -505,7 +505,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
             tx_bytes_per_sec: number;
           }>;
           error?: string;
-        }>('get_network_bandwidth', { sessionId });
+        }>('get_network_bandwidth', { connectionId });
 
         if (result.success && result.bandwidth.length > 0) {
           // Update interface list and bandwidth map
@@ -607,12 +607,12 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [sessionId, selectedInterface]);
+  }, [connectionId, selectedInterface]);
 
   // Network latency monitoring - fetch real ping data
   // OPTIMIZED: Longer interval, use idle callback
   useEffect(() => {
-    if (!sessionId) {
+    if (!connectionId) {
       setLatencyData([]);
       return;
     }
@@ -624,7 +624,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
           latency_ms?: number;
           error?: string;
         }>('get_network_latency', { 
-          sessionId,
+          connectionId,
           target: '8.8.8.8' // Ping Google DNS
         });
 
@@ -660,7 +660,7 @@ export function SystemMonitor({ sessionId }: SystemMonitorProps) {
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [sessionId]);
+  }, [connectionId]);
 
 
 

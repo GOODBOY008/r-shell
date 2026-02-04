@@ -4,7 +4,7 @@ import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 
 interface StatusBarProps {
-  activeSession?: {
+  activeConnection?: {
     name: string;
     protocol: string;
     host?: string;
@@ -12,31 +12,31 @@ interface StatusBarProps {
   };
 }
 
-export function StatusBar({ activeSession }: StatusBarProps) {
+export function StatusBar({ activeConnection }: StatusBarProps) {
   return (
     <div className="bg-muted border-t border-border px-4 py-1 flex items-center justify-between text-sm">
       <div className="flex items-center gap-4">
-        {activeSession && (
+        {activeConnection && (
           <>
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${
-                activeSession.status === 'connected' ? 'bg-green-500' :
-                activeSession.status === 'connecting' ? 'bg-yellow-500' :
+                activeConnection.status === 'connected' ? 'bg-green-500' :
+                activeConnection.status === 'connecting' ? 'bg-yellow-500' :
                 'bg-red-500'
               }`} />
-              <span>{activeSession.name}</span>
+              <span>{activeConnection.name}</span>
             </div>
-            
+
             <Separator orientation="vertical" className="h-4" />
-            
+
             <Badge variant="outline" className="text-xs">
-              {activeSession.protocol}
+              {activeConnection.protocol}
             </Badge>
-            
-            {activeSession.host && (
+
+            {activeConnection.host && (
               <>
                 <Separator orientation="vertical" className="h-4" />
-                <span className="text-muted-foreground">{activeSession.host}</span>
+                <span className="text-muted-foreground">{activeConnection.host}</span>
               </>
             )}
           </>

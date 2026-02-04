@@ -30,10 +30,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 // }
 
 interface NetworkMonitorProps {
-  sessionId: string | null;
+  connectionId: string | null;
 }
 
-export function NetworkMonitor({ sessionId }: NetworkMonitorProps) {
+export function NetworkMonitor({ connectionId }: NetworkMonitorProps) {
   // Disabled for now - will be re-enabled in future updates
   // const [interfaces, setInterfaces] = useState<NetworkInterface[]>([]);
   // const [connections, setConnections] = useState<NetworkConnection[]>([]);
@@ -49,7 +49,7 @@ export function NetworkMonitor({ sessionId }: NetworkMonitorProps) {
   // };
 
   // const fetchNetworkStats = async () => {
-  //   if (!sessionId) {
+  //   if (!connectionId) {
   //     setInterfaces([]);
   //     setConnections([]);
   //     return;
@@ -61,7 +61,7 @@ export function NetworkMonitor({ sessionId }: NetworkMonitorProps) {
 
   //     // Fetch network interface stats
   //     const statsResponse = await invoke<NetworkStatsResponse>('get_network_stats', {
-  //       sessionId,
+  //       connectionId,
   //     });
 
   //     if (statsResponse.success) {
@@ -72,7 +72,7 @@ export function NetworkMonitor({ sessionId }: NetworkMonitorProps) {
 
   //     // Fetch active connections
   //     const connectionsResponse = await invoke<ConnectionsResponse>('get_active_connections', {
-  //       sessionId,
+  //       connectionId,
   //     });
 
   //     if (connectionsResponse.success) {
@@ -100,12 +100,12 @@ export function NetworkMonitor({ sessionId }: NetworkMonitorProps) {
   //   }, 5000);
 
   //   return () => clearInterval(interval);
-  // }, [sessionId]);
+  // }, [connectionId]);
 
-  if (!sessionId) {
+  if (!connectionId) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
-        <p>No active session. Connect to view network statistics.</p>
+        <p>No active connection. Connect to view network statistics.</p>
       </div>
     );
   }

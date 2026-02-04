@@ -1,9 +1,9 @@
 mod ssh;
-mod session_manager;
+mod connection_manager;
 mod commands;
 mod websocket_server;
 
-use session_manager::SessionManager;
+use connection_manager::ConnectionManager;
 use websocket_server::WebSocketServer;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU16;
@@ -16,18 +16,18 @@ pub fn run() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Create session manager
-    let session_manager = Arc::new(SessionManager::new());
+    // Create connection manager
+    let connection_manager = Arc::new(ConnectionManager::new());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup({
-            let session_manager_clone = session_manager.clone();
+            let connection_manager_clone = connection_manager.clone();
             move |_app| {
                 // Start WebSocket server for terminal I/O
                 // Try ports 9001-9010 to avoid conflicts with other instances
-                let ws_server = Arc::new(WebSocketServer::new(session_manager_clone));
+                let ws_server = Arc::new(WebSocketServer::new(connection_manager_clone));
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = ws_server.start().await {
                         tracing::error!("WebSocket server error: {}", e);
@@ -36,7 +36,7 @@ pub fn run() {
                 Ok(())
             }
         })
-        .manage(session_manager)
+        .manage(connection_manager)
         .invoke_handler(tauri::generate_handler![
             commands::ssh_connect,
             commands::ssh_cancel_connect,
@@ -45,7 +45,7 @@ pub fn run() {
             commands::ssh_tab_complete,
             commands::get_system_stats,
             commands::list_files,
-            commands::list_sessions,
+            commands::list_connections,
             commands::sftp_download_file,
             commands::sftp_upload_file,
             commands::get_processes,

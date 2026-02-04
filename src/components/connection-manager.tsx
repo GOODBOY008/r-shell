@@ -23,7 +23,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
-import { SessionStorageManager } from '../lib/session-storage';
+import { ConnectionStorageManager } from '../lib/connection-storage';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -33,10 +33,10 @@ import {
 } from './ui/context-menu';
 import { toast } from 'sonner';
 
-interface SessionNode {
+interface ConnectionNode {
   id: string;
   name: string;
-  type: 'folder' | 'session';
+  type: 'folder' | 'connection';
   path?: string; // For folders
   protocol?: string;
   host?: string;
@@ -45,39 +45,39 @@ interface SessionNode {
   profileId?: string;
   lastConnected?: string;
   isConnected?: boolean;
-  children?: SessionNode[];
+  children?: ConnectionNode[];
   isExpanded?: boolean;
 }
 
 interface ConnectionManagerProps {
-  onSessionSelect: (session: SessionNode) => void;
-  onSessionConnect?: (session: SessionNode) => void; // Connect to session (double-click or context menu)
-  selectedSessionId: string | null;
-  activeSessions?: Set<string>; // Set of currently active session IDs
+  onConnectionSelect: (connection: ConnectionNode) => void;
+  onConnectionConnect?: (connection: ConnectionNode) => void; // Connect to connection (double-click or context menu)
+  selectedConnectionId: string | null;
+  activeConnections?: Set<string>; // Set of currently active connection IDs
   onNewConnection?: () => void; // Callback to open connection dialog
-  onEditSession?: (session: SessionNode) => void; // Callback to edit session
-  onDeleteSession?: (sessionId: string) => void; // Callback to delete session
-  onDuplicateSession?: (session: SessionNode) => void; // Callback to duplicate session
+  onEditConnection?: (connection: ConnectionNode) => void; // Callback to edit connection
+  onDeleteConnection?: (connectionId: string) => void; // Callback to delete connection
+  onDuplicateConnection?: (connection: ConnectionNode) => void; // Callback to duplicate connection
 }
 
-export function ConnectionManager({ 
-  onSessionSelect, 
-  onSessionConnect,
-  selectedSessionId, 
-  activeSessions = new Set(), 
+export function ConnectionManager({
+  onConnectionSelect,
+  onConnectionConnect,
+  selectedConnectionId,
+  activeConnections = new Set(),
   onNewConnection,
-  onEditSession,
-  onDeleteSession,
-  onDuplicateSession
+  onEditConnection,
+  onDeleteConnection,
+  onDuplicateConnection
 }: ConnectionManagerProps) {
-  // Load sessions from storage
-  const loadSessions = (): SessionNode[] => {
-    const tree = SessionStorageManager.buildSessionTree(activeSessions);
+  // Load connections from storage
+  const loadConnections = (): ConnectionNode[] => {
+    const tree = ConnectionStorageManager.buildConnectionTree(activeConnections);
     return tree.length > 0 ? tree : [];
   };
 
-  const [sessions, setSessions] = useState<SessionNode[]>(loadSessions());
-  
+  const [connections, setConnections] = useState<ConnectionNode[]>(loadConnections());
+
   // Folder management state
   const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
@@ -87,66 +87,66 @@ export function ConnectionManager({
   const [renameFolderDialogOpen, setRenameFolderDialogOpen] = useState(false);
   const [folderToRename, setFolderToRename] = useState<{ path: string; name: string; parentPath?: string } | null>(null);
   const [renameFolderNewName, setRenameFolderNewName] = useState('');
-  
+
   // Drag and drop state
-  const [draggedItem, setDraggedItem] = useState<{ node: SessionNode; type: 'session' | 'folder' } | null>(null);
+  const [draggedItem, setDraggedItem] = useState<{ node: ConnectionNode; type: 'connection' | 'folder' } | null>(null);
 
-  // Reload sessions when active sessions change
+  // Reload connections when active connections change
   useEffect(() => {
-    setSessions(loadSessions());
-  }, [activeSessions]);
+    setConnections(loadConnections());
+  }, [activeConnections]);
 
-  // Handle session deletion
-  const handleDelete = (sessionId: string) => {
-    if (SessionStorageManager.deleteSession(sessionId)) {
-      setSessions(loadSessions());
-      toast.success('Session deleted');
-      if (onDeleteSession) {
-        onDeleteSession(sessionId);
+  // Handle connection deletion
+  const handleDelete = (connectionId: string) => {
+    if (ConnectionStorageManager.deleteConnection(connectionId)) {
+      setConnections(loadConnections());
+      toast.success('Connection deleted');
+      if (onDeleteConnection) {
+        onDeleteConnection(connectionId);
       }
     } else {
-      toast.error('Failed to delete session');
+      toast.error('Failed to delete connection');
     }
   };
 
-  // Handle session duplication
-  const handleDuplicate = (node: SessionNode) => {
-    if (node.type === 'session' && node.host) {
-      // Load the full session data to get authentication credentials
-      const sessionData = SessionStorageManager.getSession(node.id);
-      if (sessionData) {
-        const duplicated = SessionStorageManager.saveSession({
+  // Handle connection duplication
+  const handleDuplicate = (node: ConnectionNode) => {
+    if (node.type === 'connection' && node.host) {
+      // Load the full connection data to get authentication credentials
+      const connectionData = ConnectionStorageManager.getConnection(node.id);
+      if (connectionData) {
+        const duplicated = ConnectionStorageManager.saveConnection({
           name: `${node.name} (Copy)`,
           host: node.host,
           port: node.port || 22,
           username: node.username || '',
           protocol: node.protocol || 'SSH',
-          folder: sessionData.folder || 'All Sessions',
+          folder: connectionData.folder || 'All Connections',
           // Copy authentication credentials
-          authMethod: sessionData.authMethod,
-          password: sessionData.password,
-          privateKeyPath: sessionData.privateKeyPath,
-          passphrase: sessionData.passphrase,
+          authMethod: connectionData.authMethod,
+          password: connectionData.password,
+          privateKeyPath: connectionData.privateKeyPath,
+          passphrase: connectionData.passphrase,
         });
-        setSessions(loadSessions());
+        setConnections(loadConnections());
         toast.success(`Duplicated: ${duplicated.name}`);
-        if (onDuplicateSession) {
-          onDuplicateSession(node);
+        if (onDuplicateConnection) {
+          onDuplicateConnection(node);
         }
       }
     }
   };
-  
+
   // Handle creating new folder
   const handleCreateFolder = () => {
     if (!newFolderName.trim()) {
       toast.error('Folder name cannot be empty');
       return;
     }
-    
+
     try {
-      SessionStorageManager.createFolder(newFolderName.trim(), newFolderParentPath);
-      setSessions(loadSessions());
+      ConnectionStorageManager.createFolder(newFolderName.trim(), newFolderParentPath);
+      setConnections(loadConnections());
       toast.success(`Folder "${newFolderName}" created`);
       setNewFolderDialogOpen(false);
       setNewFolderName('');
@@ -155,13 +155,13 @@ export function ConnectionManager({
       toast.error('Failed to create folder');
     }
   };
-  
+
   // Handle deleting folder
   const handleDeleteFolder = () => {
     if (!folderToDelete) return;
-    
-    if (SessionStorageManager.deleteFolder(folderToDelete.path, true)) {
-      setSessions(loadSessions());
+
+    if (ConnectionStorageManager.deleteFolder(folderToDelete.path, true)) {
+      setConnections(loadConnections());
       toast.success(`Folder "${folderToDelete.name}" deleted`);
       setDeleteFolderDialogOpen(false);
       setFolderToDelete(null);
@@ -169,67 +169,67 @@ export function ConnectionManager({
       toast.error('Failed to delete folder');
     }
   };
-  
+
   // Open new folder dialog
   const openNewFolderDialog = (parentPath?: string) => {
     setNewFolderParentPath(parentPath);
     setNewFolderDialogOpen(true);
   };
-  
+
   // Handle renaming folder
   const handleRenameFolder = () => {
     if (!folderToRename || !renameFolderNewName.trim()) {
       toast.error('Folder name cannot be empty');
       return;
     }
-    
+
     try {
       const oldPath = folderToRename.path;
       const newName = renameFolderNewName.trim();
-      const newPath = folderToRename.parentPath 
+      const newPath = folderToRename.parentPath
         ? `${folderToRename.parentPath}/${newName}`
         : newName;
-      
-      // Get all sessions in this folder and subfolders
-      const allSessions = SessionStorageManager.getSessionsByFolderRecursive(oldPath);
-      
+
+      // Get all connections in this folder and subfolders
+      const allConnections = ConnectionStorageManager.getConnectionsByFolderRecursive(oldPath);
+
       // Get all subfolders
-      const subfolders = SessionStorageManager.getSubfoldersRecursive(oldPath);
-      
+      const subfolders = ConnectionStorageManager.getSubfoldersRecursive(oldPath);
+
       // Create new folder first
-      SessionStorageManager.createFolder(newName, folderToRename.parentPath);
-      
+      ConnectionStorageManager.createFolder(newName, folderToRename.parentPath);
+
       // Recreate all subfolders with new parent path
       subfolders.forEach(subfolder => {
         const relativePath = subfolder.path.substring(oldPath.length + 1); // Remove old parent path
         const newSubfolderPath = `${newPath}/${relativePath}`;
         const parts = relativePath.split('/');
         const subfolderName = parts[parts.length - 1];
-        const subfolderParentPath = parts.length > 1 
+        const subfolderParentPath = parts.length > 1
           ? `${newPath}/${parts.slice(0, -1).join('/')}`
           : newPath;
-        
-        SessionStorageManager.createFolder(subfolderName, subfolderParentPath);
+
+        ConnectionStorageManager.createFolder(subfolderName, subfolderParentPath);
       });
-      
-      // Move all sessions to new paths
-      allSessions.forEach(session => {
-        let newSessionPath: string;
-        if (session.folder === oldPath) {
-          // Session directly in the renamed folder
-          newSessionPath = newPath;
+
+      // Move all connections to new paths
+      allConnections.forEach(connection => {
+        let newConnectionPath: string;
+        if (connection.folder === oldPath) {
+          // Connection directly in the renamed folder
+          newConnectionPath = newPath;
         } else {
-          // Session in a subfolder - update the path
-          const relativePath = session.folder!.substring(oldPath.length + 1);
-          newSessionPath = `${newPath}/${relativePath}`;
+          // Connection in a subfolder - update the path
+          const relativePath = connection.folder!.substring(oldPath.length + 1);
+          newConnectionPath = `${newPath}/${relativePath}`;
         }
-        SessionStorageManager.moveSession(session.id, newSessionPath);
+        ConnectionStorageManager.moveConnection(connection.id, newConnectionPath);
       });
-      
+
       // Delete old folder and all subfolders
-      SessionStorageManager.deleteFolder(oldPath, true);
-      
-      setSessions(loadSessions());
+      ConnectionStorageManager.deleteFolder(oldPath, true);
+
+      setConnections(loadConnections());
       toast.success(`Folder renamed to "${newName}"`);
       setRenameFolderDialogOpen(false);
       setFolderToRename(null);
@@ -241,75 +241,75 @@ export function ConnectionManager({
       });
     }
   };
-  
+
   // Open rename folder dialog
   const openRenameFolderDialog = (path: string, name: string, parentPath?: string) => {
     setFolderToRename({ path, name, parentPath });
     setRenameFolderNewName(name);
     setRenameFolderDialogOpen(true);
   };
-  
+
   // Open delete folder dialog
   const openDeleteFolderDialog = (path: string, name: string) => {
     setFolderToDelete({ path, name });
     setDeleteFolderDialogOpen(true);
   };
-  
+
   // Drag and drop handlers
-  const handleDragStart = (e: React.DragEvent, node: SessionNode) => {
+  const handleDragStart = (e: React.DragEvent, node: ConnectionNode) => {
     setDraggedItem({ node, type: node.type });
     e.dataTransfer.effectAllowed = 'move';
   };
-  
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
   };
-  
-  const handleDrop = (e: React.DragEvent, targetNode: SessionNode) => {
+
+  const handleDrop = (e: React.DragEvent, targetNode: ConnectionNode) => {
     e.preventDefault();
     e.stopPropagation();
-    
+
     if (!draggedItem) return;
-    
+
     // Can only drop into folders
     if (targetNode.type !== 'folder') return;
-    
+
     // Don't drop into itself
     if (draggedItem.node.id === targetNode.id) return;
-    
+
     // Don't drop folder into its own child
     if (draggedItem.type === 'folder' && targetNode.path?.startsWith(draggedItem.node.path + '/')) {
       toast.error('Cannot move folder into its own subfolder');
       return;
     }
-    
-    if (draggedItem.type === 'session') {
-      // Move session to target folder
-      if (SessionStorageManager.moveSession(draggedItem.node.id, targetNode.path!)) {
-        setSessions(loadSessions());
+
+    if (draggedItem.type === 'connection') {
+      // Move connection to target folder
+      if (ConnectionStorageManager.moveConnection(draggedItem.node.id, targetNode.path!)) {
+        setConnections(loadConnections());
         toast.success(`Moved "${draggedItem.node.name}" to "${targetNode.name}"`);
       } else {
-        toast.error('Failed to move session');
+        toast.error('Failed to move connection');
       }
     } else if (draggedItem.type === 'folder') {
       // Move folder by renaming its path
       try {
-        const sessions = SessionStorageManager.getSessionsByFolder(draggedItem.node.path!);
+        const connections = ConnectionStorageManager.getConnectionsByFolder(draggedItem.node.path!);
         const newPath = `${targetNode.path}/${draggedItem.node.name}`;
-        
+
         // Create new folder
-        SessionStorageManager.createFolder(draggedItem.node.name, targetNode.path);
-        
-        // Move all sessions
-        sessions.forEach(session => {
-          SessionStorageManager.moveSession(session.id, newPath);
+        ConnectionStorageManager.createFolder(draggedItem.node.name, targetNode.path);
+
+        // Move all connections
+        connections.forEach(connection => {
+          ConnectionStorageManager.moveConnection(connection.id, newPath);
         });
-        
+
         // Delete old folder
-        SessionStorageManager.deleteFolder(draggedItem.node.path!, false);
-        
-        setSessions(loadSessions());
+        ConnectionStorageManager.deleteFolder(draggedItem.node.path!, false);
+
+        setConnections(loadConnections());
         toast.success(`Moved folder "${draggedItem.node.name}" to "${targetNode.name}"`);
       } catch (error) {
         toast.error('Failed to Move Folder', {
@@ -317,32 +317,32 @@ export function ConnectionManager({
         });
       }
     }
-    
+
     setDraggedItem(null);
   };
-  
+
   const handleDragEnd = () => {
     setDraggedItem(null);
   };
-  
-  // Find the selected session details
-  const getSelectedSession = (nodes: SessionNode[]): SessionNode | null => {
+
+  // Find the selected connection details
+  const getSelectedConnection = (nodes: ConnectionNode[]): ConnectionNode | null => {
     for (const node of nodes) {
-      if (node.id === selectedSessionId) {
+      if (node.id === selectedConnectionId) {
         return node;
       }
       if (node.children) {
-        const found = getSelectedSession(node.children);
+        const found = getSelectedConnection(node.children);
         if (found) return found;
       }
     }
     return null;
   };
-  
-  const selectedSession = getSelectedSession(sessions);
+
+  const selectedConnection = getSelectedConnection(connections);
 
   const toggleExpanded = (nodeId: string) => {
-    const updateNode = (nodes: SessionNode[]): SessionNode[] => {
+    const updateNode = (nodes: ConnectionNode[]): ConnectionNode[] => {
       return nodes.map(node => {
         if (node.id === nodeId) {
           return { ...node, isExpanded: !node.isExpanded };
@@ -353,14 +353,14 @@ export function ConnectionManager({
         return node;
       });
     };
-    setSessions(updateNode(sessions));
+    setConnections(updateNode(connections));
   };
 
-  const getIcon = (node: SessionNode) => {
+  const getIcon = (node: ConnectionNode) => {
     if (node.type === 'folder') {
       return node.isExpanded ? <FolderOpen className="w-4 h-4" /> : <Folder className="w-4 h-4" />;
     }
-    
+
     switch (node.protocol) {
       case 'SSH':
         return <Server className="w-4 h-4 text-green-500" />;
@@ -375,15 +375,15 @@ export function ConnectionManager({
     }
   };
 
-  const renderNode = (node: SessionNode, level: number = 0) => {
-    const isSelected = selectedSessionId === node.id;
-    const isConnected = node.type === 'session' && node.isConnected;
+  const renderNode = (node: ConnectionNode, level: number = 0) => {
+    const isSelected = selectedConnectionId === node.id;
+    const isConnected = node.type === 'connection' && node.isConnected;
     const isDragging = draggedItem?.node.id === node.id;
-    
+
     const handleNodeClick = () => {
       // Always select the node first
-      onSessionSelect(node);
-      
+      onConnectionSelect(node);
+
       // Then toggle folder expansion if it's a folder
       if (node.type === 'folder') {
         toggleExpanded(node.id);
@@ -391,16 +391,16 @@ export function ConnectionManager({
     };
 
     const handleNodeDoubleClick = () => {
-      if (node.type === 'session') {
+      if (node.type === 'connection') {
         // Double click to connect
-        if (onSessionConnect) {
-          onSessionConnect(node);
+        if (onConnectionConnect) {
+          onConnectionConnect(node);
         } else {
-          onSessionSelect(node);
+          onConnectionSelect(node);
         }
       }
     };
-    
+
     const nodeContent = (
       <div
         className={`flex items-center gap-2 px-2 py-1 hover:bg-accent cursor-pointer ${
@@ -409,7 +409,7 @@ export function ConnectionManager({
         style={{ paddingLeft: `${level * 16 + 8}px` }}
         onClick={handleNodeClick}
         onDoubleClick={handleNodeDoubleClick}
-        draggable={node.path !== 'All Sessions'}
+        draggable={node.path !== 'All Connections'}
         onDragStart={(e) => handleDragStart(e, node)}
         onDragOver={node.type === 'folder' ? handleDragOver : undefined}
         onDrop={node.type === 'folder' ? (e) => handleDrop(e, node) : undefined}
@@ -417,14 +417,14 @@ export function ConnectionManager({
       >
         {node.type === 'folder' && (
           <Button variant="ghost" size="sm" className="p-0 h-4 w-4">
-            {node.isExpanded ? 
-              <ChevronDown className="w-3 h-3" /> : 
+            {node.isExpanded ?
+              <ChevronDown className="w-3 h-3" /> :
               <ChevronRight className="w-3 h-3" />
             }
           </Button>
         )}
-        {node.type === 'session' && <div className="w-4" />}
-        
+        {node.type === 'connection' && <div className="w-4" />}
+
         <div className="relative">
           {getIcon(node)}
           {isConnected && (
@@ -434,14 +434,14 @@ export function ConnectionManager({
         <span className="text-sm flex-1">{node.name}</span>
       </div>
     );
-    
+
     return (
       <div key={node.id}>
-        {node.type === 'session' ? (
+        {node.type === 'connection' ? (
           <ContextMenu onOpenChange={(open) => {
             if (open) {
-              // Select the session when context menu opens (right-click)
-              onSessionSelect(node);
+              // Select the connection when context menu opens (right-click)
+              onConnectionSelect(node);
             }
           }}>
             <ContextMenuTrigger asChild>
@@ -450,18 +450,18 @@ export function ConnectionManager({
             <ContextMenuContent>
               <ContextMenuItem
                 onClick={() => {
-                  if (onSessionConnect) {
-                    onSessionConnect(node);
+                  if (onConnectionConnect) {
+                    onConnectionConnect(node);
                   } else {
-                    onSessionSelect(node);
+                    onConnectionSelect(node);
                   }
                 }}
               >
-                {isConnected ? 'Switch to Session' : 'Connect'}
+                {isConnected ? 'Switch to Connection' : 'Connect'}
               </ContextMenuItem>
-              {onEditSession && (
+              {onEditConnection && (
                 <ContextMenuItem
-                  onClick={() => onEditSession(node)}
+                  onClick={() => onEditConnection(node)}
                 >
                   <Pencil className="w-4 h-4 mr-2" />
                   Edit
@@ -487,7 +487,7 @@ export function ConnectionManager({
           <ContextMenu onOpenChange={(open) => {
             if (open && node.type === 'folder') {
               // Select the folder when context menu opens (right-click)
-              onSessionSelect(node);
+              onConnectionSelect(node);
             }
           }}>
             <ContextMenuTrigger asChild>
@@ -500,11 +500,11 @@ export function ConnectionManager({
                 <FolderPlus className="w-4 h-4 mr-2" />
                 New Subfolder
               </ContextMenuItem>
-              {node.path !== 'All Sessions' && (
+              {node.path !== 'All Connections' && (
                 <>
                   <ContextMenuItem
                     onClick={() => {
-                      const folders = SessionStorageManager.getFolders();
+                      const folders = ConnectionStorageManager.getFolders();
                       const folder = folders.find(f => f.path === node.path);
                       openRenameFolderDialog(node.path!, node.name, folder?.parentPath);
                     }}
@@ -527,7 +527,7 @@ export function ConnectionManager({
         ) : (
           nodeContent
         )}
-        
+
         {node.type === 'folder' && node.isExpanded && node.children && (
           <div>
             {node.children.map(child => renderNode(child, level + 1))}
@@ -540,7 +540,7 @@ export function ConnectionManager({
   return (
     <>
     <div className="bg-card border-r border-border h-full flex flex-col">
-      {/* Session Browser */}
+      {/* Connection Browser */}
       <div className="flex-1 min-h-0 flex flex-col">
         <div className="p-3 border-b border-border flex items-center justify-between">
           <h3 className="font-medium">Connection Manager</h3>
@@ -554,9 +554,9 @@ export function ConnectionManager({
           </Button>
         </div>
         <div className="flex-1 overflow-auto">
-          {sessions.length === 0 ? (
+          {connections.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full p-4 text-center">
-              <p className="text-sm text-muted-foreground mb-4">No sessions yet</p>
+              <p className="text-sm text-muted-foreground mb-4">No connections yet</p>
               {onNewConnection && (
                 <Button onClick={onNewConnection} size="sm" variant="outline">
                   <Plus className="w-4 h-4 mr-2" />
@@ -565,85 +565,85 @@ export function ConnectionManager({
               )}
             </div>
           ) : (
-            sessions.map(session => renderNode(session))
+            connections.map(connection => renderNode(connection))
           )}
         </div>
       </div>
-      
+
       {/* Connection Details */}
       <div className="border-t border-border">
         <div className="p-3">
           <h3 className="font-medium text-sm mb-3">Connection Details</h3>
-          
-          {!selectedSession || selectedSession.type === 'folder' ? (
-            <p className="text-sm text-muted-foreground">No session selected</p>
+
+          {!selectedConnection || selectedConnection.type === 'folder' ? (
+            <p className="text-sm text-muted-foreground">No connection selected</p>
           ) : (
             <div className="space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium">Name</span>
-                  <span className="text-xs">{selectedSession.name}</span>
+                  <span className="text-xs">{selectedConnection.name}</span>
                 </div>
-                
+
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium">Type</span>
                   <Badge variant="outline" className="text-xs py-0 px-1 h-5">
-                    {selectedSession.protocol}
+                    {selectedConnection.protocol}
                   </Badge>
                 </div>
-                
+
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium">Status</span>
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${selectedSession.isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
-                    <span className="text-xs">{selectedSession.isConnected ? 'Connected' : 'Disconnected'}</span>
+                    <div className={`w-2 h-2 rounded-full ${selectedConnection.isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
+                    <span className="text-xs">{selectedConnection.isConnected ? 'Connected' : 'Disconnected'}</span>
                   </div>
                 </div>
 
-                {selectedSession.lastConnected && (
+                {selectedConnection.lastConnected && (
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium">Last Connected</span>
                     <span className="text-xs">
-                      {new Date(selectedSession.lastConnected).toLocaleString()}
+                      {new Date(selectedConnection.lastConnected).toLocaleString()}
                     </span>
                   </div>
                 )}
               </div>
-              
-              {selectedSession.host && (
+
+              {selectedConnection.host && (
                 <>
                   <Separator />
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium">Host</span>
-                      <span className="text-xs">{selectedSession.host}</span>
+                      <span className="text-xs">{selectedConnection.host}</span>
                     </div>
-                    
-                    {selectedSession.username && (
+
+                    {selectedConnection.username && (
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-medium">Username</span>
-                        <span className="text-xs">{selectedSession.username}</span>
+                        <span className="text-xs">{selectedConnection.username}</span>
                       </div>
                     )}
-                    
+
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium">Port</span>
                       <span className="text-xs">
-                        {selectedSession.port || (selectedSession.protocol === 'SSH' ? 22 : 23)}
+                        {selectedConnection.port || (selectedConnection.protocol === 'SSH' ? 22 : 23)}
                       </span>
                     </div>
                   </div>
                 </>
               )}
-              
+
               <Separator />
-              
+
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium">Protocol</span>
-                  <span className="text-xs">{selectedSession.protocol}</span>
+                  <span className="text-xs">{selectedConnection.protocol}</span>
                 </div>
-                
+
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-medium">Description</span>
                   <span className="text-xs text-muted-foreground">-</span>
@@ -661,7 +661,7 @@ export function ConnectionManager({
         <DialogHeader>
           <DialogTitle>Create New Folder</DialogTitle>
           <DialogDescription>
-            Create a new folder to organize your sessions.
+            Create a new folder to organize your connections.
             {newFolderParentPath && ` Parent: ${newFolderParentPath}`}
           </DialogDescription>
         </DialogHeader>
@@ -697,7 +697,7 @@ export function ConnectionManager({
           <AlertDialogTitle>Delete Folder?</AlertDialogTitle>
           <AlertDialogDescription>
             Are you sure you want to delete the folder "{folderToDelete?.name}"? 
-            This will also delete all sessions and subfolders within it. 
+            This will also delete all connections and subfolders within it.
             This action cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>

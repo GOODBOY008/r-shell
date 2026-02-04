@@ -17,17 +17,17 @@ import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
 
 interface WelcomeScreenProps {
-  onNewSession: () => void;
+  onNewConnection: () => void;
   onOpenSettings: () => void;
 }
 
-export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
   const quickActions = [
     {
       icon: Plus,
-      title: 'New Session',
+      title: 'New Connection',
       description: 'Connect to a remote server',
-      action: onNewSession,
+      action: onNewConnection,
       variant: 'default' as const,
       shortcut: 'Ctrl+N'
     },
@@ -57,7 +57,7 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
     },
     {
       icon: Server,
-      title: 'Multi-Session Support',
+      title: 'Multi-Connection Support',
       description: 'Manage multiple connections with tabbed interface'
     },
     {
@@ -218,12 +218,12 @@ export function WelcomeScreen({ onNewSession, onOpenSettings }: WelcomeScreenPro
 
         {/* Call to Action */}
         <div className="text-center pb-4">
-          <Button size="lg" onClick={onNewSession} className="gap-2 shadow-lg">
+          <Button size="lg" onClick={onNewConnection} className="gap-2 shadow-lg">
             <Plus className="h-5 w-5" />
-            Create New Session
+            Create New Connection
           </Button>
           <p className="text-xs text-muted-foreground mt-2">
-            or select an existing session from the Connection Manager
+            or select an existing connection from the Connection Manager
           </p>
         </div>
       </div>

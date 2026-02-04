@@ -9,7 +9,7 @@ import {
   ContextMenuTrigger,
 } from './ui/context-menu';
 
-interface SessionTab {
+interface ConnectionTab {
   id: string;
   name: string;
   protocol?: string;
@@ -17,8 +17,8 @@ interface SessionTab {
   connectionStatus?: 'connected' | 'connecting' | 'disconnected';
 }
 
-interface SessionTabsProps {
-  tabs: SessionTab[];
+interface ConnectionTabsProps {
+  tabs: ConnectionTab[];
   onTabSelect: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
   onNewTab: () => void;
@@ -30,10 +30,10 @@ interface SessionTabsProps {
   onCloseToLeft?: (tabId: string) => void;
 }
 
-export function SessionTabs({ 
-  tabs, 
-  onTabSelect, 
-  onTabClose, 
+export function ConnectionTabs({
+  tabs,
+  onTabSelect,
+  onTabClose,
   onNewTab,
   onDuplicateTab,
   onReconnect,
@@ -41,7 +41,7 @@ export function SessionTabs({
   onCloseOthers,
   onCloseToRight,
   onCloseToLeft
-}: SessionTabsProps) {
+}: ConnectionTabsProps) {
   return (
     <div className="bg-muted border-b border-border flex items-center">
       <div className="flex items-center overflow-x-auto">
@@ -56,16 +56,16 @@ export function SessionTabs({
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <div className={`w-2 h-2 rounded-full ${
-                    tab.connectionStatus === 'connected' ? 'bg-green-500' : 
-                    tab.connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' : 
+                    tab.connectionStatus === 'connected' ? 'bg-green-500' :
+                    tab.connectionStatus === 'connecting' ? 'bg-yellow-500 animate-pulse' :
                     tab.connectionStatus === 'disconnected' ? 'bg-red-500' :
-                    tab.protocol === 'SSH' ? 'bg-green-500' : 
-                    tab.protocol === 'PowerShell' ? 'bg-blue-500' : 
+                    tab.protocol === 'SSH' ? 'bg-green-500' :
+                    tab.protocol === 'PowerShell' ? 'bg-blue-500' :
                     'bg-gray-500'
                   }`} />
                   <span className="text-sm truncate">{tab.name}</span>
                 </div>
-                
+
                 <Button
                   variant="ghost"
                   size="sm"
@@ -135,7 +135,7 @@ export function SessionTabs({
           </ContextMenu>
         ))}
       </div>
-      
+
       <Button
         variant="ghost"
         size="sm"

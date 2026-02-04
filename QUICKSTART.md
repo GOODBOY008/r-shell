@@ -87,7 +87,7 @@ The UI is fully functional, but these features need Rust/Tauri backend:
 
 2. **Terminal Emulation**
    - Integrate xterm.js or similar library
-   - Connect terminal to SSH session via Tauri commands
+   - Connect terminal to SSH connection via Tauri commands
    - Handle terminal I/O
 
 3. **File Operations (SFTP)**
@@ -100,7 +100,7 @@ The UI is fully functional, but these features need Rust/Tauri backend:
    - Display CPU, memory, disk usage
    - Update charts in real-time
 
-5. **Session Management**
+5. **Connection Management**
    - Save connection configurations
    - Store connection history
    - Manage SSH keys

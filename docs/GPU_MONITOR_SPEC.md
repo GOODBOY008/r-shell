@@ -226,8 +226,8 @@ Detect available GPUs on the remote system.
 ```rust
 #[tauri::command]
 pub async fn detect_gpu(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<GpuDetectionResult, String>
 ```
 
@@ -240,8 +240,8 @@ Fetch current GPU metrics.
 ```rust
 #[tauri::command]
 pub async fn get_gpu_stats(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<Vec<GpuStats>, String>
 ```
 
@@ -254,8 +254,8 @@ Fetch processes using GPU.
 ```rust
 #[tauri::command]
 pub async fn get_gpu_processes(
-    session_id: String,
-    state: State<'_, Arc<SessionManager>>,
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<Vec<GpuProcess>, String>
 ```
 
@@ -393,7 +393,7 @@ Use existing color utilities with GPU-specific thresholds:
 ### Phase 2: Frontend (React)
 
 1. **Add TypeScript interfaces** in `system-monitor.tsx`
-2. **Add GPU detection state** (runs once per session)
+2. **Add GPU detection state** (runs once per connection)
 3. **Add GPU stats fetching** with polling interval (5-10 seconds)
 4. **Create GPU card component** with:
    - Utilization progress bar
@@ -413,7 +413,7 @@ Use existing color utilities with GPU-specific thresholds:
 3. **Add tooltips** for detailed info
 4. **Performance optimization**
    - Use `requestIdleCallback` for fetches
-   - Cache detection results per session
+   - Cache detection results per connection
 5. **Add loading skeleton** while fetching
 6. **Write E2E tests**
 

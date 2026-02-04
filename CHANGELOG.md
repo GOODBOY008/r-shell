@@ -26,14 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Monitor individual interface traffic (Wi-Fi, Ethernet, etc.)
   - Better visibility into network activity per interface
 
-- 🔄 **Session Reconnect**: Added reconnect functionality to session tabs
+- 🔄 **Connection Reconnect**: Added reconnect functionality to connection tabs
   - Quick reconnect button for disconnected sessions
   - Reconnect count tracking to monitor connection stability
-  - Improved session recovery workflow
+  - Improved connection recovery workflow
 
-- 📊 **Connection Status Management**: Enhanced terminal session status tracking
+- 📊 **Connection Status Management**: Enhanced terminal connection status tracking
   - Real-time connection status indicators
-  - Better visibility into session health
+  - Better visibility into connection health
   - Improved disconnect/reconnect handling
 
 ### Fixed
@@ -44,9 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- ✏️ **Session Editing**: Added ability to edit existing sessions from connection manager
-  - Load existing session details into connection dialog
-  - Update session configurations with proper form state
+- ✏️ **Connection Editing**: Added ability to edit existing connections from connection manager
+  - Load existing connection details into connection dialog
+  - Update connection configurations with proper form state
   - Automatically activate existing tabs when editing connections
   - Loading states and error handling for edit operations
 

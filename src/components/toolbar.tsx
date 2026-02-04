@@ -37,7 +37,7 @@ import {
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 
-export interface RecentSession {
+export interface RecentConnection {
   id: string;
   name: string;
   host: string;
@@ -47,8 +47,8 @@ export interface RecentSession {
 }
 
 interface ToolbarProps {
-  onNewSession?: () => void;
-  onOpenSession?: () => void;
+  onNewConnection?: () => void;
+  onOpenConnection?: () => void;
   onOpenSFTP?: () => void;
   onOpenSettings?: () => void;
   onToggleLeftSidebar?: () => void;
@@ -56,8 +56,8 @@ interface ToolbarProps {
   onToggleBottomPanel?: () => void;
   onToggleZenMode?: () => void;
   onApplyPreset?: (preset: string) => void;
-  onQuickConnect?: (sessionId: string) => void;
-  recentSessions?: RecentSession[];
+  onQuickConnect?: (connectionId: string) => void;
+  recentConnections?: RecentConnection[];
   leftSidebarVisible?: boolean;
   rightSidebarVisible?: boolean;
   bottomPanelVisible?: boolean;
@@ -80,18 +80,18 @@ function formatLastConnected(dateString?: string): string {
   return date.toLocaleDateString();
 }
 
-export function Toolbar({ 
-  onNewSession, 
-  onOpenSession, 
-  onOpenSFTP, 
-  onOpenSettings, 
+export function Toolbar({
+  onNewConnection,
+  onOpenConnection,
+  onOpenSFTP,
+  onOpenSettings,
   onToggleLeftSidebar,
-  onToggleRightSidebar, 
+  onToggleRightSidebar,
   onToggleBottomPanel,
   onToggleZenMode,
   onApplyPreset,
   onQuickConnect,
-  recentSessions = [],
+  recentConnections = [],
   leftSidebarVisible,
   rightSidebarVisible,
   bottomPanelVisible,
@@ -102,20 +102,20 @@ export function Toolbar({
       <div className="border-b border-border bg-background px-2 py-1 flex items-center gap-1">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" onClick={onNewSession}>
+            <Button variant="ghost" size="sm" onClick={onNewConnection}>
               <Plus className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>New Session</TooltipContent>
+          <TooltipContent>New Connection</TooltipContent>
         </Tooltip>
 
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" onClick={onOpenSession}>
+            <Button variant="ghost" size="sm" onClick={onOpenConnection}>
               <FolderOpen className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Open Session</TooltipContent>
+          <TooltipContent>Open Connection</TooltipContent>
         </Tooltip>
 
         {/* Quick Connect Dropdown */}
@@ -136,23 +136,23 @@ export function Toolbar({
               Recent Connections
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            {recentSessions.length > 0 ? (
-              recentSessions.map((session) => (
+            {recentConnections.length > 0 ? (
+              recentConnections.map((connection) => (
                 <DropdownMenuItem
-                  key={session.id}
-                  onClick={() => onQuickConnect?.(session.id)}
+                  key={connection.id}
+                  onClick={() => onQuickConnect?.(connection.id)}
                   className="flex items-start gap-3 py-2.5 cursor-pointer"
                 >
                   <Server className="w-4 h-4 mt-0.5 text-muted-foreground flex-shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{session.name}</div>
+                    <div className="font-medium truncate">{connection.name}</div>
                     <div className="text-xs text-muted-foreground truncate">
-                      {session.username}@{session.host}{session.port && session.port !== 22 ? `:${session.port}` : ''}
+                      {connection.username}@{connection.host}{connection.port && connection.port !== 22 ? `:${connection.port}` : ''}
                     </div>
                   </div>
-                  {session.lastConnected && (
+                  {connection.lastConnected && (
                     <span className="text-xs text-muted-foreground flex-shrink-0">
-                      {formatLastConnected(session.lastConnected)}
+                      {formatLastConnected(connection.lastConnected)}
                     </span>
                   )}
                 </DropdownMenuItem>
@@ -164,10 +164,10 @@ export function Toolbar({
                 <p className="text-xs mt-1">Connect to a server to see it here</p>
               </div>
             )}
-            {recentSessions.length > 0 && (
+            {recentConnections.length > 0 && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={onNewSession} className="text-primary">
+                <DropdownMenuItem onClick={onNewConnection} className="text-primary">
                   <Plus className="w-4 h-4 mr-2" />
                   New Connection
                 </DropdownMenuItem>

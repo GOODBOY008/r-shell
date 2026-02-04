@@ -73,7 +73,7 @@ interface TransferItem {
 }
 
 interface IntegratedFileBrowserProps {
-  sessionId: string;
+  connectionId: string;
   host?: string;
   isConnected: boolean;
   onClose: () => void;
@@ -87,7 +87,7 @@ const sessionStateCache = new Map<string, {
   searchTerm: string;
 }>();
 
-export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }: IntegratedFileBrowserProps) {
+export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose }: IntegratedFileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -134,10 +134,10 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     { name: 'data.json', type: 'file', size: 5120, modified: new Date('2024-01-12'), permissions: '-rw-r--r--', owner: 'www-data', group: 'www-data', path: 'data.json' }
   ];
 
-  // Restore or initialize state when session changes
+  // Restore or initialize state when connection changes
   useEffect(() => {
-    if (sessionId) {
-      const cached = sessionStateCache.get(sessionId);
+    if (connectionId) {
+      const cached = sessionStateCache.get(connectionId);
       if (cached) {
         // Restore previous state
         setCurrentPath(cached.currentPath);
@@ -145,33 +145,33 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         setSelectedFiles(cached.selectedFiles);
         setSearchTerm(cached.searchTerm);
       } else {
-        // Initialize new session state
+        // Initialize new connection state
         setCurrentPath('/home');
         setFiles([]);
         setSelectedFiles(new Set());
         setSearchTerm('');
       }
     }
-  }, [sessionId]);
+  }, [connectionId]);
 
   // Save state to cache when it changes
   useEffect(() => {
-    if (sessionId) {
-      sessionStateCache.set(sessionId, {
+    if (connectionId) {
+      sessionStateCache.set(connectionId, {
         currentPath,
         files,
         selectedFiles,
         searchTerm
       });
     }
-  }, [sessionId, currentPath, files, selectedFiles, searchTerm]);
+  }, [connectionId, currentPath, files, selectedFiles, searchTerm]);
 
   useEffect(() => {
-    if (isConnected && sessionId) {
-      console.log('useEffect triggered - loading files', { currentPath, sessionId, isConnected });
+    if (isConnected && connectionId) {
+      console.log('useEffect triggered - loading files', { currentPath, connectionId, isConnected });
       loadFiles();
     }
-  }, [currentPath, isConnected, sessionId]);
+  }, [currentPath, isConnected, connectionId]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -282,7 +282,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
   };
 
   const loadFiles = async () => {
-    if (!sessionId || !isConnected) {
+    if (!connectionId || !isConnected) {
       setFiles([]);
       return;
     }
@@ -291,7 +291,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     try {
       const output = await invoke<string>(
         'list_files',
-        { sessionId: sessionId, path: currentPath }
+        { connectionId, path: currentPath }
       );
       
       if (output) {
@@ -421,7 +421,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
   };
 
   const handleFileDoubleClick = async (file: FileItem) => {
-    console.log('handleFileDoubleClick called', { file, currentPath, sessionId });
+    console.log('handleFileDoubleClick called', { file, currentPath, connectionId });
     
     if (file.type === 'directory') {
       console.log('Navigating to directory:', file.path);
@@ -433,7 +433,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       setIsLoading(true);
       try {
         const content = await invoke<string>('read_file_content', {
-          sessionId,
+          connection_id: connectionId,
           path: file.path
         });
         setFileContent(content);
@@ -520,7 +520,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
             'sftp_upload_file',
             {
               request: {
-                session_id: sessionId,
+                connection_id: connectionId,
                 local_path: '',
                 remote_path: remotePath,
                 data: Array.from(uint8Array)
@@ -583,7 +583,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         'sftp_download_file',
         {
           request: {
-            session_id: sessionId,
+            connection_id: connectionId,
             local_path: '',
             remote_path: remotePath
           }
@@ -632,7 +632,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       try {
         const folderPath = currentPath === '/' ? `/${folderName}` : `${currentPath}/${folderName}`;
         await invoke<boolean>('create_directory', {
-          sessionId,
+          connection_id: connectionId,
           path: folderPath
         });
         toast.success(`Folder "${folderName}" created`);
@@ -658,15 +658,15 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
     try {
       const filePath = deletingFile.path;
       console.log('[FileBrowser] Deleting file', { 
-        filePath, 
+        filePath,
         isDirectory: deletingFile.type === 'directory',
-        sessionId 
+        connectionId
       });
-      
+
       await invoke<boolean>('delete_file', {
-        sessionId,
+        connection_id: connectionId,
         path: filePath,
-        isDirectory: deletingFile.type === 'directory'
+        is_directory: deletingFile.type === 'directory'
       });
       
       toast.success(`${deletingFile.name} deleted successfully`);
@@ -690,7 +690,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       try {
         const filePath = currentPath === '/' ? `/${editingFile.name}` : `${currentPath}/${editingFile.name}`;
         await invoke<boolean>('create_file', {
-          sessionId,
+          connection_id: connectionId,
           path: filePath,
           content: fileContent
         });
@@ -725,15 +725,15 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
           
           if (clipboard.operation === 'copy') {
             await invoke<boolean>('copy_file', {
-              sessionId,
-              sourcePath: file.path,
-              destPath
+              connection_id: connectionId,
+              source_path: file.path,
+              dest_path: destPath
             });
           } else {
             await invoke<boolean>('rename_file', {
-              sessionId,
-              oldPath: file.path,
-              newPath: destPath
+              connection_id: connectionId,
+              old_path: file.path,
+              new_path: destPath
             });
           }
         }
@@ -763,9 +763,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
         const newPath = currentPath === '/' ? `/${newFileName}` : `${currentPath}/${newFileName}`;
         
         await invoke<boolean>('rename_file', {
-          sessionId,
-          oldPath,
-          newPath
+          connection_id: connectionId,
+          old_path: oldPath,
+          new_path: newPath
         });
         
         toast.success(`"${renamingFile.name}" renamed to "${newFileName}"`);
@@ -802,7 +802,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       try {
         const filePath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
         await invoke<boolean>('create_file', {
-          sessionId,
+          connection_id: connectionId,
           path: filePath,
           content: ''
         });
@@ -824,9 +824,9 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
       const destPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
       
       await invoke<boolean>('copy_file', {
-        sessionId,
-        sourcePath,
-        destPath
+        connection_id: connectionId,
+        source_path: sourcePath,
+        dest_path: destPath
       });
       
       toast.success(`"${file.name}" duplicated as "${newName}"`);
@@ -908,7 +908,7 @@ export function IntegratedFileBrowser({ sessionId, host, isConnected, onClose }:
           'sftp_upload_file',
           {
             request: {
-              session_id: sessionId,
+              connection_id: connectionId,
               local_path: '',
               remote_path: remotePath,
               data: Array.from(uint8Array)

@@ -10,7 +10,7 @@ import { Badge } from './ui/badge';
 import { toast } from 'sonner';
 
 interface LogViewerProps {
-  sessionId?: string;
+  connectionId?: string;
 }
 
 interface LogFile {
@@ -18,7 +18,7 @@ interface LogFile {
   name: string;
 }
 
-export function LogViewer({ sessionId }: LogViewerProps) {
+export function LogViewer({ connectionId }: LogViewerProps) {
   const [logFiles, setLogFiles] = useState<LogFile[]>([]);
   const [selectedLogPath, setSelectedLogPath] = useState<string>('');
   const [logContent, setLogContent] = useState<string>('');
@@ -33,12 +33,12 @@ export function LogViewer({ sessionId }: LogViewerProps) {
 
   // Fetch available log files
   const fetchLogFiles = async () => {
-    if (!sessionId) return;
+    if (!connectionId) return;
     
     try {
       const result = await invoke<{ success: boolean; output?: string; error?: string }>(
         'list_log_files',
-        { sessionId }
+        { connectionId }
       );
       
       if (result.success && result.output) {
@@ -61,7 +61,7 @@ export function LogViewer({ sessionId }: LogViewerProps) {
 
   // Fetch log content with smooth update
   const fetchLogContent = useCallback(async (isAutoRefresh = false) => {
-    if (!sessionId || !selectedLogPath) return;
+    if (!connectionId || !selectedLogPath) return;
     
     if (!isAutoRefresh) {
       setIsLoading(true);
@@ -71,7 +71,7 @@ export function LogViewer({ sessionId }: LogViewerProps) {
       const result = await invoke<{ success: boolean; output?: string; error?: string }>(
         'tail_log',
         { 
-          sessionId,
+          connectionId,
           logPath: selectedLogPath,
           lines: lineCount
         }
@@ -114,14 +114,14 @@ export function LogViewer({ sessionId }: LogViewerProps) {
         setIsLoading(false);
       }
     }
-  }, [sessionId, selectedLogPath, lineCount, scrollLocked]);
+  }, [connectionId, selectedLogPath, lineCount, scrollLocked]);
 
   // Load log files on mount
   useEffect(() => {
-    if (sessionId) {
+    if (connectionId) {
       fetchLogFiles();
     }
-  }, [sessionId]);
+  }, [connectionId]);
 
   // Auto-refresh log content
   useEffect(() => {

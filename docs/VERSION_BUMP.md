@@ -73,7 +73,7 @@ Edit `CHANGELOG.md` to replace the template with actual changes:
 
 ### Changed
 
-- 🔧 Improved session restoration performance
+- 🔧 Improved connection restoration performance
 
 ### Fixed
 
@@ -193,6 +193,6 @@ cargo update
 chore: bump version to 0.6.3
 
 - Added SSH key management UI
-- Improved session restoration performance  
+- Improved connection restoration performance
 - Fixed memory leak in terminal component
 ```

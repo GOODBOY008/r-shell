@@ -7,17 +7,17 @@ const TEST_USERNAME = 'testuser'; // Replace with your test username
 const TEST_PASSWORD = 'testpass'; // Replace with your test password
 
 describe('SSH Connection Tests', () => {
-  let sessionId: string;
+  let connectionId: string;
 
   beforeAll(() => {
-    sessionId = `test-session-${Date.now()}`;
+    connectionId = `test-connection-${Date.now()}`;
   });
 
   afterAll(async () => {
-    // Clean up: disconnect the test session
-    if (sessionId) {
+    // Clean up: disconnect the test connection
+    if (connectionId) {
       try {
-        await invoke('ssh_disconnect', { session_id: sessionId });
+        await invoke('ssh_disconnect', { connection_id: connectionId });
       } catch (error) {
         console.error('Cleanup error:', error);
       }
@@ -25,19 +25,23 @@ describe('SSH Connection Tests', () => {
   });
 
   it('should successfully connect to SSH server', async () => {
-    const result = await invoke<{ success: boolean; session_id?: string; error?: string }>(
+    const result = await invoke<{ success: boolean; error?: string }>(
       'ssh_connect',
       {
-        session_id: sessionId,
-        host: TEST_HOST,
-        port: 22,
-        username: TEST_USERNAME,
-        password: TEST_PASSWORD,
+        request: {
+          connection_id: connectionId,
+          host: TEST_HOST,
+          port: 22,
+          username: TEST_USERNAME,
+          auth_method: 'password',
+          password: TEST_PASSWORD,
+          key_path: null,
+          passphrase: null,
+        }
       }
     );
 
     expect(result.success).toBe(true);
-    expect(result.session_id).toBe(sessionId);
     expect(result.error).toBeUndefined();
   }, 10000); // 10 second timeout for connection
 
@@ -45,7 +49,7 @@ describe('SSH Connection Tests', () => {
     const result = await invoke<{ success: boolean; output?: string; error?: string }>(
       'ssh_execute_command',
       {
-        session_id: sessionId,
+        connection_id: connectionId,
         command: 'echo "Hello from test"',
       }
     );
@@ -57,7 +61,7 @@ describe('SSH Connection Tests', () => {
   it('should get system stats', async () => {
     const result = await invoke<{ success: boolean; output?: string; error?: string }>(
       'get_system_stats',
-      { session_id: sessionId }
+      { connection_id: connectionId }
     );
 
     expect(result.success).toBe(true);
@@ -83,7 +87,7 @@ describe('SSH Connection Tests', () => {
         command: string;
       }>; 
       error?: string 
-    }>('get_processes', { session_id: sessionId });
+    }>('get_processes', { connection_id: connectionId });
 
     expect(result.success).toBe(true);
     expect(result.processes).toBeDefined();
@@ -111,7 +115,7 @@ describe('SSH Connection Tests', () => {
       }>; 
       error?: string 
     }>('list_files', {
-      session_id: sessionId,
+      connection_id: connectionId,
       path: '~'
     });
 
@@ -121,15 +125,20 @@ describe('SSH Connection Tests', () => {
   }, 5000);
 
   it('should fail with invalid credentials', async () => {
-    const badSessionId = `bad-session-${Date.now()}`;
+    const badConnectionId = `bad-connection-${Date.now()}`;
     const result = await invoke<{ success: boolean; error?: string }>(
       'ssh_connect',
       {
-        session_id: badSessionId,
-        host: TEST_HOST,
-        port: 22,
-        username: TEST_USERNAME,
-        password: 'wrongpassword',
+        request: {
+          connection_id: badConnectionId,
+          host: TEST_HOST,
+          port: 22,
+          username: TEST_USERNAME,
+          auth_method: 'password',
+          password: 'wrongpassword',
+          key_path: null,
+          passphrase: null,
+        }
       }
     );
 
@@ -140,7 +149,7 @@ describe('SSH Connection Tests', () => {
   it('should disconnect successfully', async () => {
     const result = await invoke<{ success: boolean; error?: string }>(
       'ssh_disconnect',
-      { session_id: sessionId }
+      { connection_id: connectionId }
     );
 
     expect(result.success).toBe(true);

@@ -11,7 +11,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger
 } from './ui/dropdown-menu';
-import { SessionStorageManager, type SessionData } from '@/lib/session-storage';
+import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
 import { 
   Plus, 
   FolderOpen, 
@@ -37,10 +37,10 @@ import {
 } from 'lucide-react';
 
 interface MenuBarProps {
-  onNewSession?: () => void;
-  onOpenSession?: () => void;
-  onSaveSession?: () => void;
-  onCloseSession?: () => void;
+  onNewConnection?: () => void;
+  onOpenConnection?: () => void;
+  onSaveConnection?: () => void;
+  onCloseConnection?: () => void;
   onCopy?: () => void;
   onPaste?: () => void;
   onSelectAll?: () => void;
@@ -55,16 +55,16 @@ interface MenuBarProps {
   onCloneTab?: () => void;
   onNextTab?: () => void;
   onPreviousTab?: () => void;
-  onRecentSessionSelect?: (session: SessionData) => void;
-  hasActiveSession?: boolean;
+  onRecentConnectionSelect?: (connection: ConnectionData) => void;
+  hasActiveConnection?: boolean;
   canPaste?: boolean;
 }
 
 export function MenuBar({
-  onNewSession,
-  onOpenSession,
-  onSaveSession,
-  onCloseSession,
+  onNewConnection,
+  onOpenConnection,
+  onSaveConnection,
+  onCloseConnection,
   onCopy,
   onPaste,
   onSelectAll,
@@ -79,30 +79,30 @@ export function MenuBar({
   onCloneTab,
   onNextTab,
   onPreviousTab,
-  onRecentSessionSelect,
-  hasActiveSession = false,
+  onRecentConnectionSelect,
+  hasActiveConnection = false,
   canPaste = true
 }: MenuBarProps) {
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const cmdOrCtrl = isMac ? '⌘' : 'Ctrl';
-  
-  // Load recent sessions
-  const [recentSessions, setRecentSessions] = useState<SessionData[]>([]);
-  
+
+  // Load recent connections
+  const [recentConnections, setRecentConnections] = useState<ConnectionData[]>([]);
+
   useEffect(() => {
-    // Load recent sessions on mount and whenever the component updates
-    const loadRecentSessions = () => {
-      const sessions = SessionStorageManager.getRecentSessions(5); // Get top 5 recent sessions
-      setRecentSessions(sessions);
+    // Load recent connections on mount and whenever the component updates
+    const loadRecentConnections = () => {
+      const connections = ConnectionStorageManager.getRecentConnections(5); // Get top 5 recent connections
+      setRecentConnections(connections);
     };
-    
-    loadRecentSessions();
-    
-    // Listen for storage changes to update recent sessions
+
+    loadRecentConnections();
+
+    // Listen for storage changes to update recent connections
     const handleStorageChange = () => {
-      loadRecentSessions();
+      loadRecentConnections();
     };
-    
+
     window.addEventListener('storage', handleStorageChange);
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
@@ -115,57 +115,57 @@ export function MenuBar({
           <Button variant="ghost" size="sm">File</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onClick={onNewSession}>
+          <DropdownMenuItem onClick={onNewConnection}>
             <Plus className="mr-2 h-4 w-4" />
-            New Session...
+            New Connection...
             <DropdownMenuShortcut>{cmdOrCtrl}+N</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onOpenSession}>
+          <DropdownMenuItem onClick={onOpenConnection}>
             <FolderOpen className="mr-2 h-4 w-4" />
-            Open Session...
+            Open Connection...
             <DropdownMenuShortcut>{cmdOrCtrl}+O</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               <Download className="mr-2 h-4 w-4" />
-              Recent Sessions
+              Recent Connections
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
-              {recentSessions.length > 0 ? (
-                recentSessions.map(session => (
-                  <DropdownMenuItem 
-                    key={session.id}
-                    onClick={() => onRecentSessionSelect?.(session)}
+              {recentConnections.length > 0 ? (
+                recentConnections.map(connection => (
+                  <DropdownMenuItem
+                    key={connection.id}
+                    onClick={() => onRecentConnectionSelect?.(connection)}
                   >
                     <span className="flex items-center gap-2">
-                      <span className="font-medium">{session.name}</span>
-                      <span className="text-xs text-muted-foreground">({session.username}@{session.host})</span>
+                      <span className="font-medium">{connection.name}</span>
+                      <span className="text-xs text-muted-foreground">({connection.username}@{connection.host})</span>
                     </span>
                   </DropdownMenuItem>
                 ))
               ) : (
                 <DropdownMenuItem disabled>
-                  <span className="text-muted-foreground">No recent sessions</span>
+                  <span className="text-muted-foreground">No recent connections</span>
                 </DropdownMenuItem>
               )}
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onSaveSession} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onSaveConnection} disabled={!hasActiveConnection}>
             <Save className="mr-2 h-4 w-4" />
-            Save Session
+            Save Connection
             <DropdownMenuShortcut>{cmdOrCtrl}+S</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveSession}>
+          <DropdownMenuItem disabled={!hasActiveConnection}>
             <Save className="mr-2 h-4 w-4" />
-            Save Session As...
+            Save Connection As...
             <DropdownMenuShortcut>{cmdOrCtrl}+Shift+S</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onCloseSession} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onCloseConnection} disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
-            Close Session
+            Close Connection
             <DropdownMenuShortcut>{cmdOrCtrl}+W</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem>
@@ -182,44 +182,44 @@ export function MenuBar({
           <Button variant="ghost" size="sm">Edit</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onClick={onCopy} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onCopy} disabled={!hasActiveConnection}>
             <Copy className="mr-2 h-4 w-4" />
             Copy
             <DropdownMenuShortcut>{cmdOrCtrl}+C</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onPaste} disabled={!hasActiveSession || !canPaste}>
+          <DropdownMenuItem onClick={onPaste} disabled={!hasActiveConnection || !canPaste}>
             <Clipboard className="mr-2 h-4 w-4" />
             Paste
             <DropdownMenuShortcut>{cmdOrCtrl}+V</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveSession}>
+          <DropdownMenuItem disabled={!hasActiveConnection}>
             <Scissors className="mr-2 h-4 w-4" />
             Cut
             <DropdownMenuShortcut>{cmdOrCtrl}+X</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onSelectAll} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onSelectAll} disabled={!hasActiveConnection}>
             Select All
             <DropdownMenuShortcut>{cmdOrCtrl}+A</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onFind} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onFind} disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
             Find...
             <DropdownMenuShortcut>{cmdOrCtrl}+F</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveSession}>
+          <DropdownMenuItem disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
             Find Next
             <DropdownMenuShortcut>F3</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveSession}>
+          <DropdownMenuItem disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
             Find Previous
             <DropdownMenuShortcut>Shift+F3</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={!hasActiveSession}>
+          <DropdownMenuItem disabled={!hasActiveConnection}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Clear Screen
             <DropdownMenuShortcut>{cmdOrCtrl}+L</DropdownMenuShortcut>
@@ -251,7 +251,7 @@ export function MenuBar({
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
               <DropdownMenuItem>Standard Toolbar</DropdownMenuItem>
-              <DropdownMenuItem>Session Toolbar</DropdownMenuItem>
+              <DropdownMenuItem>Connection Toolbar</DropdownMenuItem>
               <DropdownMenuItem>Status Bar</DropdownMenuItem>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
@@ -317,10 +317,10 @@ export function MenuBar({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Session Menu (renamed from Tab for clarity) */}
+      {/* Connection Menu (renamed from Tab for clarity) */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm">Session</Button>
+          <Button variant="ghost" size="sm">Connection</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={onNewTab}>
@@ -328,29 +328,29 @@ export function MenuBar({
             New Tab
             <DropdownMenuShortcut>{cmdOrCtrl}+T</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onCloneTab} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onCloneTab} disabled={!hasActiveConnection}>
             <Copy className="mr-2 h-4 w-4" />
             Duplicate Tab
             <DropdownMenuShortcut>{cmdOrCtrl}+D</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onNextTab} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onNextTab} disabled={!hasActiveConnection}>
             <ArrowRight className="mr-2 h-4 w-4" />
             Next Tab
             <DropdownMenuShortcut>{cmdOrCtrl}+→</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onPreviousTab} disabled={!hasActiveSession}>
+          <DropdownMenuItem onClick={onPreviousTab} disabled={!hasActiveConnection}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Previous Tab
             <DropdownMenuShortcut>{cmdOrCtrl}+←</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={!hasActiveSession}>
+          <DropdownMenuItem disabled={!hasActiveConnection}>
             <RefreshCw className="mr-2 h-4 w-4" />
             Reconnect
             <DropdownMenuShortcut>F5</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveSession}>
+          <DropdownMenuItem disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
             Disconnect
           </DropdownMenuItem>

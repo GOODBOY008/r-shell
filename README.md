@@ -48,9 +48,9 @@ R-Shell is a desktop SSH client that provides a beautiful and intuitive interfac
 ## Features
 
 ### 🔌 Connection Management
-- **Multi-Session Support**: Manage multiple SSH connections simultaneously with an intuitive tabbed interface
+- **Multi-Connection Support**: Manage multiple SSH connections simultaneously with an intuitive tabbed interface
 - **Connection Profiles**: Save and organize your SSH connection profiles for quick access
-- **Session Persistence**: Automatically save and restore your sessions across application restarts
+- **Connection Persistence**: Automatically save and restore your connections across application restarts
 - **Secure Authentication**: Support for password and SSH key-based authentication
 
 ### 💻 Terminal Experience
@@ -111,12 +111,12 @@ r-shell/
 │   │   ├── connection-manager.tsx   # Connection management
 │   │   ├── system-monitor.tsx      # Real-time metrics
 │   │   ├── connection-dialog.tsx   # SSH connection form
-│   │   ├── session-tabs.tsx        # Tab navigation
+│   │   ├── connection-tabs.tsx     # Tab navigation
 │   │   ├── menu-bar.tsx            # Application menu
 │   │   ├── settings-modal.tsx      # Settings dialog
 │   │   └── ...                     # Other components
 │   ├── lib/               # Utility functions
-│   │   ├── session-storage.ts      # Persistent session profiles
+│   │   ├── connection-storage.ts   # Persistent connection profiles
 │   │   ├── terminal-config.ts      # Terminal appearance settings
 │   │   └── utils.ts                # Helper utilities
 │   ├── styles/            # Global styles
@@ -128,7 +128,7 @@ r-shell/
 │   │   ├── ssh/           # SSH/SFTP implementation
 │   │   ├── commands.rs    # Tauri command handlers
 │   │   ├── websocket_server.rs  # WebSocket terminal I/O
-│   │   ├── session_manager.rs   # Session lifecycle
+│   │   ├── connection_manager.rs # Connection lifecycle
 │   │   ├── lib.rs         # Library setup
 │   │   └── main.rs        # Application entry
 │   ├── Cargo.toml         # Rust dependencies
@@ -231,15 +231,15 @@ pnpm tauri build
 
 #### App.tsx
 Main application component that manages:
-- Session state and tabs
+- Connection state and tabs
 - Dialog modals (connection, SFTP, settings)
 - Layout with resizable panels
-- Session selection and navigation
+- Connection selection and navigation
 
 #### Terminal Component
 Provides terminal emulation with:
 - Command input/output
-- Session management
+- Connection management
 - Terminal themes
 - Copy/paste support
 

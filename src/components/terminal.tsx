@@ -12,14 +12,14 @@ import { loadAppearanceSettings, getTerminalOptions } from '../lib/terminal-conf
 import 'xterm/css/xterm.css';
 
 interface TerminalProps {
-  sessionId: string;
-  sessionName: string;
+  connectionId: string;
+  connectionName: string;
   host?: string;
   username?: string;
   appearanceKey?: number;
 }
 
-export function Terminal({ sessionId, sessionName, host = 'localhost', username = 'user', appearanceKey = 0 }: TerminalProps) {
+export function Terminal({ connectionId, connectionName, host = 'localhost', username = 'user', appearanceKey = 0 }: TerminalProps) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -74,7 +74,7 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
     // Focus terminal to enable keyboard input
     term.focus();
 
-    term.writeln(`\x1b[1;32mConnected to ${sessionName} (${username}@${host})\x1b[0m`);
+    term.writeln(`\x1b[1;32mConnected to ${connectionName} (${username}@${host})\x1b[0m`);
     term.writeln(`\x1b[90mRenderer: ${rendererRef.current.toUpperCase()}\x1b[0m`);
     term.write('\r\n');
     term.write('$ ');
@@ -119,7 +119,7 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
           
           try {
             // @ts-ignore
-            const res = await invoke('ssh_execute_command', { sessionId: sessionId, command });
+            const res = await invoke('ssh_execute_command', { connection_id: connectionId, command });
             // @ts-ignore
             if (res && res.success && res.output) {
               // @ts-ignore
@@ -270,7 +270,7 @@ export function Terminal({ sessionId, sessionName, host = 'localhost', username 
       window.removeEventListener('resize', handleResize);
       term.dispose();
     };
-  }, [sessionId, sessionName, host, username, appearanceKey]);
+  }, [connectionId, connectionName, host, username, appearanceKey]);
 
   // Search functionality
   const handleSearch = (term: string, direction: 'next' | 'prev' = 'next') => {
