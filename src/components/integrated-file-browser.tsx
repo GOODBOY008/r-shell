@@ -433,7 +433,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
       setIsLoading(true);
       try {
         const content = await invoke<string>('read_file_content', {
-          connection_id: connectionId,
+          connectionId,
           path: file.path
         });
         setFileContent(content);
@@ -632,7 +632,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
       try {
         const folderPath = currentPath === '/' ? `/${folderName}` : `${currentPath}/${folderName}`;
         await invoke<boolean>('create_directory', {
-          connection_id: connectionId,
+          connectionId,
           path: folderPath
         });
         toast.success(`Folder "${folderName}" created`);
@@ -664,9 +664,9 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
       });
 
       await invoke<boolean>('delete_file', {
-        connection_id: connectionId,
+        connectionId,
         path: filePath,
-        is_directory: deletingFile.type === 'directory'
+        isDirectory: deletingFile.type === 'directory'
       });
       
       toast.success(`${deletingFile.name} deleted successfully`);
@@ -690,7 +690,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
       try {
         const filePath = currentPath === '/' ? `/${editingFile.name}` : `${currentPath}/${editingFile.name}`;
         await invoke<boolean>('create_file', {
-          connection_id: connectionId,
+          connectionId,
           path: filePath,
           content: fileContent
         });
@@ -725,15 +725,15 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
           
           if (clipboard.operation === 'copy') {
             await invoke<boolean>('copy_file', {
-              connection_id: connectionId,
-              source_path: file.path,
-              dest_path: destPath
+              connectionId,
+              sourcePath: file.path,
+              destPath: destPath
             });
           } else {
             await invoke<boolean>('rename_file', {
-              connection_id: connectionId,
-              old_path: file.path,
-              new_path: destPath
+              connectionId,
+              oldPath: file.path,
+              newPath: destPath
             });
           }
         }
@@ -763,9 +763,9 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
         const newPath = currentPath === '/' ? `/${newFileName}` : `${currentPath}/${newFileName}`;
         
         await invoke<boolean>('rename_file', {
-          connection_id: connectionId,
-          old_path: oldPath,
-          new_path: newPath
+          connectionId,
+          oldPath: oldPath,
+          newPath: newPath
         });
         
         toast.success(`"${renamingFile.name}" renamed to "${newFileName}"`);
@@ -802,7 +802,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
       try {
         const filePath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
         await invoke<boolean>('create_file', {
-          connection_id: connectionId,
+          connectionId,
           path: filePath,
           content: ''
         });
@@ -824,9 +824,9 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
       const destPath = currentPath === '/' ? `/${newName}` : `${currentPath}/${newName}`;
       
       await invoke<boolean>('copy_file', {
-        connection_id: connectionId,
-        source_path: sourcePath,
-        dest_path: destPath
+        connectionId,
+        sourcePath: sourcePath,
+        destPath: destPath
       });
       
       toast.success(`"${file.name}" duplicated as "${newName}"`);
