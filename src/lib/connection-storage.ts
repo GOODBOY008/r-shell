@@ -36,11 +36,65 @@ export interface ConnectionFolder {
 const CONNECTIONS_STORAGE_KEY = 'r-shell-connections';
 const FOLDERS_STORAGE_KEY = 'r-shell-connection-folders';
 
+// Legacy keys for migration
+const LEGACY_SESSIONS_STORAGE_KEY = 'r-shell-sessions';
+const LEGACY_FOLDERS_STORAGE_KEY = 'r-shell-session-folders';
+
 export class ConnectionStorageManager {
+  /**
+   * Migrate data from old session storage to new connection storage
+   */
+  private static migrateFromSessionStorage(): void {
+    try {
+      // Check if migration is needed
+      const hasNewData = localStorage.getItem(CONNECTIONS_STORAGE_KEY);
+      const hasLegacyData = localStorage.getItem(LEGACY_SESSIONS_STORAGE_KEY);
+      
+      if (!hasNewData && hasLegacyData) {
+        console.log('[Migration] Migrating session data to connection data...');
+        
+        // Migrate sessions to connections
+        const legacySessions = localStorage.getItem(LEGACY_SESSIONS_STORAGE_KEY);
+        if (legacySessions) {
+          const sessions = JSON.parse(legacySessions);
+          // Update folder paths from "All Sessions" to "All Connections"
+          const connections = sessions.map((session: any) => ({
+            ...session,
+            folder: session.folder?.replace(/All Sessions/g, 'All Connections')
+          }));
+          localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+          console.log(`[Migration] Migrated ${connections.length} sessions to connections`);
+        }
+        
+        // Migrate folders
+        const legacyFolders = localStorage.getItem(LEGACY_FOLDERS_STORAGE_KEY);
+        if (legacyFolders) {
+          const folders = JSON.parse(legacyFolders);
+          // Update folder names and paths
+          const connectionFolders = folders.map((folder: any) => ({
+            ...folder,
+            name: folder.name.replace(/All Sessions/g, 'All Connections'),
+            path: folder.path.replace(/All Sessions/g, 'All Connections'),
+            parentPath: folder.parentPath?.replace(/All Sessions/g, 'All Connections')
+          }));
+          localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(connectionFolders));
+          console.log(`[Migration] Migrated ${connectionFolders.length} session folders to connection folders`);
+        }
+        
+        console.log('[Migration] Migration completed successfully');
+      }
+    } catch (error) {
+      console.error('[Migration] Failed to migrate session data:', error);
+    }
+  }
+
   /**
    * Initialize default folder structure if not exists
    */
   static initialize(): void {
+    // First, try to migrate legacy data
+    this.migrateFromSessionStorage();
+    
     const folders = this.getFolders();
     if (folders.length === 0) {
       // Create default folder structure
@@ -464,6 +518,7 @@ export interface ConnectionTreeNode {
  * Tracks currently open tabs for connection persistence
  */
 const ACTIVE_CONNECTIONS_KEY = 'r-shell-active-connections';
+const LEGACY_ACTIVE_SESSIONS_KEY = 'r-shell-active-sessions';
 
 export interface ActiveConnectionState {
   tabId: string;
@@ -474,10 +529,41 @@ export interface ActiveConnectionState {
 
 export class ActiveConnectionsManager {
   /**
+   * Migrate active sessions to active connections
+   */
+  private static migrateFromActiveSessions(): void {
+    try {
+      const hasNewData = localStorage.getItem(ACTIVE_CONNECTIONS_KEY);
+      const hasLegacyData = localStorage.getItem(LEGACY_ACTIVE_SESSIONS_KEY);
+      
+      if (!hasNewData && hasLegacyData) {
+        console.log('[Migration] Migrating active sessions to active connections...');
+        const legacySessions = JSON.parse(hasLegacyData);
+        
+        // Convert old ActiveSessionState to new ActiveConnectionState
+        const activeConnections = legacySessions.map((session: any) => ({
+          tabId: session.tabId,
+          connectionId: session.sessionId,
+          order: session.order,
+          originalConnectionId: session.originalSessionId
+        }));
+        
+        localStorage.setItem(ACTIVE_CONNECTIONS_KEY, JSON.stringify(activeConnections));
+        console.log(`[Migration] Migrated ${activeConnections.length} active sessions to active connections`);
+      }
+    } catch (error) {
+      console.error('[Migration] Failed to migrate active sessions:', error);
+    }
+  }
+
+  /**
    * Get active connection states
    */
   static getActiveConnections(): ActiveConnectionState[] {
     try {
+      // Try migration first
+      this.migrateFromActiveSessions();
+      
       const stored = localStorage.getItem(ACTIVE_CONNECTIONS_KEY);
       if (!stored) return [];
       return JSON.parse(stored) as ActiveConnectionState[];
