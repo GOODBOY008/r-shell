@@ -11,6 +11,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.7.0] - 2026-02-08
+
+### Added
+
+- 🔄 **Auto-Update Support**: Integrated Tauri updater plugin for automatic application updates
+  - Background update checking on application startup
+  - Manual update check via Help menu
+  - User notification system for available updates
+
+- 🖱️ **Terminal Context Menu**: Right-click context menu for terminal operations
+  - Copy, paste, select all, and clear terminal operations
+  - Search functionality accessible from context menu
+  - Keyboard shortcuts integration
+
+- 📋 **Terminal Search Bar**: Enhanced terminal search capabilities
+  - Find text within terminal output
+  - Case-sensitive and regex search options
+  - Navigation between search results
+
+- 📂 **File Browser Sorting**: Added comprehensive sorting functionality to integrated file browser
+  - Sort by name, size, or modification date
+  - Ascending and descending order options
+  - Visual indicators for current sort state
+
+- 🌐 **Dynamic WebSocket Port**: Implemented dynamic port assignment for WebSocket server
+  - Automatic port selection to avoid conflicts
+  - Port retrieval command for frontend connection
+  - Improved reliability for PTY terminal connections
+
+### Changed
+
+- 🔧 **Session → Connection Renaming**: Comprehensive refactoring for semantic correctness
+  - Renamed all "session" references to "connection" throughout the codebase
+  - Updated storage layer: `session-storage.ts` → `connection-storage.ts`
+  - Automatic migration from old session storage format
+  - Standardized connection ID and path parameter naming
+
+- 💾 **GPU Memory Display**: Enhanced GPU monitoring to show memory usage in MiB for better readability
+
+- 📖 **Documentation Updates**: Updated README with new screenshots and feature descriptions
+
 ## [0.6.4] - 2026-01-29
 
 ### Added
