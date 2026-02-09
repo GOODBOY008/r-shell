@@ -146,24 +146,11 @@ export function PtyTerminal({
         return false;
       }
       
-      // Handle paste shortcut
+      // Handle paste shortcut - return true to let the browser handle the native paste event,
+      // which xterm will pick up via onData. We must NOT manually send clipboard content here
+      // because onData already sends it, which would cause a double paste.
       if (modKey && key === 'v') {
-        event.preventDefault();
-        navigator.clipboard.readText().then((text) => {
-          const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN && text) {
-            const encoder = new TextEncoder();
-            const dataBytes = Array.from(encoder.encode(text));
-            ws.send(JSON.stringify({
-              type: 'Input',
-              connection_id: connectionId,
-              data: dataBytes,
-            }));
-          }
-        }).catch(() => {
-          console.error('Failed to paste');
-        });
-        return false;
+        return true;
       }
       
       // Handle search shortcut
