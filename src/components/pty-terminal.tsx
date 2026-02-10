@@ -639,7 +639,7 @@ export function PtyTerminal({
         />
       )}
       
-      <div ref={terminalRef} className="h-full w-full relative z-10" />
+      <div ref={terminalRef} className="h-full w-full relative z-10 p-4 box-border" />
       <style>{`
         .terminal-no-scrollbar .xterm-viewport {
           overflow-y: hidden !important;
