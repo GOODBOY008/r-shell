@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [0.7.1] - 2026-02-10
+
+### Fixed
+
+- 🖥️ **Terminal Padding**: Added padding to PTY terminal container for better layout and visual spacing
+- 📋 **Duplicate Paste Fix**: Fixed duplicate paste being triggered when using the copy command
+
 ## [0.7.0] - 2026-02-08
 
 ### Added
