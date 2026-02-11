@@ -1,13 +1,10 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { MenuBar } from './components/menu-bar';
 import { Toolbar } from './components/toolbar';
 import { ConnectionManager } from './components/connection-manager';
-import { ConnectionTabs } from './components/connection-tabs';
-import { PtyTerminal } from './components/pty-terminal';
 import { SystemMonitor } from './components/system-monitor';
 import { LogViewer } from './components/log-viewer';
-import { NetworkMonitor } from './components/network-monitor';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { SFTPPanel } from './components/sftp-panel';
@@ -16,9 +13,11 @@ import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
-import { TerminalAppearanceSettings } from './lib/terminal-config';
 import { useLayout, LayoutProvider } from './lib/layout-context';
-import { useKeyboardShortcuts, createLayoutShortcuts } from './lib/keyboard-shortcuts';
+import { useKeyboardShortcuts, createLayoutShortcuts, createSplitViewShortcuts } from './lib/keyboard-shortcuts';
+import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
+import { GridRenderer } from './components/terminal/grid-renderer';
+import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 
@@ -30,7 +29,7 @@ interface ConnectionNode {
   id: string;
   name: string;
   type: 'folder' | 'connection';
-  path?: string; // For folders
+  path?: string;
   protocol?: string;
   host?: string;
   port?: number;
@@ -40,22 +39,11 @@ interface ConnectionNode {
   isExpanded?: boolean;
 }
 
-interface ConnectionTab {
-  id: string;
-  name: string;
-  protocol?: string;
-  host?: string;
-  username?: string;
-  isActive: boolean;
-  originalConnectionId?: string; // Reference to original connection for duplicated tabs
-  connectionStatus: 'connected' | 'connecting' | 'disconnected';
-  reconnectCount: number; // Used to force terminal remount on reconnection
-}
-
 function AppContent() {
   const [selectedConnection, setSelectedConnection] = useState<ConnectionNode | null>(null);
-  const [tabs, setTabs] = useState<ConnectionTab[]>([]);
-  const [activeTabId, setActiveTabId] = useState('');
+
+  // Terminal group state from context
+  const { state, dispatch, activeGroup, activeTab, activeConnection } = useTerminalGroups();
 
   // Modal states
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
@@ -63,9 +51,6 @@ function AppContent() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
-
-  // Appearance key to trigger terminal background updates when settings change
-  const [appearanceKey, setAppearanceKey] = useState(0);
 
   // Restoration state
   const [isRestoring, setIsRestoring] = useState(false);
@@ -85,16 +70,75 @@ function AppContent() {
     applyPreset,
   } = useLayout();
 
-  // Keyboard shortcuts
-  useKeyboardShortcuts(
-    createLayoutShortcuts({
-      toggleLeftSidebar,
-      toggleRightSidebar,
-      toggleBottomPanel,
-      toggleZenMode,
-    }),
-    true
-  );
+  // Collect all tabs across all groups for compatibility with existing features
+  const allTabs = useMemo(() => {
+    return Object.values(state.groups).flatMap(g => g.tabs);
+  }, [state.groups]);
+
+  // Keyboard shortcuts: layout + split view
+  const splitViewShortcuts = useMemo(() => {
+    const groupIds = Object.keys(state.groups);
+    return createSplitViewShortcuts({
+      splitRight: () => {
+        if (state.activeGroupId) {
+          dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'right' });
+        }
+      },
+      splitDown: () => {
+        if (state.activeGroupId) {
+          dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'down' });
+        }
+      },
+      focusGroup: (index: number) => {
+        if (index < groupIds.length) {
+          dispatch({ type: 'ACTIVATE_GROUP', groupId: groupIds[index] });
+        }
+      },
+      closeTab: () => {
+        if (activeGroup && activeGroup.activeTabId) {
+          dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
+        }
+      },
+      nextTab: () => {
+        if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
+          const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+          const nextIndex = (currentIndex + 1) % activeGroup.tabs.length;
+          dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[nextIndex].id });
+        }
+      },
+      prevTab: () => {
+        if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
+          const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+          const prevIndex = (currentIndex - 1 + activeGroup.tabs.length) % activeGroup.tabs.length;
+          dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
+        }
+      },
+    });
+  }, [state.activeGroupId, state.groups, activeGroup, dispatch]);
+
+  const layoutShortcuts = useMemo(() => createLayoutShortcuts({
+    toggleLeftSidebar,
+    toggleRightSidebar,
+    toggleBottomPanel,
+    toggleZenMode,
+  }), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode]);
+
+  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts], true);
+
+  // Save active connections when tabs change (for restore on next launch)
+  useEffect(() => {
+    if (allTabs.length > 0) {
+      const activeConnections = allTabs.map((tab, index) => ({
+        tabId: tab.id,
+        connectionId: tab.id,
+        order: index,
+        originalConnectionId: tab.originalConnectionId,
+      }));
+      ActiveConnectionsManager.saveActiveConnections(activeConnections);
+    } else {
+      ActiveConnectionsManager.clearActiveConnections();
+    }
+  }, [allTabs]);
 
   // Restore connections on mount
   useEffect(() => {
@@ -105,28 +149,28 @@ function AppContent() {
         return;
       }
 
+      // Collect tab IDs already present in the restored layout state to avoid duplicates.
+      // The TerminalGroupProvider may have loaded tabs from localStorage, so we only need
+      // to re-establish SSH connections for those tabs, not add them again.
+      const existingTabIds = new Set(
+        Object.values(state.groups).flatMap(g => g.tabs.map(t => t.id))
+      );
+
       console.log('Previous connections found:', activeConnections);
 
-      // Set restoring state
       setIsRestoring(true);
       setRestoringProgress({ current: 0, total: activeConnections.length });
 
-      // Sort by order to restore in correct sequence
       const sortedConnections = [...activeConnections].sort((a, b) => a.order - b.order);
 
       let restoredCount = 0;
       let failedCount = 0;
-      const restoredTabs: ConnectionTab[] = [];
 
-      // Restore connections sequentially with delay for proper initialization
       for (let i = 0; i < sortedConnections.length; i++) {
-        const activeConnection = sortedConnections[i];
-
-        // For duplicated tabs, use the original connection ID to get connection data
-        const connectionIdToLoad = activeConnection.originalConnectionId || activeConnection.connectionId;
+        const activeConn = sortedConnections[i];
+        const connectionIdToLoad = activeConn.originalConnectionId || activeConn.connectionId;
         const connectionData = ConnectionStorageManager.getConnection(connectionIdToLoad);
 
-        // Update progress
         setRestoringProgress({ current: i + 1, total: sortedConnections.length });
 
         if (!connectionData) {
@@ -135,7 +179,6 @@ function AppContent() {
           continue;
         }
 
-        // Check if we have authentication credentials saved
         const hasCredentials = connectionData.authMethod === 'password'
           ? !!connectionData.password
           : !!connectionData.privateKeyPath;
@@ -152,13 +195,14 @@ function AppContent() {
           username: connectionData.username,
         });
 
+        const tabAlreadyExists = existingTabIds.has(activeConn.connectionId);
+
         try {
-          // Establish SSH connection using the unique tab ID (preserve duplicated tab IDs)
           const result = await invoke<{ success: boolean; error?: string }>(
             'ssh_connect',
             {
               request: {
-                connection_id: activeConnection.connectionId, // Use the actual tab ID (which might be a duplicate ID)
+                connection_id: activeConn.connectionId,
                 host: connectionData.host,
                 port: connectionData.port || 22,
                 username: connectionData.username,
@@ -171,72 +215,51 @@ function AppContent() {
           );
 
           if (result.success) {
-            // Update last connected timestamp only for the original connection
-            if (!activeConnection.originalConnectionId) {
+            if (!activeConn.originalConnectionId) {
               ConnectionStorageManager.updateLastConnected(connectionData.id);
             }
 
-            // Mark first tab as active
-            const isFirstTab = i === 0;
+            if (tabAlreadyExists) {
+              // Tab was already restored from layout persistence — just update its status
+              dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'connecting' });
+            } else {
+              // Tab doesn't exist yet (e.g. layout was reset) — create it
+              const newTab: TerminalTab = {
+                id: activeConn.connectionId,
+                name: connectionData.name,
+                protocol: connectionData.protocol,
+                host: connectionData.host,
+                username: connectionData.username,
+                originalConnectionId: activeConn.originalConnectionId,
+                connectionStatus: 'connecting',
+                reconnectCount: 0,
+              };
 
-            // Create the tab object
-            const newTab: ConnectionTab = {
-              id: activeConnection.connectionId, // Use the actual tab ID
-              name: connectionData.name,
-              protocol: connectionData.protocol,
-              host: connectionData.host,
-              username: connectionData.username,
-              isActive: isFirstTab,
-              originalConnectionId: activeConnection.originalConnectionId, // Preserve original connection ID for duplicates
-              connectionStatus: 'connecting', // Will be updated when PTY session is established
-              reconnectCount: 0
-            };
-
-            // Add to restored tabs array
-            restoredTabs.push(newTab);
+              dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+            }
 
             restoredCount++;
-            console.log(`✓ Restored connection: ${connectionData.name}${activeConnection.originalConnectionId ? ' (duplicate)' : ''}`);
+            console.log(`✓ Restored connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}${activeConn.originalConnectionId ? ' (duplicate)' : ''}`);
 
-            // CRITICAL: Wait for terminal initialization before proceeding to next connection
-            // Each terminal needs time to:
-            // 1. Mount the component and create xterm instance
-            // 2. Establish WebSocket connection to ws://127.0.0.1:9001
-            // 3. Send StartPty message and receive confirmation
-            // 4. Start PTY output reader task on backend
-            // Without this delay, subsequent connections may:
-            // - Attach to the wrong PTY session
-            // - Receive mixed output from other PTY sessions
-            // - Have input echoing issues
             if (i < sortedConnections.length - 1) {
               await new Promise(resolve => setTimeout(resolve, 1500));
             }
           } else {
             console.error(`Failed to restore connection ${connectionData.name}:`, result.error);
+            if (tabAlreadyExists) {
+              dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'disconnected' });
+            }
             failedCount++;
           }
         } catch (error) {
           console.error(`Error restoring connection ${connectionData.name}:`, error);
+          if (tabAlreadyExists) {
+            dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'disconnected' });
+          }
           failedCount++;
         }
       }
 
-      // Batch update all restored tabs at once instead of individual updates
-      if (restoredTabs.length > 0) {
-        setTabs(restoredTabs);
-        setActiveTabId(restoredTabs[0].id);
-        setSelectedConnection({
-          id: restoredTabs[0].id,
-          name: restoredTabs[0].name,
-          type: 'connection',
-          protocol: restoredTabs[0].protocol,
-          host: restoredTabs[0].host,
-          username: restoredTabs[0].username,
-          isConnected: true
-        });
-      }
-
-      // Show toast notification with restore results
       if (restoredCount > 0) {
         toast.success('Connections Restored', {
           description: failedCount > 0
@@ -244,39 +267,22 @@ function AppContent() {
             : `Successfully restored ${restoredCount} connection(s)`,
         });
       } else if (failedCount > 0) {
-        // All connections failed to restore, clear active connections
         ActiveConnectionsManager.clearActiveConnections();
         toast.error('Connection Restore Failed', {
           description: 'Unable to restore previous connections. Please reconnect manually.',
         });
       }
 
-      // Clear restoring state
       setCurrentRestoreTarget(null);
       setIsRestoring(false);
       setRestoringProgress({ current: 0, total: 0 });
     };
 
     restoreConnections();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Save active connections when tabs change
-  useEffect(() => {
-    if (tabs.length > 0) {
-      const activeConnections = tabs.map((tab, index) => ({
-        tabId: tab.id,
-        connectionId: tab.id,
-        order: index,
-        originalConnectionId: tab.originalConnectionId, // Save reference to original connection for duplicated tabs
-      }));
-      ActiveConnectionsManager.saveActiveConnections(activeConnections);
-    } else {
-      ActiveConnectionsManager.clearActiveConnections();
-    }
-  }, [tabs]);
-
   const handleConnectionSelect = (connection: ConnectionNode) => {
-    // Just select the connection, don't connect
     if (connection.type === 'connection') {
       setSelectedConnection(connection);
     }
@@ -286,224 +292,138 @@ function AppContent() {
     if (connection.type === 'connection') {
       setSelectedConnection(connection);
 
-      // Check if tab already exists
-      const existingTab = tabs.find(tab => tab.id === connection.id);
-      if (!existingTab) {
-        // If connection is not connected, load connection data and connect
-        if (!connection.isConnected) {
-          // Load connection data from storage
-          const connectionData = ConnectionStorageManager.getConnection(connection.id);
-          if (connectionData) {
-            // Check if we have authentication credentials saved
-            const hasCredentials = connectionData.authMethod === 'password'
-              ? !!connectionData.password
-              : !!connectionData.privateKeyPath;
+      // Check if tab already exists in the ACTIVE group only.
+      // Match by tab.id OR originalConnectionId to catch duplicates too.
+      const currentGroup = state.groups[state.activeGroupId];
+      const existingTabInActiveGroup = currentGroup?.tabs.find(
+        tab => tab.id === connection.id || tab.originalConnectionId === connection.id
+      );
 
-            if (hasCredentials) {
-              // We have saved credentials - establish SSH connection first
-              try {
-                const result = await invoke<{ success: boolean; error?: string }>(
-                  'ssh_connect',
-                  {
-                    request: {
-                      connection_id: connection.id,
-                      host: connectionData.host,
-                      port: connectionData.port || 22,
-                      username: connectionData.username,
-                      auth_method: connectionData.authMethod || 'password',
-                      password: connectionData.password || '',
-                      key_path: connectionData.privateKeyPath || null,
-                      passphrase: connectionData.passphrase || null,
-                    }
-                  }
-                );
-
-                if (result.success) {
-                  // Update last connected timestamp
-                  ConnectionStorageManager.updateLastConnected(connection.id);
-
-                  // Create the tab after successful connection
-                  const config: ConnectionConfig = {
-                    id: connection.id,
-                    name: connectionData.name,
-                    protocol: connectionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
-                    host: connectionData.host,
-                    port: connectionData.port,
-                    username: connectionData.username,
-                    authMethod: connectionData.authMethod || 'password',
-                    password: connectionData.password,
-                    privateKeyPath: connectionData.privateKeyPath,
-                    passphrase: connectionData.passphrase,
-                  };
-
-                  handleConnectionDialogConnect(config);
-                } else {
-                  // Connection failed - show error and open dialog
-                  console.error('SSH connection failed:', result.error);
-                  toast.error('Connection Failed', {
-                    description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
-                  });
-                  setEditingConnection({
-                    id: connection.id,
-                    name: connectionData.name,
-                    protocol: connectionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
-                    host: connectionData.host,
-                    port: connectionData.port,
-                    username: connectionData.username,
-                    authMethod: connectionData.authMethod || 'password',
-                  });
-                  setConnectionDialogOpen(true);
-                }
-              } catch (error) {
-                console.error('Error connecting to SSH:', error);
-                toast.error('Connection Error', {
-                  description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
-                });
-                // On error, open dialog to let user try again
-                setEditingConnection({
-                  id: connection.id,
-                  name: connectionData.name,
-                  protocol: connectionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
-                  host: connectionData.host,
-                  port: connectionData.port,
-                  username: connectionData.username,
-                  authMethod: connectionData.authMethod || 'password',
-                });
-                setConnectionDialogOpen(true);
-              }
-            } else {
-              // No saved credentials - open dialog to input credentials
-              setEditingConnection({
-                id: connection.id,
-                name: connectionData.name,
-                protocol: connectionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
-                host: connectionData.host,
-                port: connectionData.port,
-                username: connectionData.username,
-                authMethod: connectionData.authMethod || 'password',
-              });
-              setConnectionDialogOpen(true);
-            }
-          }
-          return;
-        }
-
-        // Create new tab if connection is already connected somehow
-        const newTab: ConnectionTab = {
-          id: connection.id,
-          name: connection.name,
-          protocol: connection.protocol,
-          host: connection.host,
-          username: connection.username,
-          isActive: true,
-          connectionStatus: 'connecting',
-          reconnectCount: 0
-        };
-
-        // Deactivate other tabs and add new one
-        setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), newTab]);
-      } else {
-        // Activate existing tab
-        setTabs(prev => prev.map(tab => ({ ...tab, isActive: tab.id === connection.id })));
+      if (existingTabInActiveGroup) {
+        // Tab exists in active group — just activate it
+        dispatch({ type: 'ACTIVATE_TAB', groupId: state.activeGroupId, tabId: existingTabInActiveGroup.id });
+        return;
       }
 
-      setActiveTabId(connection.id);
+      // Check if this connection already has a session in ANY other group.
+      // If so, we need a unique session ID to avoid sharing the same backend PTY.
+      const existsElsewhere = allTabs.some(
+        tab => tab.id === connection.id || tab.originalConnectionId === connection.id
+      );
+
+      const connectionData = ConnectionStorageManager.getConnection(connection.id);
+      if (!connectionData) return;
+
+      const hasCredentials = connectionData.authMethod === 'password'
+        ? !!connectionData.password
+        : !!connectionData.privateKeyPath;
+
+      if (!hasCredentials) {
+        setEditingConnection({
+          id: connection.id,
+          name: connectionData.name,
+          protocol: connectionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+          host: connectionData.host,
+          port: connectionData.port,
+          username: connectionData.username,
+          authMethod: connectionData.authMethod || 'password',
+        });
+        setConnectionDialogOpen(true);
+        return;
+      }
+
+      // Use a unique session ID if the connection already exists elsewhere
+      const sessionId = existsElsewhere
+        ? `${connection.id}-dup-${Date.now()}`
+        : connection.id;
+
+      try {
+        const result = await invoke<{ success: boolean; error?: string }>(
+          'ssh_connect',
+          {
+            request: {
+              connection_id: sessionId,
+              host: connectionData.host,
+              port: connectionData.port || 22,
+              username: connectionData.username,
+              auth_method: connectionData.authMethod || 'password',
+              password: connectionData.password || '',
+              key_path: connectionData.privateKeyPath || null,
+              passphrase: connectionData.passphrase || null,
+            }
+          }
+        );
+
+        if (result.success) {
+          ConnectionStorageManager.updateLastConnected(connection.id);
+
+          const newTab: TerminalTab = {
+            id: sessionId,
+            name: connectionData.name,
+            protocol: connectionData.protocol,
+            host: connectionData.host,
+            username: connectionData.username,
+            originalConnectionId: existsElsewhere ? connection.id : undefined,
+            connectionStatus: 'connecting',
+            reconnectCount: 0,
+          };
+
+          dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+        } else {
+          console.error('SSH connection failed:', result.error);
+          toast.error('Connection Failed', {
+            description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
+          });
+          setEditingConnection({
+            id: connection.id,
+            name: connectionData.name,
+            protocol: connectionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+            host: connectionData.host,
+            port: connectionData.port,
+            username: connectionData.username,
+            authMethod: connectionData.authMethod || 'password',
+          });
+          setConnectionDialogOpen(true);
+        }
+      } catch (error) {
+        console.error('Error connecting to SSH:', error);
+        toast.error('Connection Error', {
+          description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
+        });
+        setEditingConnection({
+          id: connection.id,
+          name: connectionData.name,
+          protocol: connectionData.protocol as 'SSH' | 'Telnet' | 'Raw' | 'Serial',
+          host: connectionData.host,
+          port: connectionData.port,
+          username: connectionData.username,
+          authMethod: connectionData.authMethod || 'password',
+        });
+        setConnectionDialogOpen(true);
+      }
     }
   };
 
   const handleTabSelect = useCallback((tabId: string) => {
-    // Batch all state updates together using React 18 automatic batching
-    const tab = tabs.find(t => t.id === tabId);
-
-    setTabs(prev => prev.map(tab => ({ ...tab, isActive: tab.id === tabId })));
-    setActiveTabId(tabId);
-
-    if (tab) {
-      setSelectedConnection({
-        id: tab.id,
-        name: tab.name,
-        type: 'connection',
-        protocol: tab.protocol,
-        host: tab.host,
-        username: tab.username
-      });
+    // Find which group contains this tab and activate it
+    for (const group of Object.values(state.groups)) {
+      if (group.tabs.some(t => t.id === tabId)) {
+        dispatch({ type: 'ACTIVATE_GROUP', groupId: group.id });
+        dispatch({ type: 'ACTIVATE_TAB', groupId: group.id, tabId });
+        break;
+      }
     }
-  }, [tabs]);
+  }, [state.groups, dispatch]);
 
   const handleTabClose = useCallback((tabId: string) => {
-    const remainingTabs = tabs.filter(tab => tab.id !== tabId);
-
-    if (activeTabId === tabId && remainingTabs.length > 0) {
-      // Batch state updates: closing active tab and selecting new one
-      const newActiveTab = remainingTabs[remainingTabs.length - 1];
-      setTabs(remainingTabs.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
-      setActiveTabId(newActiveTab.id);
-    } else if (remainingTabs.length === 0) {
-      // No tabs remaining
-      setTabs([]);
-      setActiveTabId('');
-      setSelectedConnection(null);
-    } else {
-      // Closed an inactive tab
-      setTabs(remainingTabs);
-    }
-  }, [tabs, activeTabId]);
-
-  // Handle connection status changes from terminal
-  const handleConnectionStatusChange = useCallback((connectionId: string, status: 'connected' | 'connecting' | 'disconnected') => {
-    console.log(`[App] Connection status changed for ${connectionId}: ${status}`);
-    setTabs(prev => prev.map(tab =>
-      tab.id === connectionId
-        ? { ...tab, connectionStatus: status }
-        : tab
-    ));
-  }, []);
-
-  const handleCloseAll = useCallback(() => {
-    setTabs([]);
-    setActiveTabId('');
-    setSelectedConnection(null);
-  }, []);
-
-  const handleCloseOthers = useCallback((tabId: string) => {
-    const tabToKeep = tabs.find(tab => tab.id === tabId);
-    if (tabToKeep) {
-      setTabs([{ ...tabToKeep, isActive: true }]);
-      setActiveTabId(tabId);
-    }
-  }, [tabs]);
-
-  const handleCloseToRight = useCallback((tabId: string) => {
-    const tabIndex = tabs.findIndex(tab => tab.id === tabId);
-    if (tabIndex !== -1) {
-      const remainingTabs = tabs.slice(0, tabIndex + 1);
-
-      // If active tab was closed, activate the rightmost remaining tab
-      if (!remainingTabs.find(tab => tab.id === activeTabId)) {
-        const newActiveTab = remainingTabs[remainingTabs.length - 1];
-        setTabs(remainingTabs.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
-        setActiveTabId(newActiveTab.id);
-      } else {
-        setTabs(remainingTabs);
+    // Find which group contains this tab and remove it
+    for (const group of Object.values(state.groups)) {
+      if (group.tabs.some(t => t.id === tabId)) {
+        dispatch({ type: 'REMOVE_TAB', groupId: group.id, tabId });
+        break;
       }
     }
-  }, [tabs, activeTabId]);
-
-  const handleCloseToLeft = useCallback((tabId: string) => {
-    const tabIndex = tabs.findIndex(tab => tab.id === tabId);
-    if (tabIndex !== -1) {
-      const remainingTabs = tabs.slice(tabIndex);
-
-      // If active tab was closed, activate the leftmost remaining tab
-      if (!remainingTabs.find(tab => tab.id === activeTabId)) {
-        const newActiveTab = remainingTabs[0];
-        setTabs(remainingTabs.map(tab => ({ ...tab, isActive: tab.id === newActiveTab.id })));
-        setActiveTabId(newActiveTab.id);
-      } else {
-        setTabs(remainingTabs);
-      }
-    }
-  }, [tabs, activeTabId]);
+  }, [state.groups, dispatch]);
 
   const handleNewTab = useCallback(() => {
     setConnectionDialogOpen(true);
@@ -511,13 +431,10 @@ function AppContent() {
   }, []);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
-    const tabToDuplicate = tabs.find(tab => tab.id === tabId);
+    const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
     if (!tabToDuplicate) return;
 
-    // Get the original connection ID (in case this is already a duplicated tab)
     const originalConnectionId = tabToDuplicate.originalConnectionId || tabId;
-
-    // Get the connection data from storage using the original connection ID
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
       toast.error('Cannot Duplicate Tab', {
@@ -526,7 +443,6 @@ function AppContent() {
       return;
     }
 
-    // Check if we have authentication credentials saved
     const hasCredentials = connectionData.authMethod === 'password'
       ? !!connectionData.password
       : !!connectionData.privateKeyPath;
@@ -539,10 +455,8 @@ function AppContent() {
     }
 
     try {
-      // Generate a unique ID for the duplicated tab
       const duplicateId = `${originalConnectionId}-dup-${Date.now()}`;
 
-      // Establish SSH connection for the duplicate
       const result = await invoke<{ success: boolean; error?: string }>(
         'ssh_connect',
         {
@@ -560,27 +474,19 @@ function AppContent() {
       );
 
       if (result.success) {
-        // Create a new tab for the duplicated connection
-        const duplicatedTab: ConnectionTab = {
+        const duplicatedTab: TerminalTab = {
           id: duplicateId,
           name: tabToDuplicate.name,
           protocol: tabToDuplicate.protocol,
           host: tabToDuplicate.host,
           username: tabToDuplicate.username,
-          isActive: true,
-          originalConnectionId: originalConnectionId, // Store reference to original connection
+          originalConnectionId,
           connectionStatus: 'connecting',
-          reconnectCount: 0
+          reconnectCount: 0,
         };
 
-        // Insert the duplicated tab right after the original tab
-        setTabs(prev => {
-          const tabIndex = prev.findIndex(tab => tab.id === tabId);
-          const newTabs = [...prev.map(tab => ({ ...tab, isActive: false }))];
-          newTabs.splice(tabIndex + 1, 0, duplicatedTab);
-          return newTabs;
-        });
-        setActiveTabId(duplicateId);
+        // Add duplicated tab to the active group
+        dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: duplicatedTab });
 
         toast.success('Tab Duplicated', {
           description: `Successfully duplicated ${tabToDuplicate.name}`,
@@ -596,17 +502,13 @@ function AppContent() {
         description: error instanceof Error ? error.message : 'An unexpected error occurred.',
       });
     }
-  }, [tabs]);
+  }, [allTabs, state.activeGroupId, dispatch]);
 
-  // Handle reconnecting a disconnected connection
   const handleReconnect = useCallback(async (tabId: string) => {
-    const tabToReconnect = tabs.find(tab => tab.id === tabId);
+    const tabToReconnect = allTabs.find(tab => tab.id === tabId);
     if (!tabToReconnect) return;
 
-    // Get the original connection ID (in case this is a duplicated tab)
     const originalConnectionId = tabToReconnect.originalConnectionId || tabId;
-
-    // Get the connection data from storage
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
       toast.error('Cannot Reconnect', {
@@ -615,7 +517,6 @@ function AppContent() {
       return;
     }
 
-    // Check if we have authentication credentials saved
     const hasCredentials = connectionData.authMethod === 'password'
       ? !!connectionData.password
       : !!connectionData.privateKeyPath;
@@ -624,7 +525,6 @@ function AppContent() {
       toast.error('Cannot Reconnect', {
         description: 'No saved credentials found. Please connect manually.',
       });
-      // Open connection dialog with pre-filled data
       setEditingConnection({
         id: originalConnectionId,
         name: connectionData.name,
@@ -639,21 +539,15 @@ function AppContent() {
     }
 
     // Update tab status to connecting
-    setTabs(prev => prev.map(tab =>
-      tab.id === tabId
-        ? { ...tab, connectionStatus: 'connecting' as const }
-        : tab
-    ));
+    dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
 
     try {
-      // First, close the existing SSH connection to clean up
       try {
         await invoke('ssh_disconnect', { connection_id: tabId });
       } catch {
-        // Ignore errors when disconnecting - connection might already be gone
+        // Ignore errors when disconnecting
       }
 
-      // Establish new SSH connection
       const result = await invoke<{ success: boolean; error?: string }>(
         'ssh_connect',
         {
@@ -671,89 +565,68 @@ function AppContent() {
       );
 
       if (result.success) {
-        // Update last connected timestamp
         if (!tabToReconnect.originalConnectionId) {
           ConnectionStorageManager.updateLastConnected(originalConnectionId);
         }
 
-        // Increment reconnectCount to force PtyTerminal to remount and create new PTY session
-        setTabs(prev => prev.map(tab =>
-          tab.id === tabId
-            ? { ...tab, reconnectCount: tab.reconnectCount + 1 }
-            : tab
-        ));
-
+        // Note: reconnectCount is managed by the reducer via UPDATE_TAB_STATUS
+        // The PtyTerminal in TerminalGroupView will re-render based on status change
         toast.success('Reconnected', {
           description: `Successfully reconnected to ${tabToReconnect.name}`,
         });
       } else {
-        // Update tab status to disconnected
-        setTabs(prev => prev.map(tab =>
-          tab.id === tabId
-            ? { ...tab, connectionStatus: 'disconnected' as const }
-            : tab
-        ));
-
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
         toast.error('Reconnection Failed', {
           description: result.error || 'Unable to reconnect. Please try again.',
         });
       }
     } catch (error) {
       console.error('Error reconnecting:', error);
-
-      // Update tab status to disconnected
-      setTabs(prev => prev.map(tab =>
-        tab.id === tabId
-          ? { ...tab, connectionStatus: 'disconnected' as const }
-          : tab
-      ));
-
+      dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
       toast.error('Reconnection Error', {
         description: error instanceof Error ? error.message : 'An unexpected error occurred.',
       });
     }
-  }, [tabs]);
+  }, [allTabs, dispatch]);
 
   const handleConnectionDialogConnect = useCallback((config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
 
-    // Check if a tab with this ID already exists
-    const existingTab = tabs.find(tab => tab.id === tabId);
+    // Check if a tab with this ID already exists in any group
+    const existingTab = allTabs.find(tab => tab.id === tabId);
 
     if (existingTab) {
-      // Tab exists - update its info and activate it (reset connection status to connecting, increment reconnectCount)
-      setTabs(prev => prev.map(tab =>
-        tab.id === tabId
-          ? { ...tab, name: config.name, host: config.host, username: config.username, isActive: true, connectionStatus: 'connecting' as const, reconnectCount: tab.reconnectCount + 1 }
-          : { ...tab, isActive: false }
-      ));
-      setActiveTabId(tabId);
+      // Tab exists - activate it and update status
+      for (const group of Object.values(state.groups)) {
+        if (group.tabs.some(t => t.id === tabId)) {
+          dispatch({ type: 'ACTIVATE_GROUP', groupId: group.id });
+          dispatch({ type: 'ACTIVATE_TAB', groupId: group.id, tabId });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
+          break;
+        }
+      }
     } else {
-      // Create new tab
-      const newTab: ConnectionTab = {
+      // Create new tab in active group
+      const newTab: TerminalTab = {
         id: tabId,
         name: config.name,
         protocol: config.protocol,
         host: config.host,
         username: config.username,
-        isActive: true,
         connectionStatus: 'connecting',
-        reconnectCount: 0
+        reconnectCount: 0,
       };
 
-      setTabs(prev => [...prev.map(tab => ({ ...tab, isActive: false })), newTab]);
-      setActiveTabId(newTab.id);
+      dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
     }
-  }, [tabs]);
+  }, [allTabs, state.groups, state.activeGroupId, dispatch]);
 
   const handleOpenSettings = useCallback(() => {
     setSettingsModalOpen(true);
   }, []);
 
-  // Handle editing a connection from the connection manager
   const handleEditConnection = useCallback((connection: ConnectionNode) => {
     if (connection.type === 'connection') {
-      // Load the full connection data from storage
       const connectionData = ConnectionStorageManager.getConnection(connection.id);
       if (connectionData) {
         setEditingConnection({
@@ -791,14 +664,12 @@ function AppContent() {
       port: connection.port,
       lastConnected: connection.lastConnected,
     }));
-  }, [tabs]); // Refresh when tabs change (new connection made)
+  }, [allTabs]); // Refresh when tabs change (new connection made)
 
-  // Quick connect handler - connects to a recent connection by ID
+  // Quick connect handler
   const handleQuickConnect = useCallback(async (connectionId: string) => {
-    // Check if already connected
-    const existingTab = tabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
+    const existingTab = allTabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
     if (existingTab) {
-      // Just switch to existing tab
       handleTabSelect(existingTab.id);
       toast.info('Already Connected', {
         description: `Switched to existing ${existingTab.name} connection`,
@@ -806,7 +677,6 @@ function AppContent() {
       return;
     }
 
-    // Load connection data
     const connectionData = ConnectionStorageManager.getConnection(connectionId);
     if (!connectionData) {
       toast.error('Connection Not Found', {
@@ -815,13 +685,11 @@ function AppContent() {
       return;
     }
 
-    // Check if we have authentication credentials saved
     const hasCredentials = connectionData.authMethod === 'password'
       ? !!connectionData.password
       : !!connectionData.privateKeyPath;
 
     if (!hasCredentials) {
-      // No saved credentials - open connection dialog with pre-filled data
       setEditingConnection({
         id: connectionData.id,
         name: connectionData.name,
@@ -835,7 +703,6 @@ function AppContent() {
       return;
     }
 
-    // Connect using saved credentials
     try {
       const result = await invoke<{ success: boolean; error?: string }>(
         'ssh_connect',
@@ -854,10 +721,8 @@ function AppContent() {
       );
 
       if (result.success) {
-        // Update last connected timestamp
         ConnectionStorageManager.updateLastConnected(connectionData.id);
 
-        // Create the tab after successful connection
         const config: ConnectionConfig = {
           id: connectionData.id,
           name: connectionData.name,
@@ -881,7 +746,6 @@ function AppContent() {
         toast.error('Connection Failed', {
           description: result.error || 'Unable to connect. Please try again.',
         });
-        // Open dialog for manual retry
         setEditingConnection({
           id: connectionData.id,
           name: connectionData.name,
@@ -899,14 +763,14 @@ function AppContent() {
         description: error instanceof Error ? error.message : 'An unexpected error occurred.',
       });
     }
-  }, [tabs, handleTabSelect, handleConnectionDialogConnect]);
+  }, [allTabs, handleTabSelect, handleConnectionDialogConnect]);
 
-  const activeTab = tabs.find(tab => tab.id === activeTabId);
-  const activeConnection = activeTab ? {
-    name: activeTab.name,
-    protocol: activeTab.protocol || 'SSH',
-    host: activeTab.host,
-    status: activeTab.connectionStatus || 'connected'
+  // Derive active connection info for StatusBar (compatible format)
+  const statusBarConnection = activeConnection ? {
+    name: activeConnection.name,
+    protocol: activeConnection.protocol || 'SSH',
+    host: activeConnection.host,
+    status: activeConnection.status,
   } : undefined;
 
   const restoringPercent = useMemo(() => {
@@ -924,7 +788,10 @@ function AppContent() {
     ]
   ), []);
 
-
+  // Check if there are any tabs across all groups
+  const hasAnyTabs = allTabs.length > 0;
+  // Check if the grid has only one empty group (show welcome screen)
+  const showWelcomeInMainArea = !hasAnyTabs && Object.keys(state.groups).length <= 1;
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -998,22 +865,30 @@ function AppContent() {
       <MenuBar
         onNewConnection={handleNewTab}
         onNewTab={handleNewTab}
-        onCloseConnection={() => activeTabId && handleTabClose(activeTabId)}
+        onCloseConnection={() => {
+          if (activeGroup && activeGroup.activeTabId) {
+            dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
+          }
+        }}
         onNextTab={() => {
-          const currentIndex = tabs.findIndex(tab => tab.id === activeTabId);
-          if (currentIndex < tabs.length - 1) {
-            handleTabSelect(tabs[currentIndex + 1].id);
+          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
+            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            if (currentIndex < activeGroup.tabs.length - 1) {
+              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[currentIndex + 1].id });
+            }
           }
         }}
         onPreviousTab={() => {
-          const currentIndex = tabs.findIndex(tab => tab.id === activeTabId);
-          if (currentIndex > 0) {
-            handleTabSelect(tabs[currentIndex - 1].id);
+          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
+            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            if (currentIndex > 0) {
+              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[currentIndex - 1].id });
+            }
           }
         }}
         onCloneTab={() => {
-          if (activeTabId) {
-            handleDuplicateTab(activeTabId);
+          if (activeTab) {
+            handleDuplicateTab(activeTab.id);
           }
         }}
         onOpenSettings={handleOpenSettings}
@@ -1041,7 +916,7 @@ function AppContent() {
 
       <div className="flex-1 flex overflow-hidden">
         <ResizablePanelGroup direction="horizontal" autoSaveId="r-shell-main-layout">
-          {/* Left Sidebar - Connection Manager with integrated Connection Details */}
+          {/* Left Sidebar - Connection Manager */}
           {layout.leftSidebarVisible && (
             <>
               <ResizablePanel
@@ -1056,7 +931,7 @@ function AppContent() {
                   onConnectionSelect={handleConnectionSelect}
                   onConnectionConnect={handleConnectionConnect}
                   selectedConnectionId={selectedConnection?.id || null}
-                  activeConnections={new Set(tabs.map(tab => tab.id))}
+                  activeConnections={new Set(allTabs.map(tab => tab.id))}
                   onNewConnection={handleNewTab}
                   onEditConnection={handleEditConnection}
                 />
@@ -1066,7 +941,7 @@ function AppContent() {
             </>
           )}
 
-          {/* Main Content */}
+          {/* Main Content - Grid Renderer replaces ConnectionTabs + single terminal */}
           <ResizablePanel
             id="main-content"
             order={2}
@@ -1074,71 +949,41 @@ function AppContent() {
             minSize={30}
           >
             <div className="h-full flex flex-col">
-              <ConnectionTabs
-                tabs={tabs}
-                onTabSelect={handleTabSelect}
-                onTabClose={handleTabClose}
-                onNewTab={handleNewTab}
-                onDuplicateTab={handleDuplicateTab}
-                onReconnect={handleReconnect}
-                onCloseAll={handleCloseAll}
-                onCloseOthers={handleCloseOthers}
-                onCloseToRight={handleCloseToRight}
-                onCloseToLeft={handleCloseToLeft}
-              />
-
-              {tabs.length > 0 ? (
-                <>
-                  {tabs.map((tab) => (
-                    <div
-                      key={tab.id}
-                      style={{ display: tab.id === activeTabId ? 'flex' : 'none', height: '100%', flexDirection: 'column', flex: 1 }}
-                    >
-                      <ResizablePanelGroup direction="vertical" className="flex-1" autoSaveId={`r-shell-terminal-${tab.id}`}>
-                        {/* Terminal Panel */}
-                        <ResizablePanel id="terminal" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
-                          <PtyTerminal
-                            key={`${tab.id}-${tab.reconnectCount}`}
-                            connectionId={tab.id}
-                            connectionName={tab.name}
-                            host={tab.host}
-                            username={tab.username}
-                            appearanceKey={appearanceKey}
-                            onConnectionStatusChange={handleConnectionStatusChange}
-                          />
-                        </ResizablePanel>
-
-                        {layout.bottomPanelVisible && (
-                          <>
-                            <ResizableHandle />
-
-                            {/* File Browser Panel */}
-                            <ResizablePanel
-                              id="file-browser"
-                              order={2}
-                              defaultSize={layout.bottomPanelSize}
-                              minSize={20}
-                              maxSize={50}
-                              onResize={(size) => setBottomPanelSize(size)}
-                            >
-                              <IntegratedFileBrowser
-                                connectionId={tab.id}
-                                host={tab.host}
-                                isConnected={tab.connectionStatus === 'connected'}
-                                onClose={() => {}} // No close functionality since it's always visible
-                              />
-                            </ResizablePanel>
-                          </>
-                        )}
-                      </ResizablePanelGroup>
-                    </div>
-                  ))}
-                </>
-              ) : (
+              {showWelcomeInMainArea ? (
                 <WelcomeScreen
                   onNewConnection={handleNewTab}
                   onOpenSettings={handleOpenSettings}
                 />
+              ) : (
+                <ResizablePanelGroup direction="vertical" className="flex-1">
+                  {/* Terminal Grid Panel */}
+                  <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
+                    <GridRenderer node={state.gridLayout} path={[]} />
+                  </ResizablePanel>
+
+                  {layout.bottomPanelVisible && activeConnection && (
+                    <>
+                      <ResizableHandle />
+
+                      {/* File Browser Panel - uses activeConnection from context */}
+                      <ResizablePanel
+                        id="file-browser"
+                        order={2}
+                        defaultSize={layout.bottomPanelSize}
+                        minSize={20}
+                        maxSize={50}
+                        onResize={(size) => setBottomPanelSize(size)}
+                      >
+                        <IntegratedFileBrowser
+                          connectionId={activeConnection.connectionId}
+                          host={activeConnection.host}
+                          isConnected={activeConnection.status === 'connected'}
+                          onClose={() => {}}
+                        />
+                      </ResizablePanel>
+                    </>
+                  )}
+                </ResizablePanelGroup>
               )}
             </div>
           </ResizablePanel>
@@ -1147,7 +992,7 @@ function AppContent() {
             <>
               <ResizableHandle />
 
-              {/* Right Sidebar - Tabs for Monitor/Logs */}
+              {/* Right Sidebar - Monitor/Logs using activeConnection from context */}
               <ResizablePanel
                 id="right-sidebar"
                 order={3}
@@ -1162,28 +1007,19 @@ function AppContent() {
                     <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
                   </TabsList>
 
-                  {/* Always render both Monitor and Logs, use CSS to show/hide */}
                   <div className="flex-1 mt-0 overflow-hidden relative">
-                    {/* Monitor Tab Content - forceMount keeps it always mounted */}
                     <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       <div className="h-full overflow-auto p-2">
-                        {/* Render monitors for all connections but only show the active one */}
-                        {tabs.map((tab) => (
-                          <div key={`monitor-${tab.id}`} style={{ display: tab.id === activeTabId ? 'block' : 'none', height: '100%' }}>
-                            <SystemMonitor connectionId={tab.id} />
-                          </div>
-                        ))}
+                        {activeConnection ? (
+                          <SystemMonitor connectionId={activeConnection.connectionId} />
+                        ) : null}
                       </div>
                     </TabsContent>
 
-                    {/* Logs Tab Content - forceMount keeps it always mounted */}
                     <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      {/* Render log viewers for all connections but only show the active one */}
-                      {tabs.map((tab) => (
-                        <div key={`logs-${tab.id}`} style={{ display: tab.id === activeTabId ? 'block' : 'none', height: '100%' }}>
-                          <LogViewer connectionId={tab.id} />
-                        </div>
-                      ))}
+                      {activeConnection ? (
+                        <LogViewer connectionId={activeConnection.connectionId} />
+                      ) : null}
                     </TabsContent>
                   </div>
                 </Tabs>
@@ -1193,7 +1029,7 @@ function AppContent() {
         </ResizablePanelGroup>
       </div>
 
-      <StatusBar activeConnection={activeConnection} />
+      <StatusBar activeConnection={statusBarConnection} />
 
       {/* Modals */}
       <ConnectionDialog
@@ -1206,24 +1042,30 @@ function AppContent() {
       <SFTPPanel
         open={sftpPanelOpen}
         onOpenChange={setSftpPanelOpen}
-        connectionId={activeTabId}
+        connectionId={activeTab?.id || ''}
         host={activeTab?.host}
       />
 
       <SettingsModal
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
-        onAppearanceChange={() => setAppearanceKey(k => k + 1)}
+        onAppearanceChange={() => {
+          // Appearance changes are handled by individual PtyTerminal instances
+          // via their own settings listeners in TerminalGroupView
+        }}
       />
 
       <Toaster richColors position="top-right" />
     </div>
   );
 }
+
 export default function App() {
   return (
     <LayoutProvider>
-      <AppContent />
+      <TerminalGroupProvider>
+        <AppContent />
+      </TerminalGroupProvider>
     </LayoutProvider>
   );
 }

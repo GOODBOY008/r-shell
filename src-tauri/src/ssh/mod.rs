@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConfig {
@@ -39,6 +40,11 @@ pub struct PtySession {
     pub input_tx: mpsc::Sender<Vec<u8>>,
     pub output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
     pub channel_id: ChannelId,
+    /// Sender for resize requests (cols, rows) — forwarded to the SSH channel
+    pub resize_tx: mpsc::Sender<(u32, u32)>,
+    /// Cancellation token — cancelled when this session is torn down.
+    /// The WebSocket reader task should select on this to stop promptly.
+    pub cancel: CancellationToken,
 }
 
 pub struct Client;
@@ -237,6 +243,9 @@ impl SshClient {
             // Clone channel for input task
             let input_channel = channel.make_writer();
             
+            // Create a channel for resize requests
+            let (resize_tx, mut resize_rx) = mpsc::channel::<(u32, u32)>(16);
+            
             // Spawn task to handle input (frontend → SSH)
             // This is similar to ttyd's pty_write and INPUT command handling
             // Key: immediate write + flush for responsiveness
@@ -257,30 +266,51 @@ impl SshClient {
                 }
             });
             
-            // Spawn task to handle output (SSH → frontend)
-            // This is similar to ttyd's process_read_cb and OUTPUT command
+            // Spawn task to handle output (SSH → frontend) AND resize requests.
+            // The channel must stay in this task because `wait()` requires `&mut self`,
+            // but we also need `window_change()` which only requires `&self`.
+            // We use `tokio::select!` to multiplex between output reading and resize.
             tokio::spawn(async move {
                 loop {
-                    match channel.wait().await {
-                        Some(ChannelMsg::Data { data }) => {
-                            if output_tx.send(data.to_vec()).await.is_err() {
-                                break;
+                    tokio::select! {
+                        msg = channel.wait() => {
+                            match msg {
+                                Some(ChannelMsg::Data { data }) => {
+                                    if output_tx.send(data.to_vec()).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Some(ChannelMsg::ExtendedData { data, .. }) => {
+                                    // stderr data (also send to output)
+                                    if output_tx.send(data.to_vec()).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                                    eprintln!("[PTY] Channel closed");
+                                    break;
+                                }
+                                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                                    eprintln!("[PTY] Process exited with status: {}", exit_status);
+                                }
+                                _ => {}
                             }
                         }
-                        Some(ChannelMsg::ExtendedData { data, .. }) => {
-                            // stderr data (also send to output)
-                            if output_tx.send(data.to_vec()).await.is_err() {
-                                break;
+                        resize = resize_rx.recv() => {
+                            match resize {
+                                Some((cols, rows)) => {
+                                    if let Err(e) = channel.window_change(cols, rows, 0, 0).await {
+                                        eprintln!("[PTY] Failed to send window change: {}", e);
+                                    } else {
+                                        eprintln!("[PTY] Window changed to {}x{}", cols, rows);
+                                    }
+                                }
+                                None => {
+                                    // resize channel closed, session is being torn down
+                                    break;
+                                }
                             }
                         }
-                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                            eprintln!("[PTY] Channel closed");
-                            break;
-                        }
-                        Some(ChannelMsg::ExitStatus { exit_status }) => {
-                            eprintln!("[PTY] Process exited with status: {}", exit_status);
-                        }
-                        _ => {}
                     }
                 }
             });
@@ -289,6 +319,8 @@ impl SshClient {
                 input_tx,
                 output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
                 channel_id,
+                resize_tx,
+                cancel: CancellationToken::new(),
             })
         } else {
             Err(anyhow::anyhow!("Not connected"))

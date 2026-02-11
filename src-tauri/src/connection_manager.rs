@@ -8,6 +8,9 @@ use tokio_util::sync::CancellationToken;
 pub struct ConnectionManager {
     connections: Arc<RwLock<HashMap<String, Arc<RwLock<SshClient>>>>>,
     pty_sessions: Arc<RwLock<HashMap<String, Arc<PtySession>>>>,
+    /// Generation counter per connection_id — incremented on each StartPty.
+    /// Used to prevent a stale Close from killing a newly created session.
+    pty_generations: Arc<RwLock<HashMap<String, u64>>>,
     pending_connections: Arc<RwLock<HashMap<String, CancellationToken>>>,
 }
 
@@ -16,6 +19,7 @@ impl ConnectionManager {
         Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
             pty_sessions: Arc::new(RwLock::new(HashMap::new())),
+            pty_generations: Arc::new(RwLock::new(HashMap::new())),
             pending_connections: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -89,7 +93,7 @@ impl ConnectionManager {
         connection_id: &str,
         cols: u32,
         rows: u32,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         // Get the SSH client
         let connections = self.connections.read().await;
         let client = connections
@@ -98,14 +102,32 @@ impl ConnectionManager {
 
         let client = client.read().await;
 
+        // Cancel and remove any existing PTY session for this connection first.
+        // This ensures the old SSH channel and reader task are torn down before
+        // we create a new one, preventing orphaned sessions.
+        {
+            let mut pty_sessions = self.pty_sessions.write().await;
+            if let Some(old_session) = pty_sessions.remove(connection_id) {
+                old_session.cancel.cancel();
+                tracing::info!("Cancelled old PTY session for {}", connection_id);
+            }
+        }
+
         // Create PTY session
         let pty = client.create_pty_session(cols, rows).await?;
+
+        // Bump generation so any in-flight Close for the old session is ignored
+        let mut generations = self.pty_generations.write().await;
+        let gen = generations.entry(connection_id.to_string()).or_insert(0);
+        *gen += 1;
+        let current_gen = *gen;
+        drop(generations);
 
         // Store PTY session
         let mut pty_sessions = self.pty_sessions.write().await;
         pty_sessions.insert(connection_id.to_string(), Arc::new(pty));
 
-        Ok(())
+        Ok(current_gen)
     }
 
     /// Send data to PTY (user input)
@@ -172,10 +194,50 @@ impl ConnectionManager {
         }
     }
 
-    /// Close PTY connection
-    pub async fn close_pty_connection(&self, connection_id: &str) -> Result<()> {
+    /// Close PTY connection, but only if the generation matches.
+    /// This prevents a stale Close (from a remounting component) from killing
+    /// a newly created PTY session.
+    pub async fn close_pty_connection(&self, connection_id: &str, expected_gen: Option<u64>) -> Result<()> {
+        if let Some(gen) = expected_gen {
+            let generations = self.pty_generations.read().await;
+            let current_gen = generations.get(connection_id).copied().unwrap_or(0);
+            if current_gen != gen {
+                tracing::info!(
+                    "Ignoring stale Close for {} (gen {} != current {})",
+                    connection_id, gen, current_gen
+                );
+                return Ok(());
+            }
+        }
         let mut pty_sessions = self.pty_sessions.write().await;
-        pty_sessions.remove(connection_id);
+        if let Some(session) = pty_sessions.remove(connection_id) {
+            // Cancel the session so the WebSocket reader task stops immediately
+            session.cancel.cancel();
+        }
         Ok(())
+    }
+
+    /// Get the cancellation token for a PTY session (used by WebSocket reader tasks)
+    pub async fn get_pty_cancel_token(&self, connection_id: &str) -> Option<CancellationToken> {
+        let sessions = self.pty_sessions.read().await;
+        sessions.get(connection_id).map(|s| s.cancel.clone())
+    }
+
+    /// Resize PTY terminal (send window-change to remote SSH channel)
+    pub async fn resize_pty(
+        &self,
+        connection_id: &str,
+        cols: u32,
+        rows: u32,
+    ) -> Result<()> {
+        let pty_sessions = self.pty_sessions.read().await;
+        let pty = pty_sessions
+            .get(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("PTY connection not found"))?;
+
+        pty.resize_tx
+            .send((cols, rows))
+            .await
+            .map_err(|_| anyhow::anyhow!("PTY resize channel closed"))
     }
 }

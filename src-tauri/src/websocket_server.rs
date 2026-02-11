@@ -33,11 +33,24 @@ pub enum WsMessage {
     /// Resume output (flow control - like ttyd)
     Resume { connection_id: String },
     /// Close PTY connection
-    Close { connection_id: String },
+    Close {
+        connection_id: String,
+        /// If provided, the close is only applied when the generation matches
+        /// the current session. This prevents a stale close (from a remounting
+        /// component) from killing a newly created PTY session.
+        #[serde(default)]
+        generation: Option<u64>,
+    },
     /// Error message
     Error { message: String },
     /// Success confirmation
     Success { message: String },
+    /// PTY session started — includes the generation counter so the frontend
+    /// can send it back in Close to avoid stale-close races.
+    PtyStarted {
+        connection_id: String,
+        generation: u64,
+    },
 }
 
 /// WebSocket server for terminal I/O
@@ -218,19 +231,33 @@ impl WebSocketServer {
             } => {
                 tracing::info!("Starting PTY connection: {} ({}x{})", connection_id, cols, rows);
 
-                // Start the PTY connection
-                self.connection_manager
+                // Start the PTY connection (returns the generation counter)
+                let generation = self.connection_manager
                     .start_pty_connection(&connection_id, cols, rows)
                     .await?;
 
-                // Send success response
+                // Grab the cancel token for this session so the reader task can
+                // stop promptly when the session is torn down.
+                let cancel_token = self.connection_manager
+                    .get_pty_cancel_token(&connection_id)
+                    .await
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("PTY session disappeared immediately after creation")
+                    })?;
+
+                // Send success response with generation so frontend can use it in Close
                 let response = WsMessage::Success {
                     message: format!("PTY connection started: {}", connection_id),
                 };
                 tx.send(serde_json::to_string(&response)?)?;
 
+                let started = WsMessage::PtyStarted {
+                    connection_id: connection_id.clone(),
+                    generation,
+                };
+                tx.send(serde_json::to_string(&started)?)?;
+
                 // Start reading from PTY and sending to WebSocket
-                // CRITICAL OPTIMIZATION: Use blocking read instead of polling
                 let connection_manager = self.connection_manager.clone();
                 let connection_id_clone = connection_id.clone();
                 let tx_clone = tx.clone();
@@ -241,12 +268,25 @@ impl WebSocketServer {
                     let mut last_send = tokio::time::Instant::now();
 
                     loop {
-                        match connection_manager.read_from_pty(&connection_id_clone).await {
+                        // Check cancellation before each read
+                        if cancel_token.is_cancelled() {
+                            tracing::info!("PTY reader task cancelled for {}", connection_id_clone);
+                            break;
+                        }
+
+                        let read_result = tokio::select! {
+                            _ = cancel_token.cancelled() => {
+                                tracing::info!("PTY reader task cancelled for {}", connection_id_clone);
+                                break;
+                            }
+                            result = connection_manager.read_from_pty(&connection_id_clone) => result,
+                        };
+
+                        match read_result {
                             Ok(data) => {
                                 if data.is_empty() {
                                     // Send accumulated data if we have any and timeout reached
                                     if !accumulated.is_empty() && last_send.elapsed().as_millis() > 5 {
-                                        // Send output to WebSocket
                                         let output = WsMessage::Output {
                                             connection_id: connection_id_clone.clone(),
                                             data: accumulated.clone(),
@@ -288,7 +328,6 @@ impl WebSocketServer {
                             }
                             Err(e) => {
                                 tracing::error!("Error reading from PTY: {}", e);
-                                // Notify frontend that the connection is lost
                                 let error_msg = WsMessage::Error {
                                     message: format!("Connection lost: {}", e),
                                 };
@@ -311,7 +350,9 @@ impl WebSocketServer {
                 rows,
             } => {
                 tracing::info!("Resizing terminal {}: {}x{}", connection_id, cols, rows);
-                // TODO: Implement resize_pty in ConnectionManager
+                self.connection_manager
+                    .resize_pty(&connection_id, cols, rows)
+                    .await?;
                 let response = WsMessage::Success {
                     message: format!("Terminal resized: {}x{}", cols, rows),
                 };
@@ -329,9 +370,9 @@ impl WebSocketServer {
                 // In a full implementation, we'd resume the output task
                 // For now, just acknowledge
             }
-            WsMessage::Close { connection_id } => {
-                tracing::info!("Closing PTY connection: {}", connection_id);
-                self.connection_manager.close_pty_connection(&connection_id).await?;
+            WsMessage::Close { connection_id, generation } => {
+                tracing::info!("Closing PTY connection: {} (gen: {:?})", connection_id, generation);
+                self.connection_manager.close_pty_connection(&connection_id, generation).await?;
                 let response = WsMessage::Success {
                     message: format!("PTY connection closed: {}", connection_id),
                 };

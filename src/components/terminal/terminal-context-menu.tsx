@@ -13,6 +13,7 @@ import {
   Search,
   Trash2,
   FileText,
+  RefreshCw,
 } from 'lucide-react';
 
 interface TerminalContextMenuProps {
@@ -26,6 +27,7 @@ interface TerminalContextMenuProps {
   onFindPrevious?: () => void;
   onSelectAll: () => void;
   onSaveToFile: () => void;
+  onReconnect?: () => void;
   hasSelection: boolean;
   searchActive?: boolean;
 }
@@ -52,6 +54,7 @@ export function TerminalContextMenu({
   onFindPrevious,
   onSelectAll,
   onSaveToFile,
+  onReconnect,
   hasSelection,
   searchActive = false,
 }: TerminalContextMenuProps) {
@@ -118,6 +121,16 @@ export function TerminalContextMenu({
           <FileText className="mr-2 h-4 w-4" />
           <span>Save Output to File</span>
         </ContextMenuItem>
+        
+        {onReconnect && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={onReconnect}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              <span>Reconnect Terminal</span>
+            </ContextMenuItem>
+          </>
+        )}
       </ContextMenuContent>
     </ContextMenu>
   );

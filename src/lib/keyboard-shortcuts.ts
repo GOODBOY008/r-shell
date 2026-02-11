@@ -80,3 +80,64 @@ export const createLayoutShortcuts = (actions: {
     description: 'Toggle Connection Manager (Alternative)',
   },
 ];
+
+/**
+ * Split view keyboard shortcuts for terminal group management.
+ *
+ * Creates shortcuts for splitting, focusing groups, and tab navigation.
+ * For Ctrl+1~9, the focusGroup callback receives a 0-based index (0-8).
+ * If the target group index doesn't exist, the caller should ignore the action.
+ */
+export const createSplitViewShortcuts = (actions: {
+  splitRight: () => void;
+  splitDown: () => void;
+  focusGroup: (index: number) => void;
+  closeTab: () => void;
+  nextTab: () => void;
+  prevTab: () => void;
+}): KeyboardShortcut[] => [
+  {
+    key: '\\',
+    ctrlKey: true,
+    shiftKey: false,
+    handler: actions.splitRight,
+    description: 'Split terminal right',
+  },
+  {
+    key: '\\',
+    ctrlKey: true,
+    shiftKey: true,
+    handler: actions.splitDown,
+    description: 'Split terminal down',
+  },
+  // Ctrl+1 through Ctrl+9 to focus group by index (0-based)
+  ...Array.from({ length: 9 }, (_, i) => ({
+    key: String(i + 1),
+    ctrlKey: true,
+    shiftKey: false,
+    handler: () => actions.focusGroup(i),
+    description: `Focus terminal group ${i + 1}`,
+  })),
+  {
+    key: 'w',
+    ctrlKey: true,
+    shiftKey: false,
+    handler: actions.closeTab,
+    description: 'Close active tab',
+  },
+  {
+    key: 'Tab',
+    ctrlKey: true,
+    shiftKey: false,
+    handler: actions.nextTab,
+    description: 'Next tab in group',
+  },
+  {
+    key: 'Tab',
+    ctrlKey: true,
+    shiftKey: true,
+    handler: actions.prevTab,
+    description: 'Previous tab in group',
+  },
+];
+

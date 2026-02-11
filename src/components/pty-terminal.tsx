@@ -54,6 +54,12 @@ export function PtyTerminal({
   // Track connection status to avoid duplicate notifications
   const connectionStatusRef = React.useRef<'connected' | 'connecting' | 'disconnected'>('connecting');
   
+  // PTY session generation — used in Close to avoid stale-close races
+  const ptyGenerationRef = React.useRef<number | null>(null);
+  
+  // Reconnect key — incrementing this forces the main effect to tear down and rebuild
+  const [reconnectKey, setReconnectKey] = React.useState(0);
+  
   // Flow control - inspired by ttyd
   const flowControlRef = React.useRef({
     written: 0,
@@ -282,6 +288,14 @@ export function PtyTerminal({
                 }
               }
               break;
+            
+            case 'PtyStarted':
+              // Store the generation so we can send it back in Close
+              if (msg.connection_id === connectionId && typeof msg.generation === 'number') {
+                ptyGenerationRef.current = msg.generation;
+                console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
+              }
+              break;
               
             case 'Output':
               // Terminal output from PTY
@@ -404,8 +418,17 @@ export function PtyTerminal({
       ws.send(JSON.stringify(inputMsg));
     });
 
-    // Handle terminal resize
+    // Handle terminal resize — deduplicate to avoid flooding the PTY with
+    // identical resize signals when the layout is settling (e.g. after closing
+    // an adjacent terminal group). Each redundant SIGWINCH causes the remote
+    // shell to redraw its prompt, producing the repeated "root@host:~#" lines.
+    let lastSentCols = term.cols;
+    let lastSentRows = term.rows;
     const resizeDisposable = term.onResize(({ cols, rows }) => {
+      if (cols === lastSentCols && rows === lastSentRows) return;
+      lastSentCols = cols;
+      lastSentRows = rows;
+
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
         const resizeMsg = {
@@ -419,28 +442,51 @@ export function PtyTerminal({
       }
     });
 
+    // Debounced fit: coalesce rapid resize events into a single fit + PTY resize message.
+    // After fitting, schedule a follow-up fit to catch CSS transitions that may still
+    // be settling. This ensures the terminal gets the final correct dimensions.
+    // Note: duplicate resize messages are already filtered in the onResize handler above,
+    // so even if fitAddon.fit() fires multiple times, only actual size changes reach the PTY.
+    let fitTimer: ReturnType<typeof setTimeout> | null = null;
+    const debouncedFit = () => {
+      if (fitTimer) clearTimeout(fitTimer);
+      fitTimer = setTimeout(() => {
+        fitTimer = null;
+        const container = containerRef.current;
+        if (container && container.offsetWidth > 0 && container.offsetHeight > 0) {
+          fitAddon.fit();
+          // Schedule a follow-up fit after layout fully settles (CSS transitions)
+          fitTimer = setTimeout(() => {
+            fitTimer = null;
+            if (containerRef.current && containerRef.current.offsetWidth > 0) {
+              fitAddon.fit();
+            }
+          }, 300);
+        }
+      }, 150);
+    };
+
     // Handle window resize
     const handleWindowResize = () => {
-      // Only fit if terminal is visible
-      if (terminalRef.current && terminalRef.current.offsetParent !== null) {
-        fitAddon.fit();
-      }
+      debouncedFit();
     };
     window.addEventListener('resize', handleWindowResize);
 
     // Handle tab visibility changes using ResizeObserver
-    // When tab becomes visible again, fit the terminal
+    // When tab becomes visible again or panel is resized, fit the terminal
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         // Only refit if the container has a reasonable size
         if (entry.contentRect.width > 100 && entry.contentRect.height > 100) {
-          setTimeout(() => {
-            fitAddon.fit();
-          }, 0);
+          debouncedFit();
         }
       }
     });
     
+    // Observe the outer container for more reliable resize detection during panel splits
+    if (containerRef.current) {
+      resizeObserver.observe(containerRef.current);
+    }
     if (terminalRef.current) {
       resizeObserver.observe(terminalRef.current);
     }
@@ -450,28 +496,34 @@ export function PtyTerminal({
       console.log(`[PTY Terminal] [${connectionId}] Cleaning up`);
       isRunning = false;
 
-      // Close PTY connection via WebSocket
+      // Close PTY connection via WebSocket — include generation so the
+      // backend can ignore this close if a newer session already exists.
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
-        const closeMsg = {
+        const closeMsg: Record<string, unknown> = {
           type: 'Close',
           connection_id: connectionId,
         };
+        if (ptyGenerationRef.current !== null) {
+          closeMsg.generation = ptyGenerationRef.current;
+        }
         ws.send(JSON.stringify(closeMsg));
         ws.close();
       }
+      ptyGenerationRef.current = null;
       
       inputDisposable.dispose();
       resizeDisposable.dispose();
       window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
+      if (fitTimer) clearTimeout(fitTimer);
       
       term.dispose();
     };
   // Re-run when terminalKey changes (background image added/removed)
   // This is necessary because WebGL renderer doesn't support transparency
   // and we need to switch to canvas renderer when background image is set
-  }, [connectionId, connectionName, host, username, terminalKey]);
+  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey]);
 
   // Context menu handlers
   const handleCopy = React.useCallback(() => {
@@ -550,6 +602,13 @@ export function PtyTerminal({
     xtermRef.current?.selectAll();
   }, []);
 
+  const handleReconnect = React.useCallback(() => {
+    toast.info('Reconnecting terminal…');
+    connectionStatusRef.current = 'connecting';
+    onConnectionStatusChange?.(connectionId, 'connecting');
+    setReconnectKey((k) => k + 1);
+  }, [connectionId, onConnectionStatusChange]);
+
   const handleSaveToFile = React.useCallback(async () => {
     const term = xtermRef.current;
     if (!term) return;
@@ -595,6 +654,7 @@ export function PtyTerminal({
       onFindPrevious={handleFindPrevious}
       onSelectAll={handleSelectAll}
       onSaveToFile={handleSaveToFile}
+      onReconnect={handleReconnect}
       hasSelection={hasSelection}
       searchActive={searchVisible}
     >
