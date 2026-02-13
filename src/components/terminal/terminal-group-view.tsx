@@ -57,19 +57,13 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
               className="absolute inset-0"
               style={{ display: tab.id === group.activeTabId ? 'block' : 'none' }}
             >
-              {tab.connectionStatus === 'disconnected' ? (
-                <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-                  Reconnecting {tab.name}...
-                </div>
-              ) : (
-                <PtyTerminal
-                  connectionId={tab.id}
-                  connectionName={tab.name}
-                  host={tab.host}
-                  username={tab.username}
-                  onConnectionStatusChange={handleConnectionStatusChange}
-                />
-              )}
+              <PtyTerminal
+                connectionId={tab.id}
+                connectionName={tab.name}
+                host={tab.host}
+                username={tab.username}
+                onConnectionStatusChange={handleConnectionStatusChange}
+              />
             </div>
           ))
         )}

@@ -9,6 +9,33 @@ interface GridRendererProps {
   path: number[];
 }
 
+/** Derive a stable React key from a GridNode.
+ *
+ *  The key must survive tree restructuring so that React can reconcile
+ *  existing components instead of unmounting/remounting them (which
+ *  would tear down live WebSocket + PTY connections).
+ *
+ *  Strategy: use the smallest (i.e. oldest) leaf groupId in the subtree.
+ *  When a leaf is split into a branch, the original group (which always
+ *  has a smaller numeric id than the newly created group) stays in the
+ *  subtree, so the key remains the same regardless of split direction.
+ */
+function getStableKey(node: GridNode): string {
+  return `grid-${minLeafGroupId(node)}`;
+}
+
+function minLeafGroupId(node: GridNode): string {
+  if (node.type === 'leaf') return node.groupId;
+  let min = '';
+  for (const child of node.children) {
+    const id = minLeafGroupId(child);
+    if (min === '' || Number(id) < Number(min)) {
+      min = id;
+    }
+  }
+  return min;
+}
+
 export function GridRenderer({ node, path }: GridRendererProps) {
   const { dispatch } = useTerminalGroups();
 
@@ -38,7 +65,7 @@ export function GridRenderer({ node, path }: GridRendererProps) {
     <ResizablePanelGroup direction={node.direction} onLayout={handleLayout}>
       {node.children.map((child, index) => (
         <GridRendererChild
-          key={`${path.join('-')}-${index}`}
+          key={getStableKey(child)}
           child={child}
           index={index}
           path={path}
@@ -62,7 +89,9 @@ interface GridRendererChildProps {
 
 function GridRendererChild({ child, index, path, defaultSize, isLast, onHandleDoubleClick }: GridRendererChildProps) {
   const childPath = [...path, index];
-  const panelId = `grid-panel-${childPath.join('-')}`;
+  // Use the stable key (min leaf groupId) for the panel id so that
+  // react-resizable-panels can persist layout across tree restructuring.
+  const panelId = `grid-panel-${minLeafGroupId(child)}`;
 
   return (
     <>

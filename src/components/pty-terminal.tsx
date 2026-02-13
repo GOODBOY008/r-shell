@@ -357,6 +357,12 @@ export function PtyTerminal({
                   connectionStatusRef.current = 'disconnected';
                   onConnectionStatusChange?.(connectionId, 'disconnected');
                 }
+                // Close the WebSocket so the onclose handler can trigger
+                // a reconnection attempt instead of leaving the terminal
+                // stuck in a disconnected state with a stale WebSocket.
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.close();
+                }
               }
               break;
               
