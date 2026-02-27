@@ -44,6 +44,13 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
     }
   }, [dispatch, groupId, isActive]);
 
+  const handleReconnect = useCallback(
+    (tabId: string) => {
+      dispatch({ type: 'RECONNECT_TAB', tabId });
+    },
+    [dispatch],
+  );
+
   const handleConnectionStatusChange = useCallback(
     (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => {
       dispatch({ type: 'UPDATE_TAB_STATUS', tabId: connectionId, status });
@@ -83,6 +90,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         groupId={groupId}
         tabs={group.tabs}
         activeTabId={group.activeTabId}
+        onReconnect={handleReconnect}
       />
       <div className="flex-1 relative overflow-hidden">
         {showWelcome ? (

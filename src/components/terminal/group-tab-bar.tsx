@@ -192,7 +192,7 @@ export function GroupTabBar({
               </ContextMenuTrigger>
               <ContextMenuContent>
                 {/* Reconnect when disconnected */}
-                {onReconnect && tab.connectionStatus === 'disconnected' && (
+                {onReconnect && (
                   <>
                     <ContextMenuItem onClick={() => onReconnect(tab.id)}>
                       <RefreshCw className="mr-2 h-4 w-4" />

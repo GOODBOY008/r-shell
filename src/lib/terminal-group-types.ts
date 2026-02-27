@@ -49,6 +49,7 @@ export type TerminalGroupAction =
   | { type: 'CLOSE_TABS_TO_LEFT'; groupId: string; tabId: string }
   | { type: 'MOVE_TAB_TO_NEW_GROUP'; groupId: string; tabId: string; direction: SplitDirection }
   | { type: 'UPDATE_TAB_STATUS'; tabId: string; status: 'connected' | 'connecting' | 'disconnected' | 'pending' }
+  | { type: 'RECONNECT_TAB'; tabId: string }
   | { type: 'UPDATE_GRID_SIZES'; path: number[]; sizes: number[] }
   | { type: 'RESET_LAYOUT' }
   | { type: 'RESTORE_LAYOUT'; state: TerminalGroupState };
