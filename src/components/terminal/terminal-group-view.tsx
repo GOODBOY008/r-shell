@@ -38,7 +38,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const isActive = state.activeGroupId === groupId;
   const themeKey = useThemeKey();
 
-  const handleClick = useCallback(() => {
+  const handleMouseDown = useCallback(() => {
     if (!isActive) {
       dispatch({ type: 'ACTIVATE_GROUP', groupId });
     }
@@ -55,10 +55,10 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
     (e: React.KeyboardEvent) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        handleClick();
+        handleMouseDown();
       }
     },
-    [handleClick]
+    [handleMouseDown]
   );
 
   if (!group) return null;
@@ -75,7 +75,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
       data-group-id={groupId}
       data-testid={`terminal-group-view-${groupId}`}
       className={containerClass}
-      onClick={handleClick}
+      onMouseDownCapture={handleMouseDown}
       onKeyDown={handleKeyDown}
       aria-label={`Terminal group ${groupId}`}
     >
