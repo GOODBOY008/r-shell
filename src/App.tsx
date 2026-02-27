@@ -911,7 +911,7 @@ function AppContent() {
         onQuickConnect={handleQuickConnect}
         recentConnections={recentConnections}
         leftSidebarVisible={layout.leftSidebarVisible}
-        rightSidebarVisible={layout.rightSidebarVisible}
+        rightSidebarVisible={layout.rightSidebarVisible && hasAnyTabs}
         bottomPanelVisible={layout.bottomPanelVisible}
         zenMode={layout.zenMode}
       />
@@ -947,7 +947,7 @@ function AppContent() {
           <ResizablePanel
             id="main-content"
             order={2}
-            defaultSize={100 - (layout.leftSidebarVisible ? layout.leftSidebarSize : 0) - (layout.rightSidebarVisible ? layout.rightSidebarSize : 0)}
+            defaultSize={100 - (layout.leftSidebarVisible ? layout.leftSidebarSize : 0) - ((layout.rightSidebarVisible && hasAnyTabs) ? layout.rightSidebarSize : 0)}
             minSize={30}
           >
             <div className="h-full flex flex-col">
@@ -990,7 +990,7 @@ function AppContent() {
             </div>
           </ResizablePanel>
 
-          {layout.rightSidebarVisible && (
+          {layout.rightSidebarVisible && hasAnyTabs && (
             <>
               <ResizableHandle />
 
