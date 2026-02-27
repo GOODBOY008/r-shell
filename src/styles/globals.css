@@ -2,81 +2,173 @@
 
 :root {
   --font-size: 16px;
+  --font-sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  /* Base colors */
   --background: #ffffff;
-  --foreground: oklch(0.145 0 0);
+  --foreground: #0f172a;
+  
+  /* Card & Surface */
   --card: #ffffff;
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: #030213;
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.95 0.0058 264.53);
-  --secondary-foreground: #030213;
-  --muted: #ececf0;
-  --muted-foreground: #717182;
-  --accent: #e9ebef;
-  --accent-foreground: #030213;
-  --destructive: #d4183d;
+  --card-foreground: #0f172a;
+  
+  /* Popover */
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+  
+  /* Primary - Brand color */
+  --primary: #2563eb;
+  --primary-foreground: #ffffff;
+  --primary-hover: #1d4ed8;
+  
+  /* Secondary */
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  
+  /* Muted */
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  
+  /* Accent */
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+  
+  /* Destructive */
+  --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --border: rgba(0, 0, 0, 0.1);
+  
+  /* Success */
+  --success: #22c55e;
+  --success-foreground: #ffffff;
+  
+  /* Warning */
+  --warning: #f59e0b;
+  --warning-foreground: #ffffff;
+  
+  /* Border & Input */
+  --border: #e2e8f0;
   --input: transparent;
-  --input-background: #f3f3f5;
-  --switch-background: #cbced4;
+  --input-background: #f8fafc;
+  --ring: #2563eb;
+  
+  /* Switch */
+  --switch-background: #cbd5e1;
+  
+  /* Radius */
+  --radius: 0.5rem;
+
+  /* Chart colors */
+  --chart-1: #2563eb;
+  --chart-2: #22c55e;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #8b5cf6;
+
+  /* Sidebar */
+  --sidebar: #f8fafc;
+  --sidebar-foreground: #0f172a;
+  --sidebar-primary: #2563eb;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f1f5f9;
+  --sidebar-accent-foreground: #0f172a;
+  --sidebar-border: #e2e8f0;
+  --sidebar-ring: #2563eb;
+
+  /* Terminal */
+  --terminal-bg: #1e1e1e;
+  --terminal-fg: #d4d4d4;
+  --terminal-cursor: #aeafad;
+  --terminal-selection: rgba(255, 255, 255, 0.3);
+
+  /* Status colors */
+  --status-connected: #22c55e;
+  --status-connecting: #f59e0b;
+  --status-disconnected: #ef4444;
+  
+  /* Font weights */
   --font-weight-medium: 500;
   --font-weight-normal: 400;
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: #030213;
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.145 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --switch-background: oklch(0.35 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.637 0.237 25.331);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --ring: oklch(0.439 0 0);
-  --font-weight-medium: 500;
-  --font-weight-normal: 400;
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
+  /* Base colors */
+  --background: #0f172a;
+  --foreground: #f1f5f9;
+  
+  /* Card & Surface */
+  --card: #1e293b;
+  --card-foreground: #f1f5f9;
+  
+  /* Popover */
+  --popover: #1e293b;
+  --popover-foreground: #f1f5f9;
+  
+  /* Primary */
+  --primary: #3b82f6;
+  --primary-foreground: #ffffff;
+  --primary-hover: #60a5fa;
+  
+  /* Secondary */
+  --secondary: #334155;
+  --secondary-foreground: #f1f5f9;
+  
+  /* Muted */
+  --muted: #334155;
+  --muted-foreground: #94a3b8;
+  
+  /* Accent */
+  --accent: #334155;
+  --accent-foreground: #f1f5f9;
+  
+  /* Destructive */
+  --destructive: #ef4444;
+  --destructive-foreground: #ffffff;
+  
+  /* Success */
+  --success: #22c55e;
+  --success-foreground: #ffffff;
+  
+  /* Warning */
+  --warning: #f59e0b;
+  --warning-foreground: #ffffff;
+  
+  /* Border & Input */
+  --border: #334155;
+  --input: #1e293b;
+  --input-background: #1e293b;
+  --ring: #3b82f6;
+  
+  /* Switch */
+  --switch-background: #475569;
+
+  /* Chart colors */
+  --chart-1: #3b82f6;
+  --chart-2: #22c55e;
+  --chart-3: #f59e0b;
+  --chart-4: #ef4444;
+  --chart-5: #a78bfa;
+
+  /* Sidebar */
+  --sidebar: #0f172a;
+  --sidebar-foreground: #f1f5f9;
+  --sidebar-primary: #3b82f6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1e293b;
+  --sidebar-accent-foreground: #f1f5f9;
+  --sidebar-border: #334155;
+  --sidebar-ring: #3b82f6;
+
+  /* Terminal */
+  --terminal-bg: #0d1117;
+  --terminal-fg: #c9d1d9;
+  --terminal-cursor: #58a6ff;
+  --terminal-selection: rgba(88, 166, 255, 0.3);
+
+  /* Status colors */
+  --status-connected: #22c55e;
+  --status-connecting: #f59e0b;
+  --status-disconnected: #ef4444;
 }
 
 @theme inline {
@@ -96,6 +188,10 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-input-background: var(--input-background);
@@ -118,64 +214,77 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-terminal-bg: var(--terminal-bg);
+  --color-terminal-fg: var(--terminal-fg);
+  --color-terminal-cursor: var(--terminal-cursor);
+  --color-terminal-selection: var(--terminal-selection);
+  --color-status-connected: var(--status-connected);
+  --color-status-connecting: var(--status-connecting);
+  --color-status-disconnected: var(--status-disconnected);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
-
-/**
- * Base typography. This is not applied to elements which have an ancestor with a Tailwind text class.
- */
-  :where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) {
-    h1 {
-      font-size: var(--text-2xl);
-      font-weight: var(--font-weight-medium);
-      line-height: 1.5;
-    }
-
-    h2 {
-      font-size: var(--text-xl);
-      font-weight: var(--font-weight-medium);
-      line-height: 1.5;
-    }
-
-    h3 {
-      font-size: var(--text-lg);
-      font-weight: var(--font-weight-medium);
-      line-height: 1.5;
-    }
-
-    h4 {
-      font-size: var(--text-base);
-      font-weight: var(--font-weight-medium);
-      line-height: 1.5;
-    }
-
-    p {
-      font-size: var(--text-base);
-      font-weight: var(--font-weight-normal);
-      line-height: 1.5;
-    }
-
-    label {
-      font-size: var(--text-base);
-      font-weight: var(--font-weight-medium);
-      line-height: 1.5;
-    }
-
-    button {
-      font-size: var(--text-base);
-      font-weight: var(--font-weight-medium);
-      line-height: 1.5;
-    }
-
-    input {
-      font-size: var(--text-base);
-      font-weight: var(--font-weight-normal);
-      line-height: 1.5;
-    }
+:where(:not(:has([class*=" text-"]), :not(:has([class^="text-"])))) {
+  h1 {
+    font-size: var(--text-2xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
   }
+
+  h2 {
+    font-size: var(--text-xl);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h3 {
+    font-size: var(--text-lg);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  h4 {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  p {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+
+  label {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  button {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.5;
+  }
+
+  input {
+    font-size: var(--text-base);
+    font-weight: var(--font-weight-normal);
+    line-height: 1.5;
+  }
+}
 
 html {
   font-size: var(--font-size);
+  font-family: var(--font-sans);
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @keyframes fade-in {
@@ -190,7 +299,18 @@ html {
 @keyframes slide-up {
   from {
     opacity: 0;
-    transform: translateY(20px);
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
   }
   to {
     opacity: 1;
@@ -199,11 +319,11 @@ html {
 }
 
 .animate-in {
-  animation: slide-up 0.5s ease-out;
+  animation: slide-up 0.3s ease-out;
 }
 
 .fade-in {
-  animation: fade-in 0.3s ease-out;
+  animation: fade-in 0.2s ease-out;
 }
 
 /* Tab transition effects */
@@ -215,52 +335,48 @@ html {
   animation: fade-in 0.2s ease-out;
 }
 
-/* Custom scrollbar styling for light and dark mode */
+/* Custom scrollbar styling */
 * {
   scrollbar-width: thin !important;
-  scrollbar-color: rgba(156, 163, 175, 0.5) transparent !important;
+  scrollbar-color: var(--muted-foreground) transparent !important;
 }
 
 .dark * {
-  scrollbar-color: rgba(229, 231, 235, 0.8) rgba(55, 65, 81, 0.4) !important;
+  scrollbar-color: rgba(148, 163, 184, 0.5) var(--muted) !important;
 }
 
 /* Webkit browsers (Chrome, Safari, Edge) */
 *::-webkit-scrollbar {
-  width: 12px !important;
-  height: 12px !important;
+  width: 8px !important;
+  height: 8px !important;
 }
 
 *::-webkit-scrollbar-track {
   background: transparent !important;
-  border-radius: 10px !important;
+  border-radius: 4px !important;
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: rgba(156, 163, 175, 0.5) !important;
-  border-radius: 10px !important;
-  border: 3px solid transparent !important;
-  background-clip: padding-box !important;
+  background-color: var(--muted-foreground) !important;
+  border-radius: 4px !important;
+  opacity: 0.5;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(156, 163, 175, 0.7) !important;
+  background-color: var(--foreground) !important;
+  opacity: 0.8;
 }
 
 .dark *::-webkit-scrollbar-track {
-  background: rgba(31, 41, 55, 0.5) !important;
-  border-radius: 10px !important;
+  background: var(--muted) !important;
 }
 
 .dark *::-webkit-scrollbar-thumb {
-  background-color: rgba(229, 231, 235, 0.8) !important;
-  border: 3px solid rgba(31, 41, 55, 0.5) !important;
-  background-clip: padding-box !important;
-  border-radius: 10px !important;
+  background-color: rgba(148, 163, 184, 0.5) !important;
 }
 
 .dark *::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(243, 244, 246, 0.9) !important;
+  background-color: rgba(148, 163, 184, 0.8) !important;
 }
 
 /* Resizable handle cursor styles */
@@ -270,4 +386,58 @@ html {
 
 [data-slot="resizable-handle"][data-panel-group-direction="vertical"] {
   cursor: row-resize !important;
+}
+
+/* Focus ring styles */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+/* Selection styles */
+::selection {
+  background-color: var(--terminal-selection, rgba(59, 130, 246, 0.3));
+}
+
+/* Smooth transitions for theme changes */
+html {
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Status indicator colors */
+.status-connected {
+  background-color: var(--status-connected);
+}
+
+.status-connecting {
+  background-color: var(--status-connecting);
+}
+
+.status-disconnected {
+  background-color: var(--status-disconnected);
+}
+
+/* Connection status dot animation */
+.status-dot {
+  position: relative;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.status-dot.connecting::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
 }

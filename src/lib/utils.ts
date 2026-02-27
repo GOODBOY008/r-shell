@@ -7,14 +7,10 @@ export function cn(...inputs: ClassValue[]) {
 
 export type ThemeMode = 'dark' | 'light' | 'auto';
 
-/**
- * Apply theme to the document
- */
 export function applyTheme(theme: ThemeMode): void {
   const root = document.documentElement;
   
   if (theme === 'auto') {
-    // Use system preference
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     root.classList.toggle('dark', prefersDark);
   } else {
@@ -22,9 +18,6 @@ export function applyTheme(theme: ThemeMode): void {
   }
 }
 
-/**
- * Get saved theme from localStorage
- */
 export function getSavedTheme(): ThemeMode {
   try {
     const settings = localStorage.getItem('sshClientSettings');
@@ -35,23 +28,26 @@ export function getSavedTheme(): ThemeMode {
       }
     }
   } catch {
-    // Ignore parsing errors
   }
-  return 'dark'; // Default theme
+  return 'dark';
 }
 
-/**
- * Initialize theme on app startup
- */
 export function initializeTheme(): void {
   const theme = getSavedTheme();
   applyTheme(theme);
   
-  // Listen for system theme changes when in 'auto' mode
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
     const currentTheme = getSavedTheme();
     if (currentTheme === 'auto') {
       document.documentElement.classList.toggle('dark', e.matches);
     }
   });
+}
+
+export function isDarkMode(): boolean {
+  return document.documentElement.classList.contains('dark');
+}
+
+export function getAppTheme(): 'dark' | 'light' {
+  return isDarkMode() ? 'dark' : 'light';
 }

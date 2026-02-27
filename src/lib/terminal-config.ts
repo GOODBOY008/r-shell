@@ -53,9 +53,32 @@ export const defaultTerminalTheme: ITheme = {
   brightWhite: '#e5e5e5',
 };
 
+export const defaultLightTerminalTheme: ITheme = {
+  foreground: '#1e1e1e',
+  background: '#ffffff',
+  cursor: '#333333',
+  black: '#000000',
+  red: '#cd3131',
+  green: '#00bc00',
+  yellow: '#949800',
+  blue: '#0451a5',
+  magenta: '#bc05bc',
+  cyan: '#0598bc',
+  white: '#555555',
+  brightBlack: '#666666',
+  brightRed: '#cd3131',
+  brightGreen: '#14ce14',
+  brightYellow: '#b5ba00',
+  brightBlue: '#0451a5',
+  brightMagenta: '#bc05bc',
+  brightCyan: '#0598bc',
+  brightWhite: '#a5a5a5',
+};
+
 // Popular terminal theme presets
 export const terminalThemes: Record<string, ITheme> = {
   'vs-code-dark': defaultTerminalTheme,
+  'vs-code-light': defaultLightTerminalTheme,
   
   'monokai': {
     foreground: '#f8f8f2',
@@ -367,4 +390,45 @@ export function getOptimalFontSize(containerWidth: number, cols: number): number
   const charWidth = containerWidth / cols;
   // Monospace fonts typically have width = fontSize * 0.6
   return Math.floor(charWidth / 0.6);
+}
+
+export function getThemeAwareTerminalTheme(settings: TerminalAppearanceSettings): ITheme {
+  const isDark = document.documentElement.classList.contains('dark');
+  let theme = terminalThemes[settings.theme] || defaultTerminalTheme;
+  
+  // Only auto-switch the default vs-code-dark theme in light mode.
+  // If the user explicitly chose a specific theme (dracula, tokyo-night, etc.),
+  // respect their choice regardless of app theme.
+  if (!isDark && settings.theme === 'vs-code-dark') {
+    theme = defaultLightTerminalTheme;
+  } else if (!isDark) {
+    // Check if there's a matching light variant (e.g. solarized-dark → solarized-light)
+    const lightThemeName = settings.theme.replace('-dark', '-light');
+    if (lightThemeName !== settings.theme && terminalThemes[lightThemeName]) {
+      theme = terminalThemes[lightThemeName];
+    }
+  }
+  
+  return theme;
+}
+
+export function getThemeAwareTerminalOptions(appearance: TerminalAppearanceSettings): ITerminalOptions {
+  const theme = getThemeAwareTerminalTheme(appearance);
+  const needsTransparency = appearance.allowTransparency || !!appearance.backgroundImage;
+  
+  return {
+    ...defaultTerminalOptions,
+    fontSize: appearance.fontSize,
+    fontFamily: appearance.fontFamily,
+    lineHeight: appearance.lineHeight,
+    letterSpacing: appearance.letterSpacing,
+    cursorStyle: appearance.cursorStyle,
+    cursorBlink: appearance.cursorBlink,
+    scrollback: appearance.scrollback,
+    allowTransparency: needsTransparency,
+    theme: needsTransparency ? {
+      ...theme,
+      background: '#00000000',
+    } : theme,
+  };
 }

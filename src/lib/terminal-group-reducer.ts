@@ -117,6 +117,7 @@ export function createDefaultState(): TerminalGroupState {
     activeGroupId: groupId,
     gridLayout: { type: 'leaf', groupId },
     nextGroupId: 2,
+    tabToGroupMap: {},
   };
 }
 
@@ -141,8 +142,16 @@ function maybeRemoveEmptyGroup(state: TerminalGroupState, groupId: string): Term
 }
 
 function removeGroupFromState(state: TerminalGroupState, groupId: string): TerminalGroupState {
+  const group = state.groups[groupId];
   const newGroups = { ...state.groups };
   delete newGroups[groupId];
+
+  const newTabToGroupMap = { ...state.tabToGroupMap };
+  if (group) {
+    for (const tab of group.tabs) {
+      delete newTabToGroupMap[tab.id];
+    }
+  }
 
   let newGrid = removeLeaf(state.gridLayout, groupId);
   if (newGrid === null) {
@@ -164,6 +173,7 @@ function removeGroupFromState(state: TerminalGroupState, groupId: string): Termi
     groups: newGroups,
     gridLayout: newGrid,
     activeGroupId: newActiveGroupId,
+    tabToGroupMap: newTabToGroupMap,
   };
 }
 
@@ -192,6 +202,7 @@ export function terminalGroupReducer(
         gridLayout: insertSplit(state.gridLayout, groupId, newGroupId, direction),
         nextGroupId: state.nextGroupId + 1,
         activeGroupId: newGroupId,
+        tabToGroupMap: tab ? { ...state.tabToGroupMap, [tab.id]: newGroupId } : state.tabToGroupMap,
       };
     }
 
@@ -199,13 +210,18 @@ export function terminalGroupReducer(
       const { groupId } = action;
       if (!state.groups[groupId]) return state;
       if (Object.keys(state.groups).length <= 1) {
-        // Preserve last group — clear its tabs
+        // Preserve last group — clear its tabs and clean up map
         const group = state.groups[groupId];
+        const newTabToGroupMap = { ...state.tabToGroupMap };
+        for (const tab of group.tabs) {
+          delete newTabToGroupMap[tab.id];
+        }
         return {
           ...state,
           groups: {
             [groupId]: { ...group, tabs: [], activeTabId: null },
           },
+          tabToGroupMap: newTabToGroupMap,
         };
       }
       return removeGroupFromState(state, groupId);
@@ -230,6 +246,7 @@ export function terminalGroupReducer(
             activeTabId: tab.id,
           },
         },
+        tabToGroupMap: { ...state.tabToGroupMap, [tab.id]: groupId },
       };
     }
 
@@ -246,12 +263,16 @@ export function terminalGroupReducer(
         newActiveTabId = pickAdjacentTab(newTabs, tabIndex);
       }
 
+      const newTabToGroupMap = { ...state.tabToGroupMap };
+      delete newTabToGroupMap[tabId];
+
       const newState = {
         ...state,
         groups: {
           ...state.groups,
           [groupId]: { ...group, tabs: newTabs, activeTabId: newActiveTabId },
         },
+        tabToGroupMap: newTabToGroupMap,
       };
       return maybeRemoveEmptyGroup(newState, groupId);
     }
@@ -306,7 +327,7 @@ export function terminalGroupReducer(
         };
       }
 
-      // Different groups
+      // Different groups - update map
       newTargetTabs = [...targetGroup.tabs];
       const idx = targetIndex !== undefined ? Math.min(targetIndex, newTargetTabs.length) : newTargetTabs.length;
       newTargetTabs.splice(idx, 0, tab);
@@ -326,6 +347,7 @@ export function terminalGroupReducer(
             activeTabId: tab.id,
           },
         },
+        tabToGroupMap: { ...state.tabToGroupMap, [tabId]: targetGroupId },
       };
 
       newState = maybeRemoveEmptyGroup(newState, sourceGroupId);
@@ -359,12 +381,17 @@ export function terminalGroupReducer(
       if (!group) return state;
       const tab = group.tabs.find((t) => t.id === tabId);
       if (!tab) return state;
+      const newTabToGroupMap = { ...state.tabToGroupMap };
+      for (const t of group.tabs) {
+        if (t.id !== tabId) delete newTabToGroupMap[t.id];
+      }
       return {
         ...state,
         groups: {
           ...state.groups,
           [groupId]: { ...group, tabs: [tab], activeTabId: tab.id },
         },
+        tabToGroupMap: newTabToGroupMap,
       };
     }
 
@@ -375,6 +402,9 @@ export function terminalGroupReducer(
       const idx = group.tabs.findIndex((t) => t.id === tabId);
       if (idx === -1) return state;
       const newTabs = group.tabs.slice(0, idx + 1);
+      const removedTabs = group.tabs.slice(idx + 1);
+      const newTabToGroupMap = { ...state.tabToGroupMap };
+      for (const t of removedTabs) delete newTabToGroupMap[t.id];
       const newActiveTabId =
         group.activeTabId && newTabs.some((t) => t.id === group.activeTabId)
           ? group.activeTabId
@@ -385,6 +415,7 @@ export function terminalGroupReducer(
           ...state.groups,
           [groupId]: { ...group, tabs: newTabs, activeTabId: newActiveTabId },
         },
+        tabToGroupMap: newTabToGroupMap,
       };
     }
 
@@ -395,6 +426,9 @@ export function terminalGroupReducer(
       const idx = group.tabs.findIndex((t) => t.id === tabId);
       if (idx === -1) return state;
       const newTabs = group.tabs.slice(idx);
+      const removedTabs = group.tabs.slice(0, idx);
+      const newTabToGroupMap = { ...state.tabToGroupMap };
+      for (const t of removedTabs) delete newTabToGroupMap[t.id];
       const newActiveTabId =
         group.activeTabId && newTabs.some((t) => t.id === group.activeTabId)
           ? group.activeTabId
@@ -405,6 +439,7 @@ export function terminalGroupReducer(
           ...state.groups,
           [groupId]: { ...group, tabs: newTabs, activeTabId: newActiveTabId },
         },
+        tabToGroupMap: newTabToGroupMap,
       };
     }
 
@@ -446,6 +481,7 @@ export function terminalGroupReducer(
         gridLayout: insertSplit(state.gridLayout, groupId, newGroupId, direction),
         nextGroupId: state.nextGroupId + 1,
         activeGroupId: newGroupId,
+        tabToGroupMap: { ...state.tabToGroupMap, [tabId]: newGroupId },
       };
 
       newState = maybeRemoveEmptyGroup(newState, groupId);
@@ -454,21 +490,25 @@ export function terminalGroupReducer(
 
     case 'UPDATE_TAB_STATUS': {
       const { tabId, status } = action;
-      const newGroups = { ...state.groups };
-      let found = false;
-      for (const gid of Object.keys(newGroups)) {
-        const group = newGroups[gid];
-        const tabIndex = group.tabs.findIndex((t) => t.id === tabId);
-        if (tabIndex !== -1) {
-          const newTabs = [...group.tabs];
-          newTabs[tabIndex] = { ...newTabs[tabIndex], connectionStatus: status };
-          newGroups[gid] = { ...group, tabs: newTabs };
-          found = true;
-          break;
-        }
-      }
-      if (!found) return state;
-      return { ...state, groups: newGroups };
+      const groupId = state.tabToGroupMap[tabId];
+      if (!groupId) return state;
+
+      const group = state.groups[groupId];
+      if (!group) return state;
+
+      const tabIndex = group.tabs.findIndex((t) => t.id === tabId);
+      if (tabIndex === -1) return state;
+
+      const newTabs = [...group.tabs];
+      newTabs[tabIndex] = { ...newTabs[tabIndex], connectionStatus: status };
+
+      return {
+        ...state,
+        groups: {
+          ...state.groups,
+          [groupId]: { ...group, tabs: newTabs },
+        },
+      };
     }
 
     case 'UPDATE_GRID_SIZES': {

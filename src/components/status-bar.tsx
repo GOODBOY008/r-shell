@@ -8,7 +8,7 @@ interface StatusBarProps {
     name: string;
     protocol: string;
     host?: string;
-    status: 'connected' | 'connecting' | 'disconnected';
+    status: 'connected' | 'connecting' | 'disconnected' | 'pending';
   };
 }
 
@@ -22,6 +22,7 @@ export function StatusBar({ activeConnection }: StatusBarProps) {
               <div className={`w-2 h-2 rounded-full ${
                 activeConnection.status === 'connected' ? 'bg-green-500' :
                 activeConnection.status === 'connecting' ? 'bg-yellow-500' :
+                activeConnection.status === 'pending' ? 'bg-blue-500 animate-pulse' :
                 'bg-red-500'
               }`} />
               <span>{activeConnection.name}</span>

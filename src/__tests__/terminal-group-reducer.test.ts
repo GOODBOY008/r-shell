@@ -26,6 +26,10 @@ function makeTab(id: string, name?: string): TerminalTab {
 }
 
 function stateWithTabs(groupId: string, tabs: TerminalTab[], activeTabId?: string): TerminalGroupState {
+  const tabToGroupMap: Record<string, string> = {};
+  for (const tab of tabs) {
+    tabToGroupMap[tab.id] = groupId;
+  }
   return {
     groups: {
       [groupId]: {
@@ -37,6 +41,7 @@ function stateWithTabs(groupId: string, tabs: TerminalTab[], activeTabId?: strin
     activeGroupId: groupId,
     gridLayout: { type: 'leaf', groupId },
     nextGroupId: 2,
+    tabToGroupMap,
   };
 }
 
@@ -517,5 +522,99 @@ describe('RESTORE_LAYOUT', () => {
     };
     const next = terminalGroupReducer(state, { type: 'RESTORE_LAYOUT', state: custom });
     expect(next).toBe(custom);
+  });
+});
+
+// ── tabToGroupMap consistency ──
+
+/** Helper: rebuild tabToGroupMap from groups to verify consistency */
+function buildExpectedMap(state: TerminalGroupState): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const [gid, group] of Object.entries(state.groups)) {
+    for (const tab of group.tabs) {
+      map[tab.id] = gid;
+    }
+  }
+  return map;
+}
+
+describe('tabToGroupMap consistency', () => {
+  it('SPLIT_GROUP with newTab updates map', () => {
+    const state = stateWithTabs('1', [makeTab('a')]);
+    const next = terminalGroupReducer(state, {
+      type: 'SPLIT_GROUP',
+      groupId: '1',
+      direction: 'right',
+      newTab: makeTab('b'),
+    });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(next.tabToGroupMap['b']).toBe('2');
+  });
+
+  it('SPLIT_GROUP without newTab leaves map unchanged', () => {
+    const state = stateWithTabs('1', [makeTab('a')]);
+    const next = terminalGroupReducer(state, {
+      type: 'SPLIT_GROUP',
+      groupId: '1',
+      direction: 'right',
+    });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+  });
+
+  it('REMOVE_GROUP (last group) cleans map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b')]);
+    const next = terminalGroupReducer(state, { type: 'REMOVE_GROUP', groupId: '1' });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(next.tabToGroupMap).toEqual({});
+  });
+
+  it('CLOSE_OTHER_TABS cleans removed tabs from map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b'), makeTab('c')]);
+    const next = terminalGroupReducer(state, { type: 'CLOSE_OTHER_TABS', groupId: '1', tabId: 'b' });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(Object.keys(next.tabToGroupMap)).toEqual(['b']);
+  });
+
+  it('CLOSE_TABS_TO_RIGHT cleans removed tabs from map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b'), makeTab('c')]);
+    const next = terminalGroupReducer(state, { type: 'CLOSE_TABS_TO_RIGHT', groupId: '1', tabId: 'b' });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(Object.keys(next.tabToGroupMap).sort()).toEqual(['a', 'b']);
+  });
+
+  it('CLOSE_TABS_TO_LEFT cleans removed tabs from map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b'), makeTab('c')]);
+    const next = terminalGroupReducer(state, { type: 'CLOSE_TABS_TO_LEFT', groupId: '1', tabId: 'b' });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(Object.keys(next.tabToGroupMap).sort()).toEqual(['b', 'c']);
+  });
+
+  it('ADD_TAB updates map', () => {
+    const state = stateWithTabs('1', [makeTab('a')]);
+    const next = terminalGroupReducer(state, { type: 'ADD_TAB', groupId: '1', tab: makeTab('b') });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+  });
+
+  it('REMOVE_TAB cleans map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b')]);
+    const next = terminalGroupReducer(state, { type: 'REMOVE_TAB', groupId: '1', tabId: 'a' });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(next.tabToGroupMap).toEqual({ 'b': '1' });
+  });
+
+  it('MOVE_TAB updates map', () => {
+    // Create two groups
+    let state = stateWithTabs('1', [makeTab('a'), makeTab('b')]);
+    state = terminalGroupReducer(state, { type: 'SPLIT_GROUP', groupId: '1', direction: 'right' });
+    state = terminalGroupReducer(state, { type: 'MOVE_TAB', sourceGroupId: '1', targetGroupId: '2', tabId: 'b' });
+    expect(state.tabToGroupMap).toEqual(buildExpectedMap(state));
+    expect(state.tabToGroupMap['b']).toBe('2');
+  });
+
+  it('MOVE_TAB_TO_NEW_GROUP updates map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b')]);
+    const next = terminalGroupReducer(state, { type: 'MOVE_TAB_TO_NEW_GROUP', groupId: '1', tabId: 'b', direction: 'right' });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(next.tabToGroupMap['b']).not.toBe('1');
   });
 });

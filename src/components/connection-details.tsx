@@ -11,7 +11,7 @@ interface ConnectionDetailsProps {
     host?: string;
     username?: string;
     port?: number;
-    status: 'connected' | 'connecting' | 'disconnected';
+    status: 'connected' | 'connecting' | 'disconnected' | 'pending';
   };
 }
 
@@ -33,6 +33,7 @@ export function ConnectionDetails({ session }: ConnectionDetailsProps) {
     switch (status) {
       case 'connected': return 'bg-green-500';
       case 'connecting': return 'bg-yellow-500';
+      case 'pending': return 'bg-blue-500';
       case 'disconnected': return 'bg-red-500';
       default: return 'bg-gray-500';
     }

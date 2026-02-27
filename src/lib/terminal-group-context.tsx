@@ -17,7 +17,7 @@ interface TerminalGroupContextType {
     protocol: string;
     host?: string;
     username?: string;
-    status: 'connected' | 'connecting' | 'disconnected';
+    status: 'connected' | 'connecting' | 'disconnected' | 'pending';
   } | null;
 }
 
@@ -28,20 +28,25 @@ function initializeState(): TerminalGroupState {
   const loaded = loadState();
   if (!loaded) return createDefaultState();
 
-  // Reset all tabs to 'disconnected' — SSH sessions don't survive app restart.
-  // The restoreConnections effect in App.tsx will re-establish connections and
-  // update status to 'connecting' once ssh_connect succeeds on the backend.
+  // Reset all tabs to 'pending' — SSH sessions don't survive app restart.
+  // This indicates the tab needs SSH connection to be established.
+  // The restoreConnections effect in App.tsx will re-establish connections.
   const groups: Record<string, TerminalGroup> = {};
+  const tabToGroupMap: Record<string, string> = {};
+  
   for (const [id, group] of Object.entries(loaded.groups)) {
     groups[id] = {
       ...group,
       tabs: group.tabs.map((tab) => ({
         ...tab,
-        connectionStatus: 'disconnected' as const,
+        connectionStatus: 'pending' as const,
       })),
     };
+    for (const tab of group.tabs) {
+      tabToGroupMap[tab.id] = id;
+    }
   }
-  return { ...loaded, groups };
+  return { ...loaded, groups, tabToGroupMap };
 }
 
 export function TerminalGroupProvider({ children }: { children: React.ReactNode }) {

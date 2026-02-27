@@ -5,10 +5,11 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { invoke } from '@tauri-apps/api/core';
-import { loadAppearanceSettings, getTerminalOptions } from '../lib/terminal-config';
+import { loadAppearanceSettings, getThemeAwareTerminalOptions } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
+import { signalReady } from '../lib/restoration-manager';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -16,8 +17,9 @@ interface PtyTerminalProps {
   connectionName: string;
   host?: string;
   username?: string;
-  appearanceKey?: number; // Key to force re-render when appearance changes
-  onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected') => void;
+  appearanceKey?: number;
+  themeKey?: number;
+  onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => void;
 }
 
 /**
@@ -34,6 +36,7 @@ export function PtyTerminal({
   host = 'localhost', 
   username = 'user',
   appearanceKey = 0,
+  themeKey = 0,
   onConnectionStatusChange
 }: PtyTerminalProps) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
@@ -59,6 +62,10 @@ export function PtyTerminal({
   
   // Reconnect key — incrementing this forces the main effect to tear down and rebuild
   const [reconnectKey, setReconnectKey] = React.useState(0);
+  
+  // Exponential backoff reconnection tracking
+  const reconnectAttemptsRef = React.useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 5;
   
   // Flow control - inspired by ttyd
   const flowControlRef = React.useRef({
@@ -89,7 +96,7 @@ export function PtyTerminal({
 
     // Load appearance settings
     const appearance = loadAppearanceSettings();
-    const termOptions = getTerminalOptions(appearance);
+    const termOptions = getThemeAwareTerminalOptions(appearance);
 
     // Create terminal with user's appearance settings
     const term = new XTerm(termOptions);
@@ -278,10 +285,10 @@ export function PtyTerminal({
             case 'Success':
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
               if (msg.message.includes('PTY connection started')) {
+                reconnectAttemptsRef.current = 0;
                 term.writeln('\x1b[32m✓ PTY connection started\x1b[0m');
                 term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
                 term.write('\r\n');
-                // Notify parent that connection is now established
                 if (connectionStatusRef.current !== 'connected') {
                   connectionStatusRef.current = 'connected';
                   onConnectionStatusChange?.(connectionId, 'connected');
@@ -289,13 +296,14 @@ export function PtyTerminal({
               }
               break;
             
-            case 'PtyStarted':
-              // Store the generation so we can send it back in Close
+            case 'PtyStarted': {
               if (msg.connection_id === connectionId && typeof msg.generation === 'number') {
                 ptyGenerationRef.current = msg.generation;
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
+                signalReady(connectionId);
               }
               break;
+            }
               
             case 'Output':
               // Terminal output from PTY
@@ -341,10 +349,9 @@ export function PtyTerminal({
               }
               break;
               
-            case 'Error':
+            case 'Error': {
               console.error('[PTY Terminal] Error:', msg.message);
               term.write(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m\r\n`);
-              // Check if this is a connection-related error (case-insensitive)
               const errorMsgLower = msg.message.toLowerCase();
               if (errorMsgLower.includes('session not found') || 
                   errorMsgLower.includes('ssh') || 
@@ -357,14 +364,12 @@ export function PtyTerminal({
                   connectionStatusRef.current = 'disconnected';
                   onConnectionStatusChange?.(connectionId, 'disconnected');
                 }
-                // Close the WebSocket so the onclose handler can trigger
-                // a reconnection attempt instead of leaving the terminal
-                // stuck in a disconnected state with a stale WebSocket.
                 if (ws.readyState === WebSocket.OPEN) {
                   ws.close();
                 }
               }
               break;
+            }
               
             default:
               console.log('[PTY Terminal] Unknown message type:', msg.type);
@@ -387,17 +392,30 @@ export function PtyTerminal({
       ws.onclose = () => {
         console.log('[PTY Terminal] WebSocket closed');
         if (isRunning) {
-          // Report connecting status while attempting reconnect
+          const attempts = reconnectAttemptsRef.current;
+          
+          if (attempts >= MAX_RECONNECT_ATTEMPTS) {
+            term.write('\r\n\x1b[31m[Connection failed permanently. Use right-click → Reconnect to retry.]\x1b[0m\r\n');
+            if (connectionStatusRef.current !== 'disconnected') {
+              connectionStatusRef.current = 'disconnected';
+              onConnectionStatusChange?.(connectionId, 'disconnected');
+            }
+            return;
+          }
+          
+          const delay = Math.min(1000 * Math.pow(2, attempts), 30000);
+          reconnectAttemptsRef.current = attempts + 1;
+          
           if (connectionStatusRef.current !== 'connecting') {
             connectionStatusRef.current = 'connecting';
             onConnectionStatusChange?.(connectionId, 'connecting');
           }
-          term.write('\r\n\x1b[33m[Connection closed. Attempting to reconnect...]\x1b[0m\r\n');
+          term.write(`\r\n\x1b[33m[Connection closed. Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})...]\x1b[0m\r\n`);
           setTimeout(() => {
             if (isRunning) {
               connectWebSocket();
             }
-          }, 2000);
+          }, delay);
         }
       };
     };
@@ -526,10 +544,7 @@ export function PtyTerminal({
       
       term.dispose();
     };
-  // Re-run when terminalKey changes (background image added/removed)
-  // This is necessary because WebGL renderer doesn't support transparency
-  // and we need to switch to canvas renderer when background image is set
-  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey]);
+  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey, themeKey, appearanceKey]);
 
   // Context menu handlers
   const handleCopy = React.useCallback(() => {
@@ -610,6 +625,7 @@ export function PtyTerminal({
 
   const handleReconnect = React.useCallback(() => {
     toast.info('Reconnecting terminal…');
+    reconnectAttemptsRef.current = 0;
     connectionStatusRef.current = 'connecting';
     onConnectionStatusChange?.(connectionId, 'connecting');
     setReconnectKey((k) => k + 1);

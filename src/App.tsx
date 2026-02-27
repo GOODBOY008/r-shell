@@ -13,6 +13,7 @@ import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
+import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import { useKeyboardShortcuts, createLayoutShortcuts, createSplitViewShortcuts } from './lib/keyboard-shortcuts';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
@@ -242,7 +243,7 @@ function AppContent() {
             console.log(`✓ Restored connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}${activeConn.originalConnectionId ? ' (duplicate)' : ''}`);
 
             if (i < sortedConnections.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, 1500));
+              await registerRestoration(activeConn.connectionId, 5000);
             }
           } else {
             console.error(`Failed to restore connection ${connectionData.name}:`, result.error);
@@ -276,6 +277,7 @@ function AppContent() {
       setCurrentRestoreTarget(null);
       setIsRestoring(false);
       setRestoringProgress({ current: 0, total: 0 });
+      clearAllRestorations();
     };
 
     restoreConnections();

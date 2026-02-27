@@ -14,7 +14,7 @@ export interface TerminalTab {
   host?: string;
   username?: string;
   originalConnectionId?: string;
-  connectionStatus: 'connected' | 'connecting' | 'disconnected';
+  connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'pending';
   reconnectCount: number;
 }
 
@@ -31,6 +31,7 @@ export interface TerminalGroupState {
   activeGroupId: string;
   gridLayout: GridNode;
   nextGroupId: number;
+  tabToGroupMap: Record<string, string>;
 }
 
 /** Reducer Action 类型 */
@@ -47,7 +48,7 @@ export type TerminalGroupAction =
   | { type: 'CLOSE_TABS_TO_RIGHT'; groupId: string; tabId: string }
   | { type: 'CLOSE_TABS_TO_LEFT'; groupId: string; tabId: string }
   | { type: 'MOVE_TAB_TO_NEW_GROUP'; groupId: string; tabId: string; direction: SplitDirection }
-  | { type: 'UPDATE_TAB_STATUS'; tabId: string; status: 'connected' | 'connecting' | 'disconnected' }
+  | { type: 'UPDATE_TAB_STATUS'; tabId: string; status: 'connected' | 'connecting' | 'disconnected' | 'pending' }
   | { type: 'UPDATE_GRID_SIZES'; path: number[]; sizes: number[] }
   | { type: 'RESET_LAYOUT' }
   | { type: 'RESTORE_LAYOUT'; state: TerminalGroupState };

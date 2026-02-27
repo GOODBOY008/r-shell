@@ -108,6 +108,9 @@ function isValidState(value: unknown): value is TerminalGroupState {
   if (typeof obj.nextGroupId !== 'number') return false;
   if (!isValidGridNode(obj.gridLayout)) return false;
 
+  // tabToGroupMap is optional for backward compatibility — initializeState rebuilds it
+  if (obj.tabToGroupMap !== undefined && typeof obj.tabToGroupMap !== 'object') return false;
+
   // Validate each group has required fields
   const groups = obj.groups as Record<string, unknown>;
   for (const key of Object.keys(groups)) {

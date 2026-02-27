@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { GroupTabBar } from './group-tab-bar';
 import { PtyTerminal } from '../pty-terminal';
@@ -8,10 +8,35 @@ interface TerminalGroupViewProps {
   groupId: string;
 }
 
+function useThemeKey(): number {
+  const [themeKey, setThemeKey] = useState(0);
+
+  useEffect(() => {
+    const observer = new MutationObserver((mutations) => {
+      for (const mutation of mutations) {
+        if (mutation.attributeName === 'class') {
+          setThemeKey((k) => k + 1);
+          break;
+        }
+      }
+    });
+
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+
+    return () => observer.disconnect();
+  }, []);
+
+  return themeKey;
+}
+
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const { state, dispatch } = useTerminalGroups();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
+  const themeKey = useThemeKey();
 
   const handleClick = useCallback(() => {
     if (!isActive) {
@@ -20,10 +45,20 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   }, [dispatch, groupId, isActive]);
 
   const handleConnectionStatusChange = useCallback(
-    (connectionId: string, status: 'connected' | 'connecting' | 'disconnected') => {
+    (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => {
       dispatch({ type: 'UPDATE_TAB_STATUS', tabId: connectionId, status });
     },
     [dispatch],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        handleClick();
+      }
+    },
+    [handleClick]
   );
 
   if (!group) return null;
@@ -36,11 +71,13 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
     : 'h-full w-full flex flex-col border border-border';
 
   return (
-    <div
+    <section
       data-group-id={groupId}
       data-testid={`terminal-group-view-${groupId}`}
       className={containerClass}
       onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      aria-label={`Terminal group ${groupId}`}
     >
       <GroupTabBar
         groupId={groupId}
@@ -57,17 +94,27 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
               className="absolute inset-0"
               style={{ display: tab.id === group.activeTabId ? 'block' : 'none' }}
             >
-              <PtyTerminal
-                connectionId={tab.id}
-                connectionName={tab.name}
-                host={tab.host}
-                username={tab.username}
-                onConnectionStatusChange={handleConnectionStatusChange}
-              />
+              {tab.connectionStatus !== 'pending' ? (
+                <PtyTerminal
+                  key={`${tab.id}-${tab.reconnectCount}`}
+                  connectionId={tab.id}
+                  connectionName={tab.name}
+                  host={tab.host}
+                  username={tab.username}
+                  themeKey={themeKey}
+                  onConnectionStatusChange={handleConnectionStatusChange}
+                />
+              ) : (
+                <div className="h-full w-full flex items-center justify-center bg-muted/30">
+                  <div className="text-center text-muted-foreground">
+                    <div className="animate-pulse">Waiting for connection...</div>
+                  </div>
+                </div>
+              )}
             </div>
           ))
         )}
       </div>
-    </div>
+    </section>
   );
 }
