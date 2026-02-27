@@ -721,11 +721,13 @@ export function PtyTerminal({
         />
       )}
       
-      <div ref={terminalRef} className="h-full w-full relative z-10 p-4 box-border" />
+      {/* Terminal padding wrapper — uses inset to shrink the area so FitAddon
+           measures the correct available height (padding on the terminal element
+           itself causes FitAddon to over-count rows by ~2). */}
+      <div className="absolute inset-4 z-10">
+        <div ref={terminalRef} className="h-full w-full" />
+      </div>
       <style>{`
-        .terminal-no-scrollbar .xterm-viewport {
-          overflow-y: hidden !important;
-        }
         .terminal-no-scrollbar .xterm-viewport::-webkit-scrollbar {
           display: none;
         }
