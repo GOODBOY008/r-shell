@@ -15,6 +15,8 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  ArrowLeft,
+  ArrowRight,
   MoreHorizontal,
   Trash2,
   Plus,
@@ -43,7 +45,8 @@ import {
   Settings,
   Layers,
   GripVertical,
-  ScrollText
+  ScrollText,
+  Pencil
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from './ui/dropdown-menu';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from './ui/context-menu';
@@ -125,6 +128,16 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [dragCounter, setDragCounter] = useState(0);
 
+  // Navigation history state (back/forward)
+  const [navHistory, setNavHistory] = useState<string[]>(['/home']);
+  const [navIndex, setNavIndex] = useState(0);
+  const navInProgress = React.useRef(false);
+
+  // Editable address bar state
+  const [isEditingPath, setIsEditingPath] = useState(false);
+  const [editPathValue, setEditPathValue] = useState('');
+  const pathInputRef = React.useRef<HTMLInputElement>(null);
+
   // Mock file data - in real implementation, this would fetch from SSH connection
   const mockFiles: FileItem[] = [
     { name: '..', type: 'directory', size: 0, modified: new Date(), permissions: 'drwxr-xr-x', owner: 'root', group: 'root', path: '..' },
@@ -147,12 +160,17 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
         setFiles(cached.files);
         setSelectedFiles(cached.selectedFiles);
         setSearchTerm(cached.searchTerm);
+        // Reset navigation history to the restored path
+        setNavHistory([cached.currentPath]);
+        setNavIndex(0);
       } else {
         // Initialize new connection state
         setCurrentPath('/home');
         setFiles([]);
         setSelectedFiles(new Set());
         setSearchTerm('');
+        setNavHistory(['/home']);
+        setNavIndex(0);
       }
     }
   }, [connectionId]);
@@ -172,7 +190,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
   useEffect(() => {
     if (isConnected && connectionId) {
       console.log('useEffect triggered - loading files', { currentPath, connectionId, isConnected });
-      loadFiles();
+      loadFiles(currentPath);
     }
   }, [currentPath, isConnected, connectionId]);
 
@@ -284,17 +302,18 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
     setResizingColumn(columnName);
   };
 
-  const loadFiles = async () => {
+  const loadFiles = async (pathOverride?: string) => {
     if (!connectionId || !isConnected) {
       setFiles([]);
       return;
     }
     
+    const targetPath = pathOverride ?? currentPath;
     setIsLoading(true);
     try {
       const output = await invoke<string>(
         'list_files',
-        { connectionId, path: currentPath }
+        { connectionId, path: targetPath }
       );
       
       if (output) {
@@ -350,12 +369,12 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
             permissions,
             owner,
             group,
-            path: currentPath === '/' ? `/${name}` : `${currentPath}/${name}`
+            path: targetPath === '/' ? `/${name}` : `${targetPath}/${name}`
           } as FileItem;
         }).filter(f => f !== null) as FileItem[];
         
         // Add parent directory navigation
-        if (currentPath !== '/') {
+        if (targetPath !== '/') {
           parsedFiles.unshift({
             name: '..',
             type: 'directory',
@@ -364,7 +383,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
             permissions: 'drwxr-xr-x',
             owner: '-',
             group: '-',
-            path: currentPath.split('/').slice(0, -1).join('/') || '/'
+            path: targetPath.split('/').slice(0, -1).join('/') || '/'
           });
         }
         
@@ -379,6 +398,68 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // ── Navigation helpers ──
+
+  /** Navigate to a path and record in history (unless triggered by back/forward) */
+  const navigateTo = (path: string) => {
+    if (path === currentPath) return;
+    if (!navInProgress.current) {
+      // Trim any forward history past the current index, then push new entry
+      setNavHistory((prev) => [...prev.slice(0, navIndex + 1), path]);
+      setNavIndex((prev) => prev + 1);
+    }
+    setCurrentPath(path);
+  };
+
+  const canGoBack = navIndex > 0;
+  const canGoForward = navIndex < navHistory.length - 1;
+
+  const goBack = () => {
+    if (!canGoBack) return;
+    navInProgress.current = true;
+    const newIndex = navIndex - 1;
+    setNavIndex(newIndex);
+    setCurrentPath(navHistory[newIndex]);
+    // Reset flag after state flush
+    setTimeout(() => { navInProgress.current = false; }, 0);
+  };
+
+  const goForward = () => {
+    if (!canGoForward) return;
+    navInProgress.current = true;
+    const newIndex = navIndex + 1;
+    setNavIndex(newIndex);
+    setCurrentPath(navHistory[newIndex]);
+    setTimeout(() => { navInProgress.current = false; }, 0);
+  };
+
+  const goUp = () => {
+    if (currentPath === '/') return;
+    const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
+    navigateTo(parent);
+  };
+
+  /** Build breadcrumb segments from a path string */
+  const getBreadcrumbs = (p: string): { label: string; path: string }[] => {
+    const segments: { label: string; path: string }[] = [{ label: '/', path: '/' }];
+    if (p === '/') return segments;
+    const parts = p.split('/').filter(Boolean);
+    let accumulated = '';
+    for (const part of parts) {
+      accumulated += '/' + part;
+      segments.push({ label: part, path: accumulated });
+    }
+    return segments;
+  };
+
+  const handlePathSubmit = () => {
+    const trimmed = editPathValue.trim();
+    if (trimmed && trimmed !== currentPath) {
+      navigateTo(trimmed.startsWith('/') ? trimmed : '/' + trimmed);
+    }
+    setIsEditingPath(false);
   };
 
   const formatFileSize = (bytes: number) => {
@@ -428,7 +509,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
     
     if (file.type === 'directory') {
       console.log('Navigating to directory:', file.path);
-      setCurrentPath(file.path);
+      navigateTo(file.path);
     } else {
       // Open file for viewing/editing
       console.log('Opening file for viewing');
@@ -477,7 +558,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
       // Regular click on directory: navigate into it
       if (file.type === 'directory') {
         console.log('Click - navigating to directory:', file.path);
-        setCurrentPath(file.path);
+        navigateTo(file.path);
       }
       // Regular click on file: do nothing (or optionally preview)
     }
@@ -1012,20 +1093,109 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
 
   return (
     <div className={`h-full flex flex-col bg-background border-t ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
-      {/* Current Path Display */}
-      <div className="px-2 py-1 border-b bg-muted/30 flex items-center gap-2 text-xs">
-        <Folder className="h-3 w-3 text-muted-foreground" />
-        <span className="text-muted-foreground font-mono">{currentPath}</span>
+      {/* Navigation Bar: Back / Forward / Up / Home + Breadcrumb / Address bar */}
+      <div className="px-1.5 py-1 border-b bg-muted/30 flex items-center gap-0.5 text-xs">
+        {/* Back */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0"
+          title="Back"
+          disabled={!canGoBack}
+          onClick={goBack}
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+        </Button>
+        {/* Forward */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0"
+          title="Forward"
+          disabled={!canGoForward}
+          onClick={goForward}
+        >
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Button>
+        {/* Go Up */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0"
+          title="Parent directory"
+          disabled={currentPath === '/'}
+          onClick={goUp}
+        >
+          <ArrowUp className="h-3.5 w-3.5" />
+        </Button>
+        {/* Home */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 shrink-0"
+          title="Home"
+          onClick={() => navigateTo('/home')}
+        >
+          <Home className="h-3.5 w-3.5" />
+        </Button>
+
+        {/* Breadcrumb / Editable address bar */}
+        <div
+          className="flex-1 min-w-0 mx-1 h-6 flex items-center rounded border border-transparent hover:border-border bg-muted/40 px-1.5 cursor-text group"
+          onClick={() => {
+            if (!isEditingPath) {
+              setEditPathValue(currentPath);
+              setIsEditingPath(true);
+              setTimeout(() => pathInputRef.current?.select(), 0);
+            }
+          }}
+        >
+          {isEditingPath ? (
+            <input
+              ref={pathInputRef}
+              autoFocus
+              className="w-full h-full bg-transparent outline-none font-mono text-[11px]"
+              value={editPathValue}
+              onChange={(e) => setEditPathValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handlePathSubmit();
+                if (e.key === 'Escape') setIsEditingPath(false);
+              }}
+              onBlur={handlePathSubmit}
+            />
+          ) : (
+            <div className="flex items-center gap-0 overflow-x-auto whitespace-nowrap scrollbar-none">
+              {getBreadcrumbs(currentPath).map((seg, i) => (
+                <React.Fragment key={seg.path}>
+                  {i > 0 && (
+                    <ChevronRight className="h-2.5 w-2.5 text-muted-foreground shrink-0 mx-0.5" />
+                  )}
+                  <button
+                    className="text-[11px] text-muted-foreground hover:text-foreground px-0.5 rounded hover:bg-muted transition truncate max-w-[120px]"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigateTo(seg.path);
+                    }}
+                    title={seg.path}
+                  >
+                    {seg.label}
+                  </button>
+                </React.Fragment>
+              ))}
+              {/* Edit icon hint */}
+              <Pencil className="h-2.5 w-2.5 text-muted-foreground/0 group-hover:text-muted-foreground/50 ml-auto shrink-0 transition-colors" />
+            </div>
+          )}
+        </div>
+
+        {/* Refresh */}
+        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Refresh" onClick={() => loadFiles()} disabled={isLoading}>
+          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+        </Button>
       </div>
       
       {/* Compact Toolbar */}
-      <div className="px-2 py-1.5 border-b flex items-center gap-1.5 text-xs">
-        <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => setCurrentPath('/home')}>
-          <Home className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="sm" className="h-6 px-2" onClick={loadFiles} disabled={isLoading}>
-          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-        </Button>
+      <div className="px-2 py-1 border-b flex items-center gap-1.5 text-xs">
         <Button variant="ghost" size="sm" className="h-6 px-2" onClick={handleCreateFolder}>
           <FolderPlus className="h-3.5 w-3.5" />
         </Button>
@@ -1350,7 +1520,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
                 <Upload className="mr-2 h-4 w-4" />
                 Upload Files
               </ContextMenuItem>
-              <ContextMenuItem onClick={loadFiles}>
+              <ContextMenuItem onClick={() => loadFiles()}>
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Refresh
               </ContextMenuItem>
