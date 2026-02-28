@@ -340,7 +340,7 @@ export function DirectoryTransferDialog({
   const progressPercent =
     totalItems > 0 ? Math.round((processedItems / totalItems) * 100) : 0;
 
-  const dirName = sourcePath.split("/").filter(Boolean).pop() ?? sourcePath;
+  const _dirName = sourcePath.split("/").filter(Boolean).pop() ?? sourcePath;
 
   return (
     <Dialog open={open} onOpenChange={isBusy ? undefined : onOpenChange}>

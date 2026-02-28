@@ -596,7 +596,7 @@ export function PtyTerminal({
         
         ws.send(JSON.stringify(inputMsg));
       }
-    } catch (error) {
+    } catch (_error) {
       toast.error('Failed to read from clipboard');
     }
   }, [connectionId]);

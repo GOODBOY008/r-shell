@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Activity, Terminal, HardDrive, Network, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { Activity, Terminal, HardDrive, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
+import { Card, CardContent } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Progress } from './ui/progress';
 import { Badge } from './ui/badge';
@@ -129,7 +129,7 @@ const getGpuTempColor = (temp: number): string => {
   return 'text-green-500';
 };
 
-const getGpuTempProgressColor = (temp: number): string => {
+const _getGpuTempProgressColor = (temp: number): string => {
   if (temp >= 85) return '[&>div]:bg-red-500';
   if (temp >= 75) return '[&>div]:bg-orange-500';
   if (temp >= 60) return '[&>div]:bg-yellow-500';
@@ -303,17 +303,17 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     const statsInterval = setInterval(() => {
       // Only fetch if browser is idle
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => fetchSystemStats());
+        requestIdleCallback(() => { void fetchSystemStats(); });
       } else {
-        fetchSystemStats();
+        void fetchSystemStats();
       }
     }, 5000); // Increased from 3s to 5s
     
     const processInterval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => fetchProcesses());
+        requestIdleCallback(() => { void fetchProcesses(); });
       } else {
-        fetchProcesses();
+        void fetchProcesses();
       }
     }, 10000); // Increased from 5s to 10s
     
@@ -364,9 +364,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     // Refresh disk usage every 60 seconds (increased from 30s)
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => fetchDiskUsage());
+        requestIdleCallback(() => { void fetchDiskUsage(); });
       } else {
-        fetchDiskUsage();
+        void fetchDiskUsage();
       }
     }, 60000);
     
@@ -463,9 +463,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     // Poll every 5 seconds
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => fetchGpuStats());
+        requestIdleCallback(() => { void fetchGpuStats(); });
       } else {
-        fetchGpuStats();
+        void fetchGpuStats();
       }
     }, 5000);
     
@@ -482,7 +482,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
   const [networkHistory, setNetworkHistory] = useState<NetworkHistoryData[]>([]);
   const [networkInterfaces, setNetworkInterfaces] = useState<string[]>([]);
   const [selectedInterface, setSelectedInterface] = useState<string>('all');
-  const [interfaceBandwidthMap, setInterfaceBandwidthMap] = useState<Map<string, InterfaceBandwidth>>(new Map());
+  const [_interfaceBandwidthMap, setInterfaceBandwidthMap] = useState<Map<string, InterfaceBandwidth>>(new Map());
 
   // Network usage monitoring - fetch real bandwidth data
   // OPTIMIZED: Use longer interval and request idle callback
@@ -600,9 +600,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     // OPTIMIZED: Increased from 2s to 5s, use idle callback
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => fetchBandwidth());
+        requestIdleCallback(() => { void fetchBandwidth(); });
       } else {
-        fetchBandwidth();
+        void fetchBandwidth();
       }
     }, 5000);
 
@@ -653,9 +653,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     // OPTIMIZED: Increased from 3s to 10s, use idle callback
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => fetchLatency());
+        requestIdleCallback(() => { void fetchLatency(); });
       } else {
-        fetchLatency();
+        void fetchLatency();
       }
     }, 10000);
 
@@ -761,7 +761,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                   /* "All" GPU View - Compact Summary Cards */
                   <div className="space-y-2">
                     {gpuStats.map((gpu, idx) => {
-                      const gpuInfo = gpuDetection.gpus.find(g => g.index === gpu.index);
+                      const _gpuInfo = gpuDetection.gpus.find(g => g.index === gpu.index);
                       return (
                         <div key={gpu.index} className="border rounded p-1.5 space-y-1">
                           {/* GPU Name Row */}

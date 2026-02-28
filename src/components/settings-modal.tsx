@@ -17,10 +17,6 @@ import {
   Keyboard, 
   Network,
   Monitor,
-  Bell,
-  Clock,
-  HardDrive,
-  User,
   Image,
   Upload,
   X

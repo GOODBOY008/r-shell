@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { SearchAddon } from '@xterm/addon-search';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+
 import { ChevronUp, ChevronDown, X, CaseSensitive, Regex } from 'lucide-react';
 
 interface TerminalSearchBarProps {
@@ -16,8 +16,8 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
   const [query, setQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [useRegex, setUseRegex] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
-  const [totalMatches, setTotalMatches] = useState(0);
+  const [_currentIndex, _setCurrentIndex] = useState(0);
+  const [_totalMatches, _setTotalMatches] = useState(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   // Focus input when search bar becomes visible or when focus trigger changes

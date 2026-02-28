@@ -5,7 +5,7 @@
 R-Shell is a modern desktop SSH client built with **React 19 + TypeScript** (frontend) and **Tauri 2 + Rust** (backend). It provides interactive terminal sessions, SFTP file management, system monitoring, and multi-tab session management in a VS Code-like layout.
 
 - **Repository**: `GOODBOY008/r-shell`
-- **Version**: 0.7.1
+- **Version**: 1.0.0
 - **Package Manager**: pnpm (v9.15.4)
 - **Node Target**: ES2020
 - **Rust Edition**: 2021
@@ -78,6 +78,23 @@ cd src-tauri && cargo test
 # E2E tests
 pnpm test:e2e
 ```
+
+### Linting
+
+```bash
+# Check for lint errors
+pnpm lint
+
+# Auto-fix fixable issues
+pnpm lint:fix
+```
+
+- Config: `eslint.config.js` — ESLint v10 flat config with `typescript-eslint` (type-aware)
+- Plugins: `react-hooks` (v7), `react-refresh`
+- Test files (`src/__tests__/`, `src/components/__tests__/`, `src/lib/__tests__/`) are excluded from linting
+- shadcn/ui components (`src/components/ui/`) have relaxed rules
+- `no-unsafe-*` rules are warnings (common with `invoke()` returning unknown)
+- `react-hooks/set-state-in-effect`, `react-hooks/refs`, `react-hooks/purity` are warnings (new v7 rules)
 
 - Frontend tests live in `src/__tests__/` and `src/components/__tests__/` and `src/lib/__tests__/`
 - Test config: `vitest.config.ts` — uses jsdom environment, globals enabled
@@ -225,7 +242,7 @@ VS Code-like resizable panel layout with presets:
 3. **Connection cancellation**: Pending connections can be cancelled via `CancellationToken`. Always clean up pending state.
 4. **Path alias**: Use `@/` imports in TypeScript (resolves to `src/`). Configured in both `tsconfig.json` and `vite.config.ts`.
 5. **Server key verification**: Currently accepts all server keys (`check_server_key` returns `Ok(true)`). Not for production SSH security.
-6. **No ESLint configured**: The project does not have ESLint. TypeScript strict mode is the primary static analysis.
+6. **ESLint configured (v10 flat config)**: `eslint.config.js` uses `typescript-eslint` with type-aware checking, `react-hooks` v7, and `react-refresh`. Run `pnpm lint` to check, `pnpm lint:fix` to auto-fix. Test files and `src/components/ui/` are excluded or relaxed. Warnings are intentional for `no-unsafe-*` (Tauri invoke), `no-floating-promises` (fire-and-forget), and new react-hooks v7 rules (`set-state-in-effect`, `refs`, `purity`). When adding unused function parameters, prefix with `_`. When renaming destructured props to suppress unused warnings, use `{ propName: _propName }` syntax to keep the interface key intact.
 7. **`editor/` directory is empty**: `src-tauri/src/editor/` exists but contains no files — reserved for future use.
 8. **Release profile**: Rust release builds use LTO, single codegen unit, and symbol stripping for maximum optimization.
 9. **Radix Dialog centering in Tauri**: The base `DialogContent` from shadcn/ui uses `top-[50%] translate-y-[-50%]` centering. When a dialog is tall, this pushes its top half above the Tauri window viewport (there's no browser chrome to scroll to). **Always override** tall or variable-height dialogs with `!inset-0 !m-auto` centering instead, which keeps the dialog fully within the viewport.

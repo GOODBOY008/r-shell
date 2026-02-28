@@ -674,7 +674,7 @@ export function SyncDialog({
                   </tr>
                 </thead>
                 <tbody>
-                  {displayEntries.map((entry, idx) => {
+                  {displayEntries.map((entry, _idx) => {
                     // Find index in the original entries array for toggling
                     const realIdx = entries.indexOf(entry);
                     return (

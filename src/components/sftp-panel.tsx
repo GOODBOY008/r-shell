@@ -12,7 +12,7 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Progress } from "./ui/progress";
 import { ScrollArea } from "./ui/scroll-area";
-import { Separator } from "./ui/separator";
+
 import { Badge } from "./ui/badge";
 import {
   Folder,
@@ -21,11 +21,9 @@ import {
   Download,
   RefreshCw,
   Home,
-  ArrowUp,
   MoreHorizontal,
   Trash2,
   Plus,
-  Search,
   FileText,
   Image,
   Archive,
@@ -78,7 +76,7 @@ export function SFTPPanel({
   const [transfers, setTransfers] = useState<TransferItem[]>(
     [],
   );
-  const [selectedFiles, setSelectedFiles] = useState<
+  const [_selectedFiles, _setSelectedFiles] = useState<
     Set<string>
   >(new Set());
 
@@ -116,7 +114,7 @@ export function SFTPPanel({
             owner,
             group
           } as FileItem;
-        }).filter(f => f !== null) as FileItem[];
+        }).filter(f => f !== null);
         
         // Add parent directory navigation
         if (path !== '/') {

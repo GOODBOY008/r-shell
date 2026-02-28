@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { FileText, RefreshCw, Download, Search, Filter, X, Lock, Unlock } from 'lucide-react';
+import { FileText, RefreshCw, Download, Search, X, Lock, Unlock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -127,7 +127,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
   useEffect(() => {
     if (!autoRefresh || !selectedLogPath) return;
     
-    const interval = setInterval(() => fetchLogContent(true), 3000);
+    const interval = setInterval(() => { void fetchLogContent(true); }, 3000);
     return () => clearInterval(interval);
   }, [autoRefresh, selectedLogPath, fetchLogContent]);
 

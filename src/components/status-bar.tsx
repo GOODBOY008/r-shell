@@ -1,6 +1,5 @@
 import React from 'react';
 import { Badge } from './ui/badge';
-import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 
 interface StatusBarProps {

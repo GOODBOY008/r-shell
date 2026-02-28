@@ -42,7 +42,7 @@ export function FileBrowserView({
   connectionId,
   connectionName,
   host,
-  protocol,
+  protocol: _protocol,
   isConnected,
   onReconnect,
 }: FileBrowserViewProps) {
@@ -193,11 +193,11 @@ export function FileBrowserView({
               duration: 5000,
               action: {
                 label: "Open File",
-                onClick: () => invoke("open_in_os", { path: destPath }).catch(() => {}),
+                onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
               },
               cancel: {
                 label: "Show in Folder",
-                onClick: () => invoke("open_in_os", { path: destDir }).catch(() => {}),
+                onClick: () => { void invoke("open_in_os", { path: destDir }).catch(() => {}); },
               },
             });
           } else {

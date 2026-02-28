@@ -6,10 +6,10 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Textarea } from './ui/textarea';
+
 import { Switch } from './ui/switch';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
-import { Badge } from './ui/badge';
+
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager } from '../lib/connection-storage';
@@ -20,15 +20,6 @@ import {
   Key,
   Network,
   Terminal as TerminalIcon,
-  FileText,
-  Clock,
-  Globe,
-  Save,
-  BookOpen,
-  Star,
-  Trash2,
-  Download,
-  Upload
 } from 'lucide-react';
 import { getDefaultPort, getAuthMethods, getHiddenFields } from '@/lib/protocol-config';
 
@@ -101,8 +92,8 @@ export function ConnectionDialog({
 
   const [isConnecting, setIsConnecting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
-  const [savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
-  const [showSaveProfile, setShowSaveProfile] = useState(false);
+  const [_savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
+  const [_showSaveProfile, setShowSaveProfile] = useState(false);
   const [saveAsConnection, setSaveAsConnection] = useState(true);
   const [connectionFolder, setConnectionFolder] = useState('All Connections');
   const [availableFolders, setAvailableFolders] = useState<string[]>([]);
@@ -141,7 +132,7 @@ export function ConnectionDialog({
     }
   }, [open, editingConnection]);
 
-  const handleSaveProfile = () => {
+  const _handleSaveProfile = () => {
     try {
       const profile = ConnectionProfileManager.saveProfile({
         name: config.name,
@@ -155,12 +146,12 @@ export function ConnectionDialog({
       setSavedProfiles(ConnectionProfileManager.getProfiles());
       toast.success(`Saved profile: ${profile.name}`);
       setShowSaveProfile(false);
-    } catch (error) {
+    } catch (_error) {
       toast.error('Failed to save profile');
     }
   };
 
-  const handleLoadProfile = (profile: ConnectionProfile) => {
+  const _handleLoadProfile = (profile: ConnectionProfile) => {
     setConfig({
       ...config,
       name: profile.name,
@@ -174,14 +165,14 @@ export function ConnectionDialog({
     toast.success(`Loaded profile: ${profile.name}`);
   };
 
-  const handleDeleteProfile = (id: string) => {
+  const _handleDeleteProfile = (id: string) => {
     if (ConnectionProfileManager.deleteProfile(id)) {
       setSavedProfiles(ConnectionProfileManager.getProfiles());
       toast.success('Profile deleted');
     }
   };
 
-  const handleToggleFavorite = (id: string) => {
+  const _handleToggleFavorite = (id: string) => {
     const profile = ConnectionProfileManager.getProfile(id);
     if (profile) {
       ConnectionProfileManager.updateProfile(id, { favorite: !profile.favorite });

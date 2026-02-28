@@ -118,11 +118,10 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
           historyIndexRef.current = -1;
           
           try {
-            // @ts-ignore
             const res = await invoke('ssh_execute_command', { connection_id: connectionId, command });
-            // @ts-ignore
+            // @ts-expect-error untyped response
             if (res && res.success && res.output) {
-              // @ts-ignore
+              // @ts-expect-error untyped response
               const output = res.output;
               // Write output directly - xterm handles ANSI codes and convertEol handles newlines
               term.write(output);
@@ -131,7 +130,7 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
                 term.write('\r\n');
               }
             } else {
-              // @ts-ignore
+              // @ts-expect-error untyped response
               term.writeln(res.error ? `Error: ${res.error}` : 'No output');
             }
           } catch (e: any) {

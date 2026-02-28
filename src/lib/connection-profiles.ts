@@ -114,7 +114,7 @@ export class ConnectionProfileManager {
         throw new Error('Invalid JSON format');
       }
       
-      let profiles = merge ? this.getProfiles() : [];
+      const profiles = merge ? this.getProfiles() : [];
       
       // Add imported profiles with new IDs to avoid conflicts
       imported.forEach(profile => {

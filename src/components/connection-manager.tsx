@@ -151,7 +151,7 @@ export function ConnectionManager({
       setNewFolderDialogOpen(false);
       setNewFolderName('');
       setNewFolderParentPath(undefined);
-    } catch (error) {
+    } catch (_error) {
       toast.error('Failed to create folder');
     }
   };
@@ -202,7 +202,7 @@ export function ConnectionManager({
       // Recreate all subfolders with new parent path
       subfolders.forEach(subfolder => {
         const relativePath = subfolder.path.substring(oldPath.length + 1); // Remove old parent path
-        const newSubfolderPath = `${newPath}/${relativePath}`;
+        const _newSubfolderPath = `${newPath}/${relativePath}`;
         const parts = relativePath.split('/');
         const subfolderName = parts[parts.length - 1];
         const subfolderParentPath = parts.length > 1

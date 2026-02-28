@@ -181,7 +181,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     // ------ Filtering & Sorting ------
     const filteredEntries = (() => {
-      let result = filter
+      const result = filter
         ? entries.filter((e) =>
             e.name.toLowerCase().includes(filter.toLowerCase()),
           )

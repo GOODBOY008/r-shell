@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { Badge } from "./ui/badge";
+
 import {
   Select,
   SelectContent,
@@ -342,7 +342,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         });
 
         if (result.success && result.output) {
-          const prevScrollHeight = scrollRef.current?.scrollHeight ?? 0;
+          const _prevScrollHeight = scrollRef.current?.scrollHeight ?? 0;
           const wasAtBottom = scrollRef.current
             ? scrollRef.current.scrollHeight -
                 scrollRef.current.scrollTop -
@@ -390,7 +390,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
   useEffect(() => {
     if (!autoRefresh || !selectedSourceId) return;
     const interval = setInterval(
-      () => loadLog(true),
+      () => { void loadLog(true); },
       refreshInterval * 1000
     );
     return () => clearInterval(interval);

@@ -448,8 +448,8 @@ export class ConnectionStorageManager {
         throw new Error('Invalid JSON format');
       }
 
-      let connections = merge ? this.getConnections() : [];
-      let folders = merge ? this.getFolders() : [];
+      const connections = merge ? this.getConnections() : [];
+      const folders = merge ? this.getFolders() : [];
 
       // Import folders with new IDs
       if (imported.folders) {

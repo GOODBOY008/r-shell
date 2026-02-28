@@ -28,6 +28,7 @@ export function getSavedTheme(): ThemeMode {
       }
     }
   } catch {
+    // Ignore invalid JSON in localStorage
   }
   return 'dark';
 }

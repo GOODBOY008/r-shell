@@ -540,7 +540,7 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
-  const handleTabClose = useCallback(async (tabId: string) => {
+  const _handleTabClose = useCallback(async (tabId: string) => {
     // Find which group contains this tab and remove it
     for (const group of Object.values(state.groups)) {
       const tab = group.tabs.find(t => t.id === tabId);
@@ -642,7 +642,7 @@ function AppContent() {
     }
   }, [allTabs, state.activeGroupId, dispatch]);
 
-  const handleReconnect = useCallback(async (tabId: string) => {
+  const _handleReconnect = useCallback(async (tabId: string) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
     if (!tabToReconnect) return;
 

@@ -17,10 +17,7 @@ import {
   ArrowUpDown,
   ArrowLeft,
   ArrowRight,
-  MoreHorizontal,
   Trash2,
-  Plus,
-  Search,
   FileText,
   Image,
   Archive,
@@ -31,25 +28,18 @@ import {
   Scissors,
   FolderPlus,
   ChevronRight,
-  ChevronDown,
   X,
   Save,
   FileEdit,
   ClipboardPaste,
   Info,
-  Share,
   Link,
-  Move,
-  RotateCcw,
-  FileType,
-  Settings,
   Layers,
   GripVertical,
   ScrollText,
   Pencil
 } from 'lucide-react';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from './ui/dropdown-menu';
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from './ui/context-menu';
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from './ui/context-menu';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
 import { Textarea } from "./ui/textarea";
@@ -93,7 +83,7 @@ const sessionStateCache = new Map<string, {
   searchTerm: string;
 }>();
 
-export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose, onOpenInLogMonitor }: IntegratedFileBrowserProps) {
+export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, onClose: _onClose, onOpenInLogMonitor }: IntegratedFileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -126,7 +116,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
   
   // Drag and drop state
   const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [dragCounter, setDragCounter] = useState(0);
+  const [_dragCounter, setDragCounter] = useState(0);
 
   // Navigation history state (back/forward)
   const [navHistory, setNavHistory] = useState<string[]>(['/home']);
@@ -139,7 +129,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
   const pathInputRef = React.useRef<HTMLInputElement>(null);
 
   // Mock file data - in real implementation, this would fetch from SSH connection
-  const mockFiles: FileItem[] = [
+  const _mockFiles: FileItem[] = [
     { name: '..', type: 'directory', size: 0, modified: new Date(), permissions: 'drwxr-xr-x', owner: 'root', group: 'root', path: '..' },
     { name: 'documents', type: 'directory', size: 4096, modified: new Date('2024-01-15'), permissions: 'drwxr-xr-x', owner: 'user01', group: 'users', path: 'documents' },
     { name: 'scripts', type: 'directory', size: 4096, modified: new Date('2024-01-10'), permissions: 'drwxr-xr-x', owner: 'user01', group: 'admin', path: 'scripts' },
@@ -371,7 +361,7 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
             group,
             path: targetPath === '/' ? `/${name}` : `${targetPath}/${name}`
           } as FileItem;
-        }).filter(f => f !== null) as FileItem[];
+        }).filter(f => f !== null);
         
         // Add parent directory navigation
         if (targetPath !== '/') {
