@@ -1,5 +1,7 @@
 use crate::connection_manager::ConnectionManager;
 use crate::ssh::{AuthMethod, SshConfig};
+use crate::sftp_client::{FileEntry, FileEntryType, RemoteFileEntry, SftpConfig, SftpAuthMethod};
+use crate::ftp_client::FtpConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -1703,3 +1705,723 @@ pub async fn get_websocket_port() -> Result<u16, String> {
 // WebSocket server runs on a dynamically assigned port (9001-9010)
 // Use get_websocket_port() command to get the actual port
 // See src/websocket_server.rs for implementation
+
+// ========== Standalone SFTP Connection ==========
+
+#[derive(Debug, Deserialize)]
+pub struct SftpConnectRequest {
+    pub connection_id: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: String,
+    pub password: Option<String>,
+    pub key_path: Option<String>,
+    pub passphrase: Option<String>,
+}
+
+#[tauri::command]
+pub async fn sftp_connect(
+    request: SftpConnectRequest,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    let auth = match request.auth_method.as_str() {
+        "password" => SftpAuthMethod::Password {
+            password: request.password.unwrap_or_default(),
+        },
+        "publickey" => SftpAuthMethod::PublicKey {
+            key_path: request.key_path.ok_or("Key path required for SFTP")?,
+            passphrase: request.passphrase,
+        },
+        _ => return Err("Invalid SFTP auth method".to_string()),
+    };
+
+    let config = SftpConfig {
+        host: request.host,
+        port: request.port,
+        username: request.username,
+        auth_method: auth,
+    };
+
+    match state.create_sftp_connection(request.connection_id.clone(), config).await {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some(format!("SFTP connected: {}", request.connection_id)),
+            error: None,
+        }),
+        Err(e) => Err(format!("SFTP connection failed: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub async fn sftp_standalone_disconnect(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    match state.close_sftp_connection(&connection_id).await {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some("SFTP disconnected".to_string()),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+// ========== FTP Connection ==========
+
+#[derive(Debug, Deserialize)]
+pub struct FtpConnectRequest {
+    pub connection_id: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+    pub ftps_enabled: bool,
+    pub anonymous: bool,
+}
+
+#[tauri::command]
+pub async fn ftp_connect(
+    request: FtpConnectRequest,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    tracing::info!(
+        "ftp_connect: id={}, host={}:{}, user={}, ftps={}, anon={}",
+        request.connection_id, request.host, request.port,
+        request.username, request.ftps_enabled, request.anonymous
+    );
+
+    let config = FtpConfig {
+        host: request.host,
+        port: request.port,
+        username: if request.anonymous {
+            "anonymous".to_string()
+        } else {
+            request.username
+        },
+        password: if request.anonymous {
+            "anonymous@".to_string()
+        } else {
+            request.password.unwrap_or_default()
+        },
+        ftps_enabled: request.ftps_enabled,
+        anonymous: request.anonymous,
+    };
+
+    match state.create_ftp_connection(request.connection_id.clone(), config).await {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some(format!("FTP connected: {}", request.connection_id)),
+            error: None,
+        }),
+        Err(e) => Err(format!("FTP connection failed: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub async fn ftp_disconnect(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    match state.close_ftp_connection(&connection_id).await {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some("FTP disconnected".to_string()),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+// ========== Unified File Operations ==========
+
+#[tauri::command]
+pub async fn list_remote_files(
+    connection_id: String,
+    path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<Vec<FileEntry>, String> {
+    let conn_type = state
+        .get_connection_type(&connection_id)
+        .await
+        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+
+    match conn_type.as_str() {
+        "SFTP" => {
+            let sftp_map = state.get_sftp_connection().await;
+            let connections = sftp_map.read().await;
+            let client = connections
+                .get(&connection_id)
+                .ok_or("SFTP connection not found")?;
+            client.list_dir(&path).await.map_err(|e| e.to_string())
+        }
+        "FTP" => {
+            let ftp_map = state.get_ftp_connection().await;
+            let mut connections = ftp_map.write().await;
+            let client = connections
+                .get_mut(&connection_id)
+                .ok_or("FTP connection not found")?;
+            client.list_dir(&path).await.map_err(|e| e.to_string())
+        }
+        _ => Err(format!("Unsupported protocol: {}", conn_type)),
+    }
+}
+
+#[tauri::command]
+pub async fn download_remote_file(
+    connection_id: String,
+    remote_path: String,
+    local_path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<FileTransferResponse, String> {
+    let conn_type = state
+        .get_connection_type(&connection_id)
+        .await
+        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+
+    let result = match conn_type.as_str() {
+        "SFTP" => {
+            let sftp_map = state.get_sftp_connection().await;
+            let connections = sftp_map.read().await;
+            let client = connections
+                .get(&connection_id)
+                .ok_or("SFTP connection not found".to_string())?;
+            client.download_file(&remote_path, &local_path).await
+        }
+        "FTP" => {
+            let ftp_map = state.get_ftp_connection().await;
+            let mut connections = ftp_map.write().await;
+            let client = connections
+                .get_mut(&connection_id)
+                .ok_or("FTP connection not found".to_string())?;
+            client.download_file(&remote_path, &local_path).await
+        }
+        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+    };
+
+    match result {
+        Ok(bytes) => Ok(FileTransferResponse {
+            success: true,
+            bytes_transferred: Some(bytes),
+            data: None,
+            error: None,
+        }),
+        Err(e) => Ok(FileTransferResponse {
+            success: false,
+            bytes_transferred: None,
+            data: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn upload_remote_file(
+    connection_id: String,
+    local_path: String,
+    remote_path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<FileTransferResponse, String> {
+    let conn_type = state
+        .get_connection_type(&connection_id)
+        .await
+        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+
+    let result = match conn_type.as_str() {
+        "SFTP" => {
+            let sftp_map = state.get_sftp_connection().await;
+            let connections = sftp_map.read().await;
+            let client = connections
+                .get(&connection_id)
+                .ok_or("SFTP connection not found".to_string())?;
+            client.upload_file(&local_path, &remote_path).await
+        }
+        "FTP" => {
+            let ftp_map = state.get_ftp_connection().await;
+            let mut connections = ftp_map.write().await;
+            let client = connections
+                .get_mut(&connection_id)
+                .ok_or("FTP connection not found".to_string())?;
+            client.upload_file(&local_path, &remote_path).await
+        }
+        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+    };
+
+    match result {
+        Ok(bytes) => Ok(FileTransferResponse {
+            success: true,
+            bytes_transferred: Some(bytes),
+            data: None,
+            error: None,
+        }),
+        Err(e) => Ok(FileTransferResponse {
+            success: false,
+            bytes_transferred: None,
+            data: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn delete_remote_item(
+    connection_id: String,
+    path: String,
+    is_directory: bool,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    let conn_type = state
+        .get_connection_type(&connection_id)
+        .await
+        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+
+    let result = match conn_type.as_str() {
+        "SFTP" => {
+            let sftp_map = state.get_sftp_connection().await;
+            let connections = sftp_map.read().await;
+            let client = connections
+                .get(&connection_id)
+                .ok_or("SFTP connection not found".to_string())?;
+            if is_directory {
+                client.delete_dir(&path).await
+            } else {
+                client.delete_file(&path).await
+            }
+        }
+        "FTP" => {
+            let ftp_map = state.get_ftp_connection().await;
+            let mut connections = ftp_map.write().await;
+            let client = connections
+                .get_mut(&connection_id)
+                .ok_or("FTP connection not found".to_string())?;
+            if is_directory {
+                client.delete_dir(&path).await
+            } else {
+                client.delete_file(&path).await
+            }
+        }
+        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+    };
+
+    match result {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some(format!("Deleted: {}", path)),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn create_remote_directory(
+    connection_id: String,
+    path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    let conn_type = state
+        .get_connection_type(&connection_id)
+        .await
+        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+
+    let result = match conn_type.as_str() {
+        "SFTP" => {
+            let sftp_map = state.get_sftp_connection().await;
+            let connections = sftp_map.read().await;
+            let client = connections
+                .get(&connection_id)
+                .ok_or("SFTP connection not found".to_string())?;
+            client.create_dir(&path).await
+        }
+        "FTP" => {
+            let ftp_map = state.get_ftp_connection().await;
+            let mut connections = ftp_map.write().await;
+            let client = connections
+                .get_mut(&connection_id)
+                .ok_or("FTP connection not found".to_string())?;
+            client.create_dir(&path).await
+        }
+        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+    };
+
+    match result {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some(format!("Created directory: {}", path)),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+#[tauri::command]
+pub async fn rename_remote_item(
+    connection_id: String,
+    old_path: String,
+    new_path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    let conn_type = state
+        .get_connection_type(&connection_id)
+        .await
+        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+
+    let result = match conn_type.as_str() {
+        "SFTP" => {
+            let sftp_map = state.get_sftp_connection().await;
+            let connections = sftp_map.read().await;
+            let client = connections
+                .get(&connection_id)
+                .ok_or("SFTP connection not found".to_string())?;
+            client.rename(&old_path, &new_path).await
+        }
+        "FTP" => {
+            let ftp_map = state.get_ftp_connection().await;
+            let mut connections = ftp_map.write().await;
+            let client = connections
+                .get_mut(&connection_id)
+                .ok_or("FTP connection not found".to_string())?;
+            client.rename(&old_path, &new_path).await
+        }
+        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+    };
+
+    match result {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some(format!("Renamed '{}' to '{}'", old_path, new_path)),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+// ========== Local Filesystem Commands ==========
+
+#[tauri::command]
+pub async fn list_local_files(path: String) -> Result<Vec<FileEntry>, String> {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir_path = std::path::Path::new(&path);
+    if !dir_path.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+    if !dir_path.is_dir() {
+        return Err(format!("Path is not a directory: {}", path));
+    }
+
+    let read_dir = fs::read_dir(dir_path)
+        .map_err(|e| format!("Failed to read directory '{}': {}", path, e))?;
+
+    let mut entries: Vec<FileEntry> = Vec::new();
+    for item in read_dir {
+        let item = match item {
+            Ok(i) => i,
+            Err(_) => continue,
+        };
+
+        let name = item.file_name().to_string_lossy().to_string();
+        // Skip hidden files starting with . (optional, but common in FTP clients)
+        // Actually, let's show all files like FileZilla does
+
+        let metadata = match item.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+
+        let file_type = if metadata.is_dir() {
+            FileEntryType::Directory
+        } else if metadata.file_type().is_symlink() {
+            FileEntryType::Symlink
+        } else {
+            FileEntryType::File
+        };
+
+        let size = metadata.len();
+
+        let modified = metadata.modified().ok().map(|t| {
+            let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            let secs = duration.as_secs() as i64;
+            format_unix_timestamp(secs)
+        });
+
+        let permissions = {
+            let mode = metadata.permissions().mode();
+            Some(format_unix_permissions(mode))
+        };
+
+        entries.push(FileEntry {
+            name,
+            size,
+            modified,
+            permissions,
+            file_type,
+        });
+    }
+
+    // Sort: directories first, then files, alphabetical within each group
+    entries.sort_by(|a, b| {
+        let a_is_dir = matches!(a.file_type, FileEntryType::Directory);
+        let b_is_dir = matches!(b.file_type, FileEntryType::Directory);
+        match (a_is_dir, b_is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+
+    Ok(entries)
+}
+
+/// Format a unix timestamp (seconds since epoch) into an ISO-like datetime string.
+fn format_unix_timestamp(secs: i64) -> String {
+    // Simple manual conversion for local display
+    // This avoids pulling in chrono — we just need a readable date string
+    let days = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+
+    // Compute year, month, day from days since epoch (1970-01-01)
+    let mut y = 1970i64;
+    let mut remaining_days = days;
+
+    loop {
+        let days_in_year = if is_leap_year(y) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        y += 1;
+    }
+
+    let month_days = if is_leap_year(y) {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut m = 0usize;
+    for (i, &md) in month_days.iter().enumerate() {
+        if remaining_days < md as i64 {
+            m = i;
+            break;
+        }
+        remaining_days -= md as i64;
+    }
+
+    let d = remaining_days + 1;
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        y,
+        m + 1,
+        d,
+        hours,
+        minutes,
+        seconds
+    )
+}
+
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+}
+
+/// Format Unix file mode bits into a human-readable rwx string.
+fn format_unix_permissions(mode: u32) -> String {
+    let mut s = String::with_capacity(10);
+    // File type
+    s.push(match mode & 0o170000 {
+        0o040000 => 'd',
+        0o120000 => 'l',
+        _ => '-',
+    });
+    // Owner
+    s.push(if mode & 0o400 != 0 { 'r' } else { '-' });
+    s.push(if mode & 0o200 != 0 { 'w' } else { '-' });
+    s.push(if mode & 0o100 != 0 { 'x' } else { '-' });
+    // Group
+    s.push(if mode & 0o040 != 0 { 'r' } else { '-' });
+    s.push(if mode & 0o020 != 0 { 'w' } else { '-' });
+    s.push(if mode & 0o010 != 0 { 'x' } else { '-' });
+    // Other
+    s.push(if mode & 0o004 != 0 { 'r' } else { '-' });
+    s.push(if mode & 0o002 != 0 { 'w' } else { '-' });
+    s.push(if mode & 0o001 != 0 { 'x' } else { '-' });
+    s
+}
+
+#[tauri::command]
+pub async fn get_home_directory() -> Result<String, String> {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .ok_or_else(|| "Could not determine home directory".to_string())
+}
+
+#[tauri::command]
+pub async fn delete_local_item(path: String, is_directory: bool) -> Result<(), String> {
+    use std::fs;
+    let p = std::path::Path::new(&path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+    if is_directory {
+        fs::remove_dir_all(p)
+            .map_err(|e| format!("Failed to delete directory '{}': {}", path, e))
+    } else {
+        fs::remove_file(p)
+            .map_err(|e| format!("Failed to delete file '{}': {}", path, e))
+    }
+}
+
+#[tauri::command]
+pub async fn rename_local_item(old_path: String, new_path: String) -> Result<(), String> {
+    use std::fs;
+    let p = std::path::Path::new(&old_path);
+    if !p.exists() {
+        return Err(format!("Path does not exist: {}", old_path));
+    }
+    fs::rename(&old_path, &new_path)
+        .map_err(|e| format!("Failed to rename '{}' to '{}': {}", old_path, new_path, e))
+}
+
+#[tauri::command]
+pub async fn create_local_directory(path: String) -> Result<(), String> {
+    use std::fs;
+    fs::create_dir_all(&path)
+        .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+}
+
+#[tauri::command]
+pub async fn open_in_os(path: String) -> Result<(), String> {
+    open::that(&path)
+        .map_err(|e| format!("Failed to open '{}': {}", path, e))
+}
+
+// ========== Local Filesystem Tests ==========
+
+#[cfg(test)]
+mod local_fs_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_dir() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        // Create some test files and directories
+        fs::write(dir.path().join("file1.txt"), "hello").unwrap();
+        fs::write(dir.path().join("file2.rs"), "fn main() {}").unwrap();
+        fs::create_dir(dir.path().join("subdir")).unwrap();
+        fs::write(dir.path().join("subdir").join("nested.txt"), "nested").unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn test_list_local_files() {
+        let dir = create_test_dir();
+        let path = dir.path().to_string_lossy().to_string();
+        let result = list_local_files(path).await;
+        assert!(result.is_ok());
+        let entries = result.unwrap();
+        // subdir should come first (directories first)
+        assert_eq!(entries[0].name, "subdir");
+        assert!(matches!(entries[0].file_type, FileEntryType::Directory));
+        // Then files alphabetically
+        let file_names: Vec<&str> = entries[1..].iter().map(|e| e.name.as_str()).collect();
+        assert!(file_names.contains(&"file1.txt"));
+        assert!(file_names.contains(&"file2.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_list_local_files_nonexistent() {
+        let result = list_local_files("/nonexistent/path/xyz".to_string()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_get_home_directory() {
+        let result = get_home_directory().await;
+        assert!(result.is_ok());
+        let home = result.unwrap();
+        assert!(!home.is_empty());
+        assert!(std::path::Path::new(&home).exists());
+    }
+
+    #[tokio::test]
+    async fn test_delete_local_file() {
+        let dir = create_test_dir();
+        let file_path = dir.path().join("file1.txt").to_string_lossy().to_string();
+        assert!(std::path::Path::new(&file_path).exists());
+        let result = delete_local_item(file_path.clone(), false).await;
+        assert!(result.is_ok());
+        assert!(!std::path::Path::new(&file_path).exists());
+    }
+
+    #[tokio::test]
+    async fn test_delete_local_directory() {
+        let dir = create_test_dir();
+        let sub_path = dir.path().join("subdir").to_string_lossy().to_string();
+        assert!(std::path::Path::new(&sub_path).exists());
+        let result = delete_local_item(sub_path.clone(), true).await;
+        assert!(result.is_ok());
+        assert!(!std::path::Path::new(&sub_path).exists());
+    }
+
+    #[tokio::test]
+    async fn test_rename_local_item() {
+        let dir = create_test_dir();
+        let old_path = dir.path().join("file1.txt").to_string_lossy().to_string();
+        let new_path = dir.path().join("renamed.txt").to_string_lossy().to_string();
+        let result = rename_local_item(old_path.clone(), new_path.clone()).await;
+        assert!(result.is_ok());
+        assert!(!std::path::Path::new(&old_path).exists());
+        assert!(std::path::Path::new(&new_path).exists());
+    }
+
+    #[tokio::test]
+    async fn test_create_local_directory() {
+        let dir = create_test_dir();
+        let new_dir = dir.path().join("new_subdir").to_string_lossy().to_string();
+        let result = create_local_directory(new_dir.clone()).await;
+        assert!(result.is_ok());
+        assert!(std::path::Path::new(&new_dir).is_dir());
+    }
+
+    #[test]
+    fn test_format_unix_permissions() {
+        assert_eq!(format_unix_permissions(0o100644), "-rw-r--r--");
+        assert_eq!(format_unix_permissions(0o040755), "drwxr-xr-x");
+        assert_eq!(format_unix_permissions(0o100755), "-rwxr-xr-x");
+        assert_eq!(format_unix_permissions(0o120777), "lrwxrwxrwx");
+    }
+
+    #[test]
+    fn test_format_unix_timestamp() {
+        // 2024-01-01 00:00:00 UTC = 1704067200
+        let s = format_unix_timestamp(1704067200);
+        assert_eq!(s, "2024-01-01 00:00:00");
+    }
+}

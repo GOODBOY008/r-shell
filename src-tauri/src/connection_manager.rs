@@ -1,4 +1,6 @@
 use crate::ssh::{PtySession, SshClient, SshConfig};
+use crate::sftp_client::StandaloneSftpClient;
+use crate::ftp_client::FtpClient;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,6 +14,12 @@ pub struct ConnectionManager {
     /// Used to prevent a stale Close from killing a newly created session.
     pty_generations: Arc<RwLock<HashMap<String, u64>>>,
     pending_connections: Arc<RwLock<HashMap<String, CancellationToken>>>,
+    /// Standalone SFTP connections (no PTY)
+    sftp_connections: Arc<RwLock<HashMap<String, StandaloneSftpClient>>>,
+    /// FTP/FTPS connections
+    ftp_connections: Arc<RwLock<HashMap<String, FtpClient>>>,
+    /// Track protocol type per connection ID ("SSH", "SFTP", "FTP")
+    connection_types: Arc<RwLock<HashMap<String, String>>>,
 }
 
 impl ConnectionManager {
@@ -21,6 +29,9 @@ impl ConnectionManager {
             pty_sessions: Arc::new(RwLock::new(HashMap::new())),
             pty_generations: Arc::new(RwLock::new(HashMap::new())),
             pending_connections: Arc::new(RwLock::new(HashMap::new())),
+            sftp_connections: Arc::new(RwLock::new(HashMap::new())),
+            ftp_connections: Arc::new(RwLock::new(HashMap::new())),
+            connection_types: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -239,5 +250,178 @@ impl ConnectionManager {
             .send((cols, rows))
             .await
             .map_err(|_| anyhow::anyhow!("PTY resize channel closed"))
+    }
+
+    // ===== Standalone SFTP Connection Management =====
+
+    pub async fn create_sftp_connection(
+        &self,
+        connection_id: String,
+        config: crate::sftp_client::SftpConfig,
+    ) -> Result<()> {
+        let client = StandaloneSftpClient::connect(&config).await?;
+        let mut sftp_connections = self.sftp_connections.write().await;
+        sftp_connections.insert(connection_id.clone(), client);
+        let mut types = self.connection_types.write().await;
+        types.insert(connection_id, "SFTP".to_string());
+        Ok(())
+    }
+
+    pub async fn get_sftp_connection(&self) -> Arc<RwLock<HashMap<String, StandaloneSftpClient>>> {
+        self.sftp_connections.clone()
+    }
+
+    pub async fn close_sftp_connection(&self, connection_id: &str) -> Result<()> {
+        let mut sftp_connections = self.sftp_connections.write().await;
+        if let Some(mut client) = sftp_connections.remove(connection_id) {
+            client.disconnect().await?;
+        }
+        let mut types = self.connection_types.write().await;
+        types.remove(connection_id);
+        Ok(())
+    }
+
+    // ===== FTP Connection Management =====
+
+    pub async fn create_ftp_connection(
+        &self,
+        connection_id: String,
+        config: crate::ftp_client::FtpConfig,
+    ) -> Result<()> {
+        let client = FtpClient::connect(&config).await?;
+        let mut ftp_connections = self.ftp_connections.write().await;
+        ftp_connections.insert(connection_id.clone(), client);
+        let mut types = self.connection_types.write().await;
+        types.insert(connection_id, "FTP".to_string());
+        Ok(())
+    }
+
+    pub async fn get_ftp_connection(&self) -> Arc<RwLock<HashMap<String, FtpClient>>> {
+        self.ftp_connections.clone()
+    }
+
+    pub async fn close_ftp_connection(&self, connection_id: &str) -> Result<()> {
+        let mut ftp_connections = self.ftp_connections.write().await;
+        if let Some(mut client) = ftp_connections.remove(connection_id) {
+            client.disconnect().await?;
+        }
+        let mut types = self.connection_types.write().await;
+        types.remove(connection_id);
+        Ok(())
+    }
+
+    /// Get the protocol type for a connection ID.
+    pub async fn get_connection_type(&self, connection_id: &str) -> Option<String> {
+        let types = self.connection_types.read().await;
+        types.get(connection_id).cloned()
+    }
+}
+
+// =============================================================================
+// Unit tests — Task 6.4: Connection manager dispatch / protocol routing
+// =============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_new_manager_has_no_connections() {
+        let mgr = ConnectionManager::new();
+        let connections = mgr.list_connections().await;
+        assert!(connections.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_connection_type_returns_none_for_unknown() {
+        let mgr = ConnectionManager::new();
+        assert!(mgr.get_connection_type("unknown-id").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_connection_type_set_for_sftp() {
+        let mgr = ConnectionManager::new();
+        // Manually insert a connection type (simulating what create_sftp_connection does)
+        {
+            let mut types = mgr.connection_types.write().await;
+            types.insert("sftp-1".to_string(), "SFTP".to_string());
+        }
+        assert_eq!(mgr.get_connection_type("sftp-1").await, Some("SFTP".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_connection_type_set_for_ftp() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut types = mgr.connection_types.write().await;
+            types.insert("ftp-1".to_string(), "FTP".to_string());
+        }
+        assert_eq!(mgr.get_connection_type("ftp-1").await, Some("FTP".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_close_sftp_removes_connection_type() {
+        let mgr = ConnectionManager::new();
+        // Simulate having an SFTP connection
+        {
+            let mut types = mgr.connection_types.write().await;
+            types.insert("sftp-close".to_string(), "SFTP".to_string());
+        }
+        // close_sftp_connection removes from both maps
+        let result = mgr.close_sftp_connection("sftp-close").await;
+        assert!(result.is_ok());
+        assert!(mgr.get_connection_type("sftp-close").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_close_ftp_removes_connection_type() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut types = mgr.connection_types.write().await;
+            types.insert("ftp-close".to_string(), "FTP".to_string());
+        }
+        let result = mgr.close_ftp_connection("ftp-close").await;
+        assert!(result.is_ok());
+        assert!(mgr.get_connection_type("ftp-close").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_nonexistent_pending_connection() {
+        let mgr = ConnectionManager::new();
+        let cancelled = mgr.cancel_pending_connection("ghost").await;
+        assert!(!cancelled);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_protocol_types_tracked() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut types = mgr.connection_types.write().await;
+            types.insert("ssh-1".to_string(), "SSH".to_string());
+            types.insert("sftp-1".to_string(), "SFTP".to_string());
+            types.insert("ftp-1".to_string(), "FTP".to_string());
+        }
+        assert_eq!(mgr.get_connection_type("ssh-1").await, Some("SSH".to_string()));
+        assert_eq!(mgr.get_connection_type("sftp-1").await, Some("SFTP".to_string()));
+        assert_eq!(mgr.get_connection_type("ftp-1").await, Some("FTP".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_routing_sftp_vs_ftp() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut types = mgr.connection_types.write().await;
+            types.insert("conn-sftp".to_string(), "SFTP".to_string());
+            types.insert("conn-ftp".to_string(), "FTP".to_string());
+        }
+
+        // Simulate dispatch logic from list_remote_files command
+        let sftp_type = mgr.get_connection_type("conn-sftp").await.unwrap();
+        assert_eq!(sftp_type, "SFTP");
+
+        let ftp_type = mgr.get_connection_type("conn-ftp").await.unwrap();
+        assert_eq!(ftp_type, "FTP");
+
+        // Unknown connection returns None
+        assert!(mgr.get_connection_type("conn-unknown").await.is_none());
     }
 }

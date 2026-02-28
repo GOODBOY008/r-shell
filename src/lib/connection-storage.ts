@@ -19,10 +19,12 @@ export interface ConnectionData {
   tags?: string[];
   description?: string;
   // Authentication details
-  authMethod?: 'password' | 'publickey' | 'keyboard-interactive';
+  authMethod?: 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
   password?: string; // Note: In production, this should be encrypted
   privateKeyPath?: string;
   passphrase?: string;
+  // FTP-specific
+  ftpsEnabled?: boolean;
 }
 
 export interface ConnectionFolder {
@@ -525,6 +527,8 @@ export interface ActiveConnectionState {
   connectionId: string;
   order: number;
   originalConnectionId?: string; // For duplicated tabs, reference to the original connection
+  tabType?: 'terminal' | 'file-browser'; // Tab type for SFTP/FTP vs SSH
+  protocol?: string; // Protocol used (SSH, SFTP, FTP)
 }
 
 export class ActiveConnectionsManager {

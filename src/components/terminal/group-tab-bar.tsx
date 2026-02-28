@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight } from 'lucide-react';
+import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal } from 'lucide-react';
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { Button } from '../ui/button';
@@ -165,6 +165,11 @@ export function GroupTabBar({
                   onClick={() => handleTabSelect(tab.id)}
                 >
                   <div className="flex items-center gap-2 min-w-0">
+                    {tab.tabType === 'file-browser' ? (
+                      <FolderSync className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
+                    ) : (
+                      <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    )}
                     <div
                       className={`w-2 h-2 rounded-full shrink-0 ${
                         tab.connectionStatus === 'connected'

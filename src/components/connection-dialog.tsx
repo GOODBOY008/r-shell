@@ -30,6 +30,7 @@ import {
   Download,
   Upload
 } from 'lucide-react';
+import { getDefaultPort, getAuthMethods, getHiddenFields } from '@/lib/protocol-config';
 
 interface ConnectionDialogProps {
   open: boolean;
@@ -41,11 +42,11 @@ interface ConnectionDialogProps {
 export interface ConnectionConfig {
   id?: string;
   name: string;
-  protocol: 'SSH' | 'Telnet' | 'Raw' | 'Serial';
+  protocol: 'SSH' | 'Telnet' | 'Raw' | 'Serial' | 'SFTP' | 'FTP';
   host: string;
   port: number;
   username: string;
-  authMethod: 'password' | 'publickey' | 'keyboard-interactive';
+  authMethod: 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
@@ -56,6 +57,9 @@ export interface ConnectionConfig {
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
+
+  // FTP specific
+  ftpsEnabled?: boolean;
 
   // SSH specific
   compression?: boolean;
@@ -203,10 +207,13 @@ export function ConnectionDialog({
     const connectionId = editingConnection?.id || `connection-${Date.now()}`;
     connectionIdRef.current = connectionId;
 
-    // Basic validation
-    if (!config.name || !config.host || !config.username) {
+    // Basic validation — anonymous FTP doesn't require a username
+    const requiresUsername = config.authMethod !== 'anonymous';
+    if (!config.name || !config.host || (requiresUsername && !config.username)) {
       toast.error('Missing Required Fields', {
-        description: 'Please fill in all required fields: Connection Name, Host, and Username.',
+        description: requiresUsername
+          ? 'Please fill in all required fields: Connection Name, Host, and Username.'
+          : 'Please fill in all required fields: Connection Name and Host.',
       });
       resetConnectionState();
       return;
@@ -229,8 +236,58 @@ export function ConnectionDialog({
       return;
     }
 
+    // For SFTP/FTP protocols, delegate connection to App.tsx (via onConnect)
+    // which calls sftp_connect / ftp_connect Tauri commands.
+    const isSftpOrFtp = config.protocol === 'SFTP' || config.protocol === 'FTP';
+
+    if (isSftpOrFtp) {
+      try {
+        // Save connection if requested
+        if (editingConnection?.id) {
+          ConnectionStorageManager.updateConnection(editingConnection.id, {
+            name: config.name,
+            host: config.host,
+            port: config.port || (config.protocol === 'FTP' ? 21 : 22),
+            username: config.username,
+            protocol: config.protocol,
+            authMethod: config.authMethod,
+            password: config.password,
+            privateKeyPath: config.privateKeyPath,
+            passphrase: config.passphrase,
+            ftpsEnabled: config.ftpsEnabled,
+            lastConnected: new Date().toISOString(),
+          });
+        } else if (saveAsConnection) {
+          ConnectionStorageManager.saveConnectionWithId(connectionId, {
+            name: config.name,
+            host: config.host,
+            port: config.port || (config.protocol === 'FTP' ? 21 : 22),
+            username: config.username,
+            protocol: config.protocol,
+            folder: connectionFolder,
+            authMethod: config.authMethod,
+            password: config.password,
+            privateKeyPath: config.privateKeyPath,
+            passphrase: config.passphrase,
+            ftpsEnabled: config.ftpsEnabled,
+          });
+        }
+
+        // Delegate actual connection to App.tsx handler
+        onConnect({ ...config, id: connectionId });
+        onOpenChange(false);
+
+        if (!editingConnection) {
+          setConfig(defaultConfig);
+        }
+      } finally {
+        resetConnectionState();
+      }
+      return;
+    }
+
+    // SSH / Telnet / Raw / Serial — connect via ssh_connect
     try {
-      // Actually connect to SSH server
       const result = await invoke<{ success: boolean; error?: string }>(
         'ssh_connect',
         {
@@ -288,26 +345,7 @@ export function ConnectionDialog({
 
         // Reset form if creating new connection
         if (!editingConnection) {
-          setConfig({
-            name: '',
-            protocol: 'SSH',
-            host: '',
-            port: 22,
-            username: '',
-            authMethod: 'password',
-            password: '',
-            privateKeyPath: '',
-            passphrase: '',
-            proxyType: 'none',
-            proxyHost: '',
-            proxyPort: 8080,
-            proxyUsername: '',
-            proxyPassword: '',
-            compression: true,
-            keepAlive: true,
-            keepAliveInterval: 60,
-            serverAliveCountMax: 3
-          });
+          setConfig(defaultConfig);
         }
       } else {
         // Show error toast
@@ -466,10 +504,13 @@ export function ConnectionDialog({
                     <Select
                       value={config.protocol}
                       onValueChange={(value: ConnectionConfig['protocol']) => {
-                        const defaultPorts = { SSH: 22, Telnet: 23, Raw: 23, Serial: 0 };
+                        const validAuthMethods = getAuthMethods(value);
+                        const currentAuthValid = validAuthMethods.includes(config.authMethod);
                         updateConfig({
                           protocol: value,
-                          port: defaultPorts[value]
+                          port: getDefaultPort(value),
+                          ...(!currentAuthValid && { authMethod: validAuthMethods[0] }),
+                          ...(value !== 'FTP' && { ftpsEnabled: undefined }),
                         });
                       }}
                     >
@@ -478,6 +519,8 @@ export function ConnectionDialog({
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="SSH">SSH</SelectItem>
+                        <SelectItem value="SFTP">SFTP</SelectItem>
+                        <SelectItem value="FTP">FTP</SelectItem>
                         <SelectItem value="Telnet">Telnet</SelectItem>
                         <SelectItem value="Raw">Raw</SelectItem>
                         <SelectItem value="Serial">Serial</SelectItem>
@@ -542,9 +585,14 @@ export function ConnectionDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="password">Password</SelectItem>
-                      <SelectItem value="publickey">Public Key</SelectItem>
-                      <SelectItem value="keyboard-interactive">Keyboard Interactive</SelectItem>
+                      {getAuthMethods(config.protocol).map((method) => (
+                        <SelectItem key={method} value={method}>
+                          {method === 'password' ? 'Password' :
+                           method === 'publickey' ? 'Public Key' :
+                           method === 'keyboard-interactive' ? 'Keyboard Interactive' :
+                           method === 'anonymous' ? 'Anonymous' : method}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -589,6 +637,32 @@ export function ConnectionDialog({
                   </div>
                 )}
 
+                {config.authMethod === 'anonymous' && (
+                  <div className="p-4 bg-muted rounded-lg">
+                    <p className="text-sm text-muted-foreground">
+                      Anonymous authentication will connect without credentials. Some FTP servers allow public access this way.
+                    </p>
+                  </div>
+                )}
+
+                {config.protocol === 'FTP' && (
+                  <>
+                    <Separator />
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label>Enable FTPS (FTP over TLS)</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Encrypt the FTP connection using TLS for improved security
+                        </p>
+                      </div>
+                      <Switch
+                        checked={config.ftpsEnabled ?? false}
+                        onCheckedChange={(checked) => updateConfig({ ftpsEnabled: checked })}
+                      />
+                    </div>
+                  </>
+                )}
+
                 <div className="p-4 bg-muted rounded-lg">
                   <div className="flex items-center gap-2 mb-2">
                     <Key className="h-4 w-4" />
@@ -597,6 +671,8 @@ export function ConnectionDialog({
                   <p className="text-sm text-muted-foreground">
                     {config.authMethod === 'password' ? (
                       <>For production environments, we recommend using public key authentication instead of passwords for enhanced security.</>
+                    ) : config.authMethod === 'anonymous' ? (
+                      <>Anonymous connections are not encrypted. Use FTPS for secure file transfers when possible.</>
                     ) : (
                       <>Public key authentication is more secure than passwords. R-Shell supports RSA, Ed25519, and ECDSA keys.</>
                     )}
@@ -686,71 +762,102 @@ export function ConnectionDialog({
           </TabsContent>
 
           <TabsContent value="advanced" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <TerminalIcon className="h-4 w-4" />
-                  Advanced SSH Options
-                </CardTitle>
-                <CardDescription>
-                  Fine-tune SSH connection behavior and performance.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label>Enable Compression</Label>
-                      <p className="text-sm text-muted-foreground">
-                        Compress data to improve performance over slow connections
-                      </p>
-                    </div>
-                    <Switch
-                      checked={config.compression}
-                      onCheckedChange={(checked) => updateConfig({ compression: checked })}
-                    />
-                  </div>
+            {(() => {
+              const hiddenFields = getHiddenFields(config.protocol);
+              const isCompHidden = hiddenFields.includes('compression');
+              const isKaHidden = hiddenFields.includes('keepAliveInterval');
+              const isAllHidden = isCompHidden && isKaHidden;
 
-                  <Separator />
+              if (isAllHidden) {
+                return (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <TerminalIcon className="h-4 w-4" />
+                        Advanced Options
+                      </CardTitle>
+                      <CardDescription>
+                        No advanced options are available for {config.protocol} connections.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                );
+              }
 
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <Label>Keep Alive</Label>
-                      <p className="text-sm text-muted-foreground">
-                        Send keep-alive messages to prevent connection timeout
-                      </p>
-                    </div>
-                    <Switch
-                      checked={config.keepAlive}
-                      onCheckedChange={(checked) => updateConfig({ keepAlive: checked })}
-                    />
-                  </div>
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <TerminalIcon className="h-4 w-4" />
+                      Advanced SSH Options
+                    </CardTitle>
+                    <CardDescription>
+                      Fine-tune SSH connection behavior and performance.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-4">
+                      {!isCompHidden && (
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <Label>Enable Compression</Label>
+                            <p className="text-sm text-muted-foreground">
+                              Compress data to improve performance over slow connections
+                            </p>
+                          </div>
+                          <Switch
+                            checked={config.compression}
+                            onCheckedChange={(checked) => updateConfig({ compression: checked })}
+                          />
+                        </div>
+                      )}
 
-                  {config.keepAlive && (
-                    <div className="grid grid-cols-2 gap-4 ml-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="keep-alive-interval">Interval (seconds)</Label>
-                        <Input
-                          id="keep-alive-interval"
-                          type="number"
-                          value={config.keepAliveInterval}
-                          onChange={(e) => updateConfig({ keepAliveInterval: parseInt(e.target.value) || 60 })}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="max-count">Max Count</Label>
-                        <Input
-                          id="max-count"
-                          type="number"
-                          value={config.serverAliveCountMax}
-                          onChange={(e) => updateConfig({ serverAliveCountMax: parseInt(e.target.value) || 3 })}
-                        />
-                      </div>
+                      {!isCompHidden && !isKaHidden && <Separator />}
+
+                      {!isKaHidden && (
+                        <>
+                          <div className="flex items-center justify-between">
+                            <div className="space-y-0.5">
+                              <Label>Keep Alive</Label>
+                              <p className="text-sm text-muted-foreground">
+                                Send keep-alive messages to prevent connection timeout
+                              </p>
+                            </div>
+                            <Switch
+                              checked={config.keepAlive}
+                              onCheckedChange={(checked) => updateConfig({ keepAlive: checked })}
+                            />
+                          </div>
+
+                          {config.keepAlive && (
+                            <div className="grid grid-cols-2 gap-4 ml-4">
+                              <div className="space-y-2">
+                                <Label htmlFor="keep-alive-interval">Interval (seconds)</Label>
+                                <Input
+                                  id="keep-alive-interval"
+                                  type="number"
+                                  value={config.keepAliveInterval}
+                                  onChange={(e) => updateConfig({ keepAliveInterval: parseInt(e.target.value) || 60 })}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor="max-count">Max Count</Label>
+                                <Input
+                                  id="max-count"
+                                  type="number"
+                                  value={config.serverAliveCountMax}
+                                  onChange={(e) => updateConfig({ serverAliveCountMax: parseInt(e.target.value) || 3 })}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+                  </CardContent>
+                </Card>
+              );
+            })()}
           </TabsContent>
 
 

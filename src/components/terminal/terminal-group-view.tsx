@@ -2,6 +2,7 @@ import { useCallback, useState, useEffect } from 'react';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { GroupTabBar } from './group-tab-bar';
 import { PtyTerminal } from '../pty-terminal';
+import { FileBrowserView } from '../file-browser-view';
 import { WelcomeScreen } from '../welcome-screen';
 
 interface TerminalGroupViewProps {
@@ -102,7 +103,16 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
               className="absolute inset-0"
               style={{ display: tab.id === group.activeTabId ? 'block' : 'none' }}
             >
-              {tab.connectionStatus !== 'pending' ? (
+              {tab.tabType === 'file-browser' ? (
+                <FileBrowserView
+                  connectionId={tab.id}
+                  connectionName={tab.name}
+                  host={tab.host}
+                  protocol={tab.protocol}
+                  isConnected={tab.connectionStatus === 'connected'}
+                  onReconnect={() => handleReconnect(tab.id)}
+                />
+              ) : tab.connectionStatus !== 'pending' ? (
                 <PtyTerminal
                   key={`${tab.id}-${tab.reconnectCount}`}
                   connectionId={tab.id}

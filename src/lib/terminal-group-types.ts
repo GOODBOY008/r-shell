@@ -10,6 +10,8 @@ export type GridNode =
 export interface TerminalTab {
   id: string;
   name: string;
+  /** Tab type: 'terminal' for SSH PTY, 'file-browser' for SFTP/FTP */
+  tabType?: 'terminal' | 'file-browser';
   protocol?: string;
   host?: string;
   username?: string;

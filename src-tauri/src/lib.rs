@@ -2,6 +2,8 @@ mod ssh;
 mod connection_manager;
 mod commands;
 mod websocket_server;
+mod sftp_client;
+mod ftp_client;
 
 use connection_manager::ConnectionManager;
 use websocket_server::WebSocketServer;
@@ -20,6 +22,7 @@ pub fn run() {
     let connection_manager = Arc::new(ConnectionManager::new());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup({
@@ -66,6 +69,25 @@ pub fn run() {
             commands::detect_gpu,
             commands::get_gpu_stats,
             commands::get_websocket_port,
+            // Standalone SFTP/FTP commands
+            commands::sftp_connect,
+            commands::sftp_standalone_disconnect,
+            commands::ftp_connect,
+            commands::ftp_disconnect,
+            // Unified file operation commands
+            commands::list_remote_files,
+            commands::download_remote_file,
+            commands::upload_remote_file,
+            commands::delete_remote_item,
+            commands::create_remote_directory,
+            commands::rename_remote_item,
+            // Local filesystem commands
+            commands::list_local_files,
+            commands::get_home_directory,
+            commands::delete_local_item,
+            commands::rename_local_item,
+            commands::create_local_directory,
+            commands::open_in_os,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
