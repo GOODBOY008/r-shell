@@ -4,7 +4,7 @@ import { MenuBar } from './components/menu-bar';
 import { Toolbar } from './components/toolbar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
-import { LogViewer } from './components/log-viewer';
+import { LogMonitor } from './components/log-monitor';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { SFTPPanel } from './components/sftp-panel';
@@ -1324,7 +1324,7 @@ function AppContent() {
 
                     <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       {activeConnection ? (
-                        <LogViewer connectionId={activeConnection.connectionId} />
+                        <LogMonitor connectionId={activeConnection.connectionId} />
                       ) : null}
                     </TabsContent>
                   </div>
