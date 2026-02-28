@@ -2320,6 +2320,254 @@ pub async fn open_in_os(path: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to open '{}': {}", path, e))
 }
 
+// ========== Directory Synchronization ==========
+
+/// A file entry with a relative path (used for recursive listing comparisons).
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncFileEntry {
+    pub relative_path: String,
+    pub name: String,
+    pub size: u64,
+    pub modified: Option<String>,
+    pub file_type: FileEntryType,
+}
+
+/// Recursively list all files/dirs under a local directory, returning relative paths.
+#[tauri::command]
+pub async fn list_local_files_recursive(
+    path: String,
+    exclude_patterns: Vec<String>,
+) -> Result<Vec<SyncFileEntry>, String> {
+    use std::fs;
+    use std::os::unix::fs::MetadataExt;
+
+    fn walk_dir(
+        base: &std::path::Path,
+        current: &std::path::Path,
+        exclude: &[String],
+        results: &mut Vec<SyncFileEntry>,
+    ) -> Result<(), String> {
+        let read_dir = fs::read_dir(current)
+            .map_err(|e| format!("Failed to read '{}': {}", current.display(), e))?;
+
+        for item in read_dir {
+            let item = match item {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+            let name = item.file_name().to_string_lossy().to_string();
+
+            // Check exclude patterns
+            if matches_exclude(&name, exclude) {
+                continue;
+            }
+
+            let metadata = match item.metadata() {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+
+            let rel_path = item
+                .path()
+                .strip_prefix(base)
+                .unwrap_or(item.path().as_path())
+                .to_string_lossy()
+                .to_string();
+
+            let file_type = if metadata.is_dir() {
+                FileEntryType::Directory
+            } else if metadata.file_type().is_symlink() {
+                FileEntryType::Symlink
+            } else {
+                FileEntryType::File
+            };
+
+            let modified = metadata.modified().ok().map(|t| {
+                let duration = t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+                let secs = duration.as_secs() as i64;
+                format_unix_timestamp(secs)
+            });
+
+            results.push(SyncFileEntry {
+                relative_path: rel_path.clone(),
+                name: name.clone(),
+                size: metadata.len(),
+                modified,
+                file_type: file_type.clone(),
+            });
+
+            // Recurse into directories
+            if metadata.is_dir() {
+                walk_dir(base, &item.path(), exclude, results)?;
+            }
+        }
+        Ok(())
+    }
+
+    let base_path = std::path::Path::new(&path);
+    if !base_path.exists() || !base_path.is_dir() {
+        return Err(format!("Path does not exist or is not a directory: {}", path));
+    }
+
+    let mut results = Vec::new();
+    walk_dir(base_path, base_path, &exclude_patterns, &mut results)?;
+
+    // Sort: directories first, then by relative path
+    results.sort_by(|a, b| {
+        let a_dir = matches!(a.file_type, FileEntryType::Directory);
+        let b_dir = matches!(b.file_type, FileEntryType::Directory);
+        match (a_dir, b_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.relative_path.cmp(&b.relative_path),
+        }
+    });
+
+    Ok(results)
+}
+
+/// Recursively list all files/dirs under a remote directory (SFTP/FTP).
+#[tauri::command]
+pub async fn list_remote_files_recursive(
+    connection_id: String,
+    path: String,
+    exclude_patterns: Vec<String>,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<Vec<SyncFileEntry>, String> {
+    let conn_type = state
+        .get_connection_type(&connection_id)
+        .await
+        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+
+    let mut results = Vec::new();
+
+    match conn_type.as_str() {
+        "SFTP" => {
+            let sftp_map = state.get_sftp_connection().await;
+            let connections = sftp_map.read().await;
+            let client = connections
+                .get(&connection_id)
+                .ok_or("SFTP connection not found")?;
+
+            fn walk_sftp<'a>(
+                client: &'a crate::sftp_client::StandaloneSftpClient,
+                base: &'a str,
+                current: &'a str,
+                exclude: &'a [String],
+                results: &'a mut Vec<SyncFileEntry>,
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+                Box::pin(async move {
+                    let entries = client.list_dir(current).await.map_err(|e| e.to_string())?;
+                    for entry in entries {
+                        if matches_exclude(&entry.name, exclude) {
+                            continue;
+                        }
+                        let full_path = if current == "/" {
+                            format!("/{}", entry.name)
+                        } else {
+                            format!("{}/{}", current, entry.name)
+                        };
+                        let rel = full_path
+                            .strip_prefix(base)
+                            .unwrap_or(&full_path)
+                            .trim_start_matches('/')
+                            .to_string();
+
+                        let is_dir = matches!(entry.file_type, FileEntryType::Directory);
+
+                        results.push(SyncFileEntry {
+                            relative_path: rel.clone(),
+                            name: entry.name.clone(),
+                            size: entry.size,
+                            modified: entry.modified.clone(),
+                            file_type: entry.file_type.clone(),
+                        });
+
+                        if is_dir {
+                            walk_sftp(client, base, &full_path, exclude, results).await?;
+                        }
+                    }
+                    Ok(())
+                })
+            }
+
+            walk_sftp(client, &path, &path, &exclude_patterns, &mut results).await?;
+        }
+        "FTP" => {
+            let ftp_map = state.get_ftp_connection().await;
+            let mut connections = ftp_map.write().await;
+            let client = connections
+                .get_mut(&connection_id)
+                .ok_or("FTP connection not found")?;
+
+            // FTP recursive walk — iterative with a queue since we need &mut
+            let mut dirs_to_visit: Vec<String> = vec![path.clone()];
+            while let Some(dir) = dirs_to_visit.pop() {
+                let entries = client.list_dir(&dir).await.map_err(|e| e.to_string())?;
+                for entry in entries {
+                    if matches_exclude(&entry.name, &exclude_patterns) {
+                        continue;
+                    }
+                    let full_path = if dir == "/" {
+                        format!("/{}", entry.name)
+                    } else {
+                        format!("{}/{}", dir, entry.name)
+                    };
+                    let rel = full_path
+                        .strip_prefix(&path)
+                        .unwrap_or(&full_path)
+                        .trim_start_matches('/')
+                        .to_string();
+
+                    let is_dir = matches!(entry.file_type, FileEntryType::Directory);
+
+                    results.push(SyncFileEntry {
+                        relative_path: rel.clone(),
+                        name: entry.name.clone(),
+                        size: entry.size,
+                        modified: entry.modified.clone(),
+                        file_type: entry.file_type.clone(),
+                    });
+
+                    if is_dir {
+                        dirs_to_visit.push(full_path);
+                    }
+                }
+            }
+        }
+        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+    }
+
+    // Sort similarly
+    results.sort_by(|a, b| {
+        let a_dir = matches!(a.file_type, FileEntryType::Directory);
+        let b_dir = matches!(b.file_type, FileEntryType::Directory);
+        match (a_dir, b_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.relative_path.cmp(&b.relative_path),
+        }
+    });
+
+    Ok(results)
+}
+
+/// Simple glob-like pattern matching for exclude filter.
+fn matches_exclude(name: &str, patterns: &[String]) -> bool {
+    for pat in patterns {
+        if pat.starts_with("*.") {
+            // Extension match
+            let ext = &pat[1..]; // e.g., ".log"
+            if name.ends_with(ext) {
+                return true;
+            }
+        } else if name == pat {
+            return true;
+        }
+    }
+    false
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]

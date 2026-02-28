@@ -8,6 +8,7 @@ interface TransferControlsProps {
   onUpload: () => void;
   onDownload: () => void;
   disabled?: boolean;
+  children?: React.ReactNode;
 }
 
 export function TransferControls({
@@ -16,6 +17,7 @@ export function TransferControls({
   onUpload,
   onDownload,
   disabled = false,
+  children,
 }: TransferControlsProps) {
   return (
     <div className="flex flex-col items-center justify-center gap-2 w-10 shrink-0 bg-muted/20">
@@ -39,6 +41,7 @@ export function TransferControls({
       >
         <ArrowLeft className="h-4 w-4" />
       </Button>
+      {children}
     </div>
   );
 }

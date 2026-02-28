@@ -88,6 +88,9 @@ pub fn run() {
             commands::rename_local_item,
             commands::create_local_directory,
             commands::open_in_os,
+            // Directory synchronization commands
+            commands::list_local_files_recursive,
+            commands::list_remote_files_recursive,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])

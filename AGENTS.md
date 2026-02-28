@@ -228,6 +228,8 @@ VS Code-like resizable panel layout with presets:
 6. **No ESLint configured**: The project does not have ESLint. TypeScript strict mode is the primary static analysis.
 7. **`editor/` directory is empty**: `src-tauri/src/editor/` exists but contains no files — reserved for future use.
 8. **Release profile**: Rust release builds use LTO, single codegen unit, and symbol stripping for maximum optimization.
+9. **Radix Dialog centering in Tauri**: The base `DialogContent` from shadcn/ui uses `top-[50%] translate-y-[-50%]` centering. When a dialog is tall, this pushes its top half above the Tauri window viewport (there's no browser chrome to scroll to). **Always override** tall or variable-height dialogs with `!inset-0 !m-auto` centering instead, which keeps the dialog fully within the viewport.
+10. **Never use `h-fit` on a flex parent that has `flex-1` children**: `h-fit` makes the container size to its content, leaving zero remaining space for `flex-1` children to fill — they collapse to zero height and become invisible. When a dialog needs to grow to show dynamic content (e.g., comparison results in a scrollable area), use an explicit height like `h-[85vh]` so `flex-1` children have space to occupy. Use conditional height if the dialog should be compact when content is absent: `` `${hasContent ? "!h-[85vh]" : "!h-fit"}` ``.
 
 ---
 

@@ -4,7 +4,9 @@ import { toast } from "sonner";
 import {
   WifiOff,
   RotateCcw,
+  ArrowRightLeft,
 } from "lucide-react";
+import { SyncDialog } from "./sync-dialog";
 import { Button } from "./ui/button";
 import {
   ResizablePanelGroup,
@@ -46,6 +48,7 @@ export function FileBrowserView({
   const [activePanel, setActivePanel] = useState<"local" | "remote">("local");
   const [transfers, dispatchTransfer] = useReducer(transferQueueReducer, []);
   const [queueExpanded, setQueueExpanded] = useState(false);
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [localHomePath, setLocalHomePath] = useState<string | undefined>(
     undefined,
   );
@@ -312,6 +315,12 @@ export function FileBrowserView({
   }, []);
 
   // ------ Keyboard shortcuts ------
+  // ------ Sync dialog callbacks ------
+  const handleSyncComplete = useCallback(() => {
+    localPanelRef.current?.refresh();
+    remotePanelRef.current?.refresh();
+  }, []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -333,6 +342,11 @@ export function FileBrowserView({
         } else {
           remotePanelRef.current?.selectAll();
         }
+      }
+      // Ctrl+Shift+S to open sync dialog
+      if (e.key === "S" && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+        e.preventDefault();
+        setSyncDialogOpen(true);
       }
     },
     [activePanel, handleUploadButton, handleDownloadButton],
@@ -414,7 +428,18 @@ export function FileBrowserView({
             onUpload={handleUploadButton}
             onDownload={handleDownloadButton}
             disabled={!isConnected}
-          />
+          >
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              title="Sync directories (Ctrl+Shift+S)"
+              onClick={() => setSyncDialogOpen(true)}
+              disabled={!isConnected}
+            >
+              <ArrowRightLeft className="h-4 w-4" />
+            </Button>
+          </TransferControls>
 
           <ResizableHandle />
 
@@ -451,6 +476,20 @@ export function FileBrowserView({
           onToggleExpanded={() => setQueueExpanded((p) => !p)}
         />
       </div>
+
+      {/* Sync Dialog */}
+      <SyncDialog
+        open={syncDialogOpen}
+        onOpenChange={setSyncDialogOpen}
+        connectionId={connectionId}
+        localPath={localPanelRef.current?.getCurrentPath() ?? localHomePath ?? "/"}
+        remotePath={remotePanelRef.current?.getCurrentPath() ?? "/"}
+        onLoadLocalDir={loadLocalDirectory}
+        onLoadRemoteDir={loadRemoteDirectory}
+        onCreateRemoteDir={createRemoteDirectory}
+        onDeleteRemoteItem={deleteRemoteItem}
+        onSyncComplete={handleSyncComplete}
+      />
     </div>
   );
 }
