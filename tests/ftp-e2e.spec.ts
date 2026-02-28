@@ -3,8 +3,8 @@ import { test, expect } from '@playwright/test';
 // FTP test server credentials
 const FTP_HOST = '192.168.20.24';
 const FTP_PORT = '21';
-const FTP_USER = 'giga';
-const FTP_PASS = 'giga@2025';
+const FTP_USER = 'xxxx';
+const FTP_PASS = 'xxxxxxx';
 
 const APP_URL = 'http://localhost:1420';
 

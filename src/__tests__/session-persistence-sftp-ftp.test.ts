@@ -159,7 +159,7 @@ describe('SFTP/FTP session persistence unit tests', () => {
         tabType: 'file-browser',
         protocol: 'FTP',
         host: '192.168.20.24',
-        username: 'giga',
+        username: 'xxxx',
       });
 
       const state = createMinimalState([tab]);

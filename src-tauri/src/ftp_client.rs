@@ -339,10 +339,6 @@ fn parse_ftp_list_line(line: &str) -> Option<FileEntry> {
 // =============================================================================
 // Integration tests — require a live FTP server
 //
-// Run with:
-//   FTP_TEST_HOST=192.168.20.24 FTP_TEST_USER=giga FTP_TEST_PASS='giga@2025' \
-//     cargo test -p r-shell --lib ftp_client::tests -- --nocapture
-//
 // The tests are gated behind the FTP_TEST_HOST env var so they are skipped
 // in CI / normal `cargo test` runs.
 // =============================================================================
@@ -353,8 +349,8 @@ mod tests {
     /// Helper – read env vars or skip the test.
     fn test_config() -> Option<FtpConfig> {
         let host = std::env::var("FTP_TEST_HOST").ok()?;
-        let user = std::env::var("FTP_TEST_USER").unwrap_or_else(|_| "giga".into());
-        let pass = std::env::var("FTP_TEST_PASS").unwrap_or_else(|_| "giga@2025".into());
+        let user = std::env::var("FTP_TEST_USER").unwrap_or_else(|_| "xxxx".into());
+        let pass = std::env::var("FTP_TEST_PASS").unwrap_or_else(|_| "xxxxxxx".into());
         let port: u16 = std::env::var("FTP_TEST_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
