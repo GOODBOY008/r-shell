@@ -25,6 +25,8 @@ import {
   Trash2,
   Pencil,
   FolderPlus,
+  FolderUp,
+  FolderDown,
   Copy,
   Loader2,
   ChevronRight,
@@ -62,6 +64,8 @@ export interface FilePanelProps {
 
   // Transfer callbacks
   onTransferToOther?: (entries: FileEntry[], sourcePath: string) => void;
+  /** Called when user right-clicks a directory and chooses "Upload/Download directory" */
+  onTransferDirectoryToOther?: (dirName: string, sourcePath: string) => void;
 
   // Focus tracking
   onFocus: () => void;
@@ -98,6 +102,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       onCreateDirectory,
       onOpenInOS,
       onTransferToOther,
+      onTransferDirectoryToOther,
       onFocus,
       showPermissions = false,
       disabled = false,
@@ -694,6 +699,26 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                   : "Download to local"}
                               </ContextMenuItem>
                             )}
+                            {entry.file_type === "Directory" &&
+                              onTransferDirectoryToOther && (
+                                <ContextMenuItem
+                                  onClick={() =>
+                                    onTransferDirectoryToOther(
+                                      entry.name,
+                                      currentPath,
+                                    )
+                                  }
+                                >
+                                  {mode === "local" ? (
+                                    <FolderUp className="h-3.5 w-3.5 mr-2" />
+                                  ) : (
+                                    <FolderDown className="h-3.5 w-3.5 mr-2" />
+                                  )}
+                                  {mode === "local"
+                                    ? "Upload directory to remote"
+                                    : "Download directory to local"}
+                                </ContextMenuItem>
+                              )}
                             {mode === "local" && onOpenInOS && (
                               <ContextMenuItem
                                 onClick={() =>

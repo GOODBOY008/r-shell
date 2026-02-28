@@ -7,6 +7,7 @@ import {
   ArrowRightLeft,
 } from "lucide-react";
 import { SyncDialog } from "./sync-dialog";
+import { DirectoryTransferDialog } from "./directory-transfer-dialog";
 import { Button } from "./ui/button";
 import {
   ResizablePanelGroup,
@@ -49,6 +50,12 @@ export function FileBrowserView({
   const [transfers, dispatchTransfer] = useReducer(transferQueueReducer, []);
   const [queueExpanded, setQueueExpanded] = useState(false);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [dirTransfer, setDirTransfer] = useState<{
+    open: boolean;
+    direction: "upload" | "download";
+    sourcePath: string;
+    destPath: string;
+  } | null>(null);
   const [localHomePath, setLocalHomePath] = useState<string | undefined>(
     undefined,
   );
@@ -314,6 +321,38 @@ export function FileBrowserView({
     return () => document.removeEventListener("rshell-drop-transfer", handler);
   }, []);
 
+  // ------ Directory transfer callbacks ------
+  const handleUploadDirectory = useCallback(
+    (dirName: string, sourceDirPath: string) => {
+      const remotePath = remotePanelRef.current?.getCurrentPath() ?? "/";
+      setDirTransfer({
+        open: true,
+        direction: "upload",
+        sourcePath: pathJoin(sourceDirPath, dirName),
+        destPath: pathJoin(remotePath, dirName),
+      });
+    },
+    [],
+  );
+
+  const handleDownloadDirectory = useCallback(
+    (dirName: string, sourceDirPath: string) => {
+      const localPath = localPanelRef.current?.getCurrentPath() ?? "/";
+      setDirTransfer({
+        open: true,
+        direction: "download",
+        sourcePath: pathJoin(sourceDirPath, dirName),
+        destPath: pathJoin(localPath, dirName),
+      });
+    },
+    [],
+  );
+
+  const handleDirTransferComplete = useCallback(() => {
+    localPanelRef.current?.refresh();
+    remotePanelRef.current?.refresh();
+  }, []);
+
   // ------ Keyboard shortcuts ------
   // ------ Sync dialog callbacks ------
   const handleSyncComplete = useCallback(() => {
@@ -416,6 +455,7 @@ export function FileBrowserView({
               onCreateDirectory={createLocalDirectory}
               onOpenInOS={openInOS}
               onTransferToOther={enqueueUpload}
+              onTransferDirectoryToOther={handleUploadDirectory}
               onFocus={() => setActivePanel("local")}
               showPermissions={false}
             />
@@ -461,6 +501,7 @@ export function FileBrowserView({
               onRename={renameRemoteItem}
               onCreateDirectory={createRemoteDirectory}
               onTransferToOther={enqueueDownload}
+              onTransferDirectoryToOther={handleDownloadDirectory}
               onFocus={() => setActivePanel("remote")}
               showPermissions={true}
               disabled={!isConnected}
@@ -490,6 +531,21 @@ export function FileBrowserView({
         onDeleteRemoteItem={deleteRemoteItem}
         onSyncComplete={handleSyncComplete}
       />
+
+      {/* Directory Transfer Dialog */}
+      {dirTransfer && (
+        <DirectoryTransferDialog
+          open={dirTransfer.open}
+          onOpenChange={(open) => {
+            if (!open) setDirTransfer(null);
+          }}
+          direction={dirTransfer.direction}
+          connectionId={connectionId}
+          sourcePath={dirTransfer.sourcePath}
+          destPath={dirTransfer.destPath}
+          onComplete={handleDirTransferComplete}
+        />
+      )}
     </div>
   );
 }
