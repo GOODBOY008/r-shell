@@ -53,6 +53,11 @@ function AppContent() {
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
 
+  // Right sidebar tab & log monitor integration
+  const [rightSidebarTab, setRightSidebarTab] = useState("monitor");
+  const [externalLogPath, setExternalLogPath] = useState<string | undefined>();
+  const [externalLogPathKey, setExternalLogPathKey] = useState(0);
+
   // Restoration state
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoringProgress, setRestoringProgress] = useState({ current: 0, total: 0 });
@@ -774,6 +779,18 @@ function AppContent() {
     }
   }, [allTabs, dispatch]);
 
+  // Handler: open a remote file in the Log Monitor panel
+  const handleOpenInLogMonitor = useCallback((filePath: string) => {
+    setExternalLogPath(filePath);
+    setExternalLogPathKey((k) => k + 1);
+    setRightSidebarTab("logs");
+    // Ensure right sidebar is visible
+    if (!layout.rightSidebarVisible) {
+      toggleRightSidebar();
+    }
+    toast.success(`Opening ${filePath.split("/").pop()} in Log Monitor`);
+  }, [layout.rightSidebarVisible, toggleRightSidebar]);
+
   const handleConnectionDialogConnect = useCallback(async (config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
     const isSftp = config.protocol === 'SFTP';
@@ -1285,6 +1302,7 @@ function AppContent() {
                           host={activeConnection.host}
                           isConnected={activeConnection.status === 'connected'}
                           onClose={() => {}}
+                          onOpenInLogMonitor={handleOpenInLogMonitor}
                         />
                       </ResizablePanel>
                     </>
@@ -1307,7 +1325,7 @@ function AppContent() {
                 maxSize={30}
                 onResize={(size) => setRightSidebarSize(size)}
               >
-                <Tabs defaultValue="monitor" className="h-full flex flex-col">
+                <Tabs value={rightSidebarTab} onValueChange={setRightSidebarTab} className="h-full flex flex-col">
                   <TabsList className="inline-flex w-auto mx-2 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
@@ -1324,7 +1342,11 @@ function AppContent() {
 
                     <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       {activeConnection ? (
-                        <LogMonitor connectionId={activeConnection.connectionId} />
+                        <LogMonitor
+                          connectionId={activeConnection.connectionId}
+                          externalLogPath={externalLogPath}
+                          externalLogPathKey={externalLogPathKey}
+                        />
                       ) : null}
                     </TabsContent>
                   </div>

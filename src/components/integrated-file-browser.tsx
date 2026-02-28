@@ -42,7 +42,8 @@ import {
   FileType,
   Settings,
   Layers,
-  GripVertical
+  GripVertical,
+  ScrollText
 } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from './ui/dropdown-menu';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator, ContextMenuSub, ContextMenuSubContent, ContextMenuSubTrigger } from './ui/context-menu';
@@ -77,6 +78,8 @@ interface IntegratedFileBrowserProps {
   host?: string;
   isConnected: boolean;
   onClose: () => void;
+  /** Called when user wants to open a file in the Log Monitor */
+  onOpenInLogMonitor?: (filePath: string) => void;
 }
 
 // Cache to store state per session
@@ -87,7 +90,7 @@ const sessionStateCache = new Map<string, {
   searchTerm: string;
 }>();
 
-export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose }: IntegratedFileBrowserProps) {
+export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose, onOpenInLogMonitor }: IntegratedFileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -1224,6 +1227,17 @@ export function IntegratedFileBrowser({ connectionId, host, isConnected, onClose
                         <Edit className="mr-2 h-4 w-4" />
                         Edit
                       </ContextMenuItem>
+                      {onOpenInLogMonitor && (
+                        <ContextMenuItem onClick={() => {
+                          const fullPath = currentPath.endsWith('/')
+                            ? `${currentPath}${file.name}`
+                            : `${currentPath}/${file.name}`;
+                          onOpenInLogMonitor(fullPath);
+                        }}>
+                          <ScrollText className="mr-2 h-4 w-4" />
+                          Open in Log Monitor
+                        </ContextMenuItem>
+                      )}
                       <ContextMenuSeparator />
                     </>
                   )}

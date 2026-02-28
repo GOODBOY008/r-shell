@@ -68,6 +68,10 @@ import { cn } from "@/lib/utils";
 
 interface LogMonitorProps {
   connectionId?: string;
+  /** When set, auto-add this file path as a custom source and select it */
+  externalLogPath?: string;
+  /** Increment to re-trigger loading the same externalLogPath */
+  externalLogPathKey?: number;
 }
 
 interface LogSource {
@@ -237,7 +241,7 @@ const SOURCE_TYPE_LABELS: Record<string, { icon: React.ReactNode; label: string 
 
 // ── Component ──
 
-export function LogMonitor({ connectionId }: LogMonitorProps) {
+export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }: LogMonitorProps) {
   // Source state
   const [sources, setSources] = useState<LogSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState("");
@@ -391,6 +395,35 @@ export function LogMonitor({ connectionId }: LogMonitorProps) {
     );
     return () => clearInterval(interval);
   }, [autoRefresh, selectedSourceId, refreshInterval, loadLog]);
+
+  // Handle external log path (sent from file browser)
+  useEffect(() => {
+    if (!externalLogPath) return;
+    const path = externalLogPath.trim();
+    if (!path) return;
+
+    const id = `custom:${path}`;
+    const name = path.split("/").pop() ?? path;
+
+    // Add to sources if not already present
+    setSources((prev) => {
+      if (prev.some((s) => s.id === id)) return prev;
+      return [
+        ...prev,
+        {
+          id,
+          name,
+          source_type: "file" as const,
+          path,
+          category: "custom",
+          size_human: undefined,
+        },
+      ];
+    });
+
+    // Select and load it
+    setSelectedSourceId(id);
+  }, [externalLogPath, externalLogPathKey]);
 
   // ── Parse and filter lines ──
 
