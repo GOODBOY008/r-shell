@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [1.0.0] - 2026-02-28
+
+### 🎉 R-Shell 1.0 — Stable Release
+
+This is the first stable major release of R-Shell, marking it as production-ready after months of iterative development. This release introduces a fully redesigned VS Code-style terminal group system, improved connection resilience, and a polished UI experience.
+
+### Added
+
+- 🖥️ **VS Code-Style Terminal Groups**: Complete rewrite of the terminal layout system
+  - Split terminals horizontally and vertically with keyboard shortcuts
+  - Drag-and-drop tabs between terminal groups
+  - Recursive grid-based renderer for nested group layouts
+  - Tab bar per group with context menu actions
+  - Drop zone overlays for intuitive tab organization
+  - Terminal group state serialization and restoration across sessions
+
+- 🔄 **Reconnect from Context Menu**: Right-click any terminal tab to reconnect a disconnected session
+  - Quick reconnection without opening the connection dialog
+  - Available directly from the terminal tab context menu
+
+- 📖 **AI Agent Guide (AGENTS.md)**: Comprehensive project documentation for AI coding agents
+  - Full architecture overview, build instructions, and coding conventions
+  - State and data flow documentation for terminal groups and connections
+  - Key file index, dependency summary, and common pitfalls
+
+### Fixed
+
+- 🎯 **Active Group Switching**: Clicking terminal output area now correctly switches the active group focus
+- 🖼️ **Welcome Screen & Sidebar Polish**: Right sidebar hides when no terminal is open; improved welcome screen layout
+- 💬 **Tooltip Rendering**: Fixed tooltip content being partially obscured by arrow overlay
+- 📏 **Terminal Height Measurement**: Added padding wrapper to correct FitAddon height calculation in PTY terminals
+- 🔌 **WebSocket Cleanup**: Ensure WebSocket closes on disconnection to prevent stale PTY state
+- ⚡ **Connection Management**: Enhanced terminal connection lifecycle and UI responsiveness
+
+### Changed
+
+- 🏗️ **Terminal Architecture**: Migrated from flat tab list to reducer-based terminal group state management
+  - `TerminalGroupProvider` context with `useTerminalGroups()` hook
+  - Actions: `ADD_TAB`, `REMOVE_TAB`, `SPLIT_GROUP`, `ACTIVATE_TAB`, `MOVE_TAB`
+  - Persistent layout serialization to localStorage
+
+- 📦 **Project Documentation**: Added AGENTS.md for AI agent onboarding and copilot-instructions.md for GitHub Copilot
+
 ## [0.7.1] - 2026-02-10
 
 ### Fixed
