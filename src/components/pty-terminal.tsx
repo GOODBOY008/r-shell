@@ -145,6 +145,21 @@ export function PtyTerminal({
     
     // Custom key event handler to allow certain shortcuts to pass through to the app
     term.attachCustomKeyEventHandler((event) => {
+      // During IME composition (Chinese/Japanese/Korean input methods, or any
+      // input-method software), hand the event straight to xterm's internal
+      // CompositionHelper.  Returning `true` means "let xterm process it",
+      // and xterm will then check `_compositionHelper.keydown()` which knows
+      // how to handle composition key events (keyCode 229, etc.).
+      //
+      // Without this guard, fast typing during composition or pressing Space
+      // to select a candidate can race with the custom-handler logic and
+      // cause characters to be swallowed or duplicated.
+      //
+      // Reference: VS Code terminal does the same early-return.
+      if (event.isComposing || event.keyCode === 229) {
+        return true;
+      }
+
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modKey = isMac ? event.metaKey : event.ctrlKey;
       const key = event.key.toLowerCase();
@@ -422,24 +437,24 @@ export function PtyTerminal({
 
     connectWebSocket();
 
+    // Reuse a single TextEncoder across all input events to avoid
+    // per-keystroke allocation overhead.
+    const inputEncoder = new TextEncoder();
+
     // Handle user input
     const inputDisposable = term.onData((data: string) => {
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       
       // Convert string to bytes for binary data
-      const encoder = new TextEncoder();
-      const dataBytes = Array.from(encoder.encode(data));
+      const dataBytes = Array.from(inputEncoder.encode(data));
       
       // Send as JSON message (matches server's Input message type)
-      const inputMsg = {
+      ws.send(JSON.stringify({
         type: 'Input',
         connection_id: connectionId,
         data: dataBytes,
-      };
-      
-      console.log(`[PTY Terminal] [${connectionId}] Sending input:`, data.length, 'chars');
-      ws.send(JSON.stringify(inputMsg));
+      }));
     });
 
     // Handle terminal resize — deduplicate to avoid flooding the PTY with

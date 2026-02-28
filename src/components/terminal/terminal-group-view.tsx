@@ -61,6 +61,17 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Don't intercept keys that originate from within the terminal.
+      // xterm.js uses a hidden <textarea> for keyboard input; calling
+      // preventDefault() here would block the character from reaching
+      // the textarea, which breaks Space (and Enter) input – especially
+      // when an IME is active (keyCode 229 path relies on the browser
+      // inserting the character into the textarea).
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'TEXTAREA' || target.closest('.xterm')) {
+        return;
+      }
+
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         handleMouseDown();
