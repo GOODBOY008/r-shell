@@ -14,7 +14,15 @@ import {
   History,
   Shield,
   LayoutGrid,
-  MonitorDot
+  MonitorDot,
+  RefreshCw,
+  ArrowDownUp,
+  ScrollText,
+  Network,
+  Palette,
+  Download,
+  Cpu,
+  HardDrive
 } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
@@ -29,7 +37,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
     {
       icon: Plus,
       title: 'New Connection',
-      description: 'Connect to a remote server via SSH',
+      description: 'Connect via SSH, SFTP, FTP, or FTPS',
       action: onNewConnection,
       variant: 'default' as const,
       shortcut: '⌘N'
@@ -45,7 +53,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
     {
       icon: Settings,
       title: 'Preferences',
-      description: 'Terminal, appearance & key bindings',
+      description: 'Terminal themes, fonts & layout',
       action: onOpenSettings,
       variant: 'outline' as const,
       shortcut: '⌘,'
@@ -61,33 +69,65 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
     {
       icon: LayoutGrid,
       title: 'Split Panes & Tab Groups',
-      description: 'Split terminals horizontally or vertically — work across multiple sessions at once'
+      description: 'Split in 4 directions with drag-and-drop tabs and unlimited nested splits'
     },
     {
       icon: FileText,
-      title: 'Integrated SFTP Browser',
-      description: 'Browse, upload, and download remote files without leaving the app'
+      title: 'Dual-Panel File Browser',
+      description: 'FileZilla-style local + remote panels with transfer queue and progress tracking'
+    },
+    {
+      icon: RefreshCw,
+      title: 'Directory Sync',
+      description: '4-step sync wizard — compare, review diffs, and synchronize directories'
     },
     {
       icon: MonitorDot,
       title: 'System & GPU Monitor',
-      description: 'Real-time CPU, memory, disk, network, and NVIDIA/AMD GPU metrics for connected hosts'
+      description: 'CPU, memory, disk, processes, and NVIDIA/AMD GPU metrics with real-time charts'
+    },
+    {
+      icon: Network,
+      title: 'Network Monitor',
+      description: 'Per-interface bandwidth, latency, and active connections overview'
+    },
+    {
+      icon: ScrollText,
+      title: 'Log Viewer',
+      description: 'Multi-source log monitoring with level filters, regex search, and live tail'
+    },
+    {
+      icon: Palette,
+      title: 'Themes & Appearance',
+      description: '10 terminal color themes, 7 fonts, background images, and transparency'
     },
     {
       icon: Shield,
-      title: 'Key-Based Authentication',
-      description: 'Password, private key, and encrypted key with passphrase support'
+      title: 'Secure Authentication',
+      description: 'Password, private key, and encrypted key with passphrase — plus auto-reconnect'
     },
     {
       icon: History,
       title: 'Session Restore',
       description: 'Automatically reconnects your previous workspace on launch'
+    },
+    {
+      icon: ArrowDownUp,
+      title: 'Transfer Queue',
+      description: 'Queued file transfers with progress, speed, ETA, cancel, and retry controls'
+    },
+    {
+      icon: Download,
+      title: 'Auto-Update',
+      description: 'Check for updates with download progress and one-click install-and-relaunch'
     }
   ];
 
   const protocols = [
     { name: 'SSH', color: 'bg-blue-500/10 text-blue-500 border-blue-500/20' },
     { name: 'SFTP', color: 'bg-green-500/10 text-green-500 border-green-500/20' },
+    { name: 'FTP', color: 'bg-amber-500/10 text-amber-500 border-amber-500/20' },
+    { name: 'FTPS', color: 'bg-purple-500/10 text-purple-500 border-purple-500/20' },
   ];
 
   return (
@@ -102,7 +142,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
             <div className="text-left">
               <h1 className="text-2xl font-bold tracking-tight">R-Shell</h1>
               <p className="text-muted-foreground text-sm">
-                A modern SSH client built with Tauri
+                Modern SSH / SFTP / FTP client built with Tauri
               </p>
             </div>
           </div>
@@ -168,7 +208,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
         </Card>
 
         {/* Features Grid */}
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {features.map((feature, index) => (
             <Card key={index} className="hover:shadow-md transition-shadow">
               <CardContent className="p-4">
