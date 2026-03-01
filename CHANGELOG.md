@@ -11,6 +11,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [1.1.0] - 2026-03-01
+
+### 📂 R-Shell 1.1 — SFTP/FTP File Management & Developer Tooling
+
+This release introduces a full-featured dual-pane file manager with SFTP and FTP support, FileZilla-style directory synchronization, a redesigned Log Monitor, and a robust ESLint v10 setup with type-aware checking.
+
+### Added
+
+- 📁 **Dual-Pane SFTP/FTP File Browser**: FileZilla-inspired file manager with transfer queue
+  - Side-by-side local and remote pane navigation
+  - Drag-and-drop file transfers between panes
+  - Transfer queue with pause, resume, and cancel support
+  - Progress tracking per file and overall queue
+
+- 🔄 **FileZilla-Style Directory Synchronization**: Sync local and remote directories
+  - One-way and two-way sync modes
+  - Conflict detection and resolution UI
+  - Dry-run preview before applying changes
+
+- 📤 **Recursive Directory Upload/Download**: Context menu actions for bulk transfers
+  - Recursively upload entire local directories to remote
+  - Recursively download entire remote directories locally
+
+- 📋 **"Open in Log Monitor" from File Browser**: Direct log file viewing from context menu
+  - Right-click any remote file to open it in the Log Monitor
+  - Seamless integration between file browser and log viewer
+
+- 🗂️ **FileZilla-Style Navigation in Integrated File Browser**: Bookmark bar and breadcrumb navigation
+  - Path input bar with history
+  - Quick bookmarks for frequently accessed directories
+
+- 🔍 **Redesigned Log Monitor**: Business-grade log viewer rebuilt from scratch
+  - Real-time log tailing with configurable refresh intervals
+  - Syntax highlighting for common log formats
+  - Filtering, search, and line-range selection
+
+- 🛡️ **ESLint v10 with Type-Aware Checking**: Full linting setup for the codebase
+  - `typescript-eslint` with type-aware rules (`no-unsafe-*`)
+  - `react-hooks` v7 plugin with new `set-state-in-effect`, `refs`, `purity` rules
+  - `react-refresh` plugin for HMR safety
+  - All existing lint errors resolved
+
+### Fixed
+
+- ⌨️ **Space Key & IME Input Swallowed in Terminal**: Prevented input loss during fast typing and CJK composition
+  - `attachCustomKeyEventHandler` now bails out during IME composition (`isComposing`/`keyCode 229`)
+  - React capture-phase `onKeyDown` no longer calls `preventDefault()` on textarea events
+  - Removed `console.log` and per-keystroke allocations from the `onData` hot path
+
+- 🔒 **FTP Credentials Anonymized in Tests**: Sensitive test credentials replaced with placeholders to prevent accidental exposure
+
+### Changed
+
+- 📝 **README & Welcome Screen Rewritten**: Refreshed documentation and onboarding UI for v1.0.0 feature set
+
 ## [1.0.0] - 2026-02-28
 
 ### 🎉 R-Shell 1.0 — Stable Release
