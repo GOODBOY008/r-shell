@@ -1,6 +1,6 @@
 use crate::connection_manager::ConnectionManager;
 use crate::ssh::{AuthMethod, SshConfig};
-use crate::sftp_client::{FileEntry, FileEntryType, RemoteFileEntry, SftpConfig, SftpAuthMethod};
+use crate::sftp_client::{FileEntry, FileEntryType, SftpConfig, SftpAuthMethod};
 use crate::ftp_client::FtpConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -1263,7 +1263,7 @@ pub struct LatencyResponse {
 #[tauri::command]
 pub async fn get_network_latency(
     connection_id: String,
-    target: Option<String>,
+    _target: Option<String>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<LatencyResponse, String> {
     let connection = state
@@ -2397,7 +2397,6 @@ pub async fn rename_remote_item(
 #[tauri::command]
 pub async fn list_local_files(path: String) -> Result<Vec<FileEntry>, String> {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     let dir_path = std::path::Path::new(&path);
     if !dir_path.exists() {
@@ -2442,10 +2441,14 @@ pub async fn list_local_files(path: String) -> Result<Vec<FileEntry>, String> {
             format_unix_timestamp(secs)
         });
 
+        #[cfg(unix)]
         let permissions = {
+            use std::os::unix::fs::PermissionsExt;
             let mode = metadata.permissions().mode();
             Some(format_unix_permissions(mode))
         };
+        #[cfg(not(unix))]
+        let permissions: Option<String> = None;
 
         entries.push(FileEntry {
             name,
@@ -2525,6 +2528,7 @@ fn is_leap_year(y: i64) -> bool {
 }
 
 /// Format Unix file mode bits into a human-readable rwx string.
+#[cfg(unix)]
 fn format_unix_permissions(mode: u32) -> String {
     let mut s = String::with_capacity(10);
     // File type
@@ -2614,7 +2618,6 @@ pub async fn list_local_files_recursive(
     exclude_patterns: Vec<String>,
 ) -> Result<Vec<SyncFileEntry>, String> {
     use std::fs;
-    use std::os::unix::fs::MetadataExt;
 
     fn walk_dir(
         base: &std::path::Path,
@@ -2934,6 +2937,7 @@ mod local_fs_tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_format_unix_permissions() {
         assert_eq!(format_unix_permissions(0o100644), "-rw-r--r--");
         assert_eq!(format_unix_permissions(0o040755), "drwxr-xr-x");
