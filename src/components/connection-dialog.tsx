@@ -20,8 +20,9 @@ import {
   Key,
   Network,
   Terminal as TerminalIcon,
+  Monitor,
 } from 'lucide-react';
-import { getDefaultPort, getAuthMethods, getHiddenFields } from '@/lib/protocol-config';
+import { getDefaultPort, getAuthMethods, getHiddenFields, isDesktopProtocol } from '@/lib/protocol-config';
 
 interface ConnectionDialogProps {
   open: boolean;
@@ -33,7 +34,7 @@ interface ConnectionDialogProps {
 export interface ConnectionConfig {
   id?: string;
   name: string;
-  protocol: 'SSH' | 'Telnet' | 'Raw' | 'Serial' | 'SFTP' | 'FTP';
+  protocol: 'SSH' | 'Telnet' | 'Raw' | 'Serial' | 'SFTP' | 'FTP' | 'RDP' | 'VNC';
   host: string;
   port: number;
   username: string;
@@ -58,7 +59,12 @@ export interface ConnectionConfig {
   keepAliveInterval?: number;
   serverAliveCountMax?: number;
 
+  // RDP specific
+  domain?: string;
+  rdpResolution?: '1024x768' | '1280x720' | '1920x1080' | 'fit';
 
+  // VNC specific
+  vncColorDepth?: '24' | '16' | '8';
 }
 
 export function ConnectionDialog({
@@ -199,7 +205,8 @@ export function ConnectionDialog({
     connectionIdRef.current = connectionId;
 
     // Basic validation — anonymous FTP doesn't require a username
-    const requiresUsername = config.authMethod !== 'anonymous';
+    // VNC also doesn't require a username
+    const requiresUsername = config.authMethod !== 'anonymous' && config.protocol !== 'VNC';
     if (!config.name || !config.host || (requiresUsername && !config.username)) {
       toast.error('Missing Required Fields', {
         description: requiresUsername
@@ -227,18 +234,19 @@ export function ConnectionDialog({
       return;
     }
 
-    // For SFTP/FTP protocols, delegate connection to App.tsx (via onConnect)
-    // which calls sftp_connect / ftp_connect Tauri commands.
+    // For SFTP/FTP/RDP/VNC protocols, delegate connection to App.tsx (via onConnect)
+    // which calls the appropriate Tauri commands.
     const isSftpOrFtp = config.protocol === 'SFTP' || config.protocol === 'FTP';
+    const isDesktop = config.protocol === 'RDP' || config.protocol === 'VNC';
 
-    if (isSftpOrFtp) {
+    if (isSftpOrFtp || isDesktop) {
       try {
         // Save connection if requested
         if (editingConnection?.id) {
           ConnectionStorageManager.updateConnection(editingConnection.id, {
             name: config.name,
             host: config.host,
-            port: config.port || (config.protocol === 'FTP' ? 21 : 22),
+            port: config.port || (config.protocol === 'FTP' ? 21 : config.protocol === 'RDP' ? 3389 : config.protocol === 'VNC' ? 5900 : 22),
             username: config.username,
             protocol: config.protocol,
             authMethod: config.authMethod,
@@ -246,13 +254,16 @@ export function ConnectionDialog({
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
             ftpsEnabled: config.ftpsEnabled,
+            domain: config.domain,
+            rdpResolution: config.rdpResolution,
+            vncColorDepth: config.vncColorDepth,
             lastConnected: new Date().toISOString(),
           });
         } else if (saveAsConnection) {
           ConnectionStorageManager.saveConnectionWithId(connectionId, {
             name: config.name,
             host: config.host,
-            port: config.port || (config.protocol === 'FTP' ? 21 : 22),
+            port: config.port || (config.protocol === 'FTP' ? 21 : config.protocol === 'RDP' ? 3389 : config.protocol === 'VNC' ? 5900 : 22),
             username: config.username,
             protocol: config.protocol,
             folder: connectionFolder,
@@ -261,6 +272,9 @@ export function ConnectionDialog({
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
             ftpsEnabled: config.ftpsEnabled,
+            domain: config.domain,
+            rdpResolution: config.rdpResolution,
+            vncColorDepth: config.vncColorDepth,
           });
         }
 
@@ -512,6 +526,8 @@ export function ConnectionDialog({
                         <SelectItem value="SSH">SSH</SelectItem>
                         <SelectItem value="SFTP">SFTP</SelectItem>
                         <SelectItem value="FTP">FTP</SelectItem>
+                        <SelectItem value="RDP">RDP</SelectItem>
+                        <SelectItem value="VNC">VNC</SelectItem>
                         <SelectItem value="Telnet">Telnet</SelectItem>
                         <SelectItem value="Raw">Raw</SelectItem>
                         <SelectItem value="Serial">Serial</SelectItem>
@@ -541,15 +557,85 @@ export function ConnectionDialog({
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="username">Username</Label>
-                  <Input
-                    id="username"
-                    placeholder="root"
-                    value={config.username}
-                    onChange={(e) => updateConfig({ username: e.target.value })}
-                  />
-                </div>
+                {/* Username — hidden for VNC (VNC uses password-only auth) */}
+                {config.protocol !== 'VNC' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="username">Username</Label>
+                    <Input
+                      id="username"
+                      placeholder="root"
+                      value={config.username}
+                      onChange={(e) => updateConfig({ username: e.target.value })}
+                    />
+                  </div>
+                )}
+
+                {/* RDP-specific: domain and resolution */}
+                {config.protocol === 'RDP' && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="rdp-domain">Domain (optional)</Label>
+                      <Input
+                        id="rdp-domain"
+                        placeholder="WORKGROUP"
+                        value={config.domain || ''}
+                        onChange={(e) => updateConfig({ domain: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Display Resolution</Label>
+                      <Select
+                        value={config.rdpResolution || 'fit'}
+                        onValueChange={(value) => updateConfig({ rdpResolution: value as ConnectionConfig['rdpResolution'] })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fit">Fit to Window</SelectItem>
+                          <SelectItem value="1024x768">1024×768</SelectItem>
+                          <SelectItem value="1280x720">1280×720 (HD)</SelectItem>
+                          <SelectItem value="1920x1080">1920×1080 (Full HD)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+
+                {/* VNC-specific: color depth */}
+                {config.protocol === 'VNC' && (
+                  <div className="space-y-2">
+                    <Label>Color Depth</Label>
+                    <Select
+                      value={config.vncColorDepth || '24'}
+                      onValueChange={(value) => updateConfig({ vncColorDepth: value as ConnectionConfig['vncColorDepth'] })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="24">True Color (24-bit)</SelectItem>
+                        <SelectItem value="16">High Color (16-bit)</SelectItem>
+                        <SelectItem value="8">256 Colors (8-bit)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                {/* Desktop protocol info */}
+                {isDesktopProtocol(config.protocol) && (
+                  <div className="p-4 bg-muted rounded-lg">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Monitor className="h-4 w-4" />
+                      <span className="font-medium">Remote Desktop</span>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {config.protocol === 'RDP'
+                        ? 'RDP connects to Windows Remote Desktop. Requires NLA-compatible credentials.'
+                        : 'VNC connects to any host running a VNC server. Uses password-only authentication.'}
+                    </p>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

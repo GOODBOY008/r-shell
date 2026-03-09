@@ -51,6 +51,47 @@ pub enum WsMessage {
         connection_id: String,
         generation: u64,
     },
+
+    // ===== Desktop (RDP/VNC) messages =====
+
+    /// Start a desktop streaming session
+    StartDesktop {
+        connection_id: String,
+        width: u16,
+        height: u16,
+    },
+    /// Desktop session started confirmation
+    DesktopStarted {
+        connection_id: String,
+        width: u16,
+        height: u16,
+    },
+    /// Desktop keyboard event from frontend
+    DesktopKeyEvent {
+        connection_id: String,
+        key_code: u32,
+        down: bool,
+    },
+    /// Desktop pointer (mouse) event from frontend
+    DesktopPointerEvent {
+        connection_id: String,
+        x: u16,
+        y: u16,
+        button_mask: u8,
+    },
+    /// Clipboard update (bidirectional)
+    ClipboardUpdate {
+        connection_id: String,
+        text: String,
+    },
+    /// Request full framebuffer refresh
+    RequestFullFrame {
+        connection_id: String,
+    },
+    /// Close desktop session
+    CloseDesktop {
+        connection_id: String,
+    },
 }
 
 /// WebSocket server for terminal I/O
@@ -378,6 +419,82 @@ impl WebSocketServer {
                 };
                 tx.send(serde_json::to_string(&response)?)?;
             }
+
+            // ===== Desktop (RDP/VNC) message handling =====
+
+            WsMessage::StartDesktop { connection_id, width: _width, height: _height } => {
+                tracing::info!("Starting desktop session: {}", connection_id);
+                // The actual connection is established via the desktop_connect Tauri command.
+                // StartDesktop requests the frame streaming loop.
+                let client = self.connection_manager.get_desktop_connection(&connection_id).await;
+                if let Some(client) = client {
+                    let (w, h) = {
+                        let c = client.read().await;
+                        c.desktop_size()
+                    };
+                    let started = WsMessage::DesktopStarted {
+                        connection_id: connection_id.clone(),
+                        width: w,
+                        height: h,
+                    };
+                    tx.send(serde_json::to_string(&started)?)?;
+
+                    // TODO: start frame streaming loop when protocol clients are implemented
+                } else {
+                    let error = WsMessage::Error {
+                        message: format!("Desktop connection not found: {}", connection_id),
+                    };
+                    tx.send(serde_json::to_string(&error)?)?;
+                }
+            }
+
+            WsMessage::DesktopKeyEvent { connection_id, key_code, down } => {
+                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+                    let c = client.read().await;
+                    if let Err(e) = c.send_key(key_code, down).await {
+                        tracing::error!("Failed to send desktop key event: {}", e);
+                    }
+                }
+            }
+
+            WsMessage::DesktopPointerEvent { connection_id, x, y, button_mask } => {
+                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+                    let c = client.read().await;
+                    if let Err(e) = c.send_pointer(x, y, button_mask).await {
+                        tracing::error!("Failed to send desktop pointer event: {}", e);
+                    }
+                }
+            }
+
+            WsMessage::ClipboardUpdate { connection_id, text } => {
+                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+                    let c = client.read().await;
+                    if let Err(e) = c.set_clipboard(text).await {
+                        tracing::error!("Failed to set desktop clipboard: {}", e);
+                    }
+                }
+            }
+
+            WsMessage::RequestFullFrame { connection_id } => {
+                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+                    let c = client.read().await;
+                    if let Err(e) = c.request_full_frame().await {
+                        tracing::error!("Failed to request full frame: {}", e);
+                    }
+                }
+            }
+
+            WsMessage::CloseDesktop { connection_id } => {
+                tracing::info!("Closing desktop session: {}", connection_id);
+                if let Err(e) = self.connection_manager.close_desktop_connection(&connection_id).await {
+                    tracing::error!("Failed to close desktop connection: {}", e);
+                }
+                let response = WsMessage::Success {
+                    message: format!("Desktop connection closed: {}", connection_id),
+                };
+                tx.send(serde_json::to_string(&response)?)?;
+            }
+
             _ => {
                 tracing::warn!("Unexpected message type received");
             }

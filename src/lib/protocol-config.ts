@@ -5,7 +5,7 @@
  * and field visibility rules.
  */
 
-export type Protocol = 'SSH' | 'Telnet' | 'Raw' | 'Serial' | 'SFTP' | 'FTP';
+export type Protocol = 'SSH' | 'Telnet' | 'Raw' | 'Serial' | 'SFTP' | 'FTP' | 'RDP' | 'VNC';
 
 export type AuthMethod = 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
 
@@ -16,6 +16,8 @@ const DEFAULT_PORTS: Record<Protocol, number> = {
   Telnet: 23,
   Raw: 0,
   Serial: 0,
+  RDP: 3389,
+  VNC: 5900,
 };
 
 const AUTH_METHODS: Record<Protocol, AuthMethod[]> = {
@@ -25,6 +27,8 @@ const AUTH_METHODS: Record<Protocol, AuthMethod[]> = {
   Telnet: ['password'],
   Raw: [],
   Serial: [],
+  RDP: ['password'],
+  VNC: ['password'],
 };
 
 /** SSH-specific fields that should be hidden for non-SSH protocols. */
@@ -56,4 +60,11 @@ export function getHiddenFields(protocol: Protocol): SshSpecificField[] {
     return [];
   }
   return [...SSH_SPECIFIC_FIELDS];
+}
+
+/**
+ * Returns true if the protocol is a remote desktop protocol (RDP or VNC).
+ */
+export function isDesktopProtocol(protocol: Protocol): boolean {
+  return protocol === 'RDP' || protocol === 'VNC';
 }

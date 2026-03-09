@@ -13,6 +13,7 @@ import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
+import { isDesktopProtocol } from './lib/protocol-config';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import { useKeyboardShortcuts, createLayoutShortcuts, createSplitViewShortcuts } from './lib/keyboard-shortcuts';
@@ -187,9 +188,12 @@ function AppContent() {
           continue;
         }
 
-        const hasCredentials = connectionData.authMethod === 'password'
-          ? !!connectionData.password
-          : (connectionData.authMethod === 'anonymous' ? true : !!connectionData.privateKeyPath);
+        const isDesktopProto = connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
+        const hasCredentials = isDesktopProto
+          ? true // Desktop protocols can connect with or without credentials
+          : connectionData.authMethod === 'password'
+            ? !!connectionData.password
+            : (connectionData.authMethod === 'anonymous' ? true : !!connectionData.privateKeyPath);
 
         if (!hasCredentials) {
           console.log(`Connection ${connectionData.name} has no saved credentials, skipping restore`);
@@ -207,9 +211,51 @@ function AppContent() {
         const isSftp = activeConn.protocol === 'SFTP' || connectionData.protocol === 'SFTP';
         const isFtp = activeConn.protocol === 'FTP' || connectionData.protocol === 'FTP';
         const isFileBrowser = isSftp || isFtp;
+        const isDesktopRestore = activeConn.tabType === 'desktop' ||
+          connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
 
         try {
-          if (isFileBrowser) {
+          if (isDesktopRestore) {
+            // RDP/VNC restoration
+            const proto = connectionData.protocol;
+            await invoke('desktop_connect', {
+              request: {
+                connection_id: activeConn.connectionId,
+                host: connectionData.host,
+                port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
+                protocol: proto.toLowerCase(),
+                username: connectionData.username || '',
+                password: connectionData.password || '',
+                domain: connectionData.domain || null,
+                resolution: connectionData.rdpResolution || '1920x1080',
+                color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
+              }
+            });
+
+            if (!activeConn.originalConnectionId) {
+              ConnectionStorageManager.updateLastConnected(connectionData.id);
+            }
+
+            if (tabAlreadyExists) {
+              dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'connected' });
+            } else {
+              const newTab: TerminalTab = {
+                id: activeConn.connectionId,
+                name: connectionData.name,
+                tabType: 'desktop',
+                protocol: connectionData.protocol,
+                host: connectionData.host,
+                username: connectionData.username,
+                originalConnectionId: activeConn.originalConnectionId,
+                connectionStatus: 'connected',
+                reconnectCount: 0,
+              };
+              dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+            }
+
+            restoredCount++;
+            console.log(`✓ Restored ${proto} desktop connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}`);
+          } else if (isFileBrowser) {
             // SFTP/FTP restoration
             if (isSftp) {
               await invoke('sftp_connect', {
@@ -796,6 +842,7 @@ function AppContent() {
     const isSftp = config.protocol === 'SFTP';
     const isFtp = config.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
+    const isDesktop = isDesktopProtocol(config.protocol);
 
     // Check if a tab with this ID already exists in any group
     const existingTab = allTabs.find(tab => tab.id === tabId);
@@ -847,9 +894,68 @@ function AppContent() {
             description: error instanceof Error ? error.message : String(error),
           });
         }
+      } else if (isDesktop) {
+        // RDP/VNC reconnect flow
+        try {
+          await invoke('desktop_connect', {
+            request: {
+              connection_id: tabId,
+              host: config.host,
+              port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
+              protocol: config.protocol.toLowerCase(),
+              username: config.username || '',
+              password: config.password || '',
+              domain: config.domain || null,
+              resolution: config.rdpResolution || '1920x1080',
+              color_depth: config.vncColorDepth || 24,
+            }
+          });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
+        } catch (error) {
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+          toast.error('Connection Failed', {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
     } else {
-      if (isFileBrowser) {
+      if (isDesktop) {
+        // For RDP/VNC: create desktop tab and connect
+        const newTab: TerminalTab = {
+          id: tabId,
+          name: config.name,
+          tabType: 'desktop',
+          protocol: config.protocol,
+          host: config.host,
+          username: config.username,
+          connectionStatus: 'connecting',
+          reconnectCount: 0,
+        };
+        dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+
+        try {
+          await invoke('desktop_connect', {
+            request: {
+              connection_id: tabId,
+              host: config.host,
+              port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
+              protocol: config.protocol.toLowerCase(),
+              username: config.username || '',
+              password: config.password || '',
+              domain: config.domain || null,
+              resolution: config.rdpResolution || '1920x1080',
+              color_depth: config.vncColorDepth || 24,
+            }
+          });
+          ConnectionStorageManager.updateLastConnected(config.id || tabId);
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
+        } catch (error) {
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+          toast.error('Connection Failed', {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (isFileBrowser) {
         // For SFTP/FTP: connect first, then add file-browser tab
         const newTab: TerminalTab = {
           id: tabId,
@@ -933,6 +1039,9 @@ function AppContent() {
           password: connectionData.password,
           privateKeyPath: connectionData.privateKeyPath,
           passphrase: connectionData.passphrase,
+          domain: connectionData.domain,
+          rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
+          vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
         });
         setConnectionDialogOpen(true);
       } else {
@@ -1115,6 +1224,9 @@ function AppContent() {
   const showWelcomeInMainArea = !hasAnyTabs && Object.keys(state.groups).length <= 1;
   // File-browser tabs don't need right sidebar (system monitor) or bottom panel (integrated file browser)
   const isFileBrowserTab = activeTab?.tabType === 'file-browser';
+  // Desktop tabs (RDP/VNC) also don't need right sidebar or bottom panel
+  const isDesktopTab = activeTab?.tabType === 'desktop';
+  const hideExtraPanels = isFileBrowserTab || isDesktopTab;
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -1232,8 +1344,8 @@ function AppContent() {
         onQuickConnect={handleQuickConnect}
         recentConnections={recentConnections}
         leftSidebarVisible={layout.leftSidebarVisible}
-        rightSidebarVisible={layout.rightSidebarVisible && hasAnyTabs && !isFileBrowserTab}
-        bottomPanelVisible={layout.bottomPanelVisible && !isFileBrowserTab}
+        rightSidebarVisible={layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels}
+        bottomPanelVisible={layout.bottomPanelVisible && !hideExtraPanels}
         zenMode={layout.zenMode}
       />
 
@@ -1268,7 +1380,7 @@ function AppContent() {
           <ResizablePanel
             id="main-content"
             order={2}
-            defaultSize={100 - (layout.leftSidebarVisible ? layout.leftSidebarSize : 0) - ((layout.rightSidebarVisible && hasAnyTabs && !isFileBrowserTab) ? layout.rightSidebarSize : 0)}
+            defaultSize={100 - (layout.leftSidebarVisible ? layout.leftSidebarSize : 0) - ((layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels) ? layout.rightSidebarSize : 0)}
             minSize={30}
           >
             <div className="h-full flex flex-col">
@@ -1284,7 +1396,7 @@ function AppContent() {
                     <GridRenderer node={state.gridLayout} path={[]} />
                   </ResizablePanel>
 
-                  {layout.bottomPanelVisible && !isFileBrowserTab && activeConnection && (
+                  {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (
                     <>
                       <ResizableHandle />
 
@@ -1312,7 +1424,7 @@ function AppContent() {
             </div>
           </ResizablePanel>
 
-          {layout.rightSidebarVisible && hasAnyTabs && !isFileBrowserTab && (
+          {layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels && (
             <>
               <ResizableHandle />
 

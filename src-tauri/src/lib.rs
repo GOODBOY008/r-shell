@@ -4,6 +4,9 @@ mod commands;
 mod websocket_server;
 mod sftp_client;
 mod ftp_client;
+mod desktop_protocol;
+mod rdp_client;
+mod vnc_client;
 
 use connection_manager::ConnectionManager;
 use websocket_server::WebSocketServer;
@@ -94,6 +97,14 @@ pub fn run() {
             // Directory synchronization commands
             commands::list_local_files_recursive,
             commands::list_remote_files_recursive,
+            // Desktop (RDP/VNC) commands
+            commands::desktop_connect,
+            commands::desktop_disconnect,
+            commands::desktop_send_key,
+            commands::desktop_send_pointer,
+            commands::desktop_request_frame,
+            commands::desktop_set_clipboard,
+            commands::desktop_resize,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
