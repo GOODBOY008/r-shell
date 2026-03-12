@@ -18,13 +18,21 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
   useEffect(() => {
     if (!enabled) return;
 
+    const isMac = navigator.platform.toUpperCase().includes('MAC');
+
     const handleKeyDown = (event: KeyboardEvent) => {
       for (const shortcut of shortcuts) {
         const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
-        const ctrlMatch = shortcut.ctrlKey === undefined || event.ctrlKey === shortcut.ctrlKey;
+        // On macOS, treat Cmd (metaKey) as the equivalent of Ctrl for shortcut matching.
+        // This lets shortcuts defined with ctrlKey:true work with both Ctrl and Cmd on Mac.
+        const ctrlOrCmd = isMac ? (event.metaKey || event.ctrlKey) : event.ctrlKey;
+        const ctrlMatch = shortcut.ctrlKey === undefined || ctrlOrCmd === shortcut.ctrlKey;
         const shiftMatch = shortcut.shiftKey === undefined || event.shiftKey === shortcut.shiftKey;
         const altMatch = shortcut.altKey === undefined || event.altKey === shortcut.altKey;
-        const metaMatch = shortcut.metaKey === undefined || event.metaKey === shortcut.metaKey;
+        // When ctrlKey is specified on Mac, don't additionally require metaKey matching
+        const metaMatch = (isMac && shortcut.ctrlKey !== undefined)
+          ? true
+          : (shortcut.metaKey === undefined || event.metaKey === shortcut.metaKey);
 
         if (keyMatch && ctrlMatch && shiftMatch && altMatch && metaMatch) {
           event.preventDefault();
@@ -35,8 +43,8 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, [shortcuts, enabled]);
 }
 
