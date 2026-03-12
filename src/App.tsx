@@ -134,8 +134,10 @@ function AppContent() {
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
-    if (allTabs.length > 0) {
-      const activeConnections = allTabs.map((tab, index) => ({
+    // Editor tabs are transient — exclude them from persistence
+    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor');
+    if (persistableTabs.length > 0) {
+      const activeConnections = persistableTabs.map((tab, index) => ({
         tabId: tab.id,
         connectionId: tab.id,
         order: index,
@@ -837,6 +839,23 @@ function AppContent() {
     toast.success(`Opening ${filePath.split("/").pop()} in Log Monitor`);
   }, [layout.rightSidebarVisible, toggleRightSidebar]);
 
+  // Handler: open a remote file in an editor tab
+  const handleOpenInEditor = useCallback((filePath: string, fileName: string) => {
+    if (!activeConnection) return;
+    const tabId = `editor-${Date.now()}`;
+    const newTab = {
+      id: tabId,
+      name: fileName,
+      tabType: 'editor' as const,
+      host: activeConnection.host,
+      connectionStatus: activeConnection.status,
+      reconnectCount: 0,
+      editorFilePath: filePath,
+      editorConnectionId: activeConnection.connectionId,
+    };
+    dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+  }, [activeConnection, dispatch, state.activeGroupId]);
+
   const handleConnectionDialogConnect = useCallback(async (config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
     const isSftp = config.protocol === 'SFTP';
@@ -1226,7 +1245,9 @@ function AppContent() {
   const isFileBrowserTab = activeTab?.tabType === 'file-browser';
   // Desktop tabs (RDP/VNC) also don't need right sidebar or bottom panel
   const isDesktopTab = activeTab?.tabType === 'desktop';
-  const hideExtraPanels = isFileBrowserTab || isDesktopTab;
+  // Editor tabs are standalone — hide extra panels like file-browser/desktop tabs
+  const isEditorTab = activeTab?.tabType === 'editor';
+  const hideExtraPanels = isFileBrowserTab || isDesktopTab || isEditorTab;
 
   return (
     <div className="h-screen flex flex-col bg-background">
@@ -1415,6 +1436,7 @@ function AppContent() {
                           isConnected={activeConnection.status === 'connected'}
                           onClose={() => {}}
                           onOpenInLogMonitor={handleOpenInLogMonitor}
+                          onOpenInEditor={handleOpenInEditor}
                         />
                       </ResizablePanel>
                     </>

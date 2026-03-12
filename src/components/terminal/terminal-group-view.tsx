@@ -4,6 +4,7 @@ import { GroupTabBar } from './group-tab-bar';
 import { PtyTerminal } from '../pty-terminal';
 import { FileBrowserView } from '../file-browser-view';
 import { DesktopViewer } from '../desktop-viewer';
+import { FileEditorView } from '../file-editor-view';
 import { WelcomeScreen } from '../welcome-screen';
 
 interface TerminalGroupViewProps {
@@ -132,6 +133,13 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
                   protocol={tab.protocol}
                   isConnected={tab.connectionStatus === 'connected'}
                   onReconnect={() => handleReconnect(tab.id)}
+                />
+              ) : tab.tabType === 'editor' && tab.editorFilePath && tab.editorConnectionId ? (
+                <FileEditorView
+                  connectionId={tab.editorConnectionId}
+                  filePath={tab.editorFilePath}
+                  fileName={tab.name}
+                  isConnected={tab.connectionStatus === 'connected'}
                 />
               ) : tab.connectionStatus !== 'pending' ? (
                 <PtyTerminal

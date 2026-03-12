@@ -10,14 +10,18 @@ export type GridNode =
 export interface TerminalTab {
   id: string;
   name: string;
-  /** Tab type: 'terminal' for SSH PTY, 'file-browser' for SFTP/FTP, 'desktop' for RDP/VNC */
-  tabType?: 'terminal' | 'file-browser' | 'desktop';
+  /** Tab type: 'terminal' for SSH PTY, 'file-browser' for SFTP/FTP, 'desktop' for RDP/VNC, 'editor' for remote file editing */
+  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor';
   protocol?: string;
   host?: string;
   username?: string;
   originalConnectionId?: string;
   connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'pending';
   reconnectCount: number;
+  /** For editor tabs: the remote file path being edited */
+  editorFilePath?: string;
+  /** For editor tabs: the SSH connectionId used to read/write the file */
+  editorConnectionId?: string;
 }
 
 /** 终端组 */

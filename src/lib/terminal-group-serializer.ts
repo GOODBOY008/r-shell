@@ -34,11 +34,33 @@ export function deserialize(json: string): TerminalGroupState | null {
 }
 
 /**
- * saveState — persist state to localStorage, warn on failure
+ * saveState — persist state to localStorage, warn on failure.
+ * Editor tabs are ephemeral and excluded from persistence.
  */
 export function saveState(state: TerminalGroupState): void {
   try {
-    localStorage.setItem(STORAGE_KEY, serialize(state));
+    // Strip editor tabs before saving — they are transient and cannot be restored
+    const filtered: TerminalGroupState = {
+      ...state,
+      groups: Object.fromEntries(
+        Object.entries(state.groups).map(([id, group]) => {
+          const tabs = group.tabs.filter(t => t.tabType !== 'editor');
+          return [id, {
+            ...group,
+            tabs,
+            activeTabId: tabs.find(t => t.id === group.activeTabId) ? group.activeTabId : (tabs[0]?.id ?? null),
+          }];
+        }),
+      ),
+      tabToGroupMap: Object.fromEntries(
+        Object.entries(state.tabToGroupMap).filter(([tabId]) => {
+          const group = state.groups[state.tabToGroupMap[tabId]];
+          const tab = group?.tabs.find(t => t.id === tabId);
+          return tab?.tabType !== 'editor';
+        }),
+      ),
+    };
+    localStorage.setItem(STORAGE_KEY, serialize(filtered));
   } catch (e) {
     console.warn('Failed to save terminal group state to localStorage:', e);
   }

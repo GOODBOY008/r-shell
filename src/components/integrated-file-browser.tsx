@@ -29,7 +29,6 @@ import {
   FolderPlus,
   ChevronRight,
   X,
-  Save,
   FileEdit,
   ClipboardPaste,
   Info,
@@ -40,9 +39,7 @@ import {
   Pencil
 } from 'lucide-react';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from './ui/context-menu';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
-import { Textarea } from "./ui/textarea";
 import { toast } from 'sonner';
 
 interface FileItem {
@@ -73,6 +70,8 @@ interface IntegratedFileBrowserProps {
   onClose: () => void;
   /** Called when user wants to open a file in the Log Monitor */
   onOpenInLogMonitor?: (filePath: string) => void;
+  /** Called when user wants to open a file in the editor tab */
+  onOpenInEditor?: (filePath: string, fileName: string) => void;
 }
 
 // Cache to store state per session
@@ -83,15 +82,13 @@ const sessionStateCache = new Map<string, {
   searchTerm: string;
 }>();
 
-export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, onClose: _onClose, onOpenInLogMonitor }: IntegratedFileBrowserProps) {
+export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, onClose: _onClose, onOpenInLogMonitor, onOpenInEditor }: IntegratedFileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [transfers, setTransfers] = useState<TransferItem[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [showTransfers, setShowTransfers] = useState(false);
-  const [fileContent, setFileContent] = useState<string>('');
-  const [editingFile, setEditingFile] = useState<FileItem | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [clipboard, setClipboard] = useState<{ files: FileItem[], operation: 'copy' | 'cut' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
@@ -501,24 +498,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       console.log('Navigating to directory:', file.path);
       navigateTo(file.path);
     } else {
-      // Open file for viewing/editing
-      console.log('Opening file for viewing');
-      setEditingFile(file);
-      setIsLoading(true);
-      try {
-        const content = await invoke<string>('read_file_content', {
-          connectionId,
-          path: file.path
-        });
-        setFileContent(content);
-      } catch (error) {
-        console.error('Failed to read file:', error);
-        toast.error('Failed to Read File', {
-          description: error instanceof Error ? error.message : 'Unable to read file content from server.',
-        });
-        setFileContent(`# ${file.name}\n\nError loading file content: ${error}`);
-      } finally {
-        setIsLoading(false);
+      // Open file in editor tab
+      if (onOpenInEditor) {
+        onOpenInEditor(file.path, file.name);
+      } else {
+        toast.info(`Cannot open ${file.name}: no editor handler available`);
       }
     }
   };
@@ -757,28 +741,6 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const cancelDeleteFile = () => {
     console.log('[FileBrowser] User cancelled deletion');
     setDeletingFile(null);
-  };
-
-  const handleSaveFile = async () => {
-    if (editingFile) {
-      try {
-        const filePath = currentPath === '/' ? `/${editingFile.name}` : `${currentPath}/${editingFile.name}`;
-        await invoke<boolean>('create_file', {
-          connectionId,
-          path: filePath,
-          content: fileContent
-        });
-        toast.success(`${editingFile.name} saved successfully`);
-        setEditingFile(null);
-        setFileContent('');
-        loadFiles();
-      } catch (error) {
-        console.error('Failed to save file:', error);
-        toast.error('Failed to Save File', {
-          description: error instanceof Error ? error.message : 'Unable to save file to server.',
-        });
-      }
-    }
   };
 
   const handleCopyFiles = (files: FileItem[]) => {
@@ -1592,39 +1554,6 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* File Editor Dialog */}
-      <Dialog open={!!editingFile} onOpenChange={(open) => !open && setEditingFile(null)}>
-        <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[90vw] max-w-[1400px] max-h-[80vh]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Edit className="h-4 w-4" />
-              Editing: {editingFile?.name}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-4 h-[60vh]">
-            <Textarea
-              value={fileContent}
-              onChange={(e) => setFileContent(e.target.value)}
-              className="flex-1 font-mono text-sm resize-none"
-              placeholder="File content..."
-            />
-            <div className="flex justify-between">
-              <div className="text-sm text-muted-foreground">
-                {editingFile && `${formatFileSize(editingFile.size)} • ${editingFile.permissions} • ${editingFile.owner}:${editingFile.group}`}
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setEditingFile(null)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleSaveFile}>
-                  <Save className="mr-2 h-4 w-4" />
-                  Save
-                </Button>
-              </div>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

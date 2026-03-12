@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 target
+.qoder
 
 # Editor directories and files
 .vscode/*

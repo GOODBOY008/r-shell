@@ -441,3 +441,12 @@ html {
     opacity: 0;
   }
 }
+
+/* CodeMirror editor — fill parent container */
+.cm-editor {
+  height: 100%;
+}
+
+.cm-editor .cm-scroller {
+  overflow: auto;
+}

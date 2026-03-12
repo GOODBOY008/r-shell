@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor } from 'lucide-react';
+import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode } from 'lucide-react';
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { Button } from '../ui/button';
@@ -169,6 +169,8 @@ export function GroupTabBar({
                       <FolderSync className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
                     ) : tab.tabType === 'desktop' ? (
                       <Monitor className="h-3.5 w-3.5 shrink-0 text-blue-500" />
+                    ) : tab.tabType === 'editor' ? (
+                      <FileCode className="h-3.5 w-3.5 shrink-0 text-green-500" />
                     ) : (
                       <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     )}
