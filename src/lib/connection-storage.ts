@@ -533,7 +533,7 @@ export interface ActiveConnectionState {
   connectionId: string;
   order: number;
   originalConnectionId?: string; // For duplicated tabs, reference to the original connection
-  tabType?: 'terminal' | 'file-browser' | 'desktop'; // Tab type for SFTP/FTP, RDP/VNC, or SSH
+  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor'; // Tab type for SFTP/FTP, RDP/VNC, SSH, or remote file editing
   protocol?: string; // Protocol used (SSH, SFTP, FTP)
 }
 
