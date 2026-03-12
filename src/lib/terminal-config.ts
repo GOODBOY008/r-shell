@@ -35,6 +35,8 @@ export const defaultTerminalTheme: ITheme = {
   foreground: '#d4d4d4',
   background: '#1e1e1e',
   cursor: '#aeafad',
+  selectionBackground: 'rgba(255, 255, 255, 0.3)',
+  selectionInactiveBackground: 'rgba(255, 255, 255, 0.15)',
   black: '#000000',
   red: '#cd3131',
   green: '#0dbc79',
@@ -57,6 +59,8 @@ export const defaultLightTerminalTheme: ITheme = {
   foreground: '#1e1e1e',
   background: '#ffffff',
   cursor: '#333333',
+  selectionBackground: 'rgba(0, 90, 200, 0.3)',
+  selectionInactiveBackground: 'rgba(0, 90, 200, 0.15)',
   black: '#000000',
   red: '#cd3131',
   green: '#00bc00',
@@ -128,6 +132,8 @@ export const terminalThemes: Record<string, ITheme> = {
     foreground: '#657b83',
     background: '#fdf6e3',
     cursor: '#657b83',
+    selectionBackground: 'rgba(0, 90, 200, 0.3)',
+    selectionInactiveBackground: 'rgba(0, 90, 200, 0.15)',
     black: '#073642',
     red: '#dc322f',
     green: '#859900',
@@ -409,7 +415,33 @@ export function getThemeAwareTerminalTheme(settings: TerminalAppearanceSettings)
     }
   }
   
+  // Ensure selectionBackground is always set so selection is visible.
+  // Detect whether the resolved theme has a light background and pick
+  // an appropriate selection colour when the theme doesn't define one.
+  if (!theme.selectionBackground) {
+    const isLightBg = isLightBackground(theme.background);
+    theme = {
+      ...theme,
+      selectionBackground: isLightBg
+        ? 'rgba(0, 90, 200, 0.3)'
+        : 'rgba(255, 255, 255, 0.3)',
+      selectionInactiveBackground: isLightBg
+        ? 'rgba(0, 90, 200, 0.15)'
+        : 'rgba(255, 255, 255, 0.15)',
+    };
+  }
+  
   return theme;
+}
+
+/** Return true when a hex colour (e.g. "#ffffff") is perceptually light. */
+function isLightBackground(bg: string | undefined): boolean {
+  if (!bg || !bg.startsWith('#') || bg.length < 7) return false;
+  const r = parseInt(bg.slice(1, 3), 16);
+  const g = parseInt(bg.slice(3, 5), 16);
+  const b = parseInt(bg.slice(5, 7), 16);
+  // Relative luminance approximation
+  return (r * 299 + g * 587 + b * 114) / 1000 > 128;
 }
 
 export function getThemeAwareTerminalOptions(appearance: TerminalAppearanceSettings): ITerminalOptions {

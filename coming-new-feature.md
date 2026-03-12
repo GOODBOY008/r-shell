@@ -4,7 +4,7 @@ This document outlines planned feature improvements for R-Shell, with detailed d
 
 ---
 
-## Feature 1: First-Launch Experience - Hide Monitor Panel
+## Feature 1: First-Launch Experience - Hide Monitor Panel(Implemented)
 
 ### Problem Statement
 When R-Shell is newly installed, the monitor panel (right sidebar) is visible by default, which may overwhelm new users who haven't connected to any server yet.
@@ -127,7 +127,7 @@ window.addEventListener('keydown', handleKeyDown, { capture: true });
 
 ---
 
-## Feature 3: Update Homepage Feature Documentation
+## Feature 3: Update Homepage Feature Documentation(Implemented)
 
 ### Problem Statement
 The README.md and homepage documentation needs to reflect current features accurately.
@@ -1577,6 +1577,8 @@ pub async fn cleanup_temp_files() -> Result<(), String> {
 - `src-tauri/Cargo.toml` - Add ropey, egui, eframe, tree-sitter dependencies (Phase 4)
 
 ---
+
+## Improvement #10: Global Copy and Paste Support,currently the user experience is very bad
 
 ## Implementation Priority
 

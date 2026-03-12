@@ -79,7 +79,7 @@
   --terminal-bg: #1e1e1e;
   --terminal-fg: #d4d4d4;
   --terminal-cursor: #aeafad;
-  --terminal-selection: rgba(255, 255, 255, 0.3);
+  --terminal-selection: rgba(0, 90, 200, 0.3);
 
   /* Status colors */
   --status-connected: #22c55e;
