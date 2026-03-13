@@ -1289,7 +1289,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             
             {/* File Rows */}
             {sortedFiles.map((file, index) => (
-              <ContextMenu key={index}>
+              <ContextMenu key={index} onOpenChange={(open) => {
+                // Clear the right-click selection when the context menu closes (loses focus)
+                if (!open) {
+                  setSelectedFiles(new Set());
+                }
+              }}>
                 <ContextMenuTrigger asChild>
                   <div
                     className={`flex gap-2 px-2 py-1.5 hover:bg-muted/50 cursor-pointer border-b border-border/30 ${
