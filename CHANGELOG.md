@@ -11,6 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - _No unreleased changes documented yet._
 
+## [1.2.0] - 2026-03-16
+
+### 🖥️ R-Shell 1.2 — Code Editor, Remote Desktop & Terminal Polish
+
+This release adds a built-in code editor with syntax highlighting, remote desktop protocol support, and several quality-of-life improvements across the terminal and file browser.
+
+### Added
+
+- ✏️ **CodeMirror-Based Code Editor**: Full-featured in-app code editor for remote files
+  - Syntax highlighting for 15+ languages (JavaScript, TypeScript, Python, Rust, Go, Java, C/C++, SQL, HTML, CSS, JSON, YAML, XML, Markdown, PHP)
+  - One Dark theme integration matching the app's aesthetic
+  - Line numbers, code folding, bracket matching, and auto-completion
+  - Search and replace functionality
+
+- 🖥️ **RDP & VNC Desktop Protocol Clients**: Remote desktop access alongside SSH terminals
+  - Connect to Windows machines via RDP
+  - Connect to VNC servers for graphical remote access
+  - Integrated as tab types within the existing session management
+
+- 📋 **Editor Tab Type in Connection Storage**: Persistent editor tab state
+  - Editor tabs are now tracked in `ActiveConnectionState`
+  - Editor sessions restore correctly on app restart
+
+### Fixed
+
+- ⌨️ **macOS Keyboard Shortcuts**: `Cmd` key now correctly maps as `Ctrl` equivalent
+  - Layout shortcuts (`Cmd+B`, `Cmd+J`, `Cmd+M`, `Cmd+Z`) work reliably on macOS
+  - Consistent cross-platform shortcut behavior
+
+- 🎨 **Terminal Text Selection Visibility**: Theme-aware selection colors
+  - Selected text in terminals now uses proper contrast colors
+  - Works correctly in both light and dark themes
+
+- 📂 **File Browser Context Menu**: Selection clears when context menu closes
+  - Prevents stale selection state after dismissing the menu
+
 ## [1.1.0] - 2026-03-01
 
 ### 📂 R-Shell 1.1 — SFTP/FTP File Management & Developer Tooling
