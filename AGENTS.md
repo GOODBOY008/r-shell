@@ -5,7 +5,7 @@
 R-Shell is a modern desktop SSH client built with **React 19 + TypeScript** (frontend) and **Tauri 2 + Rust** (backend). It provides interactive terminal sessions, SFTP file management, system monitoring, and multi-tab session management in a VS Code-like layout.
 
 - **Repository**: `GOODBOY008/r-shell`
-- **Version**: 1.0.0
+- **Version**: 1.2.0
 - **Package Manager**: pnpm (v9.15.4)
 - **Node Target**: ES2020
 - **Rust Edition**: 2021
