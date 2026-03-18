@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useReducer, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
-import { Progress } from './ui/progress';
-import { Badge } from './ui/badge';
+import {
+  transferQueueReducer,
+  getNextQueuedTransfer,
+} from '@/lib/transfer-queue-reducer';
+import { TransferQueue } from './transfer-queue';
 import { 
   Folder, 
   File, 
@@ -53,16 +57,6 @@ interface FileItem {
   path: string;
 }
 
-interface TransferItem {
-  id: string;
-  type: 'upload' | 'download';
-  fileName: string;
-  size: number;
-  transferred: number;
-  status: 'queued' | 'transferring' | 'completed' | 'error';
-  speed: number;
-}
-
 interface IntegratedFileBrowserProps {
   connectionId: string;
   host?: string;
@@ -86,9 +80,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-  const [transfers, setTransfers] = useState<TransferItem[]>([]);
+  const [transfers, dispatchTransfer] = useReducer(transferQueueReducer, []);
+  const [queueExpanded, setQueueExpanded] = useState(false);
+  const processTransferRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [showTransfers, setShowTransfers] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [clipboard, setClipboard] = useState<{ files: FileItem[], operation: 'copy' | 'cut' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
@@ -282,6 +277,91 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       document.removeEventListener('mouseup', handleMouseUp);
     };
   }, [resizingColumn]);
+
+  // Transfer processing loop — modeled on file-browser-view.tsx
+  useEffect(() => {
+    const nextItem = getNextQueuedTransfer(transfers);
+    if (!nextItem || processTransferRef.current) return;
+
+    processTransferRef.current = true;
+    dispatchTransfer({ type: "START", id: nextItem.id });
+
+    const doTransfer = async () => {
+      try {
+        if (nextItem.direction === "upload") {
+          const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
+            "upload_remote_file",
+            {
+              connectionId,
+              localPath: nextItem.sourcePath,
+              remotePath: nextItem.destinationPath,
+            },
+          );
+          if (result.success) {
+            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
+            toast.success(`Uploaded ${nextItem.fileName}`);
+            loadFiles();
+          } else {
+            dispatchTransfer({
+              type: "FAIL",
+              id: nextItem.id,
+              error: result.error ?? "Upload failed",
+            });
+            toast.error(`Upload failed: ${nextItem.fileName}`, {
+              description: result.error ?? "Unknown error",
+            });
+          }
+        } else {
+          const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
+            "download_remote_file",
+            {
+              connectionId,
+              remotePath: nextItem.sourcePath,
+              localPath: nextItem.destinationPath,
+            },
+          );
+          if (result.success) {
+            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
+            const destPath = nextItem.destinationPath;
+            const destDir = destPath.substring(0, destPath.lastIndexOf("/")) || "/";
+            toast.success(`Downloaded ${nextItem.fileName}`, {
+              duration: 5000,
+              action: {
+                label: "Open File",
+                onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
+              },
+              cancel: {
+                label: "Show in Folder",
+                onClick: () => { void invoke("open_in_os", { path: destDir }).catch(() => {}); },
+              },
+            });
+          } else {
+            dispatchTransfer({
+              type: "FAIL",
+              id: nextItem.id,
+              error: result.error ?? "Download failed",
+            });
+            toast.error(`Download failed: ${nextItem.fileName}`, {
+              description: result.error ?? "Unknown error",
+            });
+          }
+        }
+      } catch (err) {
+        dispatchTransfer({
+          type: "FAIL",
+          id: nextItem.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        toast.error(`Transfer failed: ${nextItem.fileName}`, {
+          description: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        processTransferRef.current = false;
+      }
+    };
+
+    doTransfer();
+  }, [transfers, connectionId]);
 
   const handleResizeStart = (columnName: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -538,149 +618,76 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
-  const handleUpload = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.multiple = true;
-    input.onchange = async (e) => {
-      const files = (e.target as HTMLInputElement).files;
-      if (!files || files.length === 0) return;
+  const handleUpload = async () => {
+    try {
+      const selected = await tauriOpen({
+        multiple: true,
+        directory: false,
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      if (paths.length === 0) return;
 
-      const fileArray = Array.from(files);
-      toast.success(`Uploading ${fileArray.length} file${fileArray.length > 1 ? 's' : ''}`);
-      
-      for (let i = 0; i < fileArray.length; i++) {
-        const file = fileArray[i];
-        const transferId = `upload-${Date.now()}-${i}`;
-        
-        const mockTransfer: TransferItem = {
-          id: transferId,
-          type: 'upload',
-          fileName: file.name,
-          size: file.size,
-          transferred: 0,
-          status: 'transferring',
-          speed: 0
-        };
-        
-        setTransfers(prev => [...prev, mockTransfer]);
-        setShowTransfers(true);
-        
-        try {
-          // Read file content
-          const arrayBuffer = await file.arrayBuffer();
-          const uint8Array = new Uint8Array(arrayBuffer);
-          
-          // Upload using SFTP
-          const remotePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
-          
-          const result = await invoke<{ success: boolean; bytesTransferred?: number; error?: string }>(
-            'sftp_upload_file',
-            {
-              request: {
-                connection_id: connectionId,
-                local_path: '',
-                remote_path: remotePath,
-                data: Array.from(uint8Array)
-              }
-            }
-          );
-          
-          if (result.success) {
-            setTransfers(prev => prev.map(t => 
-              t.id === transferId ? { ...t, status: 'completed' as const, transferred: file.size } : t
-            ));
-            
-            if (i === fileArray.length - 1) {
-              toast.success(`Successfully uploaded ${fileArray.length} file${fileArray.length > 1 ? 's' : ''}`);
-              loadFiles();
-            }
-          } else {
-            setTransfers(prev => prev.map(t => 
-              t.id === transferId ? { ...t, status: 'error' as const } : t
-            ));
-            toast.error('Upload Failed', {
-              description: result.error || `Unable to upload ${file.name} to server.`,
-            });
-          }
-        } catch (error) {
-          console.error('Upload error:', error);
-          setTransfers(prev => prev.map(t => 
-            t.id === transferId ? { ...t, status: 'error' as const } : t
-          ));
-          toast.error('Upload Failed', {
-            description: error instanceof Error ? error.message : `An error occurred while uploading ${file.name}.`,
-          });
-        }
-      }
-    };
-    input.click();
+      dispatchTransfer({
+        type: "ENQUEUE",
+        items: paths.map((p) => {
+          const fileName = p.split('/').pop() || p;
+          const remotePath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
+          return {
+            fileName,
+            direction: "upload" as const,
+            sourcePath: p,
+            destinationPath: remotePath,
+            totalBytes: 0,
+          };
+        }),
+      });
+      toast.info(`Queued ${paths.length} file(s) for upload`);
+    } catch (error) {
+      console.error('Upload dialog error:', error);
+    }
   };
 
   const handleDownload = async (file: FileItem) => {
-    const transferId = `download-${Date.now()}`;
-    
-    const mockTransfer: TransferItem = {
-      id: transferId,
-      type: 'download',
-      fileName: file.name,
-      size: file.size,
-      transferred: 0,
-      status: 'transferring',
-      speed: 0
-    };
-    
-    setTransfers(prev => [...prev, mockTransfer]);
-    setShowTransfers(true);
-    
     try {
-      const remotePath = file.path;
-      
-      // Download using SFTP
-      const result = await invoke<{ success: boolean; data?: number[]; error?: string }>(
-        'sftp_download_file',
-        {
-          request: {
-            connection_id: connectionId,
-            local_path: '',
-            remote_path: remotePath
-          }
-        }
-      );
-      
-      if (result.success && result.data) {
-        // Convert data to blob and download
-        const uint8Array = new Uint8Array(result.data);
-        const blob = new Blob([uint8Array]);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = file.name;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        
-        setTransfers(prev => prev.map(t => 
-          t.id === transferId ? { ...t, status: 'completed' as const, transferred: file.size } : t
-        ));
-        toast.success(`${file.name} downloaded successfully`);
-      } else {
-        setTransfers(prev => prev.map(t => 
-          t.id === transferId ? { ...t, status: 'error' as const } : t
-        ));
-        toast.error('Download Failed', {
-          description: result.error || `Unable to download ${file.name} from server.`,
-        });
-      }
-    } catch (error) {
-      console.error('Download error:', error);
-      setTransfers(prev => prev.map(t => 
-        t.id === transferId ? { ...t, status: 'error' as const } : t
-      ));
-      toast.error('Download Failed', {
-        description: error instanceof Error ? error.message : 'An error occurred during download.',
+      const destPath = await save({ defaultPath: file.name });
+      if (!destPath) return;
+
+      dispatchTransfer({
+        type: "ENQUEUE",
+        items: [{
+          fileName: file.name,
+          direction: "download" as const,
+          sourcePath: file.path,
+          destinationPath: destPath,
+          totalBytes: file.size,
+        }],
       });
+    } catch (error) {
+      console.error('Download dialog error:', error);
+    }
+  };
+
+  const handleDownloadMultiple = async (selectedFileItems: FileItem[]) => {
+    const filesToDownload = selectedFileItems.filter(f => f.type === 'file');
+    if (filesToDownload.length === 0) return;
+    try {
+      const destDir = await tauriOpen({ directory: true });
+      if (!destDir) return;
+
+      dispatchTransfer({
+        type: "ENQUEUE",
+        items: filesToDownload.map((f) => ({
+          fileName: f.name,
+          direction: "download" as const,
+          sourcePath: f.path,
+          destinationPath: `${destDir}/${f.name}`,
+          totalBytes: f.size,
+        })),
+      });
+      toast.info(`Queued ${filesToDownload.length} file(s) for download`);
+    } catch (error) {
+      console.error('Download dialog error:', error);
     }
   };
 
@@ -908,78 +915,49 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     setIsDraggingOver(false);
     setDragCounter(0);
 
-    const droppedFiles = Array.from(e.dataTransfer.files);
-    
+    const items = Array.from(e.dataTransfer.items);
+    if (items.length === 0) return;
+
+    // Check for directory drops
+    const hasDirectory = items.some(item => {
+      const entry = item.webkitGetAsEntry?.();
+      return entry?.isDirectory;
+    });
+    if (hasDirectory) {
+      toast.info('Directory upload is not supported via drag-and-drop. Use the upload button.');
+      return;
+    }
+
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.size > 0);
     if (droppedFiles.length === 0) return;
 
-    toast.success(`Uploading ${droppedFiles.length} file${droppedFiles.length > 1 ? 's' : ''} to ${currentPath}`);
-    
-    // Process each dropped file
-    for (let index = 0; index < droppedFiles.length; index++) {
-      const file = droppedFiles[index];
-      const transferId = `upload-${Date.now()}-${index}`;
-      
-      const mockTransfer: TransferItem = {
-        id: transferId,
-        type: 'upload',
-        fileName: file.name,
-        size: file.size,
-        transferred: 0,
-        status: 'transferring',
-        speed: 0
-      };
-      
-      setTransfers(prev => [...prev, mockTransfer]);
-      setShowTransfers(true);
-      
-      try {
-        // Read file content
-        const arrayBuffer = await file.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
-        
-        // Upload using SFTP
-        const remotePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
-        
-        const result = await invoke<{ success: boolean; bytesTransferred?: number; error?: string }>(
-          'sftp_upload_file',
-          {
-            request: {
-              connection_id: connectionId,
-              local_path: '',
-              remote_path: remotePath,
-              data: Array.from(uint8Array)
-            }
-          }
-        );
-        
-        if (result.success) {
-          setTransfers(prev => prev.map(t => 
-            t.id === transferId ? { ...t, status: 'completed' as const, transferred: file.size } : t
-          ));
-          
-          // Show success message for last file
-          if (index === droppedFiles.length - 1) {
-            toast.success(`Successfully uploaded ${droppedFiles.length} file${droppedFiles.length > 1 ? 's' : ''}`);
-            loadFiles(); // Refresh file list
-          }
-        } else {
-          setTransfers(prev => prev.map(t => 
-            t.id === transferId ? { ...t, status: 'error' as const } : t
-          ));
-          toast.error('Upload Failed', {
-            description: result.error || `Unable to upload ${file.name} to server.`,
-          });
-        }
-      } catch (error) {
-        console.error('Upload error:', error);
-        setTransfers(prev => prev.map(t => 
-          t.id === transferId ? { ...t, status: 'error' as const } : t
-        ));
-        toast.error('Upload Failed', {
-          description: error instanceof Error ? error.message : `An error occurred while uploading ${file.name}.`,
+    // In Tauri, dropped files have a `path` property with the local filesystem path
+    const fileItems: Array<{ fileName: string; sourcePath: string; totalBytes: number }> = [];
+    for (const file of droppedFiles) {
+      // Tauri provides the file path via File.path
+      const filePath = (file as File & { path?: string }).path;
+      if (filePath) {
+        fileItems.push({
+          fileName: file.name,
+          sourcePath: filePath,
+          totalBytes: file.size,
         });
       }
     }
+
+    if (fileItems.length === 0) return;
+
+    dispatchTransfer({
+      type: "ENQUEUE",
+      items: fileItems.map((f) => ({
+        fileName: f.fileName,
+        direction: "upload" as const,
+        sourcePath: f.sourcePath,
+        destinationPath: currentPath === '/' ? `/${f.fileName}` : `${currentPath}/${f.fileName}`,
+        totalBytes: f.totalBytes,
+      })),
+    });
+    toast.info(`Queued ${fileItems.length} file(s) for upload to ${currentPath}`);
   };
 
   const filteredFiles = files.filter(file => 
@@ -1170,14 +1148,6 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           <span className="text-muted-foreground whitespace-nowrap">{selectedFiles.size} selected</span>
         )}
         
-        <Button variant="ghost" size="sm" className="h-6 px-2" onClick={() => setShowTransfers(!showTransfers)}>
-          <Download className="h-3.5 w-3.5" />
-          {transfers.length > 0 && (
-            <Badge variant="secondary" className="ml-1 h-3.5 px-1 text-[10px]">
-              {transfers.filter(t => t.status !== 'completed').length}
-            </Badge>
-          )}
-        </Button>
       </div>
 
       {/* File List */}
@@ -1418,6 +1388,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                         <Download className="mr-2 h-4 w-4" />
                         Download
                       </ContextMenuItem>
+                      {selectedFiles.size > 1 && (
+                        <ContextMenuItem onClick={() => handleDownloadMultiple(files.filter(f => selectedFiles.has(f.name)))}>
+                          <Download className="mr-2 h-4 w-4" />
+                          Download {selectedFiles.size} Selected
+                        </ContextMenuItem>
+                      )}
                       <ContextMenuSeparator />
                     </>
                   )}
@@ -1493,47 +1469,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       </div>
 
       {/* Transfer Queue */}
-      {showTransfers && transfers.length > 0 && (
-        <div className="border-t bg-muted/30 p-3 max-h-32 overflow-y-auto">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium">File Transfers</span>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              onClick={() => setShowTransfers(false)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-          {transfers.map((transfer) => (
-            <div key={transfer.id} className="flex items-center gap-3 p-2 bg-background rounded mb-1">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 text-sm">
-                  {transfer.type === 'upload' ? (
-                    <Upload className="h-4 w-4 text-blue-500 flex-shrink-0" />
-                  ) : (
-                    <Download className="h-4 w-4 text-green-500 flex-shrink-0" />
-                  )}
-                  <span className="truncate">{transfer.fileName}</span>
-                  <Badge variant={transfer.status === 'completed' ? 'default' : 'secondary'} className="flex-shrink-0">
-                    {transfer.status}
-                  </Badge>
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  {formatFileSize(transfer.transferred)} / {formatFileSize(transfer.size)}
-                  {transfer.status === 'transferring' && transfer.speed > 0 && (
-                    <span className="ml-2">{formatFileSize(transfer.speed)}/s</span>
-                  )}
-                </div>
-                <Progress 
-                  value={(transfer.transferred / transfer.size) * 100} 
-                  className="mt-1 h-1"
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <TransferQueue
+        transfers={transfers}
+        dispatch={dispatchTransfer}
+        expanded={queueExpanded}
+        onToggleExpanded={() => setQueueExpanded(p => !p)}
+      />
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deletingFile} onOpenChange={(open) => !open && setDeletingFile(null)}>

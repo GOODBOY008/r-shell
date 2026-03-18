@@ -324,6 +324,7 @@ pub struct FileTransferResponse {
     pub error: Option<String>,
 }
 
+/// @deprecated Use `download_remote_file` instead. Kept for backward compatibility.
 #[tauri::command]
 pub async fn sftp_download_file(
     request: FileTransferRequest,
@@ -374,6 +375,7 @@ pub async fn sftp_download_file(
     }
 }
 
+/// @deprecated Use `upload_remote_file` instead. Kept for backward compatibility.
 #[tauri::command]
 pub async fn sftp_upload_file(
     request: FileTransferRequest,
@@ -2158,13 +2160,10 @@ pub async fn download_remote_file(
     local_path: String,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
-    let conn_type = state
-        .get_connection_type(&connection_id)
-        .await
-        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+    let conn_type = state.get_connection_type(&connection_id).await;
 
-    let result = match conn_type.as_str() {
-        "SFTP" => {
+    let result = match conn_type.as_deref() {
+        Some("SFTP") => {
             let sftp_map = state.get_sftp_connection().await;
             let connections = sftp_map.read().await;
             let client = connections
@@ -2172,7 +2171,7 @@ pub async fn download_remote_file(
                 .ok_or("SFTP connection not found".to_string())?;
             client.download_file(&remote_path, &local_path).await
         }
-        "FTP" => {
+        Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
             let mut connections = ftp_map.write().await;
             let client = connections
@@ -2180,7 +2179,17 @@ pub async fn download_remote_file(
                 .ok_or("FTP connection not found".to_string())?;
             client.download_file(&remote_path, &local_path).await
         }
-        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+        Some(other) => return Err(format!("Unsupported protocol: {}", other)),
+        None => {
+            // Fallback: try SSH connection (integrated file browser uses SSH connections
+            // which are not registered in connection_types)
+            let connection = state
+                .get_connection(&connection_id)
+                .await
+                .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
+            let client = connection.read().await;
+            client.download_file(&remote_path, &local_path).await
+        }
     };
 
     match result {
@@ -2206,13 +2215,10 @@ pub async fn upload_remote_file(
     remote_path: String,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
-    let conn_type = state
-        .get_connection_type(&connection_id)
-        .await
-        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+    let conn_type = state.get_connection_type(&connection_id).await;
 
-    let result = match conn_type.as_str() {
-        "SFTP" => {
+    let result = match conn_type.as_deref() {
+        Some("SFTP") => {
             let sftp_map = state.get_sftp_connection().await;
             let connections = sftp_map.read().await;
             let client = connections
@@ -2220,7 +2226,7 @@ pub async fn upload_remote_file(
                 .ok_or("SFTP connection not found".to_string())?;
             client.upload_file(&local_path, &remote_path).await
         }
-        "FTP" => {
+        Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
             let mut connections = ftp_map.write().await;
             let client = connections
@@ -2228,7 +2234,17 @@ pub async fn upload_remote_file(
                 .ok_or("FTP connection not found".to_string())?;
             client.upload_file(&local_path, &remote_path).await
         }
-        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+        Some(other) => return Err(format!("Unsupported protocol: {}", other)),
+        None => {
+            // Fallback: try SSH connection (integrated file browser uses SSH connections
+            // which are not registered in connection_types)
+            let connection = state
+                .get_connection(&connection_id)
+                .await
+                .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
+            let client = connection.read().await;
+            client.upload_file(&local_path, &remote_path).await
+        }
     };
 
     match result {

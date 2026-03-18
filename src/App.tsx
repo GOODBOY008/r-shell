@@ -7,7 +7,6 @@ import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
-import { SFTPPanel } from './components/sftp-panel';
 import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
@@ -49,7 +48,6 @@ function AppContent() {
 
   // Modal states
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
-  const [sftpPanelOpen, setSftpPanelOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
@@ -1071,10 +1069,6 @@ function AppContent() {
     }
   }, []);
 
-  const handleOpenSFTP = useCallback(() => {
-    setSftpPanelOpen(true);
-  }, []);
-
   // Get recent connections for quick connect
   const recentConnections = useMemo(() => {
     return ConnectionStorageManager.getRecentConnections(8).map(connection => ({
@@ -1348,14 +1342,12 @@ function AppContent() {
           }
         }}
         onOpenSettings={handleOpenSettings}
-        onOpenSFTP={handleOpenSFTP}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
         hasActiveConnection={!!activeTab}
         canPaste={true}
       />
       <Toolbar
         onNewConnection={handleNewTab}
-        onOpenSFTP={handleOpenSFTP}
         onOpenSettings={handleOpenSettings}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}
@@ -1499,13 +1491,6 @@ function AppContent() {
         onOpenChange={setConnectionDialogOpen}
         onConnect={handleConnectionDialogConnect}
         editingConnection={editingConnection}
-      />
-
-      <SFTPPanel
-        open={sftpPanelOpen}
-        onOpenChange={setSftpPanelOpen}
-        connectionId={activeTab?.id || ''}
-        host={activeTab?.host}
       />
 
       <SettingsModal

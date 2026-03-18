@@ -1,3 +1,4 @@
+/** @deprecated Use IntegratedFileBrowser instead. This component is no longer mounted. */
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
