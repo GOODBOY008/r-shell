@@ -230,20 +230,27 @@ export function PtyTerminal({
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
     const waitForProperSize = () => {
       return new Promise<void>((resolve) => {
+        const MAX_WAIT_MS = 10_000; // Give up after 10 seconds (tab is probably hidden)
+        const startTime = Date.now();
+
         const checkSize = () => {
+          if (!isRunning) return;
+
           // Refit to get latest dimensions
           fitAddon.fit();
-          
-          console.log(`[PTY Terminal] [${connectionId}] Current size: ${term.cols}x${term.rows}`);
           
           // Consider terminal properly sized if it has reasonable dimensions
           // Typical minimum: 80x24, but we'll accept 40x10 as minimum
           if (term.cols >= 40 && term.rows >= 10) {
-            console.log(`[PTY Terminal] [${connectionId}] Terminal properly sized`);
+            console.log(`[PTY Terminal] [${connectionId}] Terminal properly sized: ${term.cols}x${term.rows}`);
+            resolve();
+          } else if (Date.now() - startTime > MAX_WAIT_MS) {
+            // Tab is likely hidden (display: none). Proceed with fallback size;
+            // the terminal will re-fit and send Resize when it becomes visible.
+            console.log(`[PTY Terminal] [${connectionId}] Size wait timed out (${term.cols}x${term.rows}), proceeding with fallback`);
             resolve();
           } else {
             // Terminal still too small (probably hidden), retry after 100ms
-            console.log(`[PTY Terminal] [${connectionId}] Terminal too small, waiting...`);
             setTimeout(checkSize, 100);
           }
         };

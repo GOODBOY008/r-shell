@@ -152,6 +152,19 @@ function AppContent() {
 
   // Restore connections on mount
   useEffect(() => {
+    /** Race a promise against a timeout; rejects with a clear message on expiry. */
+    function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+      return Promise.race([
+        promise,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error(`Timeout: ${label} did not complete within ${ms / 1000}s`)), ms),
+        ),
+      ]);
+    }
+
+    const CONNECT_TIMEOUT_MS = 15_000; // 15 s per backend connect call
+    const OVERALL_RESTORE_TIMEOUT_MS = 60_000; // 60 s for the entire restore
+
     const restoreConnections = async () => {
       const activeConnections = ActiveConnectionsManager.getActiveConnections();
 
@@ -219,19 +232,23 @@ function AppContent() {
           if (isDesktopRestore) {
             // RDP/VNC restoration
             const proto = connectionData.protocol;
-            await invoke('desktop_connect', {
-              request: {
-                connection_id: activeConn.connectionId,
-                host: connectionData.host,
-                port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
-                protocol: proto.toLowerCase(),
-                username: connectionData.username || '',
-                password: connectionData.password || '',
-                domain: connectionData.domain || null,
-                resolution: connectionData.rdpResolution || '1920x1080',
-                color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
-              }
-            });
+            await withTimeout(
+              invoke('desktop_connect', {
+                request: {
+                  connection_id: activeConn.connectionId,
+                  host: connectionData.host,
+                  port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
+                  protocol: proto.toLowerCase(),
+                  username: connectionData.username || '',
+                  password: connectionData.password || '',
+                  domain: connectionData.domain || null,
+                  resolution: connectionData.rdpResolution || '1920x1080',
+                  color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
+                }
+              }),
+              CONNECT_TIMEOUT_MS,
+              `desktop_connect ${connectionData.name}`,
+            );
 
             if (!activeConn.originalConnectionId) {
               ConnectionStorageManager.updateLastConnected(connectionData.id);
@@ -259,30 +276,38 @@ function AppContent() {
           } else if (isFileBrowser) {
             // SFTP/FTP restoration
             if (isSftp) {
-              await invoke('sftp_connect', {
-                request: {
-                  connection_id: activeConn.connectionId,
-                  host: connectionData.host,
-                  port: connectionData.port || 22,
-                  username: connectionData.username,
-                  auth_method: connectionData.authMethod || 'password',
-                  password: connectionData.password || '',
-                  key_path: connectionData.privateKeyPath || null,
-                  passphrase: connectionData.passphrase || null,
-                }
-              });
+              await withTimeout(
+                invoke('sftp_connect', {
+                  request: {
+                    connection_id: activeConn.connectionId,
+                    host: connectionData.host,
+                    port: connectionData.port || 22,
+                    username: connectionData.username,
+                    auth_method: connectionData.authMethod || 'password',
+                    password: connectionData.password || '',
+                    key_path: connectionData.privateKeyPath || null,
+                    passphrase: connectionData.passphrase || null,
+                  }
+                }),
+                CONNECT_TIMEOUT_MS,
+                `sftp_connect ${connectionData.name}`,
+              );
             } else {
-              await invoke('ftp_connect', {
-                request: {
-                  connection_id: activeConn.connectionId,
-                  host: connectionData.host,
-                  port: connectionData.port || 21,
-                  username: connectionData.username || '',
-                  password: connectionData.password || '',
-                  ftps_enabled: connectionData.ftpsEnabled ?? false,
-                  anonymous: connectionData.authMethod === 'anonymous',
-                }
-              });
+              await withTimeout(
+                invoke('ftp_connect', {
+                  request: {
+                    connection_id: activeConn.connectionId,
+                    host: connectionData.host,
+                    port: connectionData.port || 21,
+                    username: connectionData.username || '',
+                    password: connectionData.password || '',
+                    ftps_enabled: connectionData.ftpsEnabled ?? false,
+                    anonymous: connectionData.authMethod === 'anonymous',
+                  }
+                }),
+                CONNECT_TIMEOUT_MS,
+                `ftp_connect ${connectionData.name}`,
+              );
             }
 
             if (!activeConn.originalConnectionId) {
@@ -310,20 +335,24 @@ function AppContent() {
             console.log(`✓ Restored ${connectionData.protocol} connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}`);
           } else {
             // SSH restoration (existing behavior)
-            const result = await invoke<{ success: boolean; error?: string }>(
-              'ssh_connect',
-              {
-                request: {
-                  connection_id: activeConn.connectionId,
-                  host: connectionData.host,
-                  port: connectionData.port || 22,
-                  username: connectionData.username,
-                  auth_method: connectionData.authMethod || 'password',
-                  password: connectionData.password || '',
-                  key_path: connectionData.privateKeyPath || null,
-                  passphrase: connectionData.passphrase || null,
+            const result = await withTimeout(
+              invoke<{ success: boolean; error?: string }>(
+                'ssh_connect',
+                {
+                  request: {
+                    connection_id: activeConn.connectionId,
+                    host: connectionData.host,
+                    port: connectionData.port || 22,
+                    username: connectionData.username,
+                    auth_method: connectionData.authMethod || 'password',
+                    password: connectionData.password || '',
+                    key_path: connectionData.privateKeyPath || null,
+                    passphrase: connectionData.passphrase || null,
+                  }
                 }
-              }
+              ),
+              CONNECT_TIMEOUT_MS,
+              `ssh_connect ${connectionData.name}`,
             );
 
             if (result.success) {
@@ -351,7 +380,7 @@ function AppContent() {
               console.log(`✓ Restored connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}${activeConn.originalConnectionId ? ' (duplicate)' : ''}`);
 
               if (i < sortedConnections.length - 1) {
-                await registerRestoration(activeConn.connectionId, 5000);
+                await registerRestoration(activeConn.connectionId, 3000);
               }
             } else {
               console.error(`Failed to restore connection ${connectionData.name}:`, result.error);
@@ -389,7 +418,16 @@ function AppContent() {
       clearAllRestorations();
     };
 
-    restoreConnections();
+    withTimeout(restoreConnections(), OVERALL_RESTORE_TIMEOUT_MS, 'Session restore').catch((err) => {
+      console.error('Session restore timed out:', err);
+      toast.error('Restore Timed Out', {
+        description: 'Some connections could not be restored in time. Please reconnect manually.',
+      });
+      setCurrentRestoreTarget(null);
+      setIsRestoring(false);
+      setRestoringProgress({ current: 0, total: 0 });
+      clearAllRestorations();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

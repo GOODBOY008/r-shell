@@ -5,7 +5,7 @@ import { createContext, useContext } from 'react';
  * but need to be invoked deep inside the terminal grid tree.
  */
 export interface TerminalCallbacks {
-  onDuplicateTab?: (tabId: string) => void;
+  onDuplicateTab?: (tabId: string) => void | Promise<void>;
   onNewTab?: () => void;
 }
 
