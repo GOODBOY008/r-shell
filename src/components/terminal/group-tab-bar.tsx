@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode } from 'lucide-react';
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
+import { getTabDisplayName } from '../../lib/terminal-group-utils';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { Button } from '../ui/button';
 import {
@@ -183,7 +184,7 @@ export function GroupTabBar({
                             : 'bg-red-500'
                       }`}
                     />
-                    <span className="text-sm truncate">{tab.name}</span>
+                    <span className="text-sm truncate">{getTabDisplayName(tab, tabs)}</span>
                   </div>
 
                   <Button

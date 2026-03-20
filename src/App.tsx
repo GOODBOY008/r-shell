@@ -402,22 +402,9 @@ function AppContent() {
     if (connection.type === 'connection') {
       setSelectedConnection(connection);
 
-      // Check if tab already exists in the ACTIVE group only.
-      // Match by tab.id OR originalConnectionId to catch duplicates too.
-      const currentGroup = state.groups[state.activeGroupId];
-      const existingTabInActiveGroup = currentGroup?.tabs.find(
-        tab => tab.id === connection.id || tab.originalConnectionId === connection.id
-      );
-
-      if (existingTabInActiveGroup) {
-        // Tab exists in active group — just activate it
-        dispatch({ type: 'ACTIVATE_TAB', groupId: state.activeGroupId, tabId: existingTabInActiveGroup.id });
-        return;
-      }
-
-      // Check if this connection already has a session in ANY other group.
-      // If so, we need a unique session ID to avoid sharing the same backend PTY.
-      const existsElsewhere = allTabs.some(
+      // Check if this connection already has a session in ANY group (including active).
+      // If so, we need a unique session ID to avoid sharing the same backend connection.
+      const existsAnywhere = allTabs.some(
         tab => tab.id === connection.id || tab.originalConnectionId === connection.id
       );
 
@@ -450,8 +437,8 @@ function AppContent() {
         return;
       }
 
-      // Use a unique session ID if the connection already exists elsewhere
-      const sessionId = existsElsewhere
+      // Use a unique session ID if the connection already exists anywhere
+      const sessionId = existsAnywhere
         ? `${connection.id}-dup-${Date.now()}`
         : connection.id;
 
@@ -464,7 +451,7 @@ function AppContent() {
           protocol: connectionData.protocol,
           host: connectionData.host,
           username: connectionData.username,
-          originalConnectionId: existsElsewhere ? connection.id : undefined,
+          originalConnectionId: existsAnywhere ? connection.id : undefined,
           connectionStatus: 'connecting',
           reconnectCount: 0,
         };
@@ -533,7 +520,7 @@ function AppContent() {
               protocol: connectionData.protocol,
               host: connectionData.host,
               username: connectionData.username,
-              originalConnectionId: existsElsewhere ? connection.id : undefined,
+              originalConnectionId: existsAnywhere ? connection.id : undefined,
               connectionStatus: 'connecting',
               reconnectCount: 0,
             };
@@ -627,9 +614,15 @@ function AppContent() {
       return;
     }
 
-    const hasCredentials = connectionData.authMethod === 'password'
-      ? !!connectionData.password
-      : !!connectionData.privateKeyPath;
+    const isSftp = tabToDuplicate.protocol === 'SFTP' || connectionData.protocol === 'SFTP';
+    const isFtp = tabToDuplicate.protocol === 'FTP' || connectionData.protocol === 'FTP';
+    const isFileBrowser = isSftp || isFtp;
+
+    const hasCredentials = isFileBrowser
+      ? (connectionData.authMethod === 'anonymous' || !!connectionData.password || !!connectionData.privateKeyPath)
+      : (connectionData.authMethod === 'password'
+        ? !!connectionData.password
+        : !!connectionData.privateKeyPath);
 
     if (!hasCredentials) {
       toast.error('Cannot Duplicate Tab', {
@@ -641,26 +634,12 @@ function AppContent() {
     try {
       const duplicateId = `${originalConnectionId}-dup-${Date.now()}`;
 
-      const result = await invoke<{ success: boolean; error?: string }>(
-        'ssh_connect',
-        {
-          request: {
-            connection_id: duplicateId,
-            host: connectionData.host,
-            port: connectionData.port || 22,
-            username: connectionData.username,
-            auth_method: connectionData.authMethod || 'password',
-            password: connectionData.password || '',
-            key_path: connectionData.privateKeyPath || null,
-            passphrase: connectionData.passphrase || null,
-          }
-        }
-      );
-
-      if (result.success) {
+      if (isFileBrowser) {
+        // SFTP/FTP duplicate flow
         const duplicatedTab: TerminalTab = {
           id: duplicateId,
           name: tabToDuplicate.name,
+          tabType: 'file-browser',
           protocol: tabToDuplicate.protocol,
           host: tabToDuplicate.host,
           username: tabToDuplicate.username,
@@ -668,17 +647,85 @@ function AppContent() {
           connectionStatus: 'connecting',
           reconnectCount: 0,
         };
-
-        // Add duplicated tab to the active group
         dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: duplicatedTab });
 
-        toast.success('Tab Duplicated', {
-          description: `Successfully duplicated ${tabToDuplicate.name}`,
-        });
+        try {
+          if (isSftp) {
+            await invoke('sftp_connect', {
+              request: {
+                connection_id: duplicateId,
+                host: connectionData.host,
+                port: connectionData.port || 22,
+                username: connectionData.username,
+                auth_method: connectionData.authMethod || 'password',
+                password: connectionData.password || '',
+                key_path: connectionData.privateKeyPath || null,
+                passphrase: connectionData.passphrase || null,
+              }
+            });
+          } else {
+            await invoke('ftp_connect', {
+              request: {
+                connection_id: duplicateId,
+                host: connectionData.host,
+                port: connectionData.port || 21,
+                username: connectionData.username || '',
+                password: connectionData.password || '',
+                ftps_enabled: connectionData.ftpsEnabled ?? false,
+                anonymous: connectionData.authMethod === 'anonymous',
+              }
+            });
+          }
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'connected' });
+          toast.success('Tab Duplicated', {
+            description: `Successfully duplicated ${tabToDuplicate.name}`,
+          });
+        } catch (error) {
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'disconnected' });
+          toast.error('Duplication Failed', {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else {
-        toast.error('Duplication Failed', {
-          description: result.error || 'Unable to establish connection for the duplicated tab.',
-        });
+        // SSH duplicate flow
+        const result = await invoke<{ success: boolean; error?: string }>(
+          'ssh_connect',
+          {
+            request: {
+              connection_id: duplicateId,
+              host: connectionData.host,
+              port: connectionData.port || 22,
+              username: connectionData.username,
+              auth_method: connectionData.authMethod || 'password',
+              password: connectionData.password || '',
+              key_path: connectionData.privateKeyPath || null,
+              passphrase: connectionData.passphrase || null,
+            }
+          }
+        );
+
+        if (result.success) {
+          const duplicatedTab: TerminalTab = {
+            id: duplicateId,
+            name: tabToDuplicate.name,
+            protocol: tabToDuplicate.protocol,
+            host: tabToDuplicate.host,
+            username: tabToDuplicate.username,
+            originalConnectionId,
+            connectionStatus: 'connecting',
+            reconnectCount: 0,
+          };
+
+          dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: duplicatedTab });
+
+          toast.success('Tab Duplicated', {
+            description: `Successfully duplicated ${tabToDuplicate.name}`,
+          });
+        } else {
+          toast.error('Duplication Failed', {
+            description: result.error || 'Unable to establish connection for the duplicated tab.',
+          });
+        }
       }
     } catch (error) {
       console.error('Error duplicating tab:', error);
