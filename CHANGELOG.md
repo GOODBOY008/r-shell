@@ -7,9 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-20
+
+### 🔄 R-Shell 1.3 — Multi-Connection Profiles & File Browser Polish
+
+This release enables multiple simultaneous connections to the same server profile, adds a duplicate tab action, and significantly improves the SSH file browser with a unified transfer queue experience.
+
 ### Added
 
-- _No unreleased changes documented yet._
+- 🔀 **Multi-Connection Support for Same Profile**: Open multiple tabs connecting to the same connection profile
+  - Each tab gets an independent session with unique session ID
+  - Automatic numeric suffixes for tab names (e.g., "my-server (2)", "my-server (3)")
+  - Full lifecycle management — sessions clean up independently on tab close
+  - Works across SSH, SFTP, and FTP protocols
+
+- 📋 **Duplicate Tab Action**: Right-click context menu on tabs now includes "Duplicate Tab"
+  - Quickly create a new connection to the same server
+  - Supported for SSH terminals, SFTP, and FTP sessions
+
+### Changed
+
+- 📁 **SSH File Browser Refactored**: Major overhaul for better reliability and UX
+  - Reducer-based state management for predictable behavior
+  - Integrated Transfer Queue UI component for visual transfer progress
+  - OS-native drag-and-drop upload support (replaces legacy byte-array logic)
+  - Download workflows with native file picker dialogs for single and multi-file
+  - Removed legacy SFTP panel — unified file browsing experience
+
+### Fixed
+
+- ⏱️ **Connection Restoration Timeouts**: Added timeout handling during session restoration to prevent indefinite hangs
+- 📐 **Terminal Size Checks**: Improved terminal dimension validation to prevent layout issues
 
 ## [1.2.0] - 2026-03-16
 
