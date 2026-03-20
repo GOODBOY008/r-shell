@@ -17,6 +17,7 @@ import { registerRestoration, clearAllRestorations } from './lib/restoration-man
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import { useKeyboardShortcuts, createLayoutShortcuts, createSplitViewShortcuts } from './lib/keyboard-shortcuts';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
+import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
 import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
@@ -1453,7 +1454,9 @@ function AppContent() {
                 <ResizablePanelGroup direction="vertical" className="flex-1">
                   {/* Terminal Grid Panel */}
                   <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
-                    <GridRenderer node={state.gridLayout} path={[]} />
+                    <TerminalCallbacksProvider value={{ onDuplicateTab: handleDuplicateTab, onNewTab: handleNewTab }}>
+                      <GridRenderer node={state.gridLayout} path={[]} />
+                    </TerminalCallbacksProvider>
                   </ResizablePanel>
 
                   {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (

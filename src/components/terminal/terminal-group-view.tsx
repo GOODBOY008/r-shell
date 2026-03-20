@@ -1,5 +1,6 @@
 import { useCallback, useState, useEffect } from 'react';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
+import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import { GroupTabBar } from './group-tab-bar';
 import { PtyTerminal } from '../pty-terminal';
 import { FileBrowserView } from '../file-browser-view';
@@ -37,6 +38,7 @@ function useThemeKey(): number {
 
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const { state, dispatch } = useTerminalGroups();
+  const { onDuplicateTab, onNewTab } = useTerminalCallbacks();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
   const themeKey = useThemeKey();
@@ -105,6 +107,8 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         tabs={group.tabs}
         activeTabId={group.activeTabId}
         onReconnect={handleReconnect}
+        onDuplicateTab={onDuplicateTab}
+        onNewTab={onNewTab}
       />
       <div className="flex-1 relative overflow-hidden">
         {showWelcome ? (
