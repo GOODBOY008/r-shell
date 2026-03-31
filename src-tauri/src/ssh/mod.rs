@@ -9,6 +9,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+/// Preferred host-key algorithms advertised to the server, ordered from most to
+/// least preferred.  RSA variants (including the legacy `ssh-rsa` / SHA-1) are
+/// included so that older servers that only offer RSA host keys are still
+/// reachable.  The `openssl` feature on `russh` / `russh-keys` must be enabled
+/// for the RSA entries to have any effect.
+pub static PREFERRED_HOST_KEY_ALGOS: &[russh_keys::key::Name] = &[
+    russh_keys::key::ED25519,
+    russh_keys::key::ECDSA_SHA2_NISTP256,
+    russh_keys::key::ECDSA_SHA2_NISTP521,
+    russh_keys::key::RSA_SHA2_256,
+    russh_keys::key::RSA_SHA2_512,
+    russh_keys::key::SSH_RSA,
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConfig {
     pub host: String,
@@ -67,7 +81,13 @@ impl SshClient {
     }
 
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
-        let ssh_config = client::Config::default();
+        let ssh_config = client::Config {
+            preferred: russh::Preferred {
+                key: PREFERRED_HOST_KEY_ALGOS,
+                ..russh::Preferred::DEFAULT
+            },
+            ..client::Config::default()
+        };
         
         // Connection timeout: 3 seconds
         let connection_timeout = Duration::from_secs(3);

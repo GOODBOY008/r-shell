@@ -63,7 +63,13 @@ impl StandaloneSftpClient {
 
     /// Establish an SSH connection, authenticate, and open the SFTP subsystem.
     pub async fn connect(config: &SftpConfig) -> Result<Self> {
-        let ssh_config = client::Config::default();
+        let ssh_config = client::Config {
+            preferred: russh::Preferred {
+                key: crate::ssh::PREFERRED_HOST_KEY_ALGOS,
+                ..russh::Preferred::DEFAULT
+            },
+            ..client::Config::default()
+        };
         let connection_timeout = Duration::from_secs(10);
 
         let mut ssh_session = tokio::time::timeout(
