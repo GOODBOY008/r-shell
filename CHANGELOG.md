@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.3.0] - 2026-03-20
 
+
+## [1.3.1] - 2026-04-01
+
+### Fixed
+
+- 🔐 **RSA SSH Server Compatibility**: Resolved "No common key algorithm" connection failure for RSA-keyed SSH servers
+  - Added support for `ssh-rsa` host key algorithm for compatibility with older servers
+  - Fixes connection issues with legacy SSH servers that only support RSA host keys
+
+### Changed
+
+- 📖 **README Enhanced**: Added performance metrics and lightweight positioning documentation
+
 ### 🔄 R-Shell 1.3 — Multi-Connection Profiles & File Browser Polish
 
 This release enables multiple simultaneous connections to the same server profile, adds a duplicate tab action, and significantly improves the SSH file browser with a unified transfer queue experience.
