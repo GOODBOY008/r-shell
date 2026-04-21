@@ -75,6 +75,30 @@ impl client::Handler for Client {
     }
 }
 
+/// Expand a leading `~` in an SSH key path to the user's home directory.
+///
+/// Handles both Unix (`~/`) and Windows (`~\`) style tilde prefixes and
+/// falls back to `USERPROFILE` when `HOME` is not set (common on Windows).
+pub fn expand_tilde(path: &str) -> String {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok();
+    expand_tilde_with_home(path, home.as_deref())
+}
+
+/// Inner implementation that accepts an explicit `home` value.
+/// Extracted to allow unit testing without mutating the process environment.
+pub(crate) fn expand_tilde_with_home(path: &str, home: Option<&str>) -> String {
+    if path.starts_with("~/") || path.starts_with("~\\") {
+        if let Some(h) = home {
+            if !h.is_empty() {
+                return path.replacen('~', h, 1);
+            }
+        }
+    }
+    path.to_string()
+}
+
 impl SshClient {
     pub fn new() -> Self {
         Self { session: None }
@@ -107,16 +131,8 @@ impl SshClient {
                     .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?
             }
             AuthMethod::PublicKey { key_path, passphrase } => {
-                // Expand tilde in path
-                let expanded_path = if key_path.starts_with("~/") {
-                    if let Some(home) = std::env::var("HOME").ok() {
-                        key_path.replacen("~", &home, 1)
-                    } else {
-                        key_path.clone()
-                    }
-                } else {
-                    key_path.clone()
-                };
+                // Expand tilde in path (supports both HOME and USERPROFILE for Windows)
+                let expanded_path = expand_tilde(key_path);
 
                 // Check if file exists
                 if !std::path::Path::new(&expanded_path).exists() {
@@ -126,8 +142,8 @@ impl SshClient {
                     ));
                 }
 
-                // Try to load the key
-                let key = decode_secret_key(&expanded_path, passphrase.as_deref())
+                // Load the key from the file path (reads the file and decodes the PEM content)
+                let key = russh_keys::load_secret_key(&expanded_path, passphrase.as_deref())
                     .map_err(|e| {
                         if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
                             anyhow::anyhow!(

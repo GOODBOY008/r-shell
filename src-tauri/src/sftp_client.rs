@@ -96,15 +96,7 @@ impl StandaloneSftpClient {
                 key_path,
                 passphrase,
             } => {
-                let expanded_path = if key_path.starts_with("~/") {
-                    if let Ok(home) = std::env::var("HOME") {
-                        key_path.replacen("~", &home, 1)
-                    } else {
-                        key_path.clone()
-                    }
-                } else {
-                    key_path.clone()
-                };
+                let expanded_path = crate::ssh::expand_tilde(key_path);
 
                 if !std::path::Path::new(&expanded_path).exists() {
                     return Err(anyhow::anyhow!(
@@ -113,7 +105,7 @@ impl StandaloneSftpClient {
                     ));
                 }
 
-                let key = decode_secret_key(&expanded_path, passphrase.as_deref()).map_err(
+                let key = russh_keys::load_secret_key(&expanded_path, passphrase.as_deref()).map_err(
                     |e| {
                         if e.to_string().contains("encrypted")
                             || e.to_string().contains("passphrase")
