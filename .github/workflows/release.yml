@@ -79,7 +79,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: 'r-shell ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}

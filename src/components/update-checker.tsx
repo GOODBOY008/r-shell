@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater';
+import { relaunch } from '@tauri-apps/plugin-process';
+// relaunch() calls the process plugin's restart command (process:allow-restart capability)
 import { toast } from 'sonner';
 import {
   AlertDialog,
@@ -122,6 +124,11 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
 
     try {
       await updateInfo.install();
+      // On macOS/Linux, install() replaces the binary but does not restart the app.
+      // relaunch() is needed to start the new version.
+      // On Windows (NSIS), the installer handles restart, but relaunch() is a no-op
+      // in that case so calling it is safe.
+      await relaunch();
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'Failed to install update.';
       setStatus('error');
