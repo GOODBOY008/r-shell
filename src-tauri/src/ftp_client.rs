@@ -50,7 +50,12 @@ impl FtpClient {
     pub async fn connect(config: &FtpConfig) -> Result<Self> {
         let addr = format!("{}:{}", config.host, config.port);
 
-        tracing::info!("FTP connecting to {} (ftps={}, anonymous={})", addr, config.ftps_enabled, config.anonymous);
+        tracing::info!(
+            "FTP connecting to {} (ftps={}, anonymous={})",
+            addr,
+            config.ftps_enabled,
+            config.anonymous
+        );
 
         // Use async_std timeout since suppaftp uses async_std internally
         let timeout_duration = Duration::from_secs(15);
@@ -64,17 +69,16 @@ impl FtpClient {
             .map_err(|_| {
                 anyhow::anyhow!(
                     "FTPS connection timed out after 15s. Check host {} and port {}.",
-                    config.host, config.port
+                    config.host,
+                    config.port
                 )
             })?
-            .map_err(|e| {
-                anyhow::anyhow!("FTPS TCP connect to {} failed: {}", addr, e)
-            })?;
+            .map_err(|e| anyhow::anyhow!("FTPS TCP connect to {} failed: {}", addr, e))?;
 
             tracing::info!("FTPS TCP connected, starting TLS handshake...");
 
-            let tls_connector = suppaftp::async_native_tls::TlsConnector::new()
-                .danger_accept_invalid_certs(true);
+            let tls_connector =
+                suppaftp::async_native_tls::TlsConnector::new().danger_accept_invalid_certs(true);
             let secure_stream = ftp_stream
                 .into_secure(
                     suppaftp::AsyncNativeTlsConnector::from(tls_connector),
@@ -94,12 +98,11 @@ impl FtpClient {
             .map_err(|_| {
                 anyhow::anyhow!(
                     "FTP connection timed out after 15s. Check host {} and port {}.",
-                    config.host, config.port
+                    config.host,
+                    config.port
                 )
             })?
-            .map_err(|e| {
-                anyhow::anyhow!("FTP TCP connect to {} failed: {}", addr, e)
-            })?;
+            .map_err(|e| anyhow::anyhow!("FTP TCP connect to {} failed: {}", addr, e))?;
 
             tracing::info!("FTP TCP connected to {}", addr);
             FtpStreamKind::Plain(ftp_stream)
@@ -125,9 +128,7 @@ impl FtpClient {
         // Set binary transfer type
         {
             match &mut stream_kind {
-                FtpStreamKind::Plain(s) => {
-                    s.transfer_type(suppaftp::types::FileType::Binary).await
-                }
+                FtpStreamKind::Plain(s) => s.transfer_type(suppaftp::types::FileType::Binary).await,
                 FtpStreamKind::Secure(s) => {
                     s.transfer_type(suppaftp::types::FileType::Binary).await
                 }
@@ -149,8 +150,12 @@ impl FtpClient {
     pub async fn disconnect(&mut self) -> Result<()> {
         if let Some(kind) = self.stream.take() {
             match kind {
-                FtpStreamKind::Plain(mut s) => { let _ = s.quit().await; }
-                FtpStreamKind::Secure(mut s) => { let _ = s.quit().await; }
+                FtpStreamKind::Plain(mut s) => {
+                    let _ = s.quit().await;
+                }
+                FtpStreamKind::Secure(mut s) => {
+                    let _ = s.quit().await;
+                }
             }
         }
         Ok(())
@@ -211,9 +216,9 @@ impl FtpClient {
 
     /// Upload a local file to a remote path. Returns bytes uploaded.
     pub async fn upload_file(&mut self, local_path: &str, remote_path: &str) -> Result<u64> {
-        let data = tokio::fs::read(local_path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to read local file '{}': {}", local_path, e)
-        })?;
+        let data = tokio::fs::read(local_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read local file '{}': {}", local_path, e))?;
         let total_bytes = data.len() as u64;
 
         ftp_stream!(self, s => {
@@ -380,7 +385,10 @@ mod tests {
 
         assert!(client.is_connected(), "client should be connected");
 
-        client.disconnect().await.expect("disconnect should succeed");
+        client
+            .disconnect()
+            .await
+            .expect("disconnect should succeed");
         assert!(!client.is_connected(), "client should be disconnected");
     }
 
@@ -422,10 +430,7 @@ mod tests {
         let entries = client.list_dir("/").await.expect("list root directory");
         eprintln!("Root contains {} entries:", entries.len());
         for e in &entries {
-            eprintln!(
-                "  {:?}  {:>10}  {}",
-                e.file_type, e.size, e.name
-            );
+            eprintln!("  {:?}  {:>10}  {}", e.file_type, e.size, e.name);
         }
         // Root should be listable (may be empty on fresh server)
 
@@ -477,8 +482,11 @@ mod tests {
         let entries = client.list_dir(test_dir).await.expect("list test dir");
         eprintln!("Directory {} contains {} entries", test_dir, entries.len());
         let found = entries.iter().any(|e| e.name == "hello.txt");
-        assert!(found, "uploaded file should appear in listing: {:?}",
-            entries.iter().map(|e| &e.name).collect::<Vec<_>>());
+        assert!(
+            found,
+            "uploaded file should appear in listing: {:?}",
+            entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        );
 
         // 4d. Download the file and verify contents
         let tmp_download = std::env::temp_dir().join("rshell_e2e_download.txt");
@@ -488,7 +496,9 @@ mod tests {
             .expect("download_file should succeed");
         assert_eq!(downloaded_bytes, upload_content.len() as u64);
 
-        let downloaded_data = tokio::fs::read(&tmp_download).await.expect("read downloaded");
+        let downloaded_data = tokio::fs::read(&tmp_download)
+            .await
+            .expect("read downloaded");
         assert_eq!(
             downloaded_data, upload_content,
             "downloaded content should match uploaded content"

@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -63,9 +63,9 @@ pub struct DesktopConnectRequest {
     pub protocol: String, // "RDP" or "VNC"
     pub host: String,
     pub port: u16,
-    pub username: Option<String>,  // RDP only
+    pub username: Option<String>, // RDP only
     pub password: Option<String>,
-    pub domain: Option<String>,    // RDP only
+    pub domain: Option<String>, // RDP only
     /// RDP resolution: "1024x768", "1280x720", "1920x1080", or "fit"
     pub resolution: Option<String>,
     /// VNC color depth: 24, 16, or 8

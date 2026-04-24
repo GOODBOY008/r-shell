@@ -21,8 +21,13 @@ pub struct SftpConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type")]
 pub enum SftpAuthMethod {
-    Password { password: String },
-    PublicKey { key_path: String, passphrase: Option<String> },
+    Password {
+        password: String,
+    },
+    PublicKey {
+        key_path: String,
+        passphrase: Option<String>,
+    },
 }
 
 /// A single file/directory entry returned from directory listings.
@@ -74,7 +79,11 @@ impl StandaloneSftpClient {
 
         let mut ssh_session = tokio::time::timeout(
             connection_timeout,
-            client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client),
+            client::connect(
+                Arc::new(ssh_config),
+                (&config.host[..], config.port),
+                Client,
+            ),
         )
         .await
         .map_err(|_| {
@@ -83,7 +92,12 @@ impl StandaloneSftpClient {
             )
         })?
         .map_err(|e| {
-            anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)
+            anyhow::anyhow!(
+                "Failed to connect to {}:{}: {}",
+                config.host,
+                config.port,
+                e
+            )
         })?;
 
         // Authenticate
@@ -113,21 +127,18 @@ impl StandaloneSftpClient {
                     ));
                 }
 
-                let key = decode_secret_key(&expanded_path, passphrase.as_deref()).map_err(
-                    |e| {
+                let key =
+                    decode_secret_key(&expanded_path, passphrase.as_deref()).map_err(|e| {
                         if e.to_string().contains("encrypted")
                             || e.to_string().contains("passphrase")
                         {
-                            anyhow::anyhow!("Failed to decrypt SSH key. Please provide the correct passphrase.")
-                        } else {
                             anyhow::anyhow!(
-                                "Failed to load SSH key from {}: {}.",
-                                key_path,
-                                e
+                                "Failed to decrypt SSH key. Please provide the correct passphrase."
                             )
+                        } else {
+                            anyhow::anyhow!("Failed to load SSH key from {}: {}.", key_path, e)
                         }
-                    },
-                )?;
+                    })?;
 
                 ssh_session
                     .authenticate_publickey(&config.username, Arc::new(key))
@@ -192,9 +203,10 @@ impl StandaloneSftpClient {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
 
-        let entries = sftp.read_dir(path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to list directory '{}': {}", path, e)
-        })?;
+        let entries = sftp
+            .read_dir(path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to list directory '{}': {}", path, e))?;
 
         let mut result = Vec::new();
         for entry in entries {
@@ -206,9 +218,7 @@ impl StandaloneSftpClient {
 
             let attrs = entry.metadata();
             let size = attrs.size.unwrap_or(0);
-            let modified = attrs.mtime.map(|t| {
-                chrono_from_unix_timestamp(t as u64)
-            });
+            let modified = attrs.mtime.map(|t| chrono_from_unix_timestamp(t as u64));
 
             let permissions = attrs.permissions.map(|p| format_permissions(p));
 
@@ -233,7 +243,9 @@ impl StandaloneSftpClient {
         result.sort_by(|a, b| {
             let a_is_dir = matches!(a.file_type, FileEntryType::Directory);
             let b_is_dir = matches!(b.file_type, FileEntryType::Directory);
-            b_is_dir.cmp(&a_is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            b_is_dir
+                .cmp(&a_is_dir)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
         });
 
         Ok(result)
@@ -246,9 +258,10 @@ impl StandaloneSftpClient {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
 
-        let mut remote_file = sftp.open(remote_path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to open remote file '{}': {}", remote_path, e)
-        })?;
+        let mut remote_file = sftp
+            .open(remote_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open remote file '{}': {}", remote_path, e))?;
 
         let mut buffer = Vec::new();
         let mut temp_buf = vec![0u8; 32768];
@@ -274,9 +287,9 @@ impl StandaloneSftpClient {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
 
-        let data = tokio::fs::read(local_path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to read local file '{}': {}", local_path, e)
-        })?;
+        let data = tokio::fs::read(local_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to read local file '{}': {}", local_path, e))?;
         let total_bytes = data.len() as u64;
 
         let mut remote_file = sftp.create(remote_path).await.map_err(|e| {
@@ -302,9 +315,9 @@ impl StandaloneSftpClient {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
 
-        sftp.create_dir(path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to create directory '{}': {}", path, e)
-        })?;
+        sftp.create_dir(path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create directory '{}': {}", path, e))?;
         Ok(())
     }
 
@@ -328,9 +341,9 @@ impl StandaloneSftpClient {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
 
-        sftp.remove_file(path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to delete file '{}': {}", path, e)
-        })?;
+        sftp.remove_file(path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to delete file '{}': {}", path, e))?;
         Ok(())
     }
 
@@ -341,9 +354,9 @@ impl StandaloneSftpClient {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
 
-        sftp.remove_dir(path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to delete directory '{}': {}", path, e)
-        })?;
+        sftp.remove_dir(path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to delete directory '{}': {}", path, e))?;
         Ok(())
     }
 }
@@ -390,9 +403,15 @@ fn days_to_ymd(mut days: i64) -> (i64, u32, u32) {
 fn format_permissions(mode: u32) -> String {
     let mut s = String::with_capacity(9);
     let flags = [
-        (0o400, 'r'), (0o200, 'w'), (0o100, 'x'),
-        (0o040, 'r'), (0o020, 'w'), (0o010, 'x'),
-        (0o004, 'r'), (0o002, 'w'), (0o001, 'x'),
+        (0o400, 'r'),
+        (0o200, 'w'),
+        (0o100, 'x'),
+        (0o040, 'r'),
+        (0o020, 'w'),
+        (0o010, 'x'),
+        (0o004, 'r'),
+        (0o002, 'w'),
+        (0o001, 'x'),
     ];
     for (bit, ch) in flags.iter() {
         if mode & bit != 0 {
@@ -541,7 +560,10 @@ mod tests {
         let config: SftpConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.port, 2222);
         match config.auth_method {
-            SftpAuthMethod::PublicKey { key_path, passphrase } => {
+            SftpAuthMethod::PublicKey {
+                key_path,
+                passphrase,
+            } => {
                 assert_eq!(key_path, "/home/user/.ssh/id_rsa");
                 assert!(passphrase.is_none());
             }

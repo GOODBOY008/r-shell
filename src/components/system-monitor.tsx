@@ -780,40 +780,40 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             <div className="space-y-0.5">
                               <div className="flex justify-between text-[9px]">
                                 <span className="text-muted-foreground">GPU</span>
-                                <span className={`font-semibold ${getUsageColor(gpu.utilization)}`}>
-                                  {gpu.utilization.toFixed(0)}%
+                                <span className={`font-semibold ${getUsageColor(gpu.utilization ?? 0)}`}>
+                                  {(gpu.utilization ?? 0).toFixed(0)}%
                                 </span>
                               </div>
-                              <Progress value={gpu.utilization} className={`h-1 ${getProgressColor(gpu.utilization)}`} />
+                              <Progress value={gpu.utilization ?? 0} className={`h-1 ${getProgressColor(gpu.utilization ?? 0)}`} />
                             </div>
                             <div className="space-y-0.5">
                               <div className="flex justify-between text-[9px]">
                                 <span className="text-muted-foreground">VRAM</span>
-                                <span className={`font-semibold ${getUsageColor(gpu.memory_percent)}`}>
-                                  {gpu.memory_percent.toFixed(0)}%
+                                <span className={`font-semibold ${getUsageColor(gpu.memory_percent ?? 0)}`}>
+                                  {(gpu.memory_percent ?? 0).toFixed(0)}%
                                 </span>
                               </div>
-                              <Progress value={gpu.memory_percent} className={`h-1 ${getProgressColor(gpu.memory_percent)}`} />
+                              <Progress value={gpu.memory_percent ?? 0} className={`h-1 ${getProgressColor(gpu.memory_percent ?? 0)}`} />
                               <div className="text-[8px] text-muted-foreground text-right">
-                                {gpu.memory_used.toLocaleString()} MiB / {gpu.memory_total.toLocaleString()} MiB
+                                {(gpu.memory_used ?? 0).toLocaleString()} MiB / {(gpu.memory_total ?? 0).toLocaleString()} MiB
                               </div>
                             </div>
                           </div>
                           
                           {/* Stats Row */}
                           <div className="flex gap-2 text-[9px] text-muted-foreground">
-                            {gpu.temperature !== undefined && (
+                            {gpu.temperature != null && (
                               <span className={getGpuTempColor(gpu.temperature)}>
                                 {gpu.temperature.toFixed(0)}°C
                               </span>
                             )}
-                            {gpu.power_draw !== undefined && (
+                            {gpu.power_draw != null && (
                               <span>
                                 {gpu.power_draw.toFixed(0)}W
-                                {gpu.power_limit && `/${gpu.power_limit.toFixed(0)}W`}
+                                {gpu.power_limit != null && `/${gpu.power_limit.toFixed(0)}W`}
                               </span>
                             )}
-                            {gpu.fan_speed !== undefined && (
+                            {gpu.fan_speed != null && (
                               <span>Fan {gpu.fan_speed.toFixed(0)}%</span>
                             )}
                           </div>
@@ -926,31 +926,31 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           <div className="space-y-1">
                             <div className="flex justify-between items-center gap-1">
                               <span className="text-xs font-medium">GPU</span>
-                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.utilization)}`}>
-                                {currentGpu.utilization.toFixed(1)}%
+                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.utilization ?? 0)}`}>
+                                {(currentGpu.utilization ?? 0).toFixed(1)}%
                               </span>
                             </div>
-                            <Progress value={currentGpu.utilization} className={`h-1.5 ${getProgressColor(currentGpu.utilization)}`} />
+                            <Progress value={currentGpu.utilization ?? 0} className={`h-1.5 ${getProgressColor(currentGpu.utilization ?? 0)}`} />
                           </div>
 
                           {/* VRAM */}
                           <div className="space-y-1">
                             <div className="flex justify-between items-center gap-1">
                               <span className="text-xs font-medium">VRAM</span>
-                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.memory_percent)}`}>
-                                {currentGpu.memory_percent.toFixed(1)}%
+                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.memory_percent ?? 0)}`}>
+                                {(currentGpu.memory_percent ?? 0).toFixed(1)}%
                               </span>
                             </div>
-                            <Progress value={currentGpu.memory_percent} className={`h-1.5 ${getProgressColor(currentGpu.memory_percent)}`} />
+                            <Progress value={currentGpu.memory_percent ?? 0} className={`h-1.5 ${getProgressColor(currentGpu.memory_percent ?? 0)}`} />
                             <div className="text-[9px] text-muted-foreground text-right leading-tight">
-                              {currentGpu.memory_used} MiB / {currentGpu.memory_total} MiB
+                              {currentGpu.memory_used ?? 0} MiB / {currentGpu.memory_total ?? 0} MiB
                             </div>
                           </div>
 
                           {/* Temperature, Power, Fan in grid */}
                           <div className="grid grid-cols-3 gap-1.5 text-[10px]">
                             {/* Temperature */}
-                            {currentGpu.temperature !== undefined && (
+                            {currentGpu.temperature != null && (
                               <div className="flex flex-col gap-0.5">
                                 <span className="text-muted-foreground">Temp</span>
                                 <span className={`font-semibold ${getGpuTempColor(currentGpu.temperature)}`}>
@@ -960,12 +960,12 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             )}
                             
                             {/* Power */}
-                            {currentGpu.power_draw !== undefined && (
+                            {currentGpu.power_draw != null && (
                               <div className="flex flex-col gap-0.5">
                                 <span className="text-muted-foreground">Power</span>
                                 <span className="font-semibold">
                                   {currentGpu.power_draw.toFixed(0)}W
-                                  {currentGpu.power_limit && (
+                                  {currentGpu.power_limit != null && (
                                     <span className="text-muted-foreground font-normal">/{currentGpu.power_limit.toFixed(0)}W</span>
                                   )}
                                 </span>
@@ -973,7 +973,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             )}
                             
                             {/* Fan */}
-                            {currentGpu.fan_speed !== undefined && (
+                            {currentGpu.fan_speed != null && (
                               <div className="flex flex-col gap-0.5">
                                 <span className="text-muted-foreground">Fan</span>
                                 <span className="font-semibold">{currentGpu.fan_speed.toFixed(0)}%</span>
@@ -982,9 +982,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           </div>
 
                           {/* Encoder/Decoder for NVIDIA */}
-                          {(currentGpu.encoder_util !== undefined || currentGpu.decoder_util !== undefined) && (
+                          {(currentGpu.encoder_util != null || currentGpu.decoder_util != null) && (
                             <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                              {currentGpu.encoder_util !== undefined && (
+                              {currentGpu.encoder_util != null && (
                                 <div className="flex flex-col gap-0.5">
                                   <span className="text-muted-foreground">Encoder</span>
                                   <span className={`font-semibold ${getUsageColor(currentGpu.encoder_util)}`}>
@@ -992,7 +992,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                   </span>
                                 </div>
                               )}
-                              {currentGpu.decoder_util !== undefined && (
+                              {currentGpu.decoder_util != null && (
                                 <div className="flex flex-col gap-0.5">
                                   <span className="text-muted-foreground">Decoder</span>
                                   <span className={`font-semibold ${getUsageColor(currentGpu.decoder_util)}`}>

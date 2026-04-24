@@ -1,17 +1,18 @@
-mod ssh;
-mod connection_manager;
 mod commands;
-mod websocket_server;
-mod sftp_client;
-mod ftp_client;
+mod connection_manager;
 mod desktop_protocol;
+mod ftp_client;
+mod os_detect;
 mod rdp_client;
+mod sftp_client;
+mod ssh;
 mod vnc_client;
+mod websocket_server;
 
 use connection_manager::ConnectionManager;
-use websocket_server::WebSocketServer;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU16;
+use std::sync::Arc;
+use websocket_server::WebSocketServer;
 
 // Global atomic to store the WebSocket port (shared between backend and frontend)
 pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);

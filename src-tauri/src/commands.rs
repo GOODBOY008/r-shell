@@ -1,7 +1,8 @@
 use crate::connection_manager::ConnectionManager;
-use crate::ssh::{AuthMethod, SshConfig};
-use crate::sftp_client::{FileEntry, FileEntryType, SftpConfig, SftpAuthMethod};
 use crate::ftp_client::FtpConfig;
+use crate::os_detect::{self, OsInfo};
+use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
+use crate::ssh::{AuthMethod, SshConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -74,7 +75,10 @@ pub async fn ssh_connect(
         auth_method,
     };
 
-    match state.create_connection(request.connection_id.clone(), config).await {
+    match state
+        .create_connection(request.connection_id.clone(), config)
+        .await
+    {
         Ok(_) => Ok(CommandResponse {
             success: true,
             output: Some(format!("Connected: {}", request.connection_id)),
@@ -189,19 +193,48 @@ fn transform_interactive_command(command: &str) -> String {
 // Helper function to check if a command is interactive
 fn is_interactive_command(command: &str) -> bool {
     let cmd_name = get_command_name(command);
-    matches!(cmd_name.as_str(),
-        "top" | "htop" | "vim" | "vi" | "nano" | "emacs" |
-        "less" | "more" | "man" | "tmux" | "screen"
+    matches!(
+        cmd_name.as_str(),
+        "top"
+            | "htop"
+            | "vim"
+            | "vi"
+            | "nano"
+            | "emacs"
+            | "less"
+            | "more"
+            | "man"
+            | "tmux"
+            | "screen"
     )
 }
 
 // Helper function to extract command name
 fn get_command_name(command: &str) -> String {
-    command
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string()
+    command.split_whitespace().next().unwrap_or("").to_string()
+}
+
+/// Get or detect OS info for a connection (cached after first call).
+async fn get_os_info(
+    connection_id: &str,
+    client: &crate::ssh::SshClient,
+    state: &Arc<ConnectionManager>,
+) -> OsInfo {
+    // Return cached info if available
+    if let Some(info) = state.os_info_cache().get(connection_id).await {
+        return info;
+    }
+
+    // Detect and cache
+    let info = os_detect::detect_os(client).await;
+    state.os_info_cache().set(connection_id, info.clone()).await;
+    tracing::info!(
+        "Detected OS for {}: {} ({})",
+        connection_id,
+        info.pretty_name,
+        info.id
+    );
+    info
 }
 
 #[tauri::command]
@@ -216,8 +249,11 @@ pub async fn get_system_stats(
 
     let client = connection.read().await;
 
+    // Detect OS for distro-aware commands
+    let os_info = get_os_info(&connection_id, &client, state.inner()).await;
+
     // CPU usage (percentage)
-    let cpu_cmd = "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}'";
+    let cpu_cmd = os_info.cpu_cmd();
     let cpu_percent = client
         .execute_command(cpu_cmd)
         .await
@@ -226,7 +262,7 @@ pub async fn get_system_stats(
         .unwrap_or(0.0);
 
     // Memory stats (in MB)
-    let mem_cmd = "free -m | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$7}'";
+    let mem_cmd = os_info.memory_cmd();
     let mem_output = client.execute_command(mem_cmd).await.unwrap_or_default();
     let mem_parts: Vec<&str> = mem_output.split_whitespace().collect();
     let memory = MemoryStats {
@@ -237,7 +273,7 @@ pub async fn get_system_stats(
     };
 
     // Swap stats (in MB)
-    let swap_cmd = "free -m | awk 'NR==3{printf \"%s %s %s\", $2,$3,$4}'";
+    let swap_cmd = os_info.swap_cmd();
     let swap_output = client.execute_command(swap_cmd).await.unwrap_or_default();
     let swap_parts: Vec<&str> = swap_output.split_whitespace().collect();
     let swap = MemoryStats {
@@ -248,7 +284,7 @@ pub async fn get_system_stats(
     };
 
     // Disk stats for root filesystem
-    let disk_cmd = "df -h / | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$5}'";
+    let disk_cmd = os_info.disk_cmd();
     let disk_output = client.execute_command(disk_cmd).await.unwrap_or_default();
     let disk_parts: Vec<&str> = disk_output.trim().split_whitespace().collect();
     let disk = DiskStats {
@@ -262,7 +298,7 @@ pub async fn get_system_stats(
     };
 
     // Uptime
-    let uptime_cmd = "uptime -p 2>/dev/null || uptime | awk '{print $3\" \"$4}'";
+    let uptime_cmd = os_info.uptime_cmd();
     let uptime = client
         .execute_command(uptime_cmd)
         .await
@@ -271,7 +307,7 @@ pub async fn get_system_stats(
         .to_string();
 
     // Load average
-    let load_cmd = "uptime | awk -F'load average:' '{print $2}' | xargs";
+    let load_cmd = os_info.load_average_cmd();
     let load_average = client
         .execute_command(load_cmd)
         .await
@@ -300,7 +336,8 @@ pub async fn list_files(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("ls -la --time-style=long-iso '{}'", path);
+    let os_info = get_os_info(&connection_id, &client, state.inner()).await;
+    let command = os_info.list_files_cmd(&path);
 
     match client.execute_command(&command).await {
         Ok(output) => Ok(output),
@@ -348,7 +385,7 @@ pub async fn sftp_download_file(
                     data: Some(data),
                     error: None,
                 })
-            },
+            }
             Err(e) => Ok(FileTransferResponse {
                 success: false,
                 bytes_transferred: None,
@@ -358,7 +395,10 @@ pub async fn sftp_download_file(
         }
     } else {
         // Download to local file
-        match client.download_file(&request.remote_path, &request.local_path).await {
+        match client
+            .download_file(&request.remote_path, &request.local_path)
+            .await
+        {
             Ok(bytes) => Ok(FileTransferResponse {
                 success: true,
                 bytes_transferred: Some(bytes),
@@ -390,9 +430,13 @@ pub async fn sftp_upload_file(
 
     // If data is provided, write directly; otherwise read from local_path
     let result = if let Some(data) = &request.data {
-        client.upload_file_from_bytes(data, &request.remote_path).await
+        client
+            .upload_file_from_bytes(data, &request.remote_path)
+            .await
     } else {
-        client.upload_file(&request.local_path, &request.remote_path).await
+        client
+            .upload_file(&request.local_path, &request.remote_path)
+            .await
     };
 
     match result {
@@ -493,7 +537,10 @@ pub async fn create_file(
     let client = connection.read().await;
 
     // Upload the content as bytes
-    match client.upload_file_from_bytes(content.as_bytes(), &path).await {
+    match client
+        .upload_file_from_bytes(content.as_bytes(), &path)
+        .await
+    {
         Ok(_) => Ok(true),
         Err(e) => Err(e.to_string()),
     }
@@ -569,14 +616,13 @@ pub async fn get_processes(
 
     let client = connection.read().await;
 
-    // Execute ps command to get process list
-    // Using ps aux for detailed process information
-    // Support sorting by cpu (default) or memory
+    // Use OS-aware process listing command
+    let os_info = get_os_info(&connection_id, &client, state.inner()).await;
     let sort_option = match sort_by.as_deref() {
-        Some("mem") => "-%mem",
-        _ => "-%cpu", // Default to CPU sorting
+        Some("mem") => "mem",
+        _ => "cpu",
     };
-    let command = format!("ps aux --sort={} | head -50", sort_option);
+    let command = os_info.process_cmd(sort_option);
 
     match client.execute_command(&command).await {
         Ok(output) => {
@@ -601,7 +647,7 @@ pub async fn get_processes(
                 processes: Some(processes),
                 error: None,
             })
-        },
+        }
         Err(e) => Ok(ProcessListResponse {
             success: false,
             processes: None,
@@ -724,7 +770,7 @@ pub struct LogSource {
     pub name: String,
     pub source_type: String, // "file" | "journal" | "docker"
     pub path: String,
-    pub category: String,    // "system" | "auth" | "kernel" | "service" | "container" | "application" | ...
+    pub category: String, // "system" | "auth" | "kernel" | "service" | "container" | "application" | ...
     pub size_human: Option<String>,
 }
 
@@ -837,10 +883,7 @@ pub async fn discover_log_sources(
             if unit.is_empty() || unit.starts_with("UNIT") {
                 continue;
             }
-            let name = unit
-                .strip_suffix(".service")
-                .unwrap_or(&unit)
-                .to_string();
+            let name = unit.strip_suffix(".service").unwrap_or(&unit).to_string();
             sources.push(LogSource {
                 id: format!("journal:{}", unit),
                 name,
@@ -899,7 +942,7 @@ pub async fn discover_log_sources(
 #[tauri::command]
 pub async fn read_log(
     connection_id: String,
-    source_type: String,   // "file" | "journal" | "docker" | "custom"
+    source_type: String, // "file" | "journal" | "docker" | "custom"
     path: String,
     lines: Option<u32>,
     state: State<'_, Arc<ConnectionManager>>,
@@ -917,10 +960,7 @@ pub async fn read_log(
             "journalctl -u '{}' -n {} --no-pager 2>/dev/null",
             path, line_count
         ),
-        "docker" => format!(
-            "docker logs --tail {} '{}' 2>&1",
-            line_count, path
-        ),
+        "docker" => format!("docker logs --tail {} '{}' 2>&1", line_count, path),
         _ => format!("tail -n {} '{}' 2>/dev/null", line_count, path),
     };
 
@@ -1020,19 +1060,9 @@ pub async fn get_network_stats(
 
     let client = connection.read().await;
 
-    // Use /sys/class/net to get interface statistics
-    let command = r#"
-for iface in /sys/class/net/*; do
-    name=$(basename $iface)
-    if [ "$name" != "lo" ]; then
-        rx_bytes=$(cat $iface/statistics/rx_bytes 2>/dev/null || echo 0)
-        tx_bytes=$(cat $iface/statistics/tx_bytes 2>/dev/null || echo 0)
-        rx_packets=$(cat $iface/statistics/rx_packets 2>/dev/null || echo 0)
-        tx_packets=$(cat $iface/statistics/tx_packets 2>/dev/null || echo 0)
-        echo "$name,$rx_bytes,$tx_bytes,$rx_packets,$tx_packets"
-    fi
-done
-"#;
+    // Use OS-aware network stats command
+    let os_info = get_os_info(&connection_id, &client, state.inner()).await;
+    let command = os_info.network_stats_cmd();
 
     match client.execute_command(command).await {
         Ok(output) => {
@@ -1105,9 +1135,9 @@ pub async fn get_active_connections(
 
     let client = connection.read().await;
 
-    // Use ss command (modern replacement for netstat)
-    // -t: TCP, -u: UDP, -n: numeric, -p: show process
-    let command = "ss -tunp 2>/dev/null | tail -n +2 | head -50";
+    // Use OS-aware command (ss on modern systems, netstat on older ones)
+    let os_info = get_os_info(&connection_id, &client, state.inner()).await;
+    let command = os_info.active_connections_cmd();
 
     match client.execute_command(command).await {
         Ok(output) => {
@@ -1182,28 +1212,9 @@ pub async fn get_network_bandwidth(
 
     let client = connection.read().await;
 
-    // Sample network stats twice with 1 second interval to calculate rates
-    let command = r#"
-iface_list=""
-for iface in /sys/class/net/*; do
-    name=$(basename $iface)
-    if [ "$name" != "lo" ]; then
-        iface_list="$iface_list $name"
-    fi
-done
-
-for iface in $iface_list; do
-    rx1=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
-    tx1=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
-    echo "$iface,$rx1,$tx1"
-done
-sleep 1
-for iface in $iface_list; do
-    rx2=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
-    tx2=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
-    echo "$iface,$rx2,$tx2"
-done
-"#;
+    // Use OS-aware bandwidth sampling command
+    let os_info = get_os_info(&connection_id, &client, state.inner()).await;
+    let command = os_info.network_bandwidth_cmd();
 
     match client.execute_command(command).await {
         Ok(output) => {
@@ -1219,7 +1230,10 @@ done
                 let before_parts: Vec<&str> = before_line.split(',').collect();
                 let after_parts: Vec<&str> = after_line.split(',').collect();
 
-                if before_parts.len() == 3 && after_parts.len() == 3 && before_parts[0] == after_parts[0] {
+                if before_parts.len() == 3
+                    && after_parts.len() == 3
+                    && before_parts[0] == after_parts[0]
+                {
                     if let (Ok(rx1), Ok(tx1), Ok(rx2), Ok(tx2)) = (
                         before_parts[1].parse::<f64>(),
                         before_parts[2].parse::<f64>(),
@@ -1252,7 +1266,6 @@ done
         }),
     }
 }
-
 
 // Network latency monitoring (SSH connection latency)
 #[derive(Debug, serde::Serialize)]
@@ -1300,13 +1313,11 @@ pub async fn get_network_latency(
                 })
             }
         }
-        Err(e) => {
-            Ok(LatencyResponse {
-                success: false,
-                latency_ms: None,
-                error: Some(format!("SSH connection error: {}", e)),
-            })
-        }
+        Err(e) => Ok(LatencyResponse {
+            success: false,
+            latency_ms: None,
+            error: Some(format!("SSH connection error: {}", e)),
+        }),
     }
 }
 
@@ -1340,9 +1351,9 @@ pub async fn get_disk_usage(
 
     let client = connection.read().await;
 
-    // Use df command to get disk usage information
-    // -h: human readable, -T: show filesystem type, exclude tmpfs and devtmpfs
-    let command = "df -hT | grep -v 'tmpfs\\|devtmpfs\\|Filesystem' | awk '{print $1\"|\"$7\"|\"$3\"|\"$4\"|\"$5\"|\"$6}' | head -10";
+    // Use OS-aware disk usage command
+    let os_info = get_os_info(&connection_id, &client, state.inner()).await;
+    let command = os_info.disk_usage_cmd();
 
     match client.execute_command(command).await {
         Ok(output) => {
@@ -1428,10 +1439,16 @@ pub async fn ssh_tab_complete(
         format!("compgen -c {} 2>/dev/null || echo", word_to_complete)
     } else {
         // File/directory completion: use compgen -f for files
-        format!("compgen -f {} 2>/dev/null || ls -1ap {} 2>/dev/null | grep '^{}' || echo",
-                word_to_complete,
-                if word_to_complete.is_empty() { "." } else { word_to_complete },
-                word_to_complete)
+        format!(
+            "compgen -f {} 2>/dev/null || ls -1ap {} 2>/dev/null | grep '^{}' || echo",
+            word_to_complete,
+            if word_to_complete.is_empty() {
+                "."
+            } else {
+                word_to_complete
+            },
+            word_to_complete
+        )
     };
 
     match client.execute_command(&completion_cmd).await {
@@ -1517,14 +1534,14 @@ pub struct GpuStats {
     pub index: u32,
     pub name: String,
     pub vendor: GpuVendor,
-    pub utilization: f64,         // GPU core usage %
-    pub memory_used: u64,         // MiB
-    pub memory_total: u64,        // MiB
-    pub memory_percent: f64,      // Calculated
-    pub temperature: Option<f64>, // Celsius
-    pub power_draw: Option<f64>,  // Watts
-    pub power_limit: Option<f64>, // Watts
-    pub fan_speed: Option<f64>,   // %
+    pub utilization: f64,          // GPU core usage %
+    pub memory_used: u64,          // MiB
+    pub memory_total: u64,         // MiB
+    pub memory_percent: f64,       // Calculated
+    pub temperature: Option<f64>,  // Celsius
+    pub power_draw: Option<f64>,   // Watts
+    pub power_limit: Option<f64>,  // Watts
+    pub fan_speed: Option<f64>,    // %
     pub encoder_util: Option<f64>, // NVIDIA NVENC %
     pub decoder_util: Option<f64>, // NVIDIA NVDEC %
 }
@@ -1607,7 +1624,9 @@ pub async fn detect_gpu(
 
     // Check for AMD GPU with rocm-smi
     let amd_rocm_check = client
-        .execute_command("which rocm-smi 2>/dev/null && rocm-smi --showid --showproductname 2>/dev/null")
+        .execute_command(
+            "which rocm-smi 2>/dev/null && rocm-smi --showid --showproductname 2>/dev/null",
+        )
         .await;
 
     if let Ok(output) = amd_rocm_check {
@@ -1672,7 +1691,9 @@ pub async fn detect_gpu(
         if !output.is_empty() && output.contains("gpu_busy_percent") {
             // Count available cards
             let card_count = client
-                .execute_command("ls -d /sys/class/drm/card[0-9]*/device/gpu_busy_percent 2>/dev/null | wc -l")
+                .execute_command(
+                    "ls -d /sys/class/drm/card[0-9]*/device/gpu_busy_percent 2>/dev/null | wc -l",
+                )
                 .await
                 .ok()
                 .and_then(|s| s.trim().parse::<u32>().ok())
@@ -1744,18 +1765,12 @@ pub async fn get_gpu_stats(
                         0.0
                     };
 
-                    let temperature = parts.get(5)
-                        .and_then(|s| s.parse::<f64>().ok());
-                    let power_draw = parts.get(6)
-                        .and_then(|s| s.parse::<f64>().ok());
-                    let power_limit = parts.get(7)
-                        .and_then(|s| s.parse::<f64>().ok());
-                    let fan_speed = parts.get(8)
-                        .and_then(|s| s.parse::<f64>().ok());
-                    let encoder_util = parts.get(9)
-                        .and_then(|s| s.parse::<f64>().ok());
-                    let decoder_util = parts.get(10)
-                        .and_then(|s| s.parse::<f64>().ok());
+                    let temperature = parts.get(5).and_then(|s| s.parse::<f64>().ok());
+                    let power_draw = parts.get(6).and_then(|s| s.parse::<f64>().ok());
+                    let power_limit = parts.get(7).and_then(|s| s.parse::<f64>().ok());
+                    let fan_speed = parts.get(8).and_then(|s| s.parse::<f64>().ok());
+                    let encoder_util = parts.get(9).and_then(|s| s.parse::<f64>().ok());
+                    let decoder_util = parts.get(10).and_then(|s| s.parse::<f64>().ok());
 
                     gpus.push(GpuStats {
                         index,
@@ -1786,7 +1801,8 @@ pub async fn get_gpu_stats(
     }
 
     // Try AMD rocm-smi with JSON output
-    let amd_rocm_cmd = "rocm-smi --showuse --showmeminfo vram --showtemp --showpower --showfan --json 2>/dev/null";
+    let amd_rocm_cmd =
+        "rocm-smi --showuse --showmeminfo vram --showtemp --showpower --showfan --json 2>/dev/null";
 
     if let Ok(output) = client.execute_command(amd_rocm_cmd).await {
         let output = output.trim();
@@ -1799,22 +1815,23 @@ pub async fn get_gpu_stats(
                 if let Some(obj) = json.as_object() {
                     for (key, value) in obj {
                         if key.starts_with("card") {
-                            let index = key.trim_start_matches("card")
-                                .parse::<u32>()
-                                .unwrap_or(0);
+                            let index = key.trim_start_matches("card").parse::<u32>().unwrap_or(0);
 
-                            let utilization = value.get("GPU use (%)")
+                            let utilization = value
+                                .get("GPU use (%)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok())
                                 .unwrap_or(0.0);
 
-                            let memory_used = value.get("VRAM Total Used Memory (B)")
+                            let memory_used = value
+                                .get("VRAM Total Used Memory (B)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .map(|b| b / (1024 * 1024)) // Convert to MiB
                                 .unwrap_or(0);
 
-                            let memory_total = value.get("VRAM Total Memory (B)")
+                            let memory_total = value
+                                .get("VRAM Total Memory (B)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<u64>().ok())
                                 .map(|b| b / (1024 * 1024))
@@ -1826,15 +1843,18 @@ pub async fn get_gpu_stats(
                                 0.0
                             };
 
-                            let temperature = value.get("Temperature (Sensor edge) (C)")
+                            let temperature = value
+                                .get("Temperature (Sensor edge) (C)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<f64>().ok());
 
-                            let power_draw = value.get("Average Graphics Package Power (W)")
+                            let power_draw = value
+                                .get("Average Graphics Package Power (W)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.parse::<f64>().ok());
 
-                            let fan_speed = value.get("Fan speed (%)")
+                            let fan_speed = value
+                                .get("Fan speed (%)")
                                 .and_then(|v| v.as_str())
                                 .and_then(|s| s.trim_end_matches('%').parse::<f64>().ok());
 
@@ -2020,7 +2040,10 @@ pub async fn sftp_connect(
         auth_method: auth,
     };
 
-    match state.create_sftp_connection(request.connection_id.clone(), config).await {
+    match state
+        .create_sftp_connection(request.connection_id.clone(), config)
+        .await
+    {
         Ok(_) => Ok(CommandResponse {
             success: true,
             output: Some(format!("SFTP connected: {}", request.connection_id)),
@@ -2069,8 +2092,12 @@ pub async fn ftp_connect(
 ) -> Result<CommandResponse, String> {
     tracing::info!(
         "ftp_connect: id={}, host={}:{}, user={}, ftps={}, anon={}",
-        request.connection_id, request.host, request.port,
-        request.username, request.ftps_enabled, request.anonymous
+        request.connection_id,
+        request.host,
+        request.port,
+        request.username,
+        request.ftps_enabled,
+        request.anonymous
     );
 
     let config = FtpConfig {
@@ -2090,7 +2117,10 @@ pub async fn ftp_connect(
         anonymous: request.anonymous,
     };
 
-    match state.create_ftp_connection(request.connection_id.clone(), config).await {
+    match state
+        .create_ftp_connection(request.connection_id.clone(), config)
+        .await
+    {
         Ok(_) => Ok(CommandResponse {
             success: true,
             output: Some(format!("FTP connected: {}", request.connection_id)),
@@ -2583,11 +2613,9 @@ pub async fn delete_local_item(path: String, is_directory: bool) -> Result<(), S
         return Err(format!("Path does not exist: {}", path));
     }
     if is_directory {
-        fs::remove_dir_all(p)
-            .map_err(|e| format!("Failed to delete directory '{}': {}", path, e))
+        fs::remove_dir_all(p).map_err(|e| format!("Failed to delete directory '{}': {}", path, e))
     } else {
-        fs::remove_file(p)
-            .map_err(|e| format!("Failed to delete file '{}': {}", path, e))
+        fs::remove_file(p).map_err(|e| format!("Failed to delete file '{}': {}", path, e))
     }
 }
 
@@ -2605,14 +2633,12 @@ pub async fn rename_local_item(old_path: String, new_path: String) -> Result<(),
 #[tauri::command]
 pub async fn create_local_directory(path: String) -> Result<(), String> {
     use std::fs;
-    fs::create_dir_all(&path)
-        .map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+    fs::create_dir_all(&path).map_err(|e| format!("Failed to create directory '{}': {}", path, e))
 }
 
 #[tauri::command]
 pub async fn open_in_os(path: String) -> Result<(), String> {
-    open::that(&path)
-        .map_err(|e| format!("Failed to open '{}': {}", path, e))
+    open::that(&path).map_err(|e| format!("Failed to open '{}': {}", path, e))
 }
 
 // ========== Directory Synchronization ==========
@@ -2700,7 +2726,10 @@ pub async fn list_local_files_recursive(
 
     let base_path = std::path::Path::new(&path);
     if !base_path.exists() || !base_path.is_dir() {
-        return Err(format!("Path does not exist or is not a directory: {}", path));
+        return Err(format!(
+            "Path does not exist or is not a directory: {}",
+            path
+        ));
     }
 
     let mut results = Vec::new();
@@ -2749,7 +2778,8 @@ pub async fn list_remote_files_recursive(
                 current: &'a str,
                 exclude: &'a [String],
                 results: &'a mut Vec<SyncFileEntry>,
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+            {
                 Box::pin(async move {
                     let entries = client.list_dir(current).await.map_err(|e| e.to_string())?;
                     for entry in entries {

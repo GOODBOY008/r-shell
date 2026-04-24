@@ -4,8 +4,8 @@ use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
@@ -19,9 +19,15 @@ pub enum WsMessage {
         rows: u32,
     },
     /// Terminal input (user typing)
-    Input { connection_id: String, data: Vec<u8> },
+    Input {
+        connection_id: String,
+        data: Vec<u8>,
+    },
     /// Terminal output (from PTY)
-    Output { connection_id: String, data: Vec<u8> },
+    Output {
+        connection_id: String,
+        data: Vec<u8>,
+    },
     /// Resize terminal
     Resize {
         connection_id: String,
@@ -53,7 +59,6 @@ pub enum WsMessage {
     },
 
     // ===== Desktop (RDP/VNC) messages =====
-
     /// Start a desktop streaming session
     StartDesktop {
         connection_id: String,
@@ -80,18 +85,11 @@ pub enum WsMessage {
         button_mask: u8,
     },
     /// Clipboard update (bidirectional)
-    ClipboardUpdate {
-        connection_id: String,
-        text: String,
-    },
+    ClipboardUpdate { connection_id: String, text: String },
     /// Request full framebuffer refresh
-    RequestFullFrame {
-        connection_id: String,
-    },
+    RequestFullFrame { connection_id: String },
     /// Close desktop session
-    CloseDesktop {
-        connection_id: String,
-    },
+    CloseDesktop { connection_id: String },
 }
 
 /// WebSocket server for terminal I/O
@@ -102,9 +100,7 @@ pub struct WebSocketServer {
 
 impl WebSocketServer {
     pub fn new(connection_manager: Arc<ConnectionManager>) -> Self {
-        Self {
-            connection_manager,
-        }
+        Self { connection_manager }
     }
 
     /// Start the WebSocket server, trying ports 9001-9010 to find an available one
@@ -128,9 +124,8 @@ impl WebSocketServer {
             }
         }
 
-        let listener = listener.ok_or_else(|| {
-            anyhow::anyhow!("Failed to bind to any port in range 9001-9010")
-        })?;
+        let listener = listener
+            .ok_or_else(|| anyhow::anyhow!("Failed to bind to any port in range 9001-9010"))?;
 
         // Store the bound port in the global atomic for frontend to query
         WEBSOCKET_PORT.store(bound_port, Ordering::SeqCst);
@@ -270,16 +265,23 @@ impl WebSocketServer {
                 cols,
                 rows,
             } => {
-                tracing::info!("Starting PTY connection: {} ({}x{})", connection_id, cols, rows);
+                tracing::info!(
+                    "Starting PTY connection: {} ({}x{})",
+                    connection_id,
+                    cols,
+                    rows
+                );
 
                 // Start the PTY connection (returns the generation counter)
-                let generation = self.connection_manager
+                let generation = self
+                    .connection_manager
                     .start_pty_connection(&connection_id, cols, rows)
                     .await?;
 
                 // Grab the cancel token for this session so the reader task can
                 // stop promptly when the session is torn down.
-                let cancel_token = self.connection_manager
+                let cancel_token = self
+                    .connection_manager
                     .get_pty_cancel_token(&connection_id)
                     .await
                     .ok_or_else(|| {
@@ -327,7 +329,9 @@ impl WebSocketServer {
                             Ok(data) => {
                                 if data.is_empty() {
                                     // Send accumulated data if we have any and timeout reached
-                                    if !accumulated.is_empty() && last_send.elapsed().as_millis() > 5 {
+                                    if !accumulated.is_empty()
+                                        && last_send.elapsed().as_millis() > 5
+                                    {
                                         let output = WsMessage::Output {
                                             connection_id: connection_id_clone.clone(),
                                             data: accumulated.clone(),
@@ -335,7 +339,9 @@ impl WebSocketServer {
 
                                         if let Ok(json) = serde_json::to_string(&output) {
                                             if tx_clone.send(json).is_err() {
-                                                tracing::error!("Failed to send output to WebSocket");
+                                                tracing::error!(
+                                                    "Failed to send output to WebSocket"
+                                                );
                                                 break;
                                             }
                                         }
@@ -381,9 +387,18 @@ impl WebSocketServer {
                     }
                 });
             }
-            WsMessage::Input { connection_id, data } => {
-                tracing::debug!("Received input for connection {}: {} bytes", connection_id, data.len());
-                self.connection_manager.write_to_pty(&connection_id, data).await?;
+            WsMessage::Input {
+                connection_id,
+                data,
+            } => {
+                tracing::debug!(
+                    "Received input for connection {}: {} bytes",
+                    connection_id,
+                    data.len()
+                );
+                self.connection_manager
+                    .write_to_pty(&connection_id, data)
+                    .await?;
             }
             WsMessage::Resize {
                 connection_id,
@@ -411,9 +426,18 @@ impl WebSocketServer {
                 // In a full implementation, we'd resume the output task
                 // For now, just acknowledge
             }
-            WsMessage::Close { connection_id, generation } => {
-                tracing::info!("Closing PTY connection: {} (gen: {:?})", connection_id, generation);
-                self.connection_manager.close_pty_connection(&connection_id, generation).await?;
+            WsMessage::Close {
+                connection_id,
+                generation,
+            } => {
+                tracing::info!(
+                    "Closing PTY connection: {} (gen: {:?})",
+                    connection_id,
+                    generation
+                );
+                self.connection_manager
+                    .close_pty_connection(&connection_id, generation)
+                    .await?;
                 let response = WsMessage::Success {
                     message: format!("PTY connection closed: {}", connection_id),
                 };
@@ -421,12 +445,18 @@ impl WebSocketServer {
             }
 
             // ===== Desktop (RDP/VNC) message handling =====
-
-            WsMessage::StartDesktop { connection_id, width: _width, height: _height } => {
+            WsMessage::StartDesktop {
+                connection_id,
+                width: _width,
+                height: _height,
+            } => {
                 tracing::info!("Starting desktop session: {}", connection_id);
                 // The actual connection is established via the desktop_connect Tauri command.
                 // StartDesktop requests the frame streaming loop.
-                let client = self.connection_manager.get_desktop_connection(&connection_id).await;
+                let client = self
+                    .connection_manager
+                    .get_desktop_connection(&connection_id)
+                    .await;
                 if let Some(client) = client {
                     let (w, h) = {
                         let c = client.read().await;
@@ -448,8 +478,16 @@ impl WebSocketServer {
                 }
             }
 
-            WsMessage::DesktopKeyEvent { connection_id, key_code, down } => {
-                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+            WsMessage::DesktopKeyEvent {
+                connection_id,
+                key_code,
+                down,
+            } => {
+                if let Some(client) = self
+                    .connection_manager
+                    .get_desktop_connection(&connection_id)
+                    .await
+                {
                     let c = client.read().await;
                     if let Err(e) = c.send_key(key_code, down).await {
                         tracing::error!("Failed to send desktop key event: {}", e);
@@ -457,8 +495,17 @@ impl WebSocketServer {
                 }
             }
 
-            WsMessage::DesktopPointerEvent { connection_id, x, y, button_mask } => {
-                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+            WsMessage::DesktopPointerEvent {
+                connection_id,
+                x,
+                y,
+                button_mask,
+            } => {
+                if let Some(client) = self
+                    .connection_manager
+                    .get_desktop_connection(&connection_id)
+                    .await
+                {
                     let c = client.read().await;
                     if let Err(e) = c.send_pointer(x, y, button_mask).await {
                         tracing::error!("Failed to send desktop pointer event: {}", e);
@@ -466,8 +513,15 @@ impl WebSocketServer {
                 }
             }
 
-            WsMessage::ClipboardUpdate { connection_id, text } => {
-                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+            WsMessage::ClipboardUpdate {
+                connection_id,
+                text,
+            } => {
+                if let Some(client) = self
+                    .connection_manager
+                    .get_desktop_connection(&connection_id)
+                    .await
+                {
                     let c = client.read().await;
                     if let Err(e) = c.set_clipboard(text).await {
                         tracing::error!("Failed to set desktop clipboard: {}", e);
@@ -476,7 +530,11 @@ impl WebSocketServer {
             }
 
             WsMessage::RequestFullFrame { connection_id } => {
-                if let Some(client) = self.connection_manager.get_desktop_connection(&connection_id).await {
+                if let Some(client) = self
+                    .connection_manager
+                    .get_desktop_connection(&connection_id)
+                    .await
+                {
                     let c = client.read().await;
                     if let Err(e) = c.request_full_frame().await {
                         tracing::error!("Failed to request full frame: {}", e);
@@ -486,7 +544,11 @@ impl WebSocketServer {
 
             WsMessage::CloseDesktop { connection_id } => {
                 tracing::info!("Closing desktop session: {}", connection_id);
-                if let Err(e) = self.connection_manager.close_desktop_connection(&connection_id).await {
+                if let Err(e) = self
+                    .connection_manager
+                    .close_desktop_connection(&connection_id)
+                    .await
+                {
                     tracing::error!("Failed to close desktop connection: {}", e);
                 }
                 let response = WsMessage::Success {

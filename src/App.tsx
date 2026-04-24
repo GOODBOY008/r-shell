@@ -19,6 +19,7 @@ import { useKeyboardShortcuts, createLayoutShortcuts, createSplitViewShortcuts }
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
+import { ErrorBoundary } from './components/error-boundary';
 import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
@@ -1493,7 +1494,9 @@ function AppContent() {
                   {/* Terminal Grid Panel */}
                   <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
                     <TerminalCallbacksProvider value={{ onDuplicateTab: handleDuplicateTab, onNewTab: handleNewTab }}>
-                      <GridRenderer node={state.gridLayout} path={[]} />
+                      <ErrorBoundary label="Terminal">
+                        <GridRenderer node={state.gridLayout} path={[]} />
+                      </ErrorBoundary>
                     </TerminalCallbacksProvider>
                   </ResizablePanel>
 
@@ -1510,7 +1513,8 @@ function AppContent() {
                         maxSize={50}
                         onResize={(size) => setBottomPanelSize(size)}
                       >
-                        <IntegratedFileBrowser
+                        <ErrorBoundary label="File Browser">
+                          <IntegratedFileBrowser
                           connectionId={activeConnection.connectionId}
                           host={activeConnection.host}
                           isConnected={activeConnection.status === 'connected'}
@@ -1518,6 +1522,7 @@ function AppContent() {
                           onOpenInLogMonitor={handleOpenInLogMonitor}
                           onOpenInEditor={handleOpenInEditor}
                         />
+                        </ErrorBoundary>
                       </ResizablePanel>
                     </>
                   )}
@@ -1549,18 +1554,22 @@ function AppContent() {
                     <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       <div className="h-full overflow-auto p-2">
                         {activeConnection ? (
-                          <SystemMonitor connectionId={activeConnection.connectionId} />
+                          <ErrorBoundary label="System Monitor">
+                            <SystemMonitor connectionId={activeConnection.connectionId} />
+                          </ErrorBoundary>
                         ) : null}
                       </div>
                     </TabsContent>
 
                     <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       {activeConnection ? (
-                        <LogMonitor
-                          connectionId={activeConnection.connectionId}
-                          externalLogPath={externalLogPath}
-                          externalLogPathKey={externalLogPathKey}
-                        />
+                        <ErrorBoundary label="Log Monitor">
+                          <LogMonitor
+                            connectionId={activeConnection.connectionId}
+                            externalLogPath={externalLogPath}
+                            externalLogPathKey={externalLogPathKey}
+                          />
+                        </ErrorBoundary>
                       ) : null}
                     </TabsContent>
                   </div>
@@ -1597,10 +1606,12 @@ function AppContent() {
 
 export default function App() {
   return (
-    <LayoutProvider>
-      <TerminalGroupProvider>
-        <AppContent />
-      </TerminalGroupProvider>
-    </LayoutProvider>
+    <ErrorBoundary label="R-Shell">
+      <LayoutProvider>
+        <TerminalGroupProvider>
+          <AppContent />
+        </TerminalGroupProvider>
+      </LayoutProvider>
+    </ErrorBoundary>
   );
 }

@@ -29,7 +29,9 @@ impl RdpClient {
             return Err(anyhow::anyhow!("RDP host cannot be empty"));
         }
         if config.username.is_empty() {
-            return Err(anyhow::anyhow!("RDP username is required for NLA authentication"));
+            return Err(anyhow::anyhow!(
+                "RDP username is required for NLA authentication"
+            ));
         }
 
         // TODO: implement actual RDP connection using ironrdp crate
