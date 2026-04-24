@@ -7,7 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-03-20
+
+## [1.4.0] - 2026-04-24
+
+### 🖥️ R-Shell 1.4 — OS Detection & Distro-Aware System Monitoring
+
+This release adds intelligent OS detection and cross-distro system monitoring, so CPU, memory, disk, and uptime metrics work correctly across different Linux distributions — not just the common case.
+
+### Added
+
+- 🔍 **OS Detection Module** (`os_detect`): Detects remote OS type and distribution info (distro, version, package manager) on connect
+  - Caches `OsInfo` per connection in `ConnectionManager` to avoid repeated system calls
+  - Supports accurate metric collection across different Linux distributions
+
+- 🛡️ **Error Boundary Component**: New React `ErrorBoundary` wraps key UI sections to catch and display render errors gracefully instead of crashing the whole app
+
+### Changed
+
+- 🖥️ **Distro-Aware System Monitor**: `get_system_stats` now uses OS-specific commands for CPU, memory, disk, and uptime stats
+  - Selects the correct command variant based on detected distro (e.g. handles differences between Debian, Alpine, Arch, etc.)
+  - `system-monitor` component updated to pass OS context to backend commands
+
+- ♻️ **WebSocket Server Refactored**: Improved flow control and connection lifecycle handling
+- 🧹 **Code Cleanup**: Improved formatting and import organization across `commands.rs`, `ftp_client.rs`, `sftp_client.rs`, `ssh/mod.rs`, and `lib.rs`
 
 
 ## [1.3.1] - 2026-04-01
