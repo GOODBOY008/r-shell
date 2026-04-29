@@ -10,6 +10,7 @@ import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
 import { signalReady } from '../lib/restoration-manager';
+import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -645,13 +646,22 @@ export function PtyTerminal({
     xtermRef.current?.selectAll();
   }, []);
 
+  const { onReconnectTab } = useTerminalCallbacks();
+
   const handleReconnect = React.useCallback(() => {
-    toast.info('Reconnecting terminal…');
-    reconnectAttemptsRef.current = 0;
-    connectionStatusRef.current = 'connecting';
-    onConnectionStatusChange?.(connectionId, 'connecting');
-    setReconnectKey((k) => k + 1);
-  }, [connectionId, onConnectionStatusChange]);
+    if (onReconnectTab) {
+      // Delegate to App.tsx which re-establishes the SSH session before
+      // remounting this component via the RECONNECT_TAB reducer action.
+      void onReconnectTab(connectionId);
+    } else {
+      // Fallback: reconnect only the WebSocket/PTY loop (no SSH re-auth).
+      toast.info('Reconnecting terminal…');
+      reconnectAttemptsRef.current = 0;
+      connectionStatusRef.current = 'connecting';
+      onConnectionStatusChange?.(connectionId, 'connecting');
+      setReconnectKey((k) => k + 1);
+    }
+  }, [connectionId, onConnectionStatusChange, onReconnectTab]);
 
   const handleSaveToFile = React.useCallback(async () => {
     const term = xtermRef.current;

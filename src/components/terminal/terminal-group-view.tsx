@@ -38,7 +38,7 @@ function useThemeKey(): number {
 
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const { state, dispatch } = useTerminalGroups();
-  const { onDuplicateTab, onNewTab } = useTerminalCallbacks();
+  const { onDuplicateTab, onNewTab, onReconnectTab } = useTerminalCallbacks();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
   const themeKey = useThemeKey();
@@ -51,9 +51,16 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
 
   const handleReconnect = useCallback(
     (tabId: string) => {
-      dispatch({ type: 'RECONNECT_TAB', tabId });
+      if (onReconnectTab) {
+        // Full reconnect: re-establishes the backend SSH/SFTP/desktop session
+        // before remounting the terminal (App.tsx dispatches RECONNECT_TAB on success).
+        void onReconnectTab(tabId);
+      } else {
+        // Fallback: just remount the terminal component.
+        dispatch({ type: 'RECONNECT_TAB', tabId });
+      }
     },
-    [dispatch],
+    [dispatch, onReconnectTab],
   );
 
   const handleConnectionStatusChange = useCallback(

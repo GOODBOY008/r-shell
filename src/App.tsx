@@ -775,7 +775,7 @@ function AppContent() {
     }
   }, [allTabs, state.activeGroupId, dispatch]);
 
-  const _handleReconnect = useCallback(async (tabId: string) => {
+  const handleReconnect = useCallback(async (tabId: string) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
     if (!tabToReconnect) return;
 
@@ -893,6 +893,9 @@ function AppContent() {
           if (!tabToReconnect.originalConnectionId) {
             ConnectionStorageManager.updateLastConnected(originalConnectionId);
           }
+          // Remount PtyTerminal so it opens a fresh WebSocket/PTY on the
+          // newly re-established SSH connection.
+          dispatch({ type: 'RECONNECT_TAB', tabId });
           toast.success('Reconnected', {
             description: `Successfully reconnected to ${tabToReconnect.name}`,
           });
@@ -1493,7 +1496,7 @@ function AppContent() {
                 <ResizablePanelGroup direction="vertical" className="flex-1">
                   {/* Terminal Grid Panel */}
                   <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
-                    <TerminalCallbacksProvider value={{ onDuplicateTab: handleDuplicateTab, onNewTab: handleNewTab }}>
+                    <TerminalCallbacksProvider value={{ onDuplicateTab: handleDuplicateTab, onNewTab: handleNewTab, onReconnectTab: handleReconnect }}>
                       <ErrorBoundary label="Terminal">
                         <GridRenderer node={state.gridLayout} path={[]} />
                       </ErrorBoundary>
