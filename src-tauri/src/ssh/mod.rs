@@ -113,10 +113,12 @@ impl SshClient {
                 key_path,
                 passphrase,
             } => {
-                // Expand tilde in path
-                let expanded_path = if key_path.starts_with("~/") {
-                    if let Some(home) = std::env::var("HOME").ok() {
-                        key_path.replacen("~", &home, 1)
+                // Expand tilde in path — use dirs::home_dir() for cross-platform
+                // support (HOME is not set on Windows; USERPROFILE is used instead).
+                let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
+                    if let Some(home) = dirs::home_dir() {
+                        let home_str = home.to_string_lossy();
+                        key_path.replacen('~', &home_str, 1)
                     } else {
                         key_path.clone()
                     }
@@ -132,8 +134,15 @@ impl SshClient {
                     ));
                 }
 
-                // Try to load the key
-                let key = decode_secret_key(&expanded_path, passphrase.as_deref())
+                // Read the key file and normalise CRLF line endings so that keys
+                // created or edited on Windows (which use \r\n) are parsed correctly
+                // by russh-keys' PEM / OpenSSH decoder.
+                let key_content = std::fs::read_to_string(&expanded_path)
+                    .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e))?;
+                let key_content = key_content.replace("\r\n", "\n");
+
+                // decode_secret_key takes the key *content* as a &str.
+                let key = decode_secret_key(&key_content, passphrase.as_deref())
                     .map_err(|e| {
                         if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
                             anyhow::anyhow!(
