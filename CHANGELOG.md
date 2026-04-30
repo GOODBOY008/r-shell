@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [1.5.0] - 2026-04-30
+
+### 🔁 R-Shell 1.5 — Reliable Reconnect
+
+This release fixes reconnect flows that previously left the terminal permanently stuck after a network drop.
+
+### Fixed
+
+- 🔌 **SSH Reconnect Re-establishes Session**: Reconnect actions (tab bar button and right-click menu) now properly re-authenticate to the backend before restarting the PTY, instead of reusing the dead SSH connection
+  - `handleReconnect` in `App.tsx` dispatches `RECONNECT_TAB` after a successful SSH reconnect to remount the terminal on the fresh connection
+  - Tab bar Reconnect calls the full backend reconnect path (`onReconnectTab`) instead of a bare state dispatch
+  - Right-click Reconnect in the PTY terminal delegates to `onReconnectTab` from context, with a WebSocket-only fallback when run outside a provider
+
+
 ## [1.4.0] - 2026-04-24
 
 ### 🖥️ R-Shell 1.4 — OS Detection & Distro-Aware System Monitoring
