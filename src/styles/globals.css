@@ -337,46 +337,46 @@ body {
 
 /* Custom scrollbar styling */
 * {
-  scrollbar-width: thin !important;
-  scrollbar-color: var(--muted-foreground) transparent !important;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
 }
 
 .dark * {
-  scrollbar-color: rgba(148, 163, 184, 0.5) var(--muted) !important;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
 /* Webkit browsers (Chrome, Safari, Edge) */
 *::-webkit-scrollbar {
-  width: 8px !important;
-  height: 8px !important;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-track {
-  background: transparent !important;
-  border-radius: 4px !important;
+  background: transparent;
 }
 
 *::-webkit-scrollbar-thumb {
-  background-color: var(--muted-foreground) !important;
-  border-radius: 4px !important;
-  opacity: 0.5;
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color 0.2s ease;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background-color: var(--foreground) !important;
-  opacity: 0.8;
+  background-color: rgba(0, 0, 0, 0.45);
 }
 
-.dark *::-webkit-scrollbar-track {
-  background: var(--muted) !important;
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .dark *::-webkit-scrollbar-thumb {
-  background-color: rgba(148, 163, 184, 0.5) !important;
+  background-color: rgba(255, 255, 255, 0.2);
 }
 
 .dark *::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(148, 163, 184, 0.8) !important;
+  background-color: rgba(255, 255, 255, 0.45);
 }
 
 /* Resizable handle cursor styles */
