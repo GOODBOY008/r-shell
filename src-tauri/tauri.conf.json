@@ -18,7 +18,8 @@
         "fullscreen": false,
         "maximized": true,
         "resizable": true,
-        "decorations": true
+        "decorations": true,
+        "titleBarStyle": "Overlay"
       }
     ],
     "security": {

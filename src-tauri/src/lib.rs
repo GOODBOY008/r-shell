@@ -12,10 +12,125 @@ mod websocket_server;
 use connection_manager::ConnectionManager;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
+use tauri::Emitter;
 use websocket_server::WebSocketServer;
 
 // Global atomic to store the WebSocket port (shared between backend and frontend)
 pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// Build the native macOS menu bar (File / Edit / Tools / Connection / Window).
+/// Only compiled on macOS; other platforms keep the web-based MenuBar component.
+#[cfg(target_os = "macos")]
+fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
+
+    // ── r-shell (app) menu ────────────────────────────────────────────────────
+    let app_menu = Submenu::with_id_and_items(
+        app,
+        "m_app",
+        "r-shell",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, Some(AboutMetadata::default()))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+
+    // ── File menu ─────────────────────────────────────────────────────────────
+    let file_menu = Submenu::with_id_and_items(
+        app,
+        "m_file",
+        "File",
+        true,
+        &[
+            &MenuItem::with_id(app, "new_connection", "New Connection...", true, Some("CmdOrCtrl+N"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "save_connection", "Save Connection", true, Some("CmdOrCtrl+S"))?,
+            &MenuItem::with_id(app, "close_connection", "Close Tab", true, Some("CmdOrCtrl+W"))?,
+        ],
+    )?;
+
+    // ── Edit menu (mix of predefined + custom) ────────────────────────────────
+    let edit_menu = Submenu::with_id_and_items(
+        app,
+        "m_edit",
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "find", "Find...", true, Some("CmdOrCtrl+F"))?,
+            &MenuItem::with_id(app, "clear_screen", "Clear Screen", true, Some("CmdOrCtrl+L"))?,
+        ],
+    )?;
+
+    // ── Tools menu ────────────────────────────────────────────────────────────
+    let tools_menu = Submenu::with_id_and_items(
+        app,
+        "m_tools",
+        "Tools",
+        true,
+        &[
+            &MenuItem::with_id(app, "settings", "Options...", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?,
+        ],
+    )?;
+
+    // ── Connection menu ───────────────────────────────────────────────────────
+    let connection_menu = Submenu::with_id_and_items(
+        app,
+        "m_connection",
+        "Connection",
+        true,
+        &[
+            &MenuItem::with_id(app, "new_tab", "New Tab", true, Some("CmdOrCtrl+T"))?,
+            &MenuItem::with_id(app, "clone_tab", "Duplicate Tab", true, Some("CmdOrCtrl+D"))?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "next_tab", "Next Tab", true, None::<&str>)?,
+            &MenuItem::with_id(app, "prev_tab", "Previous Tab", true, None::<&str>)?,
+            &PredefinedMenuItem::separator(app)?,
+            &MenuItem::with_id(app, "reconnect", "Reconnect", true, Some("F5"))?,
+            &MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?,
+        ],
+    )?;
+
+    // ── Window menu ───────────────────────────────────────────────────────────
+    let window_menu = Submenu::with_id_and_items(
+        app,
+        "m_window",
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+            &PredefinedMenuItem::fullscreen(app, None)?,
+        ],
+    )?;
+
+    Menu::with_items(app, &[
+        &app_menu,
+        &file_menu,
+        &edit_menu,
+        &tools_menu,
+        &connection_menu,
+        &window_menu,
+    ])
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -32,7 +147,20 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .setup({
             let connection_manager_clone = connection_manager.clone();
-            move |_app| {
+            move |app| {
+                // Register native macOS menu and forward item events to the frontend
+                #[cfg(target_os = "macos")]
+                {
+                    match build_app_menu(&app.handle()) {
+                        Ok(menu) => {
+                            if let Err(e) = app.set_menu(menu) {
+                                tracing::warn!("Failed to set native menu: {}", e);
+                            }
+                        }
+                        Err(e) => tracing::warn!("Failed to build native menu: {}", e),
+                    }
+                }
+
                 // Start WebSocket server for terminal I/O
                 // Try ports 9001-9010 to avoid conflicts with other instances
                 let ws_server = Arc::new(WebSocketServer::new(connection_manager_clone));
@@ -43,6 +171,10 @@ pub fn run() {
                 });
                 Ok(())
             }
+        })
+        .on_menu_event(|app, event| {
+            // Forward custom menu item IDs to the frontend so React can handle them
+            let _ = app.emit("menu-action", event.id().0.as_str());
         })
         .manage(connection_manager)
         .invoke_handler(tauri::generate_handler![

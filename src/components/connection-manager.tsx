@@ -1,10 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 import {
   Dialog,
   DialogContent,
@@ -51,13 +60,15 @@ interface ConnectionNode {
 
 interface ConnectionManagerProps {
   onConnectionSelect: (connection: ConnectionNode) => void;
-  onConnectionConnect?: (connection: ConnectionNode) => void; // Connect to connection (double-click or context menu)
+  onConnectionConnect?: (connection: ConnectionNode) => void;
   selectedConnectionId: string | null;
-  activeConnections?: Set<string>; // Set of currently active connection IDs
-  onNewConnection?: () => void; // Callback to open connection dialog
-  onEditConnection?: (connection: ConnectionNode) => void; // Callback to edit connection
-  onDeleteConnection?: (connectionId: string) => void; // Callback to delete connection
-  onDuplicateConnection?: (connection: ConnectionNode) => void; // Callback to duplicate connection
+  activeConnections?: Set<string>;
+  onNewConnection?: () => void;
+  onEditConnection?: (connection: ConnectionNode) => void;
+  onDeleteConnection?: (connectionId: string) => void;
+  onDuplicateConnection?: (connection: ConnectionNode) => void;
+  recentConnections?: { id: string; name: string; host: string; username: string; port?: number; lastConnected?: string }[];
+  onQuickConnect?: (connectionId: string) => void;
 }
 
 export function ConnectionManager({
@@ -68,7 +79,9 @@ export function ConnectionManager({
   onNewConnection,
   onEditConnection,
   onDeleteConnection,
-  onDuplicateConnection
+  onDuplicateConnection,
+  recentConnections = [],
+  onQuickConnect,
 }: ConnectionManagerProps) {
   // Load connections from storage
   const loadConnections = (): ConnectionNode[] => {
@@ -542,16 +555,81 @@ export function ConnectionManager({
     <div className="bg-card border-r border-border h-full flex flex-col">
       {/* Connection Browser */}
       <div className="flex-1 min-h-0 flex flex-col">
-        <div className="p-3 border-b border-border flex items-center justify-between">
-          <h3 className="font-medium">Connection Manager</h3>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => openNewFolderDialog()}
-            className="h-7 w-7 p-0"
-          >
-            <FolderPlus className="w-4 h-4" />
-          </Button>
+        <div className="px-3 py-1.5 border-b border-border flex items-center gap-1">
+          <h3 className="font-medium text-sm flex-1">Connections</h3>
+          <TooltipProvider>
+            {/* Quick Connect */}
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                      <Zap className="w-3.5 h-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent>Quick Connect</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel className="flex items-center gap-2 text-xs">
+                  <Clock className="w-3.5 h-3.5" />
+                  Recent Connections
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {recentConnections.length > 0 ? (
+                  recentConnections.map((conn) => (
+                    <DropdownMenuItem
+                      key={conn.id}
+                      onClick={() => onQuickConnect?.(conn.id)}
+                      className="flex items-start gap-2 py-2 cursor-pointer"
+                    >
+                      <Server className="w-3.5 h-3.5 mt-0.5 text-muted-foreground flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{conn.name}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {conn.username}@{conn.host}
+                        </div>
+                      </div>
+                    </DropdownMenuItem>
+                  ))
+                ) : (
+                  <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+                    No recent connections
+                  </div>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* New Folder */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openNewFolderDialog()}
+                  className="h-6 w-6 p-0"
+                >
+                  <FolderPlus className="w-3.5 h-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>New Folder</TooltipContent>
+            </Tooltip>
+
+            {/* New Connection */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={onNewConnection}
+                  className="h-6 w-6 p-0"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>New Connection</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
         <div className="flex-1 overflow-auto">
           {connections.length === 0 ? (

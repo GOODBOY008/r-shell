@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
-import { Toolbar } from './components/toolbar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
@@ -1131,6 +1131,49 @@ function AppContent() {
     setSettingsModalOpen(true);
   }, []);
 
+  // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
+  useEffect(() => {
+    const unlistenPromise = listen<string>('menu-action', (event) => {
+      switch (event.payload) {
+        case 'new_connection':
+        case 'new_tab':
+          handleNewTab();
+          break;
+        case 'close_connection':
+          if (activeGroup && activeGroup.activeTabId) {
+            dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
+          }
+          break;
+        case 'clone_tab':
+          if (activeTab) { handleDuplicateTab(activeTab.id); }
+          break;
+        case 'next_tab':
+          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
+            const idx = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            if (idx < activeGroup.tabs.length - 1) {
+              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[idx + 1].id });
+            }
+          }
+          break;
+        case 'prev_tab':
+          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
+            const idx = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            if (idx > 0) {
+              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[idx - 1].id });
+            }
+          }
+          break;
+        case 'settings':
+          handleOpenSettings();
+          break;
+        case 'check_updates':
+          setUpdateCheckSignal(c => c + 1);
+          break;
+      }
+    });
+    return () => { unlistenPromise.then(fn => fn()); };
+  }, [activeGroup, activeTab, handleNewTab, handleOpenSettings, handleDuplicateTab, dispatch]);
+
   const handleEditConnection = useCallback((connection: ConnectionNode) => {
     if (connection.type === 'connection') {
       const connectionData = ConnectionStorageManager.getConnection(connection.id);
@@ -1402,6 +1445,7 @@ function AppContent() {
         </div>
       )}
 
+      {/* Web menu bar – on macOS shows only layout controls (native system menu handles File/Edit); on Windows/Linux shows full menus */}
       <MenuBar
         onNewConnection={handleNewTab}
         onNewTab={handleNewTab}
@@ -1428,24 +1472,18 @@ function AppContent() {
         }}
         onCloneTab={() => {
           if (activeTab) {
-            handleDuplicateTab(activeTab.id);
+            void handleDuplicateTab(activeTab.id);
           }
         }}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
         hasActiveConnection={!!activeTab}
         canPaste={true}
-      />
-      <Toolbar
-        onNewConnection={handleNewTab}
-        onOpenSettings={handleOpenSettings}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}
         onToggleBottomPanel={toggleBottomPanel}
         onToggleZenMode={toggleZenMode}
         onApplyPreset={applyPreset}
-        onQuickConnect={handleQuickConnect}
-        recentConnections={recentConnections}
         leftSidebarVisible={layout.leftSidebarVisible}
         rightSidebarVisible={layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels}
         bottomPanelVisible={layout.bottomPanelVisible && !hideExtraPanels}
@@ -1472,6 +1510,8 @@ function AppContent() {
                   activeConnections={new Set(allTabs.map(tab => tab.id))}
                   onNewConnection={handleNewTab}
                   onEditConnection={handleEditConnection}
+                  recentConnections={recentConnections}
+                  onQuickConnect={handleQuickConnect}
                 />
               </ResizablePanel>
 

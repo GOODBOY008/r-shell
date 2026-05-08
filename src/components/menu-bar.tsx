@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from './ui/button';
+import { Separator } from './ui/separator';
 import { 
   DropdownMenu, 
   DropdownMenuContent, 
@@ -9,8 +10,10 @@ import {
   DropdownMenuShortcut,
   DropdownMenuSub,
   DropdownMenuSubContent,
-  DropdownMenuSubTrigger
+  DropdownMenuSubTrigger,
+  DropdownMenuLabel
 } from './ui/dropdown-menu';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
 import { 
   Plus, 
@@ -25,7 +28,15 @@ import {
   Download,
   Scissors,
   ArrowRight,
-  ArrowLeft
+  ArrowLeft,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
+  PanelBottomClose,
+  PanelBottomOpen,
+  Maximize2,
+  LayoutGrid
 } from 'lucide-react';
 
 interface MenuBarProps {
@@ -50,6 +61,16 @@ interface MenuBarProps {
   onRecentConnectionSelect?: (connection: ConnectionData) => void;
   hasActiveConnection?: boolean;
   canPaste?: boolean;
+  // Layout controls (VS Code-style, right-aligned)
+  onToggleLeftSidebar?: () => void;
+  onToggleRightSidebar?: () => void;
+  onToggleBottomPanel?: () => void;
+  onToggleZenMode?: () => void;
+  onApplyPreset?: (preset: string) => void;
+  leftSidebarVisible?: boolean;
+  rightSidebarVisible?: boolean;
+  bottomPanelVisible?: boolean;
+  zenMode?: boolean;
 }
 
 export function MenuBar({
@@ -73,7 +94,16 @@ export function MenuBar({
   onPreviousTab,
   onRecentConnectionSelect,
   hasActiveConnection = false,
-  canPaste = true
+  canPaste = true,
+  onToggleLeftSidebar,
+  onToggleRightSidebar,
+  onToggleBottomPanel,
+  onToggleZenMode,
+  onApplyPreset,
+  leftSidebarVisible,
+  rightSidebarVisible,
+  bottomPanelVisible,
+  zenMode,
 }: MenuBarProps) {
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const cmdOrCtrl = isMac ? '⌘' : 'Ctrl';
@@ -100,7 +130,14 @@ export function MenuBar({
   }, []);
 
   return (
-    <div className="border-b border-border bg-background px-2 py-1 flex items-center gap-1">
+    <div
+      data-tauri-drag-region
+      className="border-b border-border bg-background py-1 flex items-center gap-1"
+      style={{ paddingLeft: isMac ? '80px' : '8px' }}
+    >
+      {/* Menu dropdowns — hidden on macOS because native system menu bar handles these */}
+      {!isMac && (
+        <>
       {/* File Menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -348,6 +385,94 @@ export function MenuBar({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+        </> /* end !isMac menu dropdowns */
+      )}
+
+      {/* Layout controls — VS Code style, right-aligned */}
+      <div className="ml-auto flex items-center gap-0.5 pr-1">
+        <TooltipProvider>
+          <Separator orientation="vertical" className="h-4 mx-1" />
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleLeftSidebar}>
+                {leftSidebarVisible
+                  ? <PanelLeftClose className="w-4 h-4" />
+                  : <PanelLeftOpen className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{leftSidebarVisible ? 'Hide' : 'Show'} Connection Manager</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleBottomPanel}>
+                {bottomPanelVisible
+                  ? <PanelBottomClose className="w-4 h-4" />
+                  : <PanelBottomOpen className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{bottomPanelVisible ? 'Hide' : 'Show'} File Browser</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleRightSidebar}>
+                {rightSidebarVisible
+                  ? <PanelRightClose className="w-4 h-4" />
+                  : <PanelRightOpen className="w-4 h-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{rightSidebarVisible ? 'Hide' : 'Show'} Monitor Panel</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className={`h-7 w-7 p-0 ${zenMode ? 'bg-accent' : ''}`}
+                onClick={onToggleZenMode}
+              >
+                <Maximize2 className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Toggle Zen Mode</TooltipContent>
+          </Tooltip>
+
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                    <LayoutGrid className="w-4 h-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Layout Presets</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Layout Presets</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Default')}>Default Layout</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Minimal')}>Minimal – Terminal Only</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Focus Mode')}>Focus Mode</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Full Stack')}>Full Stack – All Panels</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Zen Mode')}>Zen Mode</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onOpenSettings}>
+                <Settings className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Options</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
     </div>
   );
 }
