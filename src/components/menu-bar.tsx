@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { 
@@ -129,9 +130,19 @@ export function MenuBar({
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
+  const handleDragRegionMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.buttons === 1) {
+      // Double-click toggles maximize; single click starts dragging
+      if (e.detail === 2) {
+        void getCurrentWindow().toggleMaximize();
+      } else {
+        void getCurrentWindow().startDragging();
+      }
+    }
+  }, []);
+
   return (
     <div
-      data-tauri-drag-region
       className="border-b border-border bg-background py-1 flex items-center gap-1"
       style={{ paddingLeft: isMac ? '80px' : '8px' }}
     >
@@ -388,8 +399,14 @@ export function MenuBar({
         </> /* end !isMac menu dropdowns */
       )}
 
+      {/* Drag region spacer — fills all empty horizontal space so the user can drag the window */}
+      <div
+        className="flex-1 h-full min-h-[28px] min-w-0 cursor-default"
+        onMouseDown={handleDragRegionMouseDown}
+      />
+
       {/* Layout controls — VS Code style, right-aligned */}
-      <div className="ml-auto flex items-center gap-0.5 pr-1">
+      <div className="flex items-center gap-0.5 pr-1">
         <TooltipProvider>
           <Separator orientation="vertical" className="h-4 mx-1" />
 
