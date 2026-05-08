@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [1.6.0] - 2026-05-08
+
+### 🍎 R-Shell 1.6 — Native macOS Experience
+
+This release brings a native macOS menu bar, quick connect shortcuts, draggable window chrome, and improved SSH key compatibility across all platforms.
+
+### Added
+
+- 🍎 **Native macOS Menu Bar**: Full `NSMenu` integration with standard macOS application menus (File, Edit, View, Window, Help)
+  - Provides native keyboard shortcuts and menu-driven access to all major app actions
+- ⚡ **Quick Connect**: New quick-connect shortcut in the Connection Manager for one-click access to recently used hosts
+- 🖱️ **Draggable Titlebar Region**: Menu bar area is now a native drag region so the window can be moved without a traditional title bar
+- 🔲 **Window Maximize Button**: Added native window maximize/restore control to the menu bar
+
+### Changed
+
+- 🎨 **Tab Styling Refresh**: Improved tab bar visual consistency — active, hover, and inactive states now have clearer differentiation
+- 📜 **Scrollbar Styling**: Updated scrollbar track and thumb colors for better visibility against dark backgrounds
+
+### Fixed
+
+- 🔐 **Cross-Platform SSH Key Paths**: `~/` tilde in key paths now expands correctly on all platforms (Linux, macOS, Windows)
+- 🔑 **SSH Key CRLF Normalization**: Private keys with Windows-style `\r\n` line endings are now normalized before use, fixing auth failures when keys are edited on Windows
+
+
 ## [1.5.0] - 2026-04-30
 
 ### 🔁 R-Shell 1.5 — Reliable Reconnect
