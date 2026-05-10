@@ -4,7 +4,7 @@ This document outlines planned feature improvements for R-Shell, with detailed d
 
 ---
 
-## Feature 1: First-Launch Experience - Hide Monitor Panel(Implemented)
+## Feature 1: First-Launch Experience - Hide Monitor Panel
 
 ### Problem Statement
 When R-Shell is newly installed, the monitor panel (right sidebar) is visible by default, which may overwhelm new users who haven't connected to any server yet.
@@ -62,7 +62,7 @@ const FIRST_LAUNCH_LAYOUT: LayoutConfig = {
 
 ---
 
-## Feature 2: Fix Keyboard Shortcuts
+## Feature 2: Fix Keyboard Shortcuts (Implemented)
 
 ### Problem Statement
 The keyboard shortcuts (Ctrl+B, Ctrl+J, Ctrl+M, Ctrl+Z) are not working as expected.
@@ -171,7 +171,7 @@ The README.md and homepage documentation needs to reflect current features accur
 
 ---
 
-## Feature 4: Cross-Device Settings Sync
+## Feature 4: Cross-Device Settings Sync (Partial - sync dialog/types exist, no full backend)
 
 ### Problem Statement
 Users want to sync their connection profiles, layout preferences, and settings across multiple devices.
@@ -847,7 +847,7 @@ return (
 
 ---
 
-## Feature 9: Enhanced File Viewer/Editor
+## Feature 9: Enhanced File Viewer/Editor (Partial - CodeMirror editor exists, no open-with-local-app)
 
 ### Problem Statement
 The current file viewing/editing experience in R-Shell has several limitations:
@@ -1582,37 +1582,38 @@ pub async fn cleanup_temp_files() -> Result<(), String> {
 
 ## Implementation Priority
 
-| Priority | Feature | Effort | Impact |
-|----------|---------|--------|--------|
-| 🔴 High | #2 Fix Keyboard Shortcuts | Low | High |
-| 🔴 High | #8 Terminal Context Menu | Medium | High |
-| 🔴 High | #1 First-Launch Experience | Low | Medium |
-| 🔴 High | #9 Enhanced File Viewer | Medium | High |
-| 🟡 Medium | #6 Compact Monitor + Users | Medium | High |
-| 🟡 Medium | #3 Update Documentation | Low | Medium |
-| 🟢 Low | #5 Windows Auto-Update | Medium | Medium |
-| 🟢 Low | #7 Icon Redesign | Medium | Low |
-| 🔵 Future | #4 Cross-Device Sync | High | High |
+| Priority | Feature | Effort | Impact | Status |
+|----------|---------|--------|--------|--------|
+| 🔴 High | #2 Fix Keyboard Shortcuts | Low | High | ✅ Done |
+| 🔴 High | #8 Terminal Context Menu | Medium | High | ✅ Done |
+| 🔴 High | #1 First-Launch Experience | Low | Medium | ❌ Not started |
+| 🔴 High | #10 Global Copy/Paste | Low | High | ❌ Not started |
+| 🔴 High | #9 Enhanced File Viewer | Medium | High | ⚠️ Partial (CodeMirror editor) |
+| 🟡 Medium | #6 Compact Monitor + Users | Medium | High | ❌ Not started |
+| 🟡 Medium | #3 Update Documentation | Low | Medium | ✅ Done |
+| 🟢 Low | #5 Windows Auto-Update | Medium | Medium | ✅ Done |
+| 🟢 Low | #7 Icon Redesign | Medium | Low | ❌ Not started |
+| 🔵 Future | #4 Cross-Device Sync | High | High | ⚠️ Partial (dialog/types only) |
 
 ---
 
 ## Version Roadmap
 
-### v0.7.0 (Next Release)
+### Already Done (current: v1.6.0)
+- ✅ Feature #2: Fix Keyboard Shortcuts
+- ✅ Feature #3: Documentation Update
+- ✅ Feature #5: Windows Auto-Update
+- ✅ Feature #8: Terminal Context Menu
+- ⚠️ Feature #9: Enhanced File Viewer (CodeMirror editor exists)
+
+### Next Release
 - Feature #1: First-Launch Experience
-- Feature #2: Fix Keyboard Shortcuts
-- Feature #3: Documentation Update
-- Feature #8: Terminal Context Menu
+- Feature #10: Global Copy/Paste Support
 - Feature #9: Enhanced File Viewer (Phase 1 - Open with Local App)
 
-### v0.8.0
-- Feature #6: Compact System Monitor
-- Feature #5: Windows Auto-Update
-- Feature #9: Enhanced File Viewer (Phase 2-3 - Improved Inline Editor & Image Preview)
-
-### v1.0.0
-- Feature #4: Cross-Device Sync
-- Feature #9: Enhanced File Viewer (Phase 4 - Ropey + egui Native Editor)
+### Future
+- Feature #6: Compact System Monitor + Online Users
+- Feature #9: Enhanced File Viewer (Phase 2-3 - Image Preview, improved editor)
+- Feature #4: Cross-Device Sync (complete backend)
 - Feature #7: New Icon
-- Feature #9: Enhanced File Viewer (Phase 4 - Monaco Editor, optional)
-- Polish and stability improvements
+- Feature #9: Enhanced File Viewer (Phase 4 - Ropey + egui Native Editor)
