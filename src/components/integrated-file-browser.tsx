@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useRef } from 'react';
+import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { Button } from './ui/button';
@@ -9,6 +9,12 @@ import {
   getNextQueuedTransfer,
 } from '@/lib/transfer-queue-reducer';
 import { TransferQueue } from './transfer-queue';
+import { DirectoryTree } from './directory-tree';
+import {
+  ResizablePanelGroup,
+  ResizablePanel,
+  ResizableHandle,
+} from './ui/resizable';
 import { 
   Folder, 
   File, 
@@ -368,6 +374,27 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     e.stopPropagation();
     setResizingColumn(columnName);
   };
+
+  /** SSH-specific directory loader for the DirectoryTree component. */
+  const loadSSHDirectories = useCallback(async (path: string): Promise<string[]> => {
+    if (!connectionId || !isConnected) return [];
+    try {
+      const output = await invoke<string>('list_files', { connectionId, path });
+      if (!output) return [];
+      const lines = output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
+      const dirs: string[] = [];
+      for (const line of lines) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 8 && parts[0].startsWith('d')) {
+          const name = parts.slice(7).join(' ');
+          if (name && name !== '.' && name !== '..') dirs.push(name);
+        }
+      }
+      return dirs;
+    } catch {
+      return [];
+    }
+  }, [connectionId, isConnected]);
 
   const loadFiles = async (pathOverride?: string) => {
     if (!connectionId || !isConnected) {
@@ -1150,9 +1177,34 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         
       </div>
 
-      {/* File List */}
+      {/* File List + Directory Tree */}
+      <ResizablePanelGroup
+        direction="horizontal"
+        autoSaveId="integrated-file-browser-split"
+        className="flex-1"
+      >
+        {/* Directory tree sidebar */}
+        <ResizablePanel
+          id="ssh-dir-tree"
+          order={1}
+          defaultSize={22}
+          minSize={14}
+          maxSize={40}
+        >
+          <DirectoryTree
+            loadDirectory={loadSSHDirectories}
+            currentPath={currentPath}
+            onNavigate={navigateTo}
+            disabled={!isConnected}
+          />
+        </ResizablePanel>
+
+        <ResizableHandle />
+
+        {/* File list panel */}
+        <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
       <div 
-        className="flex-1 overflow-hidden relative"
+        className="h-full overflow-hidden relative bg-background"
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -1467,6 +1519,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           </ContextMenu>
         </ScrollArea>
       </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       {/* Transfer Queue */}
       <TransferQueue

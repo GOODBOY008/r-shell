@@ -69,6 +69,7 @@ export interface FilePanelProps {
 
   // Focus tracking
   onFocus: () => void;
+  onPathChange?: (path: string) => void;
 
   // Columns config
   showPermissions?: boolean;
@@ -82,6 +83,7 @@ export interface FilePanelRef {
   getSelectedEntries: () => FileEntry[];
   refresh: () => void;
   selectAll: () => void;
+  navigateTo: (path: string) => void;
 }
 
 // ---------- MIME type for cross-panel drag ----------
@@ -104,6 +106,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       onTransferToOther,
       onTransferDirectoryToOther,
       onFocus,
+      onPathChange,
       showPermissions = false,
       disabled = false,
     },
@@ -147,6 +150,9 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         selectAll: () => {
           setSelectedNames(new Set(filteredEntries.map((e) => e.name)));
         },
+        navigateTo: (path: string) => {
+          loadDirectory(path);
+        },
       }),
       [currentPath, entries, selectedNames],
     );
@@ -160,6 +166,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           const result = await onLoadDirectory(path);
           setEntries(result);
           setCurrentPath(path);
+          onPathChange?.(path);
           setSelectedNames(new Set());
           setLastSelectedIndex(null);
         } catch (err) {
@@ -170,7 +177,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           setLoading(false);
         }
       },
-      [onLoadDirectory, disabled],
+      [onLoadDirectory, disabled, onPathChange],
     );
 
     useEffect(() => {
