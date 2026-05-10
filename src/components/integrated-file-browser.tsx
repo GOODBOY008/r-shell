@@ -91,6 +91,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const processTransferRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  // Tracks which connectionId the current path/files state belongs to.
+  // Updated synchronously (via ref) in the restore effect so the save effect
+  // never writes stale data from the previous connection under the new id.
+  const effectiveConnectionIdRef = useRef<string | undefined>(undefined);
+  // Monotonic counter: each loadFiles call stamps its own gen; stale responses are discarded.
+  const loadGenRef = useRef(0);
   const [clipboard, setClipboard] = useState<{ files: FileItem[], operation: 'copy' | 'cut' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [newFileName, setNewFileName] = useState('');
@@ -138,21 +144,21 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     { name: 'data.json', type: 'file', size: 5120, modified: new Date('2024-01-12'), permissions: '-rw-r--r--', owner: 'www-data', group: 'www-data', path: 'data.json' }
   ];
 
-  // Restore or initialize state when connection changes
+  // Restore or initialize state when connection changes.
+  // IMPORTANT: update effectiveConnectionIdRef FIRST (synchronous) so the save
+  // effect below can distinguish "same connection data changed" from "just switched".
   useEffect(() => {
+    effectiveConnectionIdRef.current = connectionId;
     if (connectionId) {
       const cached = sessionStateCache.get(connectionId);
       if (cached) {
-        // Restore previous state
         setCurrentPath(cached.currentPath);
         setFiles(cached.files);
         setSelectedFiles(cached.selectedFiles);
         setSearchTerm(cached.searchTerm);
-        // Reset navigation history to the restored path
         setNavHistory([cached.currentPath]);
         setNavIndex(0);
       } else {
-        // Initialize new connection state
         setCurrentPath('/home');
         setFiles([]);
         setSelectedFiles(new Set());
@@ -163,22 +169,27 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   }, [connectionId]);
 
-  // Save state to cache when it changes
+  // Persist state to cache whenever data changes.
+  // connectionId is intentionally omitted from deps: we only want this to fire
+  // when the *data* changes for the currently active connection, not when we
+  // switch connections (which would write the old connection's path under the
+  // new connection's id before the restore effect sets the correct data).
   useEffect(() => {
-    if (connectionId) {
-      sessionStateCache.set(connectionId, {
+    const id = effectiveConnectionIdRef.current;
+    if (id) {
+      sessionStateCache.set(id, {
         currentPath,
         files,
         selectedFiles,
         searchTerm
       });
     }
-  }, [connectionId, currentPath, files, selectedFiles, searchTerm]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPath, files, selectedFiles, searchTerm]);
 
   useEffect(() => {
     if (isConnected && connectionId) {
-      console.log('useEffect triggered - loading files', { currentPath, connectionId, isConnected });
-      loadFiles(currentPath);
+      void loadFiles(currentPath);
     }
   }, [currentPath, isConnected, connectionId]);
 
@@ -403,6 +414,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
     
     const targetPath = pathOverride ?? currentPath;
+    const gen = ++loadGenRef.current;
     setIsLoading(true);
     try {
       const output = await invoke<string>(
@@ -481,16 +493,20 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           });
         }
         
+        if (gen !== loadGenRef.current) return; // stale — a newer load superseded us
         setFiles(parsedFiles);
       }
     } catch (error) {
+      if (gen !== loadGenRef.current) return;
       console.error('Failed to load files:', error);
       toast.error('Failed to Load Files', {
         description: error instanceof Error ? error.message : 'Unable to load remote directory contents.',
       });
       setFiles([]);
     } finally {
-      setIsLoading(false);
+      if (gen === loadGenRef.current) {
+        setIsLoading(false);
+      }
     }
   };
 

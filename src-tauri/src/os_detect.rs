@@ -435,11 +435,16 @@ done
     /// List files command.
     /// GNU ls supports `--time-style=long-iso`; BusyBox and macOS do not.
     pub fn list_files_cmd(&self, path: &str) -> String {
+        fn shell_quote(value: &str) -> String {
+            format!("'{}'", value.replace('\'', "'\"'\"'"))
+        }
+
+        let quoted_path = shell_quote(path);
         if self.has_gnu_coreutils {
-            format!("ls -la --time-style=long-iso '{}'", path)
+            format!("ls -la --time-style=long-iso {}", quoted_path)
         } else {
             // BusyBox / macOS ls — no --time-style, but -la still works
-            format!("ls -la '{}'", path)
+            format!("ls -la {}", quoted_path)
         }
     }
 }
@@ -549,5 +554,18 @@ mod tests {
             ..Default::default()
         };
         assert!(!info.list_files_cmd("/tmp").contains("--time-style"));
+    }
+
+    #[test]
+    fn test_list_files_quotes_apostrophes() {
+        let info = OsInfo {
+            has_gnu_coreutils: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            info.list_files_cmd("/tmp/dir's folder"),
+            "ls -la --time-style=long-iso '/tmp/dir'\"'\"'s folder'"
+        );
     }
 }
