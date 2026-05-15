@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
+import { withRetry, CancelledError } from '@/lib/async-retry';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
@@ -97,6 +98,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const effectiveConnectionIdRef = useRef<string | undefined>(undefined);
   // Monotonic counter: each loadFiles call stamps its own gen; stale responses are discarded.
   const loadGenRef = useRef(0);
+  // Tracks the path that is authoritative for the current connectionId.
+  // Updated synchronously in the restore effect (before setState), so the load
+  // effect always uses the correct path even before React re-renders with the
+  // new state value. This prevents the stale-path → error-toast race on tab switch.
+  const committedPathRef = useRef('/home');
+  committedPathRef.current = currentPath; // mirror latest state every render
   const [clipboard, setClipboard] = useState<{ files: FileItem[], operation: 'copy' | 'cut' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [newFileName, setNewFileName] = useState('');
@@ -151,6 +158,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     effectiveConnectionIdRef.current = connectionId;
     if (connectionId) {
       const cached = sessionStateCache.get(connectionId);
+      // Update committedPathRef synchronously BEFORE setState so the load
+      // effect (which fires in the same commit) reads the correct path and
+      // doesn't request the previous connection's stale path on the new server.
+      const newPath = cached?.currentPath ?? '/home';
+      committedPathRef.current = newPath;
       if (cached) {
         setCurrentPath(cached.currentPath);
         setFiles(cached.files);
@@ -184,13 +196,18 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         searchTerm
       });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentPath, files, selectedFiles, searchTerm]);
 
   useEffect(() => {
     if (isConnected && connectionId) {
-      void loadFiles(currentPath);
+      // Always use committedPathRef.current rather than the closure-captured
+      // currentPath.  When connectionId changes, the restore effect has already
+      // updated committedPathRef synchronously to the correct path for the new
+      // connection, even though the currentPath state value (from the previous
+      // render) is still the old connection's stale path.
+      void loadFiles(committedPathRef.current);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn; adding it would cause infinite re-renders
   }, [currentPath, isConnected, connectionId]);
 
   // Keyboard shortcuts
@@ -215,7 +232,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           case 'v':
             if (clipboard) {
               event.preventDefault();
-              handlePasteFiles();
+              void handlePasteFiles();
             }
             break;
           case 'a':
@@ -224,7 +241,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             break;
           case 'r':
             event.preventDefault();
-            loadFiles();
+            void loadFiles();
             break;
         }
       } else if (event.key === 'Delete' && selectedFiles.size > 0) {
@@ -247,6 +264,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles/handlePasteFiles are stable inline fns; adding them would cause infinite re-renders
   }, [selectedFiles, files, clipboard, renamingFile]);
 
   // Column resize effect
@@ -317,7 +335,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           if (result.success) {
             dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
             toast.success(`Uploaded ${nextItem.fileName}`);
-            loadFiles();
+            void loadFiles();
           } else {
             dispatchTransfer({
               type: "FAIL",
@@ -377,7 +395,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       }
     };
 
-    doTransfer();
+    void doTransfer();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn; adding it would cause infinite re-renders
   }, [transfers, connectionId]);
 
   const handleResizeStart = (columnName: string, e: React.MouseEvent) => {
@@ -415,11 +434,17 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     
     const targetPath = pathOverride ?? currentPath;
     const gen = ++loadGenRef.current;
+    const isCancelled = () => gen !== loadGenRef.current;
     setIsLoading(true);
     try {
-      const output = await invoke<string>(
-        'list_files',
-        { connectionId, path: targetPath }
+      // withRetry checks isCancelled() before each attempt and after the
+      // successful await, so stale calls from a previous connection are
+      // discarded without showing an error toast.  maxRetries=2 means up
+      // to 3 total attempts with 1 s → 2 s backoff.
+      const output = await withRetry(
+        () => invoke<string>('list_files', { connectionId, path: targetPath }),
+        isCancelled,
+        { maxRetries: 2, baseDelayMs: 1000 },
       );
       
       if (output) {
@@ -497,7 +522,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         setFiles(parsedFiles);
       }
     } catch (error) {
-      if (gen !== loadGenRef.current) return;
+      // CancelledError means a newer load superseded this one — discard silently.
+      if (error instanceof CancelledError || gen !== loadGenRef.current) return;
       console.error('Failed to load files:', error);
       toast.error('Failed to Load Files', {
         description: error instanceof Error ? error.message : 'Unable to load remote directory contents.',
@@ -744,7 +770,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           path: folderPath
         });
         toast.success(`Folder "${folderName}" created`);
-        loadFiles();
+        void loadFiles();
       } catch (error) {
         console.error('Failed to create folder:', error);
         toast.error('Failed to Create Folder', {
@@ -779,7 +805,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       
       toast.success(`${deletingFile.name} deleted successfully`);
       setDeletingFile(null);
-      loadFiles();
+      void loadFiles();
     } catch (error) {
       console.error('[FileBrowser] Failed to delete file:', error);
       toast.error('Failed to Delete File', {
@@ -827,7 +853,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         const operation = clipboard.operation === 'copy' ? 'copied' : 'moved';
         toast.success(`${clipboard.files.length} item(s) ${operation} successfully`);
         setClipboard(null);
-        loadFiles();
+        void loadFiles();
       } catch (error) {
         console.error('Failed to paste files:', error);
         toast.error('Failed to Paste Files', {
@@ -857,7 +883,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         toast.success(`"${renamingFile.name}" renamed to "${newFileName}"`);
         setRenamingFile(null);
         setNewFileName('');
-        loadFiles();
+        void loadFiles();
       } catch (error) {
         console.error('Failed to rename file:', error);
         toast.error('Failed to Rename File', {
@@ -874,7 +900,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   const handleCopyPath = (file: FileItem) => {
     const fullPath = `${currentPath}/${file.name}`;
-    navigator.clipboard.writeText(fullPath);
+    void navigator.clipboard.writeText(fullPath);
     toast.success('Path copied to clipboard');
   };
 
@@ -893,7 +919,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           content: ''
         });
         toast.success(`File "${fileName}" created`);
-        loadFiles();
+        void loadFiles();
       } catch (error) {
         console.error('Failed to create file:', error);
         toast.error('Failed to Create File', {
@@ -916,7 +942,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       });
       
       toast.success(`"${file.name}" duplicated as "${newName}"`);
-      loadFiles();
+      void loadFiles();
     } catch (error) {
       console.error('Failed to duplicate file:', error);
       toast.error('Failed to Duplicate File', {
@@ -1359,7 +1385,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                           value={newFileName}
                           onChange={(e) => setNewFileName(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleRenameConfirm();
+                            if (e.key === 'Enter') void handleRenameConfirm();
                             if (e.key === 'Escape') handleRenameCancel();
                           }}
                           onBlur={handleRenameConfirm}

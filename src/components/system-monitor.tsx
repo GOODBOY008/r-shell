@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { withRetry, CancelledError } from '@/lib/async-retry';
 import { Activity, Terminal, HardDrive, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -173,79 +174,73 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
   // GPU colors for multi-GPU chart
   const GPU_COLORS = ['#8b5cf6', '#06b6d4', '#f97316', '#22c55e', '#ec4899', '#eab308'];
 
-  // Fetch system stats from backend
-  const fetchSystemStats = async () => {
+  // Fetch system stats from backend.
+  // Accepts an optional `isCancelled` guard so callers can prevent stale
+  // state updates after a connection switch or component unmount.
+  // Throws on invoke failure so that withRetry can decide whether to retry.
+  const fetchSystemStats = async (isCancelled: () => boolean = () => false): Promise<void> => {
     if (!connectionId) return;
-    
-    try {
-      const stats = await invoke<{
-        cpu_percent: number;
-        memory: { total: number; used: number; free: number; available: number };
-        swap: { total: number; used: number; free: number; available: number };
-        disk: { total: string; used: string; available: string; use_percent: number };
-        uptime: string;
-        load_average?: string;
-      }>('get_system_stats', { connectionId });
-      
-      // Calculate memory percentage
-      const memoryPercent = stats.memory.total > 0 
-        ? (stats.memory.used / stats.memory.total) * 100 
-        : 0;
-      
-      // Calculate swap percentage
-      const swapPercent = stats.swap.total > 0
-        ? (stats.swap.used / stats.swap.total) * 100
-        : 0;
-        
-      setStats({
-        cpu: stats.cpu_percent,
-        memory: memoryPercent,
-        memoryTotal: stats.memory.total,
-        memoryUsed: stats.memory.used,
-        swap: swapPercent,
-        swapTotal: stats.swap.total,
-        swapUsed: stats.swap.used,
-        diskUsage: stats.disk.use_percent,
-        uptime: stats.uptime
-      });
-    } catch (error) {
-      console.error('Failed to fetch system stats:', error);
-    }
+
+    const stats = await invoke<{
+      cpu_percent: number;
+      memory: { total: number; used: number; free: number; available: number };
+      swap: { total: number; used: number; free: number; available: number };
+      disk: { total: string; used: string; available: string; use_percent: number };
+      uptime: string;
+      load_average?: string;
+    }>('get_system_stats', { connectionId });
+
+    if (isCancelled()) return; // discard stale result
+
+    const memoryPercent = stats.memory.total > 0
+      ? (stats.memory.used / stats.memory.total) * 100
+      : 0;
+    const swapPercent = stats.swap.total > 0
+      ? (stats.swap.used / stats.swap.total) * 100
+      : 0;
+
+    setStats({
+      cpu: stats.cpu_percent,
+      memory: memoryPercent,
+      memoryTotal: stats.memory.total,
+      memoryUsed: stats.memory.used,
+      swap: swapPercent,
+      swapTotal: stats.swap.total,
+      swapUsed: stats.swap.used,
+      diskUsage: stats.disk.use_percent,
+      uptime: stats.uptime,
+    });
   };
 
-  // Fetch process list from backend
-  const fetchProcesses = async () => {
+  // Fetch process list from backend.
+  // Same isCancelled / throw-on-error contract as fetchSystemStats.
+  const fetchProcesses = async (isCancelled: () => boolean = () => false): Promise<void> => {
     if (!connectionId) return;
-    
-    try {
-      const result = await invoke<{ 
-        success: boolean; 
-        processes?: Array<{
-          pid: string;
-          user: string;
-          cpu: string;
-          mem: string;
-          command: string;
-        }>; 
-        error?: string 
-      }>('get_processes', { 
-        connectionId,
-        sortBy: processSortBy
-      });
-      
-      if (result.success && result.processes) {
-        // Convert string values to numbers
-        const processesWithNumbers = result.processes.map(p => ({
+
+    const result = await invoke<{
+      success: boolean;
+      processes?: Array<{
+        pid: string;
+        user: string;
+        cpu: string;
+        mem: string;
+        command: string;
+      }>;
+      error?: string;
+    }>('get_processes', { connectionId, sortBy: processSortBy });
+
+    if (isCancelled()) return;
+
+    if (result.success && result.processes) {
+      setProcesses(
+        result.processes.map(p => ({
           pid: parseInt(p.pid),
           user: p.user,
           cpu: parseFloat(p.cpu),
           mem: parseFloat(p.mem),
-          command: p.command
-        }));
-        setProcesses(processesWithNumbers);
-      }
-    } catch (error) {
-      console.error('Failed to fetch processes:', error);
+          command: p.command,
+        }))
+      );
     }
   };
 
@@ -266,8 +261,8 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       
       if (result.success) {
         toast.success(`Process ${process.pid} terminated successfully`);
-        // Refresh process list
-        await fetchProcesses();
+        // Fire-and-forget refresh — failure here is non-critical
+        void fetchProcesses().catch(e => console.error('Failed to refresh processes:', e));
       } else {
         toast.error(`Failed to kill process: ${result.error || 'Unknown error'}`);
       }
@@ -279,197 +274,205 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     setProcessToKill(null);
   };
 
-  // Poll system stats every 3 seconds
-  // OPTIMIZATION: Use longer intervals to reduce load on terminal
+  // Poll system stats every 5 s and processes every 10 s.
+  // The initial fetch uses withRetry (up to 2 extra attempts, 1 s / 2 s backoff)
+  // to survive transient SSH unavailability right after session restore.
+  // Subsequent interval calls rely on natural retry via the next tick.
   useEffect(() => {
     if (!connectionId) {
-      // Clear data when no connection
-      setStats({
-        cpu: 0,
-        memory: 0,
-        diskUsage: 0,
-        uptime: '0:00:00'
-      });
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setStats({ cpu: 0, memory: 0, diskUsage: 0, uptime: '0:00:00' });
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setProcesses([]);
       return;
     }
-    
-    // Fetch immediately when connection changes
-    fetchSystemStats();
-    fetchProcesses();
-    
-    // OPTIMIZED: Longer intervals to reduce impact on terminal
-    // Use requestIdleCallback if available for better performance
+
+    let cancelled = false;
+
+    // Initial fetch with retry
+    void withRetry(() => fetchSystemStats(() => cancelled), () => cancelled, { maxRetries: 2 })
+      .catch(err => { if (!(err instanceof CancelledError)) console.error('Stats initial fetch failed:', err); });
+    void withRetry(() => fetchProcesses(() => cancelled), () => cancelled, { maxRetries: 2 })
+      .catch(err => { if (!(err instanceof CancelledError)) console.error('Processes initial fetch failed:', err); });
+
+    // Subsequent polling (self-healing via next interval tick)
     const statsInterval = setInterval(() => {
-      // Only fetch if browser is idle
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchSystemStats(); });
+        requestIdleCallback(() => { void fetchSystemStats(() => cancelled).catch(() => {}); });
       } else {
-        void fetchSystemStats();
+        void fetchSystemStats(() => cancelled).catch(() => {});
       }
-    }, 5000); // Increased from 3s to 5s
-    
+    }, 5000);
+
     const processInterval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchProcesses(); });
+        requestIdleCallback(() => { void fetchProcesses(() => cancelled).catch(() => {}); });
       } else {
-        void fetchProcesses();
+        void fetchProcesses(() => cancelled).catch(() => {});
       }
-    }, 10000); // Increased from 5s to 10s
-    
+    }, 10000);
+
     return () => {
+      cancelled = true;
       clearInterval(statsInterval);
       clearInterval(processInterval);
     };
-  }, [connectionId, processSortBy]); // Re-run when connectionId or sort changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchSystemStats/fetchProcesses are stable inline fns; adding them causes infinite re-renders
+  }, [connectionId, processSortBy]);
 
-  // Fetch disk usage data
-  const fetchDiskUsage = async () => {
-    if (!connectionId) {
-      setDisks([]);
-      return;
-    }
+  // Fetch disk usage data.
+  // Same isCancelled / throw-on-error contract as fetchSystemStats.
+  // Disk usage refreshes every 60 s so the initial retry is especially
+  // important: without it the panel stays empty for a full minute on failure.
+  const fetchDiskUsage = async (isCancelled: () => boolean = () => false): Promise<void> => {
+    if (!connectionId) { setDisks([]); return; }
 
-    try {
-      const result = await invoke<{
-        success: boolean;
-        disks: Array<{
-          filesystem: string;
-          path: string;
-          total: string;
-          used: string;
-          available: string;
-          usage: number;
-        }>;
-        error?: string;
-      }>('get_disk_usage', { connectionId });
+    const result = await invoke<{
+      success: boolean;
+      disks: Array<{
+        filesystem: string;
+        path: string;
+        total: string;
+        used: string;
+        available: string;
+        usage: number;
+      }>;
+      error?: string;
+    }>('get_disk_usage', { connectionId });
 
-      if (result.success) {
-        setDisks(result.disks);
-      } else {
-        console.error('Failed to fetch disk usage:', result.error);
-      }
-    } catch (error) {
-      console.error('Failed to fetch disk usage:', error);
+    if (isCancelled()) return;
+
+    if (result.success) {
+      setDisks(result.disks);
+    } else {
+      throw new Error(result.error ?? 'Disk usage fetch returned failure');
     }
   };
 
-  // Fetch disk usage on mount and when connection changes
-  // OPTIMIZED: Much longer interval - disk usage rarely changes
+  // Disk usage polling — 60 s interval; initial call uses retry (high impact
+  // if missed: user waits a full minute for first data).
   useEffect(() => {
     if (!connectionId) return;
-    
-    fetchDiskUsage();
-    
-    // Refresh disk usage every 60 seconds (increased from 30s)
+
+    let cancelled = false;
+
+    void withRetry(() => fetchDiskUsage(() => cancelled), () => cancelled, {
+      maxRetries: 3,
+      onRetry: (n, err) => console.warn(`Disk usage retry ${n}:`, err),
+    }).catch(err => { if (!(err instanceof CancelledError)) console.error('Disk usage failed after all retries:', err); });
+
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchDiskUsage(); });
+        requestIdleCallback(() => { void fetchDiskUsage(() => cancelled).catch(() => {}); });
       } else {
-        void fetchDiskUsage();
+        void fetchDiskUsage(() => cancelled).catch(() => {});
       }
     }, 60000);
-    
-    return () => clearInterval(interval);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchDiskUsage is a stable inline fn; adding it causes infinite re-renders
   }, [connectionId]);
 
-  // GPU Detection - runs once per connection
-  const fetchGpuDetection = async () => {
-    if (!connectionId) return;
-    
-    try {
-      const result = await invoke<GpuDetectionResult>('detect_gpu', { connectionId });
-      setGpuDetection(result);
-      setGpuDetectionDone(true);
-      
-      if (result.available && result.gpus.length > 0) {
-        // Default to "all" for multi-GPU, or first GPU for single
-        setSelectedGpuIndex(result.gpus.length > 1 ? 'all' : result.gpus[0].index);
-      }
-    } catch (error) {
-      console.error('Failed to detect GPU:', error);
-      setGpuDetection({
-        available: false,
-        vendor: 'unknown',
-        gpus: [],
-        detection_method: 'none'
-      });
-      setGpuDetectionDone(true);
-    }
-  };
-
-  // GPU Stats fetching
-  const fetchGpuStats = async () => {
+  // GPU Stats fetching.
+  // Same isCancelled / throw-on-error contract as fetchSystemStats.
+  const fetchGpuStats = async (isCancelled: () => boolean = () => false): Promise<void> => {
     if (!connectionId || !gpuDetection?.available) return;
-    
-    try {
-      const result = await invoke<{
-        success: boolean;
-        gpus: GpuStats[];
-        error?: string;
-      }>('get_gpu_stats', { connectionId });
-      
-      if (result.success && result.gpus.length > 0) {
-        setGpuStats(result.gpus);
-        
-        // Update history for each GPU
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString().slice(0, 8);
-        
-        setGpuHistory(prev => {
-          const newHistory = new Map(prev);
-          result.gpus.forEach(gpu => {
-            const history = newHistory.get(gpu.index) || [];
-            const newPoint: GpuHistoryData = {
-              time: timeStr,
-              utilization: gpu.utilization,
-              memory: gpu.memory_percent,
-              temperature: gpu.temperature,
-              timestamp: now.getTime()
-            };
-            // Keep last 60 data points (5 minutes at 5s intervals)
-            newHistory.set(gpu.index, [...history, newPoint].slice(-60));
-          });
-          return newHistory;
+
+    const result = await invoke<{
+      success: boolean;
+      gpus: GpuStats[];
+      error?: string;
+    }>('get_gpu_stats', { connectionId });
+
+    if (isCancelled()) return;
+
+    if (result.success && result.gpus.length > 0) {
+      setGpuStats(result.gpus);
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString().slice(0, 8);
+
+      setGpuHistory(prev => {
+        const newHistory = new Map(prev);
+        result.gpus.forEach(gpu => {
+          const history = newHistory.get(gpu.index) || [];
+          const newPoint: GpuHistoryData = {
+            time: timeStr,
+            utilization: gpu.utilization,
+            memory: gpu.memory_percent,
+            temperature: gpu.temperature,
+            timestamp: now.getTime(),
+          };
+          newHistory.set(gpu.index, [...history, newPoint].slice(-60));
         });
-      }
-    } catch (error) {
-      console.error('Failed to fetch GPU stats:', error);
+        return newHistory;
+      });
     }
   };
 
-  // GPU detection effect - runs once per connection connect
+  // GPU detection effect — one-shot per connection, gated on gpuDetection state.
+  // Uses withRetry from @/lib/async-retry for exponential backoff (1 s → 2 s → 4 s)
+  // and CancelledError for clean stale-result suppression on connection switch.
   useEffect(() => {
     if (!connectionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setGpuDetection(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setGpuStats([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setGpuHistory(new Map());
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setGpuDetectionDone(false);
       return;
     }
-    
-    // Reset and detect on new connection
+
+    let cancelled = false;
     setGpuDetectionDone(false);
-    fetchGpuDetection();
+    setGpuDetection(null);
+
+    void withRetry(
+      () => invoke<GpuDetectionResult>('detect_gpu', { connectionId }),
+      () => cancelled,
+      {
+        maxRetries: 3,
+        onRetry: (n, err) => console.warn(`GPU detection retry ${n}:`, err),
+      },
+    ).then(result => {
+      setGpuDetection(result);
+      setGpuDetectionDone(true);
+      if (result.available && result.gpus.length > 0) {
+        setSelectedGpuIndex(result.gpus.length > 1 ? 'all' : result.gpus[0].index);
+      }
+    }).catch(err => {
+      if (err instanceof CancelledError) return; // connection switched — discard
+      console.error('GPU detection failed after all retries:', err);
+      setGpuDetection({ available: false, vendor: 'unknown', gpus: [], detection_method: 'none' });
+      setGpuDetectionDone(true);
+    });
+
+    return () => { cancelled = true; };
   }, [connectionId]);
 
   // GPU stats polling - only if GPU detected
   useEffect(() => {
     if (!connectionId || !gpuDetection?.available) return;
-    
-    // Initial fetch
-    fetchGpuStats();
-    
-    // Poll every 5 seconds
+
+    let cancelled = false;
+
+    // Initial fetch (GPU stats are not critical on first call — 5 s interval self-heals)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchGpuStats(() => cancelled).catch(err => console.error('GPU stats fetch failed:', err));
+
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchGpuStats(); });
+        requestIdleCallback(() => { void fetchGpuStats(() => cancelled).catch(() => {}); });
       } else {
-        void fetchGpuStats();
+        void fetchGpuStats(() => cancelled).catch(() => {});
       }
     }, 5000);
-    
-    return () => clearInterval(interval);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchGpuStats is a stable inline fn; adding it causes infinite re-renders
   }, [connectionId, gpuDetection?.available]);
 
   const [latencyData, setLatencyData] = useState<LatencyData[]>([]);
@@ -488,16 +491,23 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
   // OPTIMIZED: Use longer interval and request idle callback
   useEffect(() => {
     if (!connectionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setNetworkHistory([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setNetworkInterfaces([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedInterface('all');
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInterfaceBandwidthMap(new Map());
       return;
     }
 
-    const fetchBandwidth = async () => {
-      try {
-        const result = await invoke<{
+    let cancelled = false;
+
+    // fetchBandwidth throws on invoke failure so withRetry can retry it.
+    // The isCancelled guard prevents stale state updates after connection switch.
+    const fetchBandwidth = async (isCancelled: () => boolean = () => false) => {
+      const result = await invoke<{
           success: boolean;
           bandwidth: Array<{
             interface: string;
@@ -507,7 +517,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           error?: string;
         }>('get_network_bandwidth', { connectionId });
 
-        if (result.success && result.bandwidth.length > 0) {
+      if (isCancelled()) return;
+
+      if (result.success && result.bandwidth.length > 0) {
           // Update interface list and bandwidth map
           const interfaceNames = result.bandwidth.map(iface => iface.interface);
           setNetworkInterfaces(prevInterfaces => {
@@ -589,77 +601,73 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             return updated.slice(-300);
           });
         }
-      } catch (error) {
-        console.error('Failed to fetch network bandwidth:', error);
-      }
     };
 
-    // Initial fetch
-    fetchBandwidth();
+    // Initial fetch with retry
+    void withRetry(() => fetchBandwidth(() => cancelled), () => cancelled, { maxRetries: 2 })
+      .catch(err => { if (!(err instanceof CancelledError)) console.error('Network bandwidth initial fetch failed:', err); });
 
     // OPTIMIZED: Increased from 2s to 5s, use idle callback
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchBandwidth(); });
+        requestIdleCallback(() => { void fetchBandwidth(() => cancelled).catch(() => {}); });
       } else {
-        void fetchBandwidth();
+        void fetchBandwidth(() => cancelled).catch(() => {});
       }
     }, 5000);
 
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [connectionId, selectedInterface]);
 
   // Network latency monitoring - fetch real ping data
   // OPTIMIZED: Longer interval, use idle callback
   useEffect(() => {
     if (!connectionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLatencyData([]);
       return;
     }
 
-    const fetchLatency = async () => {
-      try {
-        const result = await invoke<{
-          success: boolean;
-          latency_ms?: number;
-          error?: string;
-        }>('get_network_latency', { 
-          connectionId,
-          target: '8.8.8.8' // Ping Google DNS
-        });
+    let cancelled = false;
 
-        if (result.success && result.latency_ms !== undefined) {
-          const now = new Date();
-          const newDataPoint: LatencyData = {
-            time: now.toLocaleTimeString().slice(0, 8),
-            latency: Math.round(result.latency_ms * 10) / 10,
-            timestamp: now.getTime()
-          };
+    // fetchLatency throws on invoke failure; isCancelled guards stale setState.
+    const fetchLatency = async (isCancelled: () => boolean = () => false) => {
+      const result = await invoke<{
+        success: boolean;
+        latency_ms?: number;
+        error?: string;
+      }>('get_network_latency', {
+        connectionId,
+        target: '8.8.8.8', // Ping Google DNS
+      });
 
-          setLatencyData(prev => {
-            const updated = [...prev, newDataPoint];
-            // Keep only last 100 data points (5 minutes of data)
-            return updated.slice(-100);
-          });
-        }
-      } catch (error) {
-        console.error('Failed to fetch network latency:', error);
+      if (isCancelled()) return;
+
+      if (result.success && result.latency_ms !== undefined) {
+        const now = new Date();
+        const newDataPoint: LatencyData = {
+          time: now.toLocaleTimeString().slice(0, 8),
+          latency: Math.round(result.latency_ms * 10) / 10,
+          timestamp: now.getTime(),
+        };
+        setLatencyData(prev => [...prev, newDataPoint].slice(-100));
       }
     };
 
-    // Initial fetch
-    fetchLatency();
+    // Initial fetch with retry
+    void withRetry(() => fetchLatency(() => cancelled), () => cancelled, { maxRetries: 2 })
+      .catch(err => { if (!(err instanceof CancelledError)) console.error('Latency initial fetch failed:', err); });
 
     // OPTIMIZED: Increased from 3s to 10s, use idle callback
     const interval = setInterval(() => {
       if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchLatency(); });
+        requestIdleCallback(() => { void fetchLatency(() => cancelled).catch(() => {}); });
       } else {
-        void fetchLatency();
+        void fetchLatency(() => cancelled).catch(() => {});
       }
     }, 10000);
 
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [connectionId]);
 
 
