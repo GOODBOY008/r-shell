@@ -256,12 +256,12 @@ export function DirectoryTree({
   const selectedPath = normalizePath(currentPath);
 
   return (
-    <div className="h-full w-full flex flex-col border-r">
-      <div className="px-2 py-1 flex items-center border-b bg-muted/30 text-xs font-medium text-muted-foreground">
+    <div className="h-full w-full flex flex-col overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-sm">
+      <div className="px-2 py-1 flex items-center border-b bg-muted/30 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
         Directories
       </div>
       <div
-        className="flex-1 min-h-0 overflow-auto p-1 outline-none"
+        className="flex-1 min-h-0 overflow-auto p-1.5 outline-none [scrollbar-gutter:stable]"
         role="tree"
         tabIndex={0}
         onKeyDown={handleKeyDown}

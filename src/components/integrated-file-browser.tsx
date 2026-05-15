@@ -1066,185 +1066,190 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   return (
     <div className={`h-full flex flex-col bg-background border-t ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
-      {/* Navigation Bar: Back / Forward / Up / Home + Breadcrumb / Address bar */}
-      <div className="px-1.5 py-1 border-b bg-muted/30 flex items-center gap-0.5 text-xs">
-        {/* Back */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0"
-          title="Back"
-          disabled={!canGoBack}
-          onClick={goBack}
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-        </Button>
-        {/* Forward */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0"
-          title="Forward"
-          disabled={!canGoForward}
-          onClick={goForward}
-        >
-          <ArrowRight className="h-3.5 w-3.5" />
-        </Button>
-        {/* Go Up */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0"
-          title="Parent directory"
-          disabled={currentPath === '/'}
-          onClick={goUp}
-        >
-          <ArrowUp className="h-3.5 w-3.5" />
-        </Button>
-        {/* Home */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6 shrink-0"
-          title="Home"
-          onClick={() => navigateTo('/home')}
-        >
-          <Home className="h-3.5 w-3.5" />
-        </Button>
+      {/* File Browser Toolbar */}
+      <div className="relative z-10 px-2 pt-2 pb-1">
+        <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border/70 bg-background/90 px-1.5 py-1 text-xs shadow-sm backdrop-blur-sm scrollbar-none">
+          {/* Back */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 rounded-md"
+            title="Back"
+            disabled={!canGoBack}
+            onClick={goBack}
+          >
+            <ArrowLeft className="h-3.5 w-3.5" />
+          </Button>
+          {/* Forward */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 rounded-md"
+            title="Forward"
+            disabled={!canGoForward}
+            onClick={goForward}
+          >
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+          {/* Go Up */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 rounded-md"
+            title="Parent directory"
+            disabled={currentPath === '/'}
+            onClick={goUp}
+          >
+            <ArrowUp className="h-3.5 w-3.5" />
+          </Button>
+          {/* Home */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 rounded-md"
+            title="Home"
+            onClick={() => navigateTo('/home')}
+          >
+            <Home className="h-3.5 w-3.5" />
+          </Button>
 
-        {/* Breadcrumb / Editable address bar */}
-        <div
-          className="flex-1 min-w-0 mx-1 h-6 flex items-center rounded border border-transparent hover:border-border bg-muted/40 px-1.5 cursor-text group"
-          onClick={() => {
-            if (!isEditingPath) {
-              setEditPathValue(currentPath);
-              setIsEditingPath(true);
-              setTimeout(() => pathInputRef.current?.select(), 0);
-            }
-          }}
-        >
-          {isEditingPath ? (
-            <input
-              ref={pathInputRef}
-              autoFocus
-              className="w-full h-full bg-transparent outline-none font-mono text-[11px]"
-              value={editPathValue}
-              onChange={(e) => setEditPathValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handlePathSubmit();
-                if (e.key === 'Escape') setIsEditingPath(false);
-              }}
-              onBlur={handlePathSubmit}
+          {/* Breadcrumb / Editable address bar */}
+          <div
+            className="mx-1 flex h-6 min-w-0 flex-1 cursor-text items-center rounded-md border border-border/50 bg-muted/50 px-1.5 shadow-inner group hover:border-border"
+            onClick={() => {
+              if (!isEditingPath) {
+                setEditPathValue(currentPath);
+                setIsEditingPath(true);
+                setTimeout(() => pathInputRef.current?.select(), 0);
+              }
+            }}
+          >
+            {isEditingPath ? (
+              <input
+                ref={pathInputRef}
+                autoFocus
+                className="h-full w-full bg-transparent font-mono text-[11px] outline-none"
+                value={editPathValue}
+                onChange={(e) => setEditPathValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handlePathSubmit();
+                  if (e.key === 'Escape') setIsEditingPath(false);
+                }}
+                onBlur={handlePathSubmit}
+              />
+            ) : (
+              <div className="flex items-center gap-0 overflow-x-auto whitespace-nowrap scrollbar-none">
+                {getBreadcrumbs(currentPath).map((seg, i) => (
+                  <React.Fragment key={seg.path}>
+                    {i > 0 && (
+                      <ChevronRight className="mx-0.5 h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+                    )}
+                    <button
+                      className="max-w-[120px] truncate rounded px-0.5 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigateTo(seg.path);
+                      }}
+                      title={seg.path}
+                    >
+                      {seg.label}
+                    </button>
+                  </React.Fragment>
+                ))}
+                <Pencil className="ml-auto h-2.5 w-2.5 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/50" />
+              </div>
+            )}
+          </div>
+
+          {/* Refresh */}
+          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-md" title="Refresh" onClick={() => loadFiles()} disabled={isLoading}>
+            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+
+          <div className="mx-1 h-4 w-px shrink-0 bg-border/60" />
+
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" onClick={handleCreateFolder}>
+            <FolderPlus className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" onClick={handleUpload}>
+            <Upload className="h-3.5 w-3.5" />
+          </Button>
+
+          <div className="mx-1 h-4 w-px shrink-0 bg-border/60" />
+
+          <div className="w-32 min-w-[7rem] shrink-0 sm:w-40">
+            <Input
+              placeholder="Search..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="h-6 border-border/60 bg-background/70 text-xs shadow-none placeholder:text-muted-foreground/70 focus-visible:bg-background"
             />
-          ) : (
-            <div className="flex items-center gap-0 overflow-x-auto whitespace-nowrap scrollbar-none">
-              {getBreadcrumbs(currentPath).map((seg, i) => (
-                <React.Fragment key={seg.path}>
-                  {i > 0 && (
-                    <ChevronRight className="h-2.5 w-2.5 text-muted-foreground shrink-0 mx-0.5" />
-                  )}
-                  <button
-                    className="text-[11px] text-muted-foreground hover:text-foreground px-0.5 rounded hover:bg-muted transition truncate max-w-[120px]"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigateTo(seg.path);
-                    }}
-                    title={seg.path}
-                  >
-                    {seg.label}
-                  </button>
-                </React.Fragment>
-              ))}
-              {/* Edit icon hint */}
-              <Pencil className="h-2.5 w-2.5 text-muted-foreground/0 group-hover:text-muted-foreground/50 ml-auto shrink-0 transition-colors" />
-            </div>
+          </div>
+
+          <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">{actualItemCount} items</span>
+
+          {selectedFiles.size > 0 && (
+            <span className="shrink-0 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+              {selectedFiles.size} selected
+            </span>
           )}
         </div>
-
-        {/* Refresh */}
-        <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Refresh" onClick={() => loadFiles()} disabled={isLoading}>
-          <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
-        </Button>
-      </div>
-      
-      {/* Compact Toolbar */}
-      <div className="px-2 py-1 border-b flex items-center gap-1.5 text-xs">
-        <Button variant="ghost" size="sm" className="h-6 px-2" onClick={handleCreateFolder}>
-          <FolderPlus className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="sm" className="h-6 px-2" onClick={handleUpload}>
-          <Upload className="h-3.5 w-3.5" />
-        </Button>
-        
-        <div className="flex-1 min-w-0">
-          <Input
-            placeholder="Search..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="h-6 text-xs"
-          />
-        </div>
-        
-        <span className="text-muted-foreground whitespace-nowrap">{actualItemCount} items</span>
-        
-        {selectedFiles.size > 0 && (
-          <span className="text-muted-foreground whitespace-nowrap">{selectedFiles.size} selected</span>
-        )}
-        
+        <div className="pointer-events-none absolute inset-x-4 top-full -mt-2 h-4 bg-gradient-to-b from-background/35 via-background/10 to-transparent blur-sm" />
       </div>
 
       {/* File List + Directory Tree */}
-      <ResizablePanelGroup
-        direction="horizontal"
-        autoSaveId="integrated-file-browser-split"
-        className="flex-1"
-      >
-        {/* Directory tree sidebar */}
-        <ResizablePanel
-          id="ssh-dir-tree"
-          order={1}
-          defaultSize={22}
-          minSize={14}
-          maxSize={40}
+      <div className="min-h-0 flex-1 px-2 pb-2">
+        <ResizablePanelGroup
+          direction="horizontal"
+          autoSaveId="integrated-file-browser-split"
+          className="h-full"
         >
-          <DirectoryTree
-            loadDirectory={loadSSHDirectories}
-            currentPath={currentPath}
-            onNavigate={navigateTo}
-            disabled={!isConnected}
-          />
-        </ResizablePanel>
+          {/* Directory tree sidebar */}
+          <ResizablePanel
+            id="ssh-dir-tree"
+            order={1}
+            defaultSize={22}
+            minSize={14}
+            maxSize={40}
+          >
+            <DirectoryTree
+              loadDirectory={loadSSHDirectories}
+              currentPath={currentPath}
+              onNavigate={navigateTo}
+              disabled={!isConnected}
+            />
+          </ResizablePanel>
 
-        <ResizableHandle />
+          <ResizableHandle />
 
-        {/* File list panel */}
-        <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
-      <div 
-        className="h-full overflow-hidden relative bg-background"
-        onDragEnter={handleDragEnter}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        {/* Drag overlay */}
-        {isDraggingOver && (
-          <div className="absolute inset-0 bg-accent/20 border-2 border-dashed border-primary z-50 flex items-center justify-center pointer-events-none">
-            <div className="bg-background/90 rounded-lg p-6 shadow-lg">
-              <Upload className="h-12 w-12 mx-auto mb-3 text-primary" />
-              <p className="font-medium">Drop files to upload</p>
-              <p className="text-sm text-muted-foreground mt-1">Upload to {currentPath}</p>
-            </div>
-          </div>
-        )}
-        
-        <ScrollArea className="h-full">
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <div className="p-1 min-h-full" data-columns-container>
-                {/* Column Headers */}
-                <div 
-                  className="flex gap-2 px-2 py-1 text-xs font-medium text-muted-foreground border-b bg-muted/30 sticky top-0"
-                >
+          {/* File list panel */}
+          <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
+            <div
+              className="relative h-full overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-sm"
+              onDragEnter={handleDragEnter}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              {/* Drag overlay */}
+              {isDraggingOver && (
+                <div className="absolute inset-0 bg-accent/20 border-2 border-dashed border-primary z-50 flex items-center justify-center pointer-events-none">
+                  <div className="bg-background/90 rounded-lg p-6 shadow-lg">
+                    <Upload className="h-12 w-12 mx-auto mb-3 text-primary" />
+                    <p className="font-medium">Drop files to upload</p>
+                    <p className="text-sm text-muted-foreground mt-1">Upload to {currentPath}</p>
+                  </div>
+                </div>
+              )}
+
+              <ScrollArea className="h-full [&>[data-slot=scroll-area-viewport]]:[scrollbar-gutter:stable]">
+                <ContextMenu>
+                  <ContextMenuTrigger asChild>
+                    <div className="min-h-full p-1.5" data-columns-container>
+                      {/* Column Headers */}
+                      <div
+                        className="sticky top-0 z-10 flex gap-2 border-b bg-muted/30 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55"
+                      >
                   <div 
                     className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
                     style={{ width: `${columnWidths.name}px` }}
@@ -1323,30 +1328,30 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                       sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
                     ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
                   </div>
-                </div>
-            
-            {/* File Rows */}
-            {sortedFiles.map((file, index) => (
-              <ContextMenu key={index} onOpenChange={(open) => {
-                // Clear the right-click selection when the context menu closes (loses focus)
-                if (!open) {
-                  setSelectedFiles(new Set());
-                }
-              }}>
-                <ContextMenuTrigger asChild>
-                  <div
-                    className={`flex gap-2 px-2 py-1.5 hover:bg-muted/50 cursor-pointer border-b border-border/30 ${
-                      selectedFiles.has(file.name) ? 'bg-accent' : ''
-                    }`}
-                    onClick={(e) => handleFileClick(file, e)}
-                    onDoubleClick={() => handleFileDoubleClick(file)}
-                    onContextMenu={() => {
-                      // Select the file when right-clicking to show which file the context menu operates on
-                      if (!selectedFiles.has(file.name)) {
-                        setSelectedFiles(new Set([file.name]));
-                      }
-                    }}
-                  >
+                      </div>
+
+                      {/* File Rows */}
+                      {sortedFiles.map((file, index) => (
+                        <ContextMenu key={index} onOpenChange={(open) => {
+                          // Clear the right-click selection when the context menu closes (loses focus)
+                          if (!open) {
+                            setSelectedFiles(new Set());
+                          }
+                        }}>
+                          <ContextMenuTrigger asChild>
+                            <div
+                              className={`flex gap-2 px-2 py-1.5 hover:bg-muted/50 cursor-pointer border-b border-border/30 ${
+                                selectedFiles.has(file.name) ? 'bg-accent' : ''
+                              }`}
+                              onClick={(e) => handleFileClick(file, e)}
+                              onDoubleClick={() => handleFileDoubleClick(file)}
+                              onContextMenu={() => {
+                                // Select the file when right-clicking to show which file the context menu operates on
+                                if (!selectedFiles.has(file.name)) {
+                                  setSelectedFiles(new Set([file.name]));
+                                }
+                              }}
+                            >
                     <div className="flex items-center gap-2 min-w-0" style={{ width: `${columnWidths.name}px` }}>
                       {getFileIcon(file)}
                       {renamingFile?.name === file.name ? (
@@ -1377,10 +1382,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <div className="text-sm text-muted-foreground truncate" style={{ width: `${columnWidths.owner}px` }}>
                       {file.owner}:{file.group}
                     </div>
-                  </div>
-                </ContextMenuTrigger>
-                
-                <ContextMenuContent className="w-64">
+                            </div>
+                          </ContextMenuTrigger>
+
+                          <ContextMenuContent className="w-64">
                   {/* File-specific actions */}
                   {file.type === 'file' && (
                     <>
@@ -1489,14 +1494,14 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                       </ContextMenuItem>
                     </>
                   )}
-                </ContextMenuContent>
-              </ContextMenu>
-            ))}
-              </div>
-            </ContextMenuTrigger>
-            
-            {/* Empty space context menu */}
-            <ContextMenuContent className="w-48">
+                          </ContextMenuContent>
+                        </ContextMenu>
+                      ))}
+                    </div>
+                  </ContextMenuTrigger>
+
+                  {/* Empty space context menu */}
+                  <ContextMenuContent className="w-48">
               <ContextMenuItem onClick={handleNewFile}>
                 <File className="mr-2 h-4 w-4" />
                 New File
@@ -1531,12 +1536,13 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 <X className="mr-2 h-4 w-4" />
                 Clear Selection
               </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-        </ScrollArea>
+                  </ContextMenuContent>
+                </ContextMenu>
+              </ScrollArea>
+            </div>
+          </ResizablePanel>
+        </ResizablePanelGroup>
       </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
 
       {/* Transfer Queue */}
       <TransferQueue
