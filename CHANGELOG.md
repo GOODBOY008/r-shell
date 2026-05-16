@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [1.7.0] - 2026-05-16
+
+### 🔖 R-Shell 1.7 — Stable Sessions
+
+This release brings long-lived connection reliability: SSH keepalive prevents servers from silently dropping idle sessions, and the PTY terminal now detects dropped connections gracefully instead of silently replacing the shell. A new lazy-loading directory tree, improved file browser toolbar, and robust path quoting round out the update.
+
+### Added
+
+- 🌳 **Directory Tree**: New lazy-loading, expandable directory tree panel in the integrated file browser for fast folder navigation without changing the main view
+- 🔌 **SSH Keepalive**: Client-side SSH keepalive now runs every 60 seconds (3 missed replies triggers clean disconnect), preventing SSH servers from silently timing out idle connections after hours of inactivity
+
+### Changed
+
+- 🖥️ **File Browser Toolbar**: Enhanced integrated file browser UI with an improved toolbar layout, clearer action grouping, and better visual hierarchy
+
+### Fixed
+
+- 🐛 **Path Quoting**: File listing and stat commands now correctly quote paths containing apostrophes, spaces, and other shell special characters — fixes errors browsing directories with unusual names
+- 🔄 **PTY Session Loss Detection**: After a session is established, a dropped SSH connection now displays `[SSH session lost. Use right-click → Reconnect]` instead of silently spawning a fresh shell with lost state
+- ⚡ **Reconnect Retry**: Implemented cancellation-aware exponential backoff for PTY reconnect attempts; permanent failures (connection not found) now fail fast instead of burning all retry attempts uselessly
+
+
 ## [1.6.0] - 2026-05-08
 
 ### 🍎 R-Shell 1.6 — Native macOS Experience
