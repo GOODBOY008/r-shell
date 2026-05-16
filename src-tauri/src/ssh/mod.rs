@@ -91,6 +91,11 @@ impl SshClient {
                 key: PREFERRED_HOST_KEY_ALGOS,
                 ..russh::Preferred::DEFAULT
             },
+            // Send a keepalive every 60 s. After 3 missed replies russh closes
+            // the connection, preventing the server from silently dropping idle
+            // sessions after hours of inactivity.
+            keepalive_interval: Some(Duration::from_secs(60)),
+            keepalive_max: 3,
             ..client::Config::default()
         };
 

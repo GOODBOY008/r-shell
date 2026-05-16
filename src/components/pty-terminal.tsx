@@ -226,6 +226,11 @@ export function PtyTerminal({
     term.write('\r\n');
 
     let isRunning = true;
+    // Tracks whether a PTY session has been successfully established in this
+    // effect run. Once true, a subsequent WS drop means the user's remote
+    // session is gone — we stop the auto-reconnect loop and let them choose
+    // to reconnect explicitly via the Reconnect button.
+    let hasEverConnected = false;
     
     // CRITICAL: Wait for terminal to have proper dimensions before connecting
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
@@ -309,8 +314,14 @@ export function PtyTerminal({
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
               if (msg.message.includes('PTY connection started')) {
                 reconnectAttemptsRef.current = 0;
-                term.writeln('\x1b[32m✓ PTY connection started\x1b[0m');
-                term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
+                if (hasEverConnected) {
+                  // Reconnected after a drop — warn that a fresh shell was started
+                  term.writeln('\x1b[33m⚠ Previous session lost. New session started.\x1b[0m');
+                } else {
+                  term.writeln('\x1b[32m✓ PTY connection started\x1b[0m');
+                  term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
+                }
+                hasEverConnected = true;
                 term.write('\r\n');
                 if (connectionStatusRef.current !== 'connected') {
                   connectionStatusRef.current = 'connected';
@@ -376,6 +387,11 @@ export function PtyTerminal({
               console.error('[PTY Terminal] Error:', msg.message);
               term.write(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m\r\n`);
               const errorMsgLower = msg.message.toLowerCase();
+              // Permanent failures (SSH session gone on the backend) — stop the
+              // retry loop immediately instead of burning through all 5 attempts.
+              if (errorMsgLower.includes('not found') || errorMsgLower.includes('failed to open')) {
+                reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
+              }
               if (errorMsgLower.includes('session not found') || 
                   errorMsgLower.includes('ssh') || 
                   errorMsgLower.includes('connection') ||
@@ -415,6 +431,19 @@ export function PtyTerminal({
       ws.onclose = () => {
         console.log('[PTY Terminal] WebSocket closed');
         if (isRunning) {
+          // If a session was successfully established, a WS drop means the
+          // remote shell is gone. Stop auto-reconnecting so the user is not
+          // surprised by a fresh shell silently replacing their previous one.
+          // They can use right-click → Reconnect to restart intentionally.
+          if (hasEverConnected) {
+            term.write('\r\n\x1b[33m[SSH session lost. Use right-click → Reconnect to re-establish the connection.]\x1b[0m\r\n');
+            if (connectionStatusRef.current !== 'disconnected') {
+              connectionStatusRef.current = 'disconnected';
+              onConnectionStatusChange?.(connectionId, 'disconnected');
+            }
+            return;
+          }
+
           const attempts = reconnectAttemptsRef.current;
           
           if (attempts >= MAX_RECONNECT_ATTEMPTS) {
