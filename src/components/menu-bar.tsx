@@ -130,16 +130,12 @@ export function MenuBar({
     return () => window.removeEventListener('storage', handleStorageChange);
   }, []);
 
-  const handleDragRegionMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.buttons === 1) {
-      // Double-click toggles maximize; single click starts dragging
-      if (e.detail === 2) {
-        void getCurrentWindow().toggleMaximize();
-      } else {
-        void getCurrentWindow().startDragging();
-      }
+  const handleDragRegionDoubleClick = useCallback(() => {
+    // On non-macOS, data-tauri-drag-region doesn't zoom on double-click, so we do it manually
+    if (!isMac) {
+      void getCurrentWindow().toggleMaximize();
     }
-  }, []);
+  }, [isMac]);
 
   return (
     <div
@@ -402,7 +398,8 @@ export function MenuBar({
       {/* Drag region spacer — fills all empty horizontal space so the user can drag the window */}
       <div
         className="flex-1 h-full min-h-[28px] min-w-0 cursor-default"
-        onMouseDown={handleDragRegionMouseDown}
+        data-tauri-drag-region
+        onDoubleClick={handleDragRegionDoubleClick}
       />
 
       {/* Layout controls — VS Code style, right-aligned */}
