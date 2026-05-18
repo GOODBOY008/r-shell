@@ -186,10 +186,7 @@ mod key_loading_tests {
     #[test]
     fn test_decode_secret_key_with_lf_content() {
         let pem = generate_pem_lf();
-        assert!(
-            pem.contains("-----BEGIN"),
-            "Should be a PEM-encoded key"
-        );
+        assert!(pem.contains("-----BEGIN"), "Should be a PEM-encoded key");
         let result = decode_secret_key(&pem, None);
         assert!(
             result.is_ok(),
@@ -293,7 +290,8 @@ mod key_loading_tests {
         let pem_crlf = generate_pem_lf().replace('\n', "\r\n");
 
         let mut tmp = NamedTempFile::new().expect("tempfile creation must succeed");
-        tmp.write_all(pem_crlf.as_bytes()).expect("write must succeed");
+        tmp.write_all(pem_crlf.as_bytes())
+            .expect("write must succeed");
         tmp.flush().unwrap();
 
         let content = std::fs::read_to_string(tmp.path()).expect("read_to_string must succeed");

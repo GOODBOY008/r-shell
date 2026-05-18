@@ -50,10 +50,28 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
         "File",
         true,
         &[
-            &MenuItem::with_id(app, "new_connection", "New Connection...", true, Some("CmdOrCtrl+N"))?,
+            &MenuItem::with_id(
+                app,
+                "new_connection",
+                "New Connection...",
+                true,
+                Some("CmdOrCtrl+N"),
+            )?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "save_connection", "Save Connection", true, Some("CmdOrCtrl+S"))?,
-            &MenuItem::with_id(app, "close_connection", "Close Tab", true, Some("CmdOrCtrl+W"))?,
+            &MenuItem::with_id(
+                app,
+                "save_connection",
+                "Save Connection",
+                true,
+                Some("CmdOrCtrl+S"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "close_connection",
+                "Close Tab",
+                true,
+                Some("CmdOrCtrl+W"),
+            )?,
         ],
     )?;
 
@@ -74,7 +92,13 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
             &PredefinedMenuItem::select_all(app, None)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "find", "Find...", true, Some("CmdOrCtrl+F"))?,
-            &MenuItem::with_id(app, "clear_screen", "Clear Screen", true, Some("CmdOrCtrl+L"))?,
+            &MenuItem::with_id(
+                app,
+                "clear_screen",
+                "Clear Screen",
+                true,
+                Some("CmdOrCtrl+L"),
+            )?,
         ],
     )?;
 
@@ -87,7 +111,13 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
         &[
             &MenuItem::with_id(app, "settings", "Options...", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "check_updates",
+                "Check for Updates",
+                true,
+                None::<&str>,
+            )?,
         ],
     )?;
 
@@ -122,14 +152,17 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
         ],
     )?;
 
-    Menu::with_items(app, &[
-        &app_menu,
-        &file_menu,
-        &edit_menu,
-        &tools_menu,
-        &connection_menu,
-        &window_menu,
-    ])
+    Menu::with_items(
+        app,
+        &[
+            &app_menu,
+            &file_menu,
+            &edit_menu,
+            &tools_menu,
+            &connection_menu,
+            &window_menu,
+        ],
+    )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

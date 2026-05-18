@@ -142,8 +142,9 @@ impl SshClient {
                 // Read the key file and normalise CRLF line endings so that keys
                 // created or edited on Windows (which use \r\n) are parsed correctly
                 // by russh-keys' PEM / OpenSSH decoder.
-                let key_content = std::fs::read_to_string(&expanded_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e))?;
+                let key_content = std::fs::read_to_string(&expanded_path).map_err(|e| {
+                    anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e)
+                })?;
                 let key_content = key_content.replace("\r\n", "\n");
 
                 // decode_secret_key takes the key *content* as a &str.

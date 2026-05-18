@@ -91,9 +91,7 @@ impl OsInfoCache {
 /// The detection runs a single compound command that reads /etc/os-release,
 /// falls back to uname, and probes for tool availability — all in one
 /// round-trip to minimise latency.
-pub async fn detect_os(
-    client: &crate::ssh::SshClient,
-) -> OsInfo {
+pub async fn detect_os(client: &crate::ssh::SshClient) -> OsInfo {
     // Single compound command — works on virtually every POSIX system.
     // We collect:
     //   1. ID and PRETTY_NAME from /etc/os-release
@@ -186,9 +184,8 @@ fn classify_family(id: &str, id_like: &str, uname: &str) -> OsFamily {
         "debian" | "ubuntu" | "linuxmint" | "pop" | "elementary" | "zorin" | "kali"
         | "raspbian" | "deepin" | "kylin" => return OsFamily::Debian,
 
-        "rhel" | "centos" | "fedora" | "rocky" | "almalinux" | "ol" | "amzn"
-        | "scientific" | "eurolinux" | "anolis" | "openeuler" | "tencentos"
-        | "alinux" => return OsFamily::RedHat,
+        "rhel" | "centos" | "fedora" | "rocky" | "almalinux" | "ol" | "amzn" | "scientific"
+        | "eurolinux" | "anolis" | "openeuler" | "tencentos" | "alinux" => return OsFamily::RedHat,
 
         "alpine" => return OsFamily::Alpine,
 
@@ -230,9 +227,7 @@ impl OsInfo {
     /// Fallback: read /proc/stat twice (works everywhere with /proc).
     pub fn cpu_cmd(&self) -> &'static str {
         match self.family {
-            OsFamily::MacOS => {
-                "top -l1 -n0 | awk '/CPU usage/{gsub(/%/,\"\"); print 100-$7}'"
-            }
+            OsFamily::MacOS => "top -l1 -n0 | awk '/CPU usage/{gsub(/%/,\"\"); print 100-$7}'",
             OsFamily::Alpine if !self.has_procps_top => {
                 // BusyBox top: "CPU:   5% usr   2% sys   0% nic  92% idle ..."
                 // Run one iteration in batch mode, extract idle%, compute 100-idle
@@ -457,7 +452,10 @@ mod tests {
     fn test_classify_debian() {
         assert_eq!(classify_family("ubuntu", "", "linux"), OsFamily::Debian);
         assert_eq!(classify_family("debian", "", "linux"), OsFamily::Debian);
-        assert_eq!(classify_family("linuxmint", "ubuntu debian", "linux"), OsFamily::Debian);
+        assert_eq!(
+            classify_family("linuxmint", "ubuntu debian", "linux"),
+            OsFamily::Debian
+        );
     }
 
     #[test]
@@ -478,7 +476,10 @@ mod tests {
 
     #[test]
     fn test_classify_suse() {
-        assert_eq!(classify_family("opensuse-leap", "", "linux"), OsFamily::Suse);
+        assert_eq!(
+            classify_family("opensuse-leap", "", "linux"),
+            OsFamily::Suse
+        );
         assert_eq!(classify_family("sles", "", "linux"), OsFamily::Suse);
     }
 
@@ -490,8 +491,14 @@ mod tests {
 
     #[test]
     fn test_classify_by_id_like() {
-        assert_eq!(classify_family("pop", "ubuntu debian", "linux"), OsFamily::Debian);
-        assert_eq!(classify_family("eurolinux", "rhel fedora centos", "linux"), OsFamily::RedHat);
+        assert_eq!(
+            classify_family("pop", "ubuntu debian", "linux"),
+            OsFamily::Debian
+        );
+        assert_eq!(
+            classify_family("eurolinux", "rhel fedora centos", "linux"),
+            OsFamily::RedHat
+        );
     }
 
     #[test]
@@ -501,7 +508,10 @@ mod tests {
 
     #[test]
     fn test_classify_unknown_linux() {
-        assert_eq!(classify_family("unknown", "", "linux"), OsFamily::GenericLinux);
+        assert_eq!(
+            classify_family("unknown", "", "linux"),
+            OsFamily::GenericLinux
+        );
     }
 
     #[test]

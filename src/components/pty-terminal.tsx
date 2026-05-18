@@ -68,6 +68,10 @@ export function PtyTerminal({
   const reconnectAttemptsRef = React.useRef(0);
   const MAX_RECONNECT_ATTEMPTS = 5;
   
+  // Auto-reconnect tracking after a successful session drops (e.g. sleep/wake, server timeout)
+  const autoReconnectAfterDropRef = React.useRef(0);
+  const MAX_AUTO_RECONNECT_AFTER_DROP = 5;
+  
   // Flow control - inspired by ttyd
   const flowControlRef = React.useRef({
     written: 0,
@@ -227,10 +231,12 @@ export function PtyTerminal({
 
     let isRunning = true;
     // Tracks whether a PTY session has been successfully established in this
-    // effect run. Once true, a subsequent WS drop means the user's remote
-    // session is gone — we stop the auto-reconnect loop and let them choose
-    // to reconnect explicitly via the Reconnect button.
+    // effect run. Reset to false when we initiate an auto-reconnect after a
+    // drop so the reconnect loop can function normally.
     let hasEverConnected = false;
+    // Set when a drop triggers auto-reconnect, so the Success message can
+    // warn the user that a fresh shell was started.
+    let isReconnectAfterDrop = false;
     
     // CRITICAL: Wait for terminal to have proper dimensions before connecting
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
@@ -314,14 +320,16 @@ export function PtyTerminal({
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
               if (msg.message.includes('PTY connection started')) {
                 reconnectAttemptsRef.current = 0;
-                if (hasEverConnected) {
+                autoReconnectAfterDropRef.current = 0; // Reset drop-reconnect counter on success
+                if (hasEverConnected || isReconnectAfterDrop) {
                   // Reconnected after a drop — warn that a fresh shell was started
-                  term.writeln('\x1b[33m⚠ Previous session lost. New session started.\x1b[0m');
+                  term.writeln('\x1b[33m⚠ Previous session lost. New shell session started.\x1b[0m');
                 } else {
                   term.writeln('\x1b[32m✓ PTY connection started\x1b[0m');
                   term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
                 }
                 hasEverConnected = true;
+                isReconnectAfterDrop = false;
                 term.write('\r\n');
                 if (connectionStatusRef.current !== 'connected') {
                   connectionStatusRef.current = 'connected';
@@ -432,15 +440,42 @@ export function PtyTerminal({
         console.log('[PTY Terminal] WebSocket closed');
         if (isRunning) {
           // If a session was successfully established, a WS drop means the
-          // remote shell is gone. Stop auto-reconnecting so the user is not
-          // surprised by a fresh shell silently replacing their previous one.
-          // They can use right-click → Reconnect to restart intentionally.
+          // remote shell is gone (e.g. sleep/wake cycle, server timeout).
+          // Auto-reconnect with exponential backoff so the user doesn't have
+          // to manually click Reconnect every time the network hiccups.
           if (hasEverConnected) {
-            term.write('\r\n\x1b[33m[SSH session lost. Use right-click → Reconnect to re-establish the connection.]\x1b[0m\r\n');
-            if (connectionStatusRef.current !== 'disconnected') {
-              connectionStatusRef.current = 'disconnected';
-              onConnectionStatusChange?.(connectionId, 'disconnected');
+            const dropAttempt = autoReconnectAfterDropRef.current;
+            if (dropAttempt >= MAX_AUTO_RECONNECT_AFTER_DROP) {
+              // Exhausted auto-reconnect attempts — ask user to act manually.
+              term.write('\r\n\x1b[31m[Connection lost. Auto-reconnect failed after ' + MAX_AUTO_RECONNECT_AFTER_DROP + ' attempts. Use right-click → Reconnect.]\x1b[0m\r\n');
+              if (connectionStatusRef.current !== 'disconnected') {
+                connectionStatusRef.current = 'disconnected';
+                onConnectionStatusChange?.(connectionId, 'disconnected');
+              }
+              return;
             }
+
+            const delay = Math.min(2000 * Math.pow(2, dropAttempt), 30000);
+            autoReconnectAfterDropRef.current = dropAttempt + 1;
+
+            term.write(`\r\n\x1b[33m[Connection lost. Reconnecting in ${Math.round(delay / 1000)}s (attempt ${dropAttempt + 1}/${MAX_AUTO_RECONNECT_AFTER_DROP})...]\x1b[0m\r\n`);
+            if (connectionStatusRef.current !== 'connecting') {
+              connectionStatusRef.current = 'connecting';
+              onConnectionStatusChange?.(connectionId, 'connecting');
+            }
+
+            // Reset flags so the reconnect loop can start cleanly.
+            // isReconnectAfterDrop stays true so the Success message warns
+            // the user that a fresh shell was started.
+            isReconnectAfterDrop = true;
+            hasEverConnected = false;
+            reconnectAttemptsRef.current = 0;
+
+            setTimeout(() => {
+              if (isRunning) {
+                connectWebSocket();
+              }
+            }, delay);
             return;
           }
 
@@ -596,7 +631,27 @@ export function PtyTerminal({
       
       term.dispose();
     };
-  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey, themeKey, appearanceKey]);
+  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey]);
+  // NOTE: themeKey and appearanceKey are intentionally NOT in the deps above.
+  // Including them would tear down the WebSocket + PTY session on every theme
+  // change (e.g. macOS auto Dark/Light switch), killing any running remote
+  // processes such as nvitop. Theme/appearance updates are handled in-place
+  // by the effect below without any connection disruption.
+
+  // Update terminal colors and font in-place when theme or appearance changes.
+  React.useEffect(() => {
+    const term = xtermRef.current;
+    if (!term) return;
+    const currentAppearance = loadAppearanceSettings();
+    const opts = getThemeAwareTerminalOptions(currentAppearance);
+    term.options.theme = opts.theme;
+    term.options.fontSize = opts.fontSize;
+    term.options.fontFamily = opts.fontFamily;
+    term.options.cursorStyle = opts.cursorStyle;
+    term.options.cursorBlink = opts.cursorBlink;
+    // Refit so any font-size change propagates as a PTY resize.
+    fitRef.current?.fit();
+  }, [themeKey, appearanceKey]);
 
   // Context menu handlers
   const handleCopy = React.useCallback(() => {
