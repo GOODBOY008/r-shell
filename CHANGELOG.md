@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [1.8.0] - 2026-05-21
+
+### 🔄 R-Shell 1.8 — Smarter Recovery & Window Controls
+
+This release improves terminal resilience with automatic PTY reconnect handling after dropped connections, and refines desktop window behavior with better drag-region double-click maximize support on non-macOS platforms.
+
+### Added
+
+- 🔁 **Automatic PTY Reconnect**: Interactive terminal sessions now automatically attempt reconnection after connection drops for a smoother recovery experience
+
+### Changed
+
+- 🪟 **Drag Region UX on Non-macOS**: Improved titlebar drag-region behavior to support double-click maximize/restore interactions more consistently on non-macOS platforms
+
+### Fixed
+
+- 🔌 **PTY Drop Recovery Flow**: Improved PTY connection-drop handling to reduce manual recovery steps when SSH sessions are interrupted
+
+
 ## [1.7.0] - 2026-05-16
 
 ### 🔖 R-Shell 1.7 — Stable Sessions
