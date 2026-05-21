@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "file-viewer",
+  "description": "Capability for file viewer popup windows",
+  "windows": ["file-viewer-*"],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -927,22 +927,61 @@ function AppContent() {
     toast.success(`Opening ${filePath.split("/").pop()} in Log Monitor`);
   }, [layout.rightSidebarVisible, toggleRightSidebar]);
 
-  // Handler: open a remote file in an editor tab
+  // Handler: open a remote file in a new Tauri window.
+  // The window is centered on whichever monitor the parent window currently
+  // occupies, matching the behaviour of VS Code, Chrome, Figma, etc.
   const handleOpenInEditor = useCallback((filePath: string, fileName: string) => {
     if (!activeConnection) return;
-    const tabId = `editor-${Date.now()}`;
-    const newTab = {
-      id: tabId,
-      name: fileName,
-      tabType: 'editor' as const,
-      host: activeConnection.host,
-      connectionStatus: activeConnection.status,
-      reconnectCount: 0,
-      editorFilePath: filePath,
-      editorConnectionId: activeConnection.connectionId,
-    };
-    dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
-  }, [activeConnection, dispatch, state.activeGroupId]);
+    const label = `file-viewer-${Date.now()}`;
+    const url = `${window.location.origin}/?mode=file-viewer`
+      + `&connectionId=${encodeURIComponent(activeConnection.connectionId)}`
+      + `&filePath=${encodeURIComponent(filePath)}`
+      + `&fileName=${encodeURIComponent(fileName)}`;
+
+    const WIN_W = 900;
+    const WIN_H = 700;
+
+    Promise.all([
+      import('@tauri-apps/api/webviewWindow'),
+      import('@tauri-apps/api/window'),
+    ]).then(async ([{ WebviewWindow }, { getCurrentWindow, currentMonitor }]) => {
+      const parentWin = getCurrentWindow();
+      const [monitor, scaleFactor] = await Promise.all([
+        currentMonitor(),          // standalone function, not a method on Window
+        parentWin.scaleFactor(),
+      ]);
+
+      // Derive logical (DIP) position centered on the parent's monitor.
+      // Falls back to Tauri's built-in centering if monitor info is unavailable.
+      let position: { x: number; y: number } | undefined;
+      if (monitor) {
+        const logicalMonX = monitor.position.x / scaleFactor;
+        const logicalMonY = monitor.position.y / scaleFactor;
+        const logicalMonW = monitor.size.width / scaleFactor;
+        const logicalMonH = monitor.size.height / scaleFactor;
+        position = {
+          x: Math.round(logicalMonX + (logicalMonW - WIN_W) / 2),
+          y: Math.round(logicalMonY + (logicalMonH - WIN_H) / 2),
+        };
+      }
+
+      const win = new WebviewWindow(label, {
+        url,
+        title: fileName,
+        width: WIN_W,
+        height: WIN_H,
+        // Use explicit position when available; fall back to primary-monitor center
+        ...(position ? position : { center: true }),
+        resizable: true,
+        decorations: true,
+      });
+      win.once('tauri://error', (e) => {
+        toast.error('Failed to open file window', { description: String(e.payload) });
+      });
+    }).catch((err: unknown) => {
+      toast.error('Could not open file window', { description: String(err) });
+    });
+  }, [activeConnection]);
 
   const handleConnectionDialogConnect = useCallback(async (config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
