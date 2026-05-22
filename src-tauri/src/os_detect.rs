@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, OnceCell};
 
 /// Detected OS family of a remote host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,33 +57,41 @@ impl Default for OsInfo {
 }
 
 /// Per-connection OS info cache.
+///
+/// Uses one `OnceCell` per connection so that concurrent callers share a
+/// single in-flight detection rather than each spawning their own.
 pub struct OsInfoCache {
-    cache: Arc<RwLock<HashMap<String, OsInfo>>>,
+    cells: Arc<Mutex<HashMap<String, Arc<OnceCell<OsInfo>>>>>,
 }
 
 impl OsInfoCache {
     pub fn new() -> Self {
         Self {
-            cache: Arc::new(RwLock::new(HashMap::new())),
+            cells: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    /// Get cached OS info for a connection, or None if not yet detected.
-    pub async fn get(&self, connection_id: &str) -> Option<OsInfo> {
-        self.cache.read().await.get(connection_id).cloned()
-    }
-
-    /// Store OS info for a connection.
-    pub async fn set(&self, connection_id: &str, info: OsInfo) {
-        self.cache
-            .write()
-            .await
-            .insert(connection_id.to_string(), info);
+    /// Return the cached OS info, running `init` exactly once per connection.
+    /// Concurrent callers for the same `connection_id` block until the first
+    /// detection completes, then all receive the same cached result.
+    pub async fn get_or_init<F, Fut>(&self, connection_id: &str, init: F) -> OsInfo
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = OsInfo>,
+    {
+        let cell = {
+            let mut cells = self.cells.lock().await;
+            cells
+                .entry(connection_id.to_string())
+                .or_insert_with(|| Arc::new(OnceCell::new()))
+                .clone()
+        };
+        cell.get_or_init(init).await.clone()
     }
 
     /// Remove cached info when a connection is closed.
     pub async fn remove(&self, connection_id: &str) {
-        self.cache.write().await.remove(connection_id);
+        self.cells.lock().await.remove(connection_id);
     }
 }
 

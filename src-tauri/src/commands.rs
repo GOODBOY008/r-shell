@@ -215,26 +215,27 @@ fn get_command_name(command: &str) -> String {
 }
 
 /// Get or detect OS info for a connection (cached after first call).
+///
+/// Concurrent callers for the same connection share a single in-flight
+/// detection via `OnceCell`; only the first caller runs `detect_os`.
 async fn get_os_info(
     connection_id: &str,
     client: &crate::ssh::SshClient,
     state: &Arc<ConnectionManager>,
 ) -> OsInfo {
-    // Return cached info if available
-    if let Some(info) = state.os_info_cache().get(connection_id).await {
-        return info;
-    }
-
-    // Detect and cache
-    let info = os_detect::detect_os(client).await;
-    state.os_info_cache().set(connection_id, info.clone()).await;
-    tracing::info!(
-        "Detected OS for {}: {} ({})",
-        connection_id,
-        info.pretty_name,
-        info.id
-    );
-    info
+    state
+        .os_info_cache()
+        .get_or_init(connection_id, || async {
+            let info = os_detect::detect_os(client).await;
+            tracing::info!(
+                "Detected OS for {}: {} ({})",
+                connection_id,
+                info.pretty_name,
+                info.id
+            );
+            info
+        })
+        .await
 }
 
 #[tauri::command]
