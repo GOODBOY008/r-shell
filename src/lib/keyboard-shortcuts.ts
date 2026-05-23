@@ -1,5 +1,19 @@
 import { useEffect } from 'react';
 
+/**
+ * Returns true when the event's target is a focusable text-editing element
+ * (input, textarea, or contenteditable).  Global layout shortcuts should not
+ * intercept keystrokes while the user is typing in such elements.
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tagName = el.tagName?.toLowerCase();
+  if (tagName === 'input' || tagName === 'textarea') return true;
+  const ce = el.getAttribute('contenteditable');
+  return ce !== null && ce !== 'false';
+}
+
 export interface KeyboardShortcut {
   key: string;
   ctrlKey?: boolean;
@@ -21,6 +35,10 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
     const isMac = navigator.platform.toUpperCase().includes('MAC');
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      // Do not intercept shortcuts while the user is typing in an editable element
+      // (input, textarea, contenteditable) — e.g. the New Connection form fields.
+      if (isEditableTarget(event.target)) return;
+
       for (const shortcut of shortcuts) {
         const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
         // On macOS, treat Cmd (metaKey) as the equivalent of Ctrl for shortcut matching.

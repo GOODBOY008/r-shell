@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createSplitViewShortcuts, KeyboardShortcut } from '../lib/keyboard-shortcuts';
+import { createSplitViewShortcuts, isEditableTarget, KeyboardShortcut } from '../lib/keyboard-shortcuts';
 
 function createMockActions() {
   return {
@@ -146,5 +146,57 @@ describe('createSplitViewShortcuts', () => {
     for (const shortcut of shortcuts) {
       expect(shortcut.description).toBeTruthy();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isEditableTarget
+// ---------------------------------------------------------------------------
+describe('isEditableTarget', () => {
+  function makeElement(tagName: string): HTMLElement {
+    const el = document.createElement(tagName);
+    return el;
+  }
+
+  it('returns false for null', () => {
+    expect(isEditableTarget(null)).toBe(false);
+  });
+
+  it('returns true for an <input> element', () => {
+    expect(isEditableTarget(makeElement('input'))).toBe(true);
+  });
+
+  it('returns true for a <textarea> element', () => {
+    expect(isEditableTarget(makeElement('textarea'))).toBe(true);
+  });
+
+  it('returns true for a contenteditable element', () => {
+    const el = makeElement('div');
+    el.setAttribute('contenteditable', 'true');
+    expect(isEditableTarget(el)).toBe(true);
+  });
+
+  it('returns true for contenteditable="" (empty string means editable)', () => {
+    const el = makeElement('div');
+    el.setAttribute('contenteditable', '');
+    expect(isEditableTarget(el)).toBe(true);
+  });
+
+  it('returns false for contenteditable="false"', () => {
+    const el = makeElement('div');
+    el.setAttribute('contenteditable', 'false');
+    expect(isEditableTarget(el)).toBe(false);
+  });
+
+  it('returns false for a non-editable <div>', () => {
+    expect(isEditableTarget(makeElement('div'))).toBe(false);
+  });
+
+  it('returns false for a <button>', () => {
+    expect(isEditableTarget(makeElement('button'))).toBe(false);
+  });
+
+  it('returns false for a <select>', () => {
+    expect(isEditableTarget(makeElement('select'))).toBe(false);
   });
 });
