@@ -20,6 +20,7 @@ interface PtyTerminalProps {
   username?: string;
   appearanceKey?: number;
   themeKey?: number;
+  isActive?: boolean;
   onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => void;
 }
 
@@ -38,6 +39,7 @@ export function PtyTerminal({
   username = 'user',
   appearanceKey = 0,
   themeKey = 0,
+  isActive = true,
   onConnectionStatusChange
 }: PtyTerminalProps) {
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
@@ -47,6 +49,8 @@ export function PtyTerminal({
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
   const containerRef = React.useRef<HTMLDivElement | null>(null);
+  const initialIsActiveRef = React.useRef(isActive);
+  const wasActiveRef = React.useRef(isActive);
   
   // Search bar state
   const [searchVisible, setSearchVisible] = React.useState(false);
@@ -140,8 +144,10 @@ export function PtyTerminal({
     fitRef.current = fitAddon;
     searchRef.current = searchAddon;
 
-    // Focus terminal to enable keyboard input
-    term.focus();
+    // Focus terminal to enable keyboard input when this tab is mounted active.
+    if (initialIsActiveRef.current) {
+      term.focus();
+    }
     
     // Track selection changes for context menu
     term.onSelectionChange(() => {
@@ -652,6 +658,35 @@ export function PtyTerminal({
     // Refit so any font-size change propagates as a PTY resize.
     fitRef.current?.fit();
   }, [themeKey, appearanceKey]);
+
+  React.useEffect(() => {
+    if (!isActive) {
+      wasActiveRef.current = false;
+      return;
+    }
+
+    if (wasActiveRef.current) {
+      return;
+    }
+
+    wasActiveRef.current = true;
+
+    const frameId = window.requestAnimationFrame(() => {
+      const term = xtermRef.current;
+      const fitAddon = fitRef.current;
+      const container = containerRef.current;
+      if (!term || !fitAddon || !container) return;
+      if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
+
+      fitAddon.fit();
+      if (term.rows > 0) {
+        term.refresh(0, term.rows - 1);
+      }
+      term.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [isActive]);
 
   // Context menu handlers
   const handleCopy = React.useCallback(() => {
