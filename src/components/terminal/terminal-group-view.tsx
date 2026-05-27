@@ -160,6 +160,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
                   host={tab.host}
                   username={tab.username}
                   themeKey={themeKey}
+                  isActive={isActive && tab.id === group.activeTabId}
                   onConnectionStatusChange={handleConnectionStatusChange}
                 />
               ) : (
