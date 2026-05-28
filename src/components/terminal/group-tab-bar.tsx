@@ -140,13 +140,15 @@ export function GroupTabBar({
   );
 
   return (
-    <div className="bg-muted border-b border-border flex items-center">
+    <div
+      className="bg-muted border-b border-border flex items-center"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <div
         ref={tabBarRef}
-        className="flex items-center overflow-x-auto relative"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        className="flex flex-1 min-w-0 items-center overflow-x-auto relative"
       >
         {tabs.map((tab, index) => (
           <React.Fragment key={tab.id}>
