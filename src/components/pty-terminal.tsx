@@ -833,7 +833,7 @@ export function PtyTerminal({
     >
     <div 
       ref={containerRef}
-      className="relative h-full w-full terminal-no-scrollbar overflow-hidden"
+      className="relative h-full w-full pty-terminal-container overflow-hidden"
       onClick={(e) => {
         // Don't refocus terminal if clicking on search bar or other interactive elements
         const target = e.target as HTMLElement;
@@ -879,36 +879,47 @@ export function PtyTerminal({
         <div ref={terminalRef} className="h-full w-full" />
       </div>
       <style>{`
-        .terminal-no-scrollbar .xterm-viewport::-webkit-scrollbar {
-          display: none;
+        .pty-terminal-container .xterm-viewport {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+          scrollbar-gutter: stable;
         }
-        .terminal-no-scrollbar .xterm-viewport {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
+        .pty-terminal-container .xterm-viewport::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
+        }
+        .pty-terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+          background-color: rgba(148, 163, 184, 0.55);
+          border: 2px solid transparent;
+          border-radius: 999px;
+          background-clip: content-box;
+        }
+        .pty-terminal-container .xterm-viewport::-webkit-scrollbar-track {
+          background: transparent;
         }
         /* Make xterm background transparent when background image is set */
         ${appearance.backgroundImage ? `
-        .terminal-no-scrollbar .xterm {
+        .pty-terminal-container .xterm {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-viewport {
+        .pty-terminal-container .xterm-viewport {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-screen {
+        .pty-terminal-container .xterm-screen {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-rows {
+        .pty-terminal-container .xterm-rows {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar canvas {
+        .pty-terminal-container canvas {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-helper-textarea {
+        .pty-terminal-container .xterm-helper-textarea {
           background-color: transparent !important;
         }
         ` : ''}
