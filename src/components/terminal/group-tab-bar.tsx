@@ -175,15 +175,24 @@ export function GroupTabBar({
                     ) : (
                       <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     )}
-                    <div
-                      className={`w-2 h-2 rounded-full shrink-0 ${
-                        tab.connectionStatus === 'connected'
-                          ? 'bg-green-500'
-                          : tab.connectionStatus === 'connecting'
-                            ? 'bg-yellow-500 animate-pulse'
-                            : 'bg-red-500'
-                      }`}
-                    />
+                    <div className="relative h-2 w-2 shrink-0">
+                      <div
+                        className={`h-2 w-2 rounded-full ${
+                          tab.connectionStatus === 'connected'
+                            ? 'bg-green-500'
+                            : tab.connectionStatus === 'connecting'
+                              ? 'bg-yellow-500 animate-pulse'
+                              : 'bg-red-500'
+                        }`}
+                      />
+                      {tab.hasUnreadOutput && (
+                        <span
+                          data-testid={`tab-unread-output-${tab.id}`}
+                          aria-label="Unread terminal output"
+                          className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-sky-500 ring-2 ring-background animate-pulse"
+                        />
+                      )}
+                    </div>
                     <span className="text-sm truncate">{getTabDisplayName(tab, tabs)}</span>
                   </div>
 

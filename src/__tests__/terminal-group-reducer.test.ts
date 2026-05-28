@@ -288,6 +288,12 @@ describe('ACTIVATE_TAB', () => {
     const next = terminalGroupReducer(state, { type: 'ACTIVATE_TAB', groupId: '1', tabId: 'b' });
     expect(next.groups['1'].activeTabId).toBe('b');
   });
+
+  it('clears unread output when activating a tab', () => {
+    const state = stateWithTabs('1', [makeTab('a'), { ...makeTab('b'), hasUnreadOutput: true }], 'a');
+    const next = terminalGroupReducer(state, { type: 'ACTIVATE_TAB', groupId: '1', tabId: 'b' });
+    expect(next.groups['1'].tabs.find((tab) => tab.id === 'b')?.hasUnreadOutput).toBe(false);
+  });
 });
 
 // ── Reducer: ACTIVATE_GROUP ──
@@ -298,6 +304,44 @@ describe('ACTIVATE_GROUP', () => {
     state = terminalGroupReducer(state, { type: 'SPLIT_GROUP', groupId: '1', direction: 'right' });
     const next = terminalGroupReducer(state, { type: 'ACTIVATE_GROUP', groupId: '1' });
     expect(next.activeGroupId).toBe('1');
+  });
+
+  it('clears unread output on the active tab of the activated group', () => {
+    const state: TerminalGroupState = {
+      groups: {
+        '1': { id: '1', tabs: [makeTab('a')], activeTabId: 'a' },
+        '2': { id: '2', tabs: [{ ...makeTab('b'), hasUnreadOutput: true }], activeTabId: 'b' },
+      },
+      activeGroupId: '1',
+      gridLayout: {
+        type: 'branch',
+        direction: 'horizontal',
+        children: [
+          { type: 'leaf', groupId: '1' },
+          { type: 'leaf', groupId: '2' },
+        ],
+        sizes: [50, 50],
+      },
+      nextGroupId: 3,
+      tabToGroupMap: { a: '1', b: '2' },
+    };
+
+    const next = terminalGroupReducer(state, { type: 'ACTIVATE_GROUP', groupId: '2' });
+    expect(next.groups['2'].tabs[0].hasUnreadOutput).toBe(false);
+  });
+});
+
+describe('MARK_TAB_UNREAD_OUTPUT', () => {
+  it('marks a hidden tab when output arrives', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b')], 'a');
+    const next = terminalGroupReducer(state, { type: 'MARK_TAB_UNREAD_OUTPUT', tabId: 'b' });
+    expect(next.groups['1'].tabs.find((tab) => tab.id === 'b')?.hasUnreadOutput).toBe(true);
+  });
+
+  it('does not mark the currently visible tab', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b')], 'a');
+    const next = terminalGroupReducer(state, { type: 'MARK_TAB_UNREAD_OUTPUT', tabId: 'a' });
+    expect(next.groups['1'].tabs.find((tab) => tab.id === 'a')?.hasUnreadOutput).toBeFalsy();
   });
 });
 

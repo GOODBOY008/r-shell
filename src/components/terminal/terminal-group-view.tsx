@@ -70,6 +70,13 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
     [dispatch],
   );
 
+  const handleTerminalOutput = useCallback(
+    (connectionId: string) => {
+      dispatch({ type: 'MARK_TAB_UNREAD_OUTPUT', tabId: connectionId });
+    },
+    [dispatch],
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       // Don't intercept keys that originate from within the terminal.
@@ -162,6 +169,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
                   themeKey={themeKey}
                   isActive={isActive && tab.id === group.activeTabId}
                   onConnectionStatusChange={handleConnectionStatusChange}
+                  onOutput={handleTerminalOutput}
                 />
               ) : (
                 <div className="h-full w-full flex items-center justify-center bg-muted/30">

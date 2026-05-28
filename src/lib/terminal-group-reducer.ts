@@ -141,6 +141,49 @@ function maybeRemoveEmptyGroup(state: TerminalGroupState, groupId: string): Term
   return removeGroupFromState(state, groupId);
 }
 
+function findGroupIdForTab(state: TerminalGroupState, tabId: string): string | null {
+  const mappedGroupId = state.tabToGroupMap[tabId];
+  if (mappedGroupId && state.groups[mappedGroupId]?.tabs.some((tab) => tab.id === tabId)) {
+    return mappedGroupId;
+  }
+
+  for (const [groupId, group] of Object.entries(state.groups)) {
+    if (group.tabs.some((tab) => tab.id === tabId)) {
+      return groupId;
+    }
+  }
+
+  return null;
+}
+
+function updateTabUnreadOutput(
+  state: TerminalGroupState,
+  groupId: string,
+  tabId: string,
+  hasUnreadOutput: boolean,
+): TerminalGroupState {
+  const group = state.groups[groupId];
+  if (!group) return state;
+
+  let changed = false;
+  const tabs = group.tabs.map((tab) => {
+    if (tab.id !== tabId) return tab;
+    if ((tab.hasUnreadOutput ?? false) === hasUnreadOutput) return tab;
+    changed = true;
+    return { ...tab, hasUnreadOutput };
+  });
+
+  if (!changed) return state;
+
+  return {
+    ...state,
+    groups: {
+      ...state.groups,
+      [groupId]: { ...group, tabs },
+    },
+  };
+}
+
 function removeGroupFromState(state: TerminalGroupState, groupId: string): TerminalGroupState {
   const group = state.groups[groupId];
   const newGroups = { ...state.groups };
@@ -229,7 +272,11 @@ export function terminalGroupReducer(
 
     case 'ACTIVATE_GROUP': {
       if (!state.groups[action.groupId]) return state;
-      return { ...state, activeGroupId: action.groupId };
+      const nextState = { ...state, activeGroupId: action.groupId };
+      const activeTabId = state.groups[action.groupId].activeTabId;
+      return activeTabId
+        ? updateTabUnreadOutput(nextState, action.groupId, activeTabId, false)
+        : nextState;
     }
 
     case 'ADD_TAB': {
@@ -281,13 +328,14 @@ export function terminalGroupReducer(
       const group = state.groups[action.groupId];
       if (!group) return state;
       if (!group.tabs.some((t) => t.id === action.tabId)) return state;
-      return {
+      const nextState = {
         ...state,
         groups: {
           ...state.groups,
           [action.groupId]: { ...group, activeTabId: action.tabId },
         },
       };
+      return updateTabUnreadOutput(nextState, action.groupId, action.tabId, false);
     }
 
     case 'MOVE_TAB': {
@@ -490,7 +538,7 @@ export function terminalGroupReducer(
 
     case 'UPDATE_TAB_STATUS': {
       const { tabId, status } = action;
-      const groupId = state.tabToGroupMap[tabId];
+      const groupId = findGroupIdForTab(state, tabId);
       if (!groupId) return state;
 
       const group = state.groups[groupId];
@@ -509,6 +557,15 @@ export function terminalGroupReducer(
           [groupId]: { ...group, tabs: newTabs },
         },
       };
+    }
+
+    case 'MARK_TAB_UNREAD_OUTPUT': {
+      const groupId = findGroupIdForTab(state, action.tabId);
+      if (!groupId) return state;
+
+      const group = state.groups[groupId];
+      const isVisible = state.activeGroupId === groupId && group.activeTabId === action.tabId;
+      return updateTabUnreadOutput(state, groupId, action.tabId, !isVisible);
     }
 
     case 'RECONNECT_TAB': {
