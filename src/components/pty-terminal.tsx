@@ -56,6 +56,13 @@ export function PtyTerminal({
   const [searchVisible, setSearchVisible] = React.useState(false);
   const [searchFocusTrigger, setSearchFocusTrigger] = React.useState(0);
   const [hasSelection, setHasSelection] = React.useState(false);
+
+  // Scrollbar visibility — only show when buffer overflows the visible rows
+  const [hasScrollableContent, setHasScrollableContent] = React.useState(false);
+
+  // Unique CSS scoping class for this instance — prevents dynamic scrollbar rules
+  // injected via <style> from bleeding across multiple mounted terminals on the page.
+  const scopeId = React.useId().replace(/:/g, '');
   
   // Track whether terminal was created with background image (determines renderer choice)
   const hadBackgroundImageRef = React.useRef<boolean | null>(null);
@@ -143,6 +150,12 @@ export function PtyTerminal({
     xtermRef.current = term;
     fitRef.current = fitAddon;
     searchRef.current = searchAddon;
+
+    // Scrollbar visibility: show only when content overflows the viewport.
+    const checkScrollability = () => {
+      setHasScrollableContent(term.buffer.active.length > term.rows);
+    };
+    const lineFeedDisposable = term.onLineFeed(checkScrollability);
 
     // Focus terminal to enable keyboard input when this tab is mounted active.
     if (initialIsActiveRef.current) {
@@ -545,6 +558,7 @@ export function PtyTerminal({
       if (cols === lastSentCols && rows === lastSentRows) return;
       lastSentCols = cols;
       lastSentRows = rows;
+      checkScrollability(); // row count changed — re-evaluate scrollability
 
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -631,6 +645,7 @@ export function PtyTerminal({
       
       inputDisposable.dispose();
       resizeDisposable.dispose();
+      lineFeedDisposable.dispose();
       window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
       if (fitTimer) clearTimeout(fitTimer);
@@ -730,6 +745,7 @@ export function PtyTerminal({
 
   const handleClear = React.useCallback(() => {
     xtermRef.current?.clear();
+    setHasScrollableContent(false);
   }, []);
 
   const handleClearScrollback = React.useCallback(() => {
@@ -738,6 +754,7 @@ export function PtyTerminal({
       term.clear();
       // Note: clearScrollback method doesn't exist in newer xterm versions
       // clear() already clears both viewport and scrollback
+      setHasScrollableContent(false);
     }
   }, []);
 
@@ -833,7 +850,7 @@ export function PtyTerminal({
     >
     <div 
       ref={containerRef}
-      className="relative h-full w-full pty-terminal-container overflow-hidden"
+      className={`relative h-full w-full pty-terminal-container pty-term-${scopeId} overflow-hidden`}
       onClick={(e) => {
         // Don't refocus terminal if clicking on search bar or other interactive elements
         const target = e.target as HTMLElement;
@@ -879,47 +896,50 @@ export function PtyTerminal({
         <div ref={terminalRef} className="h-full w-full" />
       </div>
       <style>{`
-        .pty-terminal-container .xterm-viewport {
-          scrollbar-width: thin;
+        /* Scrollbar appearance — scoped to this terminal instance */
+        .pty-term-${scopeId} .xterm-viewport {
           scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
-          scrollbar-gutter: stable;
+          scrollbar-width: ${hasScrollableContent ? 'thin' : 'none'};
+          scrollbar-gutter: ${hasScrollableContent ? 'stable' : 'auto'};
+          overflow-y: ${hasScrollableContent ? 'auto' : 'hidden'};
         }
-        .pty-terminal-container .xterm-viewport::-webkit-scrollbar {
+        ${hasScrollableContent ? `
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar {
           width: 10px;
           height: 10px;
         }
-        .pty-terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar-thumb {
           background-color: rgba(148, 163, 184, 0.55);
           border: 2px solid transparent;
           border-radius: 999px;
           background-clip: content-box;
         }
-        .pty-terminal-container .xterm-viewport::-webkit-scrollbar-track {
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar-track {
           background: transparent;
-        }
+        }` : ''}
         /* Make xterm background transparent when background image is set */
         ${appearance.backgroundImage ? `
-        .pty-terminal-container .xterm {
+        .pty-term-${scopeId} .xterm {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .pty-terminal-container .xterm-viewport {
+        .pty-term-${scopeId} .xterm-viewport {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .pty-terminal-container .xterm-screen {
+        .pty-term-${scopeId} .xterm-screen {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .pty-terminal-container .xterm-rows {
+        .pty-term-${scopeId} .xterm-rows {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .pty-terminal-container canvas {
+        .pty-term-${scopeId} canvas {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .pty-terminal-container .xterm-helper-textarea {
+        .pty-term-${scopeId} .xterm-helper-textarea {
           background-color: transparent !important;
         }
         ` : ''}
