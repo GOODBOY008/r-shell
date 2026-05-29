@@ -1,10 +1,11 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { PtyTerminal } from '../components/pty-terminal';
 
 const mocks = vi.hoisted(() => {
   const terminals: Array<any> = [];
+  let capturedLineFeedCallback: (() => void) | null = null;
 
   class MockTerminal {
     cols = 80;
@@ -27,6 +28,10 @@ const mocks = vi.hoisted(() => {
     attachCustomKeyEventHandler = vi.fn();
     onData = vi.fn(() => ({ dispose: vi.fn() }));
     onResize = vi.fn(() => ({ dispose: vi.fn() }));
+    onLineFeed = vi.fn((callback: () => void) => {
+      capturedLineFeedCallback = callback;
+      return { dispose: vi.fn() };
+    });
     hasSelection = vi.fn(() => false);
     getSelection = vi.fn(() => '');
     selectAll = vi.fn();
@@ -55,7 +60,7 @@ const mocks = vi.hoisted(() => {
     return terminal;
   });
 
-  return { terminals, Terminal, MockWebSocket };
+  return { terminals, Terminal, MockWebSocket, getLineFeedCallback: () => capturedLineFeedCallback };
 });
 
 vi.mock('@xterm/xterm', () => ({
@@ -178,16 +183,42 @@ describe('PtyTerminal scrollbar visibility', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps the xterm viewport scrollbar visible for long output', () => {
+  it('hides the xterm viewport scrollbar when content fits in the viewport', () => {
     const { container } = renderTerminal();
     const styles = Array.from(container.querySelectorAll('style'))
       .map((style) => style.textContent ?? '')
       .join('\n');
 
+    // No class-based hiding — CSS-only approach
     expect(container.querySelector('.terminal-no-scrollbar')).toBeNull();
+    // No heavy-handed hiding techniques
     expect(styles).not.toContain('display: none');
-    expect(styles).not.toContain('scrollbar-width: none');
-    expect(styles).toContain('.pty-terminal-container .xterm-viewport');
+    // Content doesn't overflow — viewport should have scrollbar hidden
+    expect(styles).toContain('overflow-y: hidden');
+    expect(styles).toContain('scrollbar-width: none');
+    // No webkit scrollbar thumb/track rules injected when not scrollable
+    expect(styles).not.toContain('::-webkit-scrollbar-thumb');
+  });
+
+  it('shows the xterm viewport scrollbar when content overflows the viewport', () => {
+    const { container } = renderTerminal();
+    const terminal = mocks.terminals[0];
+    const lineFeedCallback = mocks.getLineFeedCallback();
+
+    // Simulate more lines than the 24-row viewport
+    terminal.buffer.active.length = 30;
+
+    act(() => {
+      lineFeedCallback?.();
+    });
+
+    const styles = Array.from(container.querySelectorAll('style'))
+      .map((s) => s.textContent ?? '')
+      .join('\n');
+
+    expect(styles).toContain('overflow-y: auto');
+    expect(styles).toContain('scrollbar-gutter: stable');
+    expect(styles).toContain('::-webkit-scrollbar');
     expect(styles).toContain('scrollbar-width: thin');
   });
 });
