@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [2.0.0] - 2026-05-30
+
+### 🚀 R-Shell 2.0 — Foundation
+
+R-Shell 2.0 marks the first stable major release, consolidating everything built since the initial launch: interactive SSH terminals with PTY streaming, SFTP/FTP dual-pane file management, a built-in code editor, remote desktop support (RDP/VNC), cross-platform system monitoring, native macOS menu bar, automatic reconnection, and a VS Code-like resizable panel layout. This release represents the complete, production-ready baseline for all future development.
+
+### Added
+
+- 🖥️ **Interactive PTY Terminal**: Full xterm.js-powered SSH terminal with WebSocket streaming, flow control, resize events, and IME/CJK input support
+- 📁 **SFTP/FTP Dual-Pane File Manager**: FileZilla-style transfer queue, OS-native drag-and-drop uploads, multi-file downloads with native file picker
+- ✏️ **Built-in Code Editor**: CodeMirror-based editor with syntax highlighting for 15+ languages, search/replace, code folding, and bracket matching
+- 🖥️ **Remote Desktop (RDP & VNC)**: Connect to Windows machines via RDP and graphical servers via VNC as integrated tab types
+- 📊 **System Monitoring**: Distro-aware CPU, memory, disk, network, and process monitors using OS-specific commands
+- 🍎 **Native macOS Menu Bar**: Full `NSMenu` integration with standard macOS application menus and keyboard shortcuts
+- 🌳 **Lazy-Loading Directory Tree**: Expandable directory tree panel in the integrated file browser for fast folder navigation
+- 🔁 **Automatic PTY Reconnect**: Exponential-backoff reconnection after connection drops with clear session-loss indicators
+- 🔌 **SSH Keepalive**: Client-side keepalive every 60 seconds to prevent server-side idle timeouts
+- 🔀 **Multi-Connection Support**: Multiple simultaneous tabs to the same server profile, each with independent sessions and auto-suffixed names
+- 🛡️ **Error Boundary**: React `ErrorBoundary` wraps key UI sections to catch render errors gracefully
+
+### Changed
+
+- 🏗️ **Architecture Stabilized**: Dual communication model (Tauri commands + WebSocket PTY) locked in as the stable API surface for 2.x
+- 🔍 **OS Detection**: Remote OS type and distro detected on connect and cached per connection for accurate metric collection
+- 🪟 **Drag Region & Window Controls**: Native titlebar drag region, maximize/restore button, and improved double-click behavior on all platforms
+- 🎨 **Tab & Scrollbar Styling**: Clearer active/hover/inactive tab differentiation and improved scrollbar visibility
+
+### Fixed
+
+- 🔐 **SSH Key Compatibility**: `~/` tilde expansion and `\r\n` CRLF normalization for cross-platform private key support
+- 🔐 **RSA Server Compatibility**: `ssh-rsa` host key algorithm support for legacy SSH servers
+- 🐛 **Path Quoting**: Shell-special characters (spaces, apostrophes) in remote paths handled correctly throughout
+- ⌨️ **macOS Keyboard Shortcuts**: `Cmd` key correctly maps as `Ctrl` equivalent for all layout shortcuts
+- 🔄 **Reconnect Flow**: Full re-authentication before PTY restart; tab bar and right-click reconnect actions use a consistent code path
+
+
 ## [1.8.0] - 2026-05-21
 
 ### 🔄 R-Shell 1.8 — Smarter Recovery & Window Controls
