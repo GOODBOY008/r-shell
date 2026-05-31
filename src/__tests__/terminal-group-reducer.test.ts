@@ -343,6 +343,31 @@ describe('MARK_TAB_UNREAD_OUTPUT', () => {
     const next = terminalGroupReducer(state, { type: 'MARK_TAB_UNREAD_OUTPUT', tabId: 'a' });
     expect(next.groups['1'].tabs.find((tab) => tab.id === 'a')?.hasUnreadOutput).toBeFalsy();
   });
+
+  it('does not mark the active tab of another rendered split group', () => {
+    const state: TerminalGroupState = {
+      groups: {
+        '1': { id: '1', tabs: [makeTab('a')], activeTabId: 'a' },
+        '2': { id: '2', tabs: [makeTab('c')], activeTabId: 'c' },
+      },
+      activeGroupId: '1',
+      gridLayout: {
+        type: 'branch',
+        direction: 'horizontal',
+        children: [
+          { type: 'leaf', groupId: '1' },
+          { type: 'leaf', groupId: '2' },
+        ],
+        sizes: [50, 50],
+      },
+      nextGroupId: 3,
+      tabToGroupMap: { a: '1', c: '2' },
+    };
+
+    const next = terminalGroupReducer(state, { type: 'MARK_TAB_UNREAD_OUTPUT', tabId: 'c' });
+
+    expect(next.groups['2'].tabs[0].hasUnreadOutput).toBeFalsy();
+  });
 });
 
 // ── Reducer: MOVE_TAB ──

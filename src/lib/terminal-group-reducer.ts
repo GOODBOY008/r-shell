@@ -564,7 +564,7 @@ export function terminalGroupReducer(
       if (!groupId) return state;
 
       const group = state.groups[groupId];
-      const isVisible = state.activeGroupId === groupId && group.activeTabId === action.tabId;
+      const isVisible = group.activeTabId === action.tabId;
       return updateTabUnreadOutput(state, groupId, action.tabId, !isVisible);
     }
 
