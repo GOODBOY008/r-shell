@@ -2662,6 +2662,14 @@ pub async fn list_local_files_recursive(
 ) -> Result<Vec<SyncFileEntry>, String> {
     use std::fs;
 
+    fn relative_path_to_string(path: &std::path::Path) -> String {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .filter(|component| !component.is_empty())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
     fn walk_dir(
         base: &std::path::Path,
         current: &std::path::Path,
@@ -2692,8 +2700,8 @@ pub async fn list_local_files_recursive(
                 .path()
                 .strip_prefix(base)
                 .unwrap_or(item.path().as_path())
-                .to_string_lossy()
-                .to_string();
+                .to_path_buf();
+            let rel_path = relative_path_to_string(&rel_path);
 
             let file_type = if metadata.is_dir() {
                 FileEntryType::Directory
@@ -3101,6 +3109,26 @@ mod local_fs_tests {
         let result = create_local_directory(new_dir.clone()).await;
         assert!(result.is_ok());
         assert!(std::path::Path::new(&new_dir).is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_list_local_files_recursive_returns_portable_relative_paths() {
+        let dir = create_test_dir();
+        let path = dir.path().to_string_lossy().to_string();
+        let entries = list_local_files_recursive(path, vec![]).await.unwrap();
+        let relative_paths: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry.relative_path.as_str())
+            .collect();
+
+        assert!(relative_paths.contains(&"subdir/nested.txt"));
+        assert!(
+            relative_paths
+                .iter()
+                .all(|relative_path| !relative_path.contains('\\')),
+            "relative paths should use forward slashes: {:?}",
+            relative_paths
+        );
     }
 
     #[test]

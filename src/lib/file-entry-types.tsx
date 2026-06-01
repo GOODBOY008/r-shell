@@ -122,12 +122,17 @@ export function localParentPath(p: string): string {
   // Normalize to forward slashes
   const normalized = p.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
+
+  if (parts[0]?.match(/^[A-Za-z]:$/)) {
+    if (parts.length <= 1) return `${parts[0]}\\`;
+    parts.pop();
+    return parts.length === 1
+      ? `${parts[0]}\\`
+      : `${parts[0]}\\${parts.slice(1).join("\\")}`;
+  }
+
   parts.pop();
   if (parts.length === 0) return "/";
-  // Preserve drive letter on Windows (e.g., "C:")
-  if (parts[0].match(/^[A-Za-z]:$/)) {
-    return parts.length === 1 ? `${parts[0]}/` : parts.join("/");
-  }
   return `/${parts.join("/")}`;
 }
 
@@ -140,10 +145,10 @@ export function localBreadcrumbSegments(
 
   // Check for drive letter (Windows)
   if (parts.length > 0 && parts[0].match(/^[A-Za-z]:$/)) {
-    segs.push({ label: parts[0], path: `${parts[0]}/` });
+    segs.push({ label: `${parts[0]}\\`, path: `${parts[0]}\\` });
     let acc = parts[0];
     for (let i = 1; i < parts.length; i++) {
-      acc += `/${parts[i]}`;
+      acc += `\\${parts[i]}`;
       segs.push({ label: parts[i], path: acc });
     }
   } else {
