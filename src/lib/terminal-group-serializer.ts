@@ -39,12 +39,16 @@ export function deserialize(json: string): TerminalGroupState | null {
  */
 export function saveState(state: TerminalGroupState): void {
   try {
+    const tabToGroupMap = state.tabToGroupMap;
+
     // Strip editor tabs before saving — they are transient and cannot be restored
     const filtered: TerminalGroupState = {
       ...state,
       groups: Object.fromEntries(
         Object.entries(state.groups).map(([id, group]) => {
-          const tabs = group.tabs.filter(t => t.tabType !== 'editor');
+          const tabs = group.tabs
+            .filter(t => t.tabType !== 'editor')
+            .map(({ hasUnreadOutput: _hasUnreadOutput, ...tab }) => tab);
           return [id, {
             ...group,
             tabs,
@@ -52,13 +56,15 @@ export function saveState(state: TerminalGroupState): void {
           }];
         }),
       ),
-      tabToGroupMap: Object.fromEntries(
-        Object.entries(state.tabToGroupMap).filter(([tabId]) => {
-          const group = state.groups[state.tabToGroupMap[tabId]];
-          const tab = group?.tabs.find(t => t.id === tabId);
-          return tab?.tabType !== 'editor';
-        }),
-      ),
+      tabToGroupMap: tabToGroupMap
+        ? Object.fromEntries(
+          Object.entries(tabToGroupMap).filter(([tabId]) => {
+            const group = state.groups[tabToGroupMap[tabId]];
+            const tab = group?.tabs.find(t => t.id === tabId);
+            return tab?.tabType !== 'editor';
+          }),
+        )
+        : tabToGroupMap,
     };
     localStorage.setItem(STORAGE_KEY, serialize(filtered));
   } catch (e) {

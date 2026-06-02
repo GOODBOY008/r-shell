@@ -40,6 +40,7 @@ function initializeState(): TerminalGroupState {
       tabs: group.tabs.map((tab) => ({
         ...tab,
         connectionStatus: 'pending' as const,
+        hasUnreadOutput: false,
       })),
     };
     for (const tab of group.tabs) {

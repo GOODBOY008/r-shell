@@ -18,6 +18,8 @@ export interface TerminalTab {
   originalConnectionId?: string;
   connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'pending';
   reconnectCount: number;
+  /** 后台终端产生新输出时显示未读提示，切回该 tab 后清除。 */
+  hasUnreadOutput?: boolean;
   /** For editor tabs: the remote file path being edited */
   editorFilePath?: string;
   /** For editor tabs: the SSH connectionId used to read/write the file */
@@ -55,6 +57,7 @@ export type TerminalGroupAction =
   | { type: 'CLOSE_TABS_TO_LEFT'; groupId: string; tabId: string }
   | { type: 'MOVE_TAB_TO_NEW_GROUP'; groupId: string; tabId: string; direction: SplitDirection }
   | { type: 'UPDATE_TAB_STATUS'; tabId: string; status: 'connected' | 'connecting' | 'disconnected' | 'pending' }
+  | { type: 'MARK_TAB_UNREAD_OUTPUT'; tabId: string }
   | { type: 'RECONNECT_TAB'; tabId: string }
   | { type: 'UPDATE_GRID_SIZES'; path: number[]; sizes: number[] }
   | { type: 'RESET_LAYOUT' }
