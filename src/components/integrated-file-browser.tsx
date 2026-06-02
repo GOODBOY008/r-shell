@@ -744,9 +744,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         );
 
         for (const remoteDirectory of plan.directories) {
+          // create_directory wraps the path in single quotes on the Rust side,
+          // so escape single quotes to avoid shell parsing/injection issues.
+          const escapedRemoteDirectory = remoteDirectory.replace(/'/g, `'\\''`);
           await invoke<boolean>("create_directory", {
             connectionId,
-            path: remoteDirectory,
+            path: escapedRemoteDirectory,
           });
           createdDirectoryCount += 1;
         }
