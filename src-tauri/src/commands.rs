@@ -457,6 +457,14 @@ pub async fn sftp_upload_file(
 }
 
 // File operation commands
+
+/// Escape a path for use inside a POSIX single-quoted shell argument.
+/// Single quotes cannot appear inside a single-quoted string, so we end the
+/// quote, emit the escaped quote, and reopen the quote: `'` → `'\''`.
+fn shell_escape_single_quoted(path: &str) -> String {
+    path.replace('\'', "'\\''")
+}
+
 #[tauri::command]
 pub async fn create_directory(
     connection_id: String,
@@ -469,7 +477,7 @@ pub async fn create_directory(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("mkdir -p '{}'", path);
+    let command = format!("mkdir -p '{}'", shell_escape_single_quoted(&path));
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -491,9 +499,9 @@ pub async fn delete_file(
 
     let client = connection.read().await;
     let command = if is_directory {
-        format!("rm -rf '{}'", path)
+        format!("rm -rf '{}'", shell_escape_single_quoted(&path))
     } else {
-        format!("rm -f '{}'", path)
+        format!("rm -f '{}'", shell_escape_single_quoted(&path))
     };
 
     match client.execute_command(&command).await {
@@ -515,7 +523,7 @@ pub async fn rename_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("mv '{}' '{}'", old_path, new_path);
+    let command = format!("mv '{}' '{}'", shell_escape_single_quoted(&old_path), shell_escape_single_quoted(&new_path));
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),

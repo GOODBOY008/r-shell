@@ -728,6 +728,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
       const queuedItems: UploadQueueInput[] = [];
       let createdDirectoryCount = 0;
+      const dirErrors: string[] = [];
 
       for (const directoryPath of directoryPaths) {
         const entries = await invoke<LocalRecursiveUploadEntry[]>(
@@ -743,17 +744,28 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           entries,
         );
 
+        // Create remote directories before enqueuing file transfers.
+        // Shell-quote escaping is handled on the Rust side.
         for (const remoteDirectory of plan.directories) {
-          // create_directory wraps the path in single quotes on the Rust side,
-          // so escape single quotes to avoid shell parsing/injection issues.
-          const escapedRemoteDirectory = remoteDirectory.replace(/'/g, `'\\''`);
-          await invoke<boolean>("create_directory", {
-            connectionId,
-            path: escapedRemoteDirectory,
-          });
-          createdDirectoryCount += 1;
+          try {
+            await invoke<boolean>("create_directory", {
+              connectionId,
+              path: remoteDirectory,
+            });
+            createdDirectoryCount += 1;
+          } catch (err) {
+            dirErrors.push(
+              `${remoteDirectory}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         }
         queuedItems.push(...plan.items);
+      }
+
+      if (dirErrors.length > 0) {
+        toast.warning(`${dirErrors.length} directory creation(s) failed`, {
+          description: dirErrors.slice(0, 3).join("\n"),
+        });
       }
 
       if (queuedItems.length > 0) {
@@ -761,13 +773,14 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           type: "ENQUEUE",
           items: queuedItems,
         });
-      } else {
+        toast.info(
+          `Queued ${queuedItems.length} file(s) from ${directoryPaths.length} folder(s); created ${createdDirectoryCount} remote folder(s)`,
+        );
+      } else if (dirErrors.length === 0) {
+        // Folder(s) were empty — just refresh
         void loadFiles();
+        toast.info(`Created ${createdDirectoryCount} remote folder(s)`);
       }
-
-      toast.info(
-        `Queued ${queuedItems.length} file(s) from ${directoryPaths.length} folder(s); created ${createdDirectoryCount} remote folder(s)`,
-      );
     } catch (error) {
       console.error('Upload folder dialog error:', error);
       toast.error('Folder upload failed', {
