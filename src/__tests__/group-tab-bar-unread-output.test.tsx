@@ -63,10 +63,10 @@ describe('GroupTabBar unread output indicator', () => {
       makeTab('tab-2', 'server-b', true),
     ];
 
-    const { getByTestId } = render(
+    const { getByRole } = render(
       <GroupTabBar groupId="group-1" tabs={tabs} activeTabId="tab-1" />,
     );
 
-    expect(getByTestId('tab-unread-output-tab-2')).toBeTruthy();
+    expect(getByRole('img', { name: /Unread terminal output/i })).toBeTruthy();
   });
 });

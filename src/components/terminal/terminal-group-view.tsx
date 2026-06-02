@@ -169,7 +169,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
                   themeKey={themeKey}
                   isActive={isActive && tab.id === group.activeTabId}
                   onConnectionStatusChange={handleConnectionStatusChange}
-                  onOutput={handleTerminalOutput}
+                  onOutput={tab.id === group.activeTabId ? undefined : handleTerminalOutput}
                 />
               ) : (
                 <div className="h-full w-full flex items-center justify-center bg-muted/30">

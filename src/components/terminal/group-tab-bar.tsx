@@ -188,6 +188,7 @@ export function GroupTabBar({
                       {tab.hasUnreadOutput && (
                         <span
                           data-testid={`tab-unread-output-${tab.id}`}
+                          role="img"
                           aria-label="Unread terminal output"
                           className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-sky-500 ring-2 ring-background animate-pulse"
                         />
