@@ -9,6 +9,12 @@ import {
   transferQueueReducer,
   getNextQueuedTransfer,
 } from '@/lib/transfer-queue-reducer';
+import {
+  buildDirectoryUploadPlan,
+  buildFileUploadItems,
+  type LocalRecursiveUploadEntry,
+  type UploadQueueInput,
+} from '@/lib/upload-paths';
 import { TransferQueue } from './transfer-queue';
 import { DirectoryTree } from './directory-tree';
 import {
@@ -18,6 +24,7 @@ import {
 } from './ui/resizable';
 import { 
   Folder, 
+  FolderUp,
   File, 
   Upload, 
   Download, 
@@ -699,21 +706,87 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
       dispatchTransfer({
         type: "ENQUEUE",
-        items: paths.map((p) => {
-          const fileName = p.split('/').pop() || p;
-          const remotePath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
-          return {
-            fileName,
-            direction: "upload" as const,
-            sourcePath: p,
-            destinationPath: remotePath,
-            totalBytes: 0,
-          };
-        }),
+        items: buildFileUploadItems(paths, currentPath),
       });
       toast.info(`Queued ${paths.length} file(s) for upload`);
     } catch (error) {
       console.error('Upload dialog error:', error);
+    }
+  };
+
+  const handleUploadFolder = async () => {
+    try {
+      const selected = await tauriOpen({
+        multiple: true,
+        directory: true,
+        recursive: true,
+      });
+      if (!selected) return;
+
+      const directoryPaths = Array.isArray(selected) ? selected : [selected];
+      if (directoryPaths.length === 0) return;
+
+      const queuedItems: UploadQueueInput[] = [];
+      let createdDirectoryCount = 0;
+      const dirErrors: string[] = [];
+
+      for (const directoryPath of directoryPaths) {
+        const entries = await invoke<LocalRecursiveUploadEntry[]>(
+          "list_local_files_recursive",
+          {
+            path: directoryPath,
+            excludePatterns: [],
+          },
+        );
+        const plan = buildDirectoryUploadPlan(
+          directoryPath,
+          currentPath,
+          entries,
+        );
+
+        // Create remote directories before enqueuing file transfers.
+        // Shell-quote escaping is handled on the Rust side.
+        for (const remoteDirectory of plan.directories) {
+          try {
+            await invoke<boolean>("create_directory", {
+              connectionId,
+              path: remoteDirectory,
+            });
+            createdDirectoryCount += 1;
+          } catch (err) {
+            dirErrors.push(
+              `${remoteDirectory}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+        queuedItems.push(...plan.items);
+      }
+
+      if (dirErrors.length > 0) {
+        toast.warning(`${dirErrors.length} directory creation(s) failed`, {
+          description: dirErrors.slice(0, 3).join("\n"),
+        });
+      }
+
+      if (queuedItems.length > 0) {
+        dispatchTransfer({
+          type: "ENQUEUE",
+          items: queuedItems,
+        });
+        toast.info(
+          `Queued ${queuedItems.length} file(s) from ${directoryPaths.length} folder(s); created ${createdDirectoryCount} remote folder(s)`,
+        );
+      } else if (dirErrors.length === 0) {
+        // Folder(s) were empty — just refresh
+        void loadFiles();
+        toast.info(`Created ${createdDirectoryCount} remote folder(s)`);
+      }
+    } catch (error) {
+      console.error('Upload folder dialog error:', error);
+      toast.error('Folder upload failed', {
+        description:
+          error instanceof Error ? error.message : 'Unable to upload folder.',
+      });
     }
   };
 
@@ -993,7 +1066,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       return entry?.isDirectory;
     });
     if (hasDirectory) {
-      toast.info('Directory upload is not supported via drag-and-drop. Use the upload button.');
+      toast.info('Directory drag-and-drop is not supported yet. Use the upload folder button.');
       return;
     }
 
@@ -1197,8 +1270,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" onClick={handleCreateFolder}>
             <FolderPlus className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" onClick={handleUpload}>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" title="Upload files" onClick={handleUpload}>
             <Upload className="h-3.5 w-3.5" />
+          </Button>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" title="Upload folder" onClick={handleUploadFolder}>
+            <FolderUp className="h-3.5 w-3.5" />
           </Button>
 
           <div className="mx-1 h-4 w-px shrink-0 bg-border/60" />
@@ -1551,6 +1627,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               <ContextMenuItem onClick={handleUpload}>
                 <Upload className="mr-2 h-4 w-4" />
                 Upload Files
+              </ContextMenuItem>
+              <ContextMenuItem onClick={handleUploadFolder}>
+                <FolderUp className="mr-2 h-4 w-4" />
+                Upload Folder
               </ContextMenuItem>
               <ContextMenuItem onClick={() => loadFiles()}>
                 <RefreshCw className="mr-2 h-4 w-4" />
