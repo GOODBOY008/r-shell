@@ -86,6 +86,14 @@ impl SshClient {
     }
 
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+        let public_key = match &config.auth_method {
+            AuthMethod::PublicKey {
+                key_path,
+                passphrase,
+            } => Some(load_public_key(key_path, passphrase.as_deref())?),
+            AuthMethod::Password { .. } => None,
+        };
+
         let ssh_config = client::Config {
             preferred: russh::Preferred {
                 key: PREFERRED_HOST_KEY_ALGOS,
@@ -115,55 +123,13 @@ impl SshClient {
                 .await
                 .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?,
             AuthMethod::PublicKey {
-                key_path,
-                passphrase,
+                ..
             } => {
-                // Expand tilde in path — use dirs::home_dir() for cross-platform
-                // support (HOME is not set on Windows; USERPROFILE is used instead).
-                let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
-                    if let Some(home) = dirs::home_dir() {
-                        let home_str = home.to_string_lossy();
-                        key_path.replacen('~', &home_str, 1)
-                    } else {
-                        key_path.clone()
-                    }
-                } else {
-                    key_path.clone()
-                };
-
-                // Check if file exists
-                if !std::path::Path::new(&expanded_path).exists() {
-                    return Err(anyhow::anyhow!(
-                        "SSH key file not found: {}. Please check the file path and try again.",
-                        key_path
-                    ));
-                }
-
-                // Read the key file and normalise CRLF line endings so that keys
-                // created or edited on Windows (which use \r\n) are parsed correctly
-                // by russh-keys' PEM / OpenSSH decoder.
-                let key_content = std::fs::read_to_string(&expanded_path).map_err(|e| {
-                    anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e)
-                })?;
-                let key_content = key_content.replace("\r\n", "\n");
-
-                // decode_secret_key takes the key *content* as a &str.
-                let key = decode_secret_key(&key_content, passphrase.as_deref())
-                    .map_err(|e| {
-                        if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
-                            anyhow::anyhow!(
-                                "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
-                            )
-                        } else {
-                            anyhow::anyhow!(
-                                "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
-                                key_path, e
-                            )
-                        }
-                    })?;
-
                 ssh_session
-                    .authenticate_publickey(&config.username, Arc::new(key))
+                    .authenticate_publickey(
+                        &config.username,
+                        Arc::new(public_key.expect("public key is loaded before connecting")),
+                    )
                     .await
                     .map_err(|e| anyhow::anyhow!("Public key authentication failed: {}. The key may not be authorized on the server.", e))?
             }
@@ -490,6 +456,43 @@ impl SshClient {
             Err(anyhow::anyhow!("Not connected"))
         }
     }
+}
+
+fn load_public_key(key_path: &str, passphrase: Option<&str>) -> Result<key::KeyPair> {
+    let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            let home_str = home.to_string_lossy();
+            key_path.replacen('~', &home_str, 1)
+        } else {
+            key_path.to_string()
+        }
+    } else {
+        key_path.to_string()
+    };
+
+    if !std::path::Path::new(&expanded_path).exists() {
+        return Err(anyhow::anyhow!(
+            "SSH key file not found: {}. Please check the file path and try again.",
+            key_path
+        ));
+    }
+
+    let key_content = std::fs::read_to_string(&expanded_path)
+        .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e))?;
+    let key_content = key_content.replace("\r\n", "\n");
+
+    decode_secret_key(&key_content, passphrase).map_err(|e| {
+        if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
+            anyhow::anyhow!(
+                "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
+            )
+        } else {
+            anyhow::anyhow!(
+                "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
+                key_path, e
+            )
+        }
+    })
 }
 
 #[cfg(test)]

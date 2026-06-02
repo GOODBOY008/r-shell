@@ -14,6 +14,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuSubContent,
 } from '../ui/context-menu';
+import { useI18n } from '@/lib/i18n';
 
 interface GroupTabBarProps {
   groupId: string;
@@ -32,6 +33,7 @@ export function GroupTabBar({
   onDuplicateTab,
   onReconnect,
 }: GroupTabBarProps) {
+  const { t } = useI18n();
   const { dispatch } = useTerminalGroups();
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
@@ -206,7 +208,7 @@ export function GroupTabBar({
                   <>
                     <ContextMenuItem onClick={() => onReconnect(tab.id)}>
                       <RefreshCw className="mr-2 h-4 w-4" />
-                      Reconnect
+                      {t('menu.reconnect')}
                     </ContextMenuItem>
                     <ContextMenuSeparator />
                   </>
@@ -216,7 +218,7 @@ export function GroupTabBar({
                   <>
                     <ContextMenuItem onClick={() => onDuplicateTab(tab.id)}>
                       <Copy className="mr-2 h-4 w-4" />
-                      Duplicate Tab
+                      {t('menu.duplicateTab')}
                     </ContextMenuItem>
                     <ContextMenuSeparator />
                   </>
@@ -224,27 +226,27 @@ export function GroupTabBar({
                 {/* Close */}
                 <ContextMenuItem onClick={() => handleTabClose(tab.id)}>
                   <X className="mr-2 h-4 w-4" />
-                  Close
+                  {t('common.close')}
                 </ContextMenuItem>
                 {/* Close Others */}
                 {tabs.length > 1 && (
                   <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_OTHER_TABS', groupId, tabId: tab.id })}>
                     <XCircle className="mr-2 h-4 w-4" />
-                    Close Others
+                    {t('terminal.closeOthers')}
                   </ContextMenuItem>
                 )}
                 {/* Close to Right */}
                 {index < tabs.length - 1 && (
                   <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_TABS_TO_RIGHT', groupId, tabId: tab.id })}>
                     <ArrowRight className="mr-2 h-4 w-4" />
-                    Close to the Right
+                    {t('terminal.closeRight')}
                   </ContextMenuItem>
                 )}
                 {/* Close to Left */}
                 {index > 0 && (
                   <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_TABS_TO_LEFT', groupId, tabId: tab.id })}>
                     <ArrowLeft className="mr-2 h-4 w-4" />
-                    Close to the Left
+                    {t('terminal.closeLeft')}
                   </ContextMenuItem>
                 )}
                 <ContextMenuSeparator />
@@ -252,24 +254,24 @@ export function GroupTabBar({
                 <ContextMenuSub>
                   <ContextMenuSubTrigger>
                     <MoveRight className="mr-2 h-4 w-4" />
-                    Move to New Group
+                    {t('terminal.moveToNewGroup')}
                   </ContextMenuSubTrigger>
                   <ContextMenuSubContent>
                     <ContextMenuItem onClick={() => handleMoveToNewGroup(tab.id, 'right')}>
                       <ArrowRight className="mr-2 h-4 w-4" />
-                      Right
+                      {t('terminal.right')}
                     </ContextMenuItem>
                     <ContextMenuItem onClick={() => handleMoveToNewGroup(tab.id, 'left')}>
                       <ArrowLeft className="mr-2 h-4 w-4" />
-                      Left
+                      {t('terminal.left')}
                     </ContextMenuItem>
                     <ContextMenuItem onClick={() => handleMoveToNewGroup(tab.id, 'down')}>
                       <ArrowDown className="mr-2 h-4 w-4" />
-                      Down
+                      {t('terminal.down')}
                     </ContextMenuItem>
                     <ContextMenuItem onClick={() => handleMoveToNewGroup(tab.id, 'up')}>
                       <ArrowUp className="mr-2 h-4 w-4" />
-                      Up
+                      {t('terminal.up')}
                     </ContextMenuItem>
                   </ContextMenuSubContent>
                 </ContextMenuSub>

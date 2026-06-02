@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
-// Test credentials - Replace with your own test server credentials
-const TEST_HOST = 'localhost'; // Replace with your test SSH server
-const TEST_USERNAME = 'testuser'; // Replace with your test username
-const TEST_PASSWORD = 'testpass'; // Replace with your test password
+const runSshIntegrationTests = process.env.RSHELL_RUN_SSH_TESTS === '1'
+  && typeof window !== 'undefined'
+  && typeof (window as { __TAURI_INTERNALS__?: { invoke?: unknown } }).__TAURI_INTERNALS__?.invoke === 'function';
 
-describe('SSH Connection Tests', () => {
+const TEST_HOST = process.env.RSHELL_TEST_SSH_HOST ?? 'localhost';
+const TEST_USERNAME = process.env.RSHELL_TEST_SSH_USERNAME ?? 'testuser';
+const TEST_PASSWORD = process.env.RSHELL_TEST_SSH_PASSWORD ?? 'testpass';
+
+describe.skipIf(!runSshIntegrationTests)('SSH Connection Tests', () => {
   let connectionId: string;
 
   beforeAll(() => {

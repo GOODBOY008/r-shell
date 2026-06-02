@@ -20,6 +20,7 @@ import React, {
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { useI18n } from "@/lib/i18n";
 import {
   Search,
   RefreshCw,
@@ -242,6 +243,7 @@ const SOURCE_TYPE_LABELS: Record<string, { icon: React.ReactNode; label: string 
 // ── Component ──
 
 export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }: LogMonitorProps) {
+  const { t } = useI18n();
   // Source state
   const [sources, setSources] = useState<LogSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState("");
@@ -280,15 +282,15 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
       if (result.success) {
         setSources(result.sources);
         if (result.sources.length === 0) {
-          toast.info("No log sources discovered");
+          toast.info(t('log.noSources'));
         }
       } else {
-        toast.error("Failed to discover log sources", {
+        toast.error(t('log.discoverFailed'), {
           description: result.error,
         });
       }
     } catch (err) {
-      toast.error("Failed to discover log sources", {
+      toast.error(t('log.discoverFailed'), {
         description: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -361,13 +363,13 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
             });
           }
         } else if (!isAutoRefresh) {
-          toast.error("Failed to load log", {
+          toast.error(t('log.loadFailed'), {
             description: result.error ?? "Unknown error",
           });
         }
       } catch (err) {
         if (!isAutoRefresh) {
-          toast.error("Failed to load log", {
+          toast.error(t('log.loadFailed'), {
             description: err instanceof Error ? err.message : String(err),
           });
         }
@@ -611,7 +613,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         <div className="flex items-center gap-1 px-2 py-1 border-b bg-muted/30 shrink-0">
           <Select value={selectedSourceId} onValueChange={handleSourceChange}>
             <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
-              <SelectValue placeholder="Select log source…" />
+              <SelectValue placeholder={t('log.selectSource')} />
             </SelectTrigger>
             <SelectContent className="max-h-[300px]">
               {Object.entries(groupedSources).map(([type, items]) => {
@@ -725,7 +727,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {autoRefresh ? "Stop live tail" : "Start live tail"}
+              {autoRefresh ? t('log.stopTail') : t('log.startTail')}
             </TooltipContent>
           </Tooltip>
 
@@ -922,7 +924,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
           {!selectedSourceId ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
               <FileText className="h-8 w-8 opacity-40" />
-              <p className="text-xs">Select a log source to begin</p>
+              <p className="text-xs">{t('log.selectToBegin')}</p>
               {sources.length === 0 && !isDiscovering && (
                 <Button
                   variant="outline"
@@ -938,15 +940,15 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
           ) : isLoading && rawLines.length === 0 ? (
             <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
               <RefreshCw className="h-4 w-4 animate-spin" />
-              <span className="text-xs">Loading logs…</span>
+              <span className="text-xs">{t('log.loading')}</span>
             </div>
           ) : filteredLines.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-1">
               <AlertCircle className="h-6 w-6 opacity-40" />
               <p className="text-xs">
                 {rawLines.length > 0
-                  ? "No matching lines with current filters"
-                  : "No log content"}
+                  ? t('log.noMatches')
+                  : t('log.noContent')}
               </p>
             </div>
           ) : (

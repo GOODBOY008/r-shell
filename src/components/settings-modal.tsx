@@ -29,6 +29,7 @@ import {
   terminalThemes 
 } from '../lib/terminal-config';
 import { applyTheme, ThemeMode } from '../lib/utils';
+import { getLocaleName, supportedLocales, useI18n, type LanguageMode } from '../lib/i18n';
 
 interface SettingsModalProps {
   open: boolean;
@@ -37,6 +38,7 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ open, onOpenChange, onAppearanceChange }: SettingsModalProps) {
+  const { t, languageMode, setLanguageMode } = useI18n();
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
   
   const [settings, setSettings] = useState({
@@ -121,12 +123,12 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     applyTheme(settings.theme as ThemeMode);
     
     // Save other settings to localStorage
-    localStorage.setItem('sshClientSettings', JSON.stringify(settings));
+    localStorage.setItem('sshClientSettings', JSON.stringify({ ...settings, language: languageMode }));
     onOpenChange(false);
   };
 
   const handleReset = () => {
-    if (confirm('Are you sure you want to reset all settings to defaults?')) {
+    if (confirm(t('settings.resetConfirm'))) {
       // Reset terminal appearance
       setTerminalAppearance(defaultAppearanceSettings);
       
@@ -161,6 +163,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
       
       // Apply default theme
       applyTheme('dark');
+      setLanguageMode('auto');
     }
   };
 
@@ -173,9 +176,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               <Settings className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <div>Settings & Preferences</div>
+              <div>{t('settings.title')}</div>
               <DialogDescription className="mt-1">
-                Customize your SSH client experience and preferences
+                {t('settings.description')}
               </DialogDescription>
             </div>
           </DialogTitle>
@@ -188,42 +191,42 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
             >
               <TerminalIcon className="h-3.5 w-3.5" />
-              <span>Terminal</span>
+              <span>{t('settings.tab.terminal')}</span>
             </TabsTrigger>
             <TabsTrigger 
               value="connection" 
               className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
             >
               <Network className="h-3.5 w-3.5" />
-              <span>Connection</span>
+              <span>{t('settings.tab.connection')}</span>
             </TabsTrigger>
             <TabsTrigger 
               value="security" 
               className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
             >
               <Shield className="h-3.5 w-3.5" />
-              <span>Security</span>
+              <span>{t('settings.tab.security')}</span>
             </TabsTrigger>
             <TabsTrigger 
               value="interface" 
               className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
             >
               <Palette className="h-3.5 w-3.5" />
-              <span>Interface</span>
+              <span>{t('settings.tab.interface')}</span>
             </TabsTrigger>
             <TabsTrigger 
               value="keyboard" 
               className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
             >
               <Keyboard className="h-3.5 w-3.5" />
-              <span>Keyboard</span>
+              <span>{t('settings.tab.keyboard')}</span>
             </TabsTrigger>
             <TabsTrigger 
               value="advanced" 
               className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
             >
               <Monitor className="h-3.5 w-3.5" />
-              <span>Advanced</span>
+              <span>{t('settings.tab.advanced')}</span>
             </TabsTrigger>
           </TabsList>
 
@@ -232,16 +235,16 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <TerminalIcon className="h-4 w-4" />
-                  Terminal Appearance
+                  {t('settings.terminal.appearance')}
                 </CardTitle>
                 <CardDescription>
-                  Configure how the terminal looks and behaves.
+                  {t('settings.terminal.appearanceDescription')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Font Family</Label>
+                    <Label>{t('settings.terminal.fontFamily')}</Label>
                     <Select 
                       value={terminalAppearance.fontFamily} 
                       onValueChange={(value) => updateTerminalAppearance('fontFamily', value)}
@@ -670,15 +673,37 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Palette className="h-4 w-4" />
-                  Interface Settings
+                  {t('settings.interface.title')}
                 </CardTitle>
                 <CardDescription>
-                  Customize the application interface and panels.
+                  {t('settings.interface.description')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Application Theme</Label>
+                  <Label>{t('settings.language.label')}</Label>
+                  <Select value={languageMode} onValueChange={(value) => setLanguageMode(value as LanguageMode)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="auto">{t('common.autoSystem')}</SelectItem>
+                      {supportedLocales.map((locale) => (
+                        <SelectItem key={locale} value={locale}>
+                          {getLocaleName(locale)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-sm text-muted-foreground">
+                    {t('settings.language.description')}
+                  </p>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-2">
+                  <Label>{t('settings.interface.theme')}</Label>
                   <Select 
                     value={settings.theme} 
                     onValueChange={(value) => {
@@ -691,9 +716,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="dark">Dark</SelectItem>
-                      <SelectItem value="light">Light</SelectItem>
-                      <SelectItem value="auto">Auto (System)</SelectItem>
+                      <SelectItem value="dark">{t('settings.interface.theme.dark')}</SelectItem>
+                      <SelectItem value="light">{t('settings.interface.theme.light')}</SelectItem>
+                      <SelectItem value="auto">{t('settings.interface.theme.auto')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -701,10 +726,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                 <Separator />
 
                 <div className="space-y-4">
-                  <Label>Panel Visibility</Label>
+                  <Label>{t('settings.interface.panels')}</Label>
                   
                   <div className="flex items-center justify-between">
-                    <span>Connection Manager</span>
+                    <span>{t('settings.interface.connectionManager')}</span>
                     <Switch
                       checked={settings.showConnectionManager}
                       onCheckedChange={(checked) => updateSetting('showConnectionManager', checked)}
@@ -712,7 +737,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                   </div>
                   
                   <div className="flex items-center justify-between">
-                    <span>System Monitor</span>
+                    <span>{t('settings.interface.systemMonitor')}</span>
                     <Switch
                       checked={settings.showSystemMonitor}
                       onCheckedChange={(checked) => updateSetting('showSystemMonitor', checked)}
@@ -720,7 +745,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                   </div>
                   
                   <div className="flex items-center justify-between">
-                    <span>Status Bar</span>
+                    <span>{t('settings.interface.statusBar')}</span>
                     <Switch
                       checked={settings.showStatusBar}
                       onCheckedChange={(checked) => updateSetting('showStatusBar', checked)}
@@ -732,9 +757,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Enable Notifications</Label>
+                    <Label>{t('settings.interface.notifications')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Show system notifications for important events
+                      {t('settings.interface.notificationsDescription')}
                     </p>
                   </div>
                   <Switch
@@ -751,16 +776,16 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Keyboard className="h-4 w-4" />
-                  Keyboard Shortcuts
+                  {t('settings.keyboard.title')}
                 </CardTitle>
                 <CardDescription>
-                  Customize keyboard shortcuts for common actions.
+                  {t('settings.keyboard.description')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>New Session</Label>
+                    <Label>{t('settings.keyboard.newSession')}</Label>
                     <Input
                       value={settings.newSession}
                       onChange={(e) => updateSetting('newSession', e.target.value)}
@@ -768,7 +793,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Close Session</Label>
+                    <Label>{t('settings.keyboard.closeSession')}</Label>
                     <Input
                       value={settings.closeSession}
                       onChange={(e) => updateSetting('closeSession', e.target.value)}
@@ -779,7 +804,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Next Tab</Label>
+                    <Label>{t('settings.keyboard.nextTab')}</Label>
                     <Input
                       value={settings.nextTab}
                       onChange={(e) => updateSetting('nextTab', e.target.value)}
@@ -787,7 +812,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Previous Tab</Label>
+                    <Label>{t('settings.keyboard.previousTab')}</Label>
                     <Input
                       value={settings.previousTab}
                       onChange={(e) => updateSetting('previousTab', e.target.value)}
@@ -798,7 +823,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="p-4 bg-muted rounded-lg">
                   <p className="text-sm text-muted-foreground">
-                    <strong>Note:</strong> Changes to keyboard shortcuts will take effect after restarting the application.
+                    <strong>{t('settings.keyboard.note')}</strong> {t('settings.keyboard.noteDescription')}
                   </p>
                 </div>
               </CardContent>
@@ -810,16 +835,16 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Monitor className="h-4 w-4" />
-                  Advanced Settings
+                  {t('settings.advanced.title')}
                 </CardTitle>
                 <CardDescription>
-                  Configure advanced options and diagnostic settings.
+                  {t('settings.advanced.description')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Log Level</Label>
+                    <Label>{t('settings.advanced.logLevel')}</Label>
                     <Select value={settings.logLevel} onValueChange={(value) => updateSetting('logLevel', value)}>
                       <SelectTrigger>
                         <SelectValue />
@@ -833,7 +858,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Max Log Size: {settings.maxLogSize}MB</Label>
+                    <Label>{t('settings.advanced.maxLogSize', { size: settings.maxLogSize })}</Label>
                     <Slider
                       value={[settings.maxLogSize]}
                       onValueChange={([value]) => updateSetting('maxLogSize', value)}
@@ -848,9 +873,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Check for Updates</Label>
+                    <Label>{t('settings.advanced.checkUpdates')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Automatically check for application updates
+                      {t('settings.advanced.checkUpdatesDescription')}
                     </p>
                   </div>
                   <Switch
@@ -861,9 +886,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Enable Telemetry</Label>
+                    <Label>{t('settings.advanced.telemetry')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Help improve the application by sending anonymous usage data
+                      {t('settings.advanced.telemetryDescription')}
                     </p>
                   </div>
                   <Switch
@@ -878,14 +903,14 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
         <div className="flex justify-between px-6 py-4 border-t bg-muted/30">
           <Button variant="ghost" onClick={handleReset}>
-            Reset to Defaults
+            {t('settings.resetToDefaults')}
           </Button>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button onClick={handleSave} className="min-w-[120px]">
-              Save Settings
+              {t('settings.saveSettings')}
             </Button>
           </div>
         </div>

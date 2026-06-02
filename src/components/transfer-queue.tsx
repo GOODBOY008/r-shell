@@ -29,6 +29,7 @@ import type {
   TransferAction,
 } from "@/lib/transfer-queue-reducer";
 import { getActiveTransferCount } from "@/lib/transfer-queue-reducer";
+import { useI18n } from "@/lib/i18n";
 import { formatSize } from "@/lib/file-entry-types";
 
 // ---------- Legacy type export for backward compatibility ----------
@@ -87,6 +88,7 @@ export function TransferQueue({
   expanded,
   onToggleExpanded,
 }: TransferQueueProps) {
+  const { t } = useI18n();
   const activeCount = getActiveTransferCount(transfers);
   const prevActiveCount = useRef(activeCount);
 
@@ -121,7 +123,7 @@ export function TransferQueue({
             ) : (
               <ChevronUp className="h-3 w-3" />
             )}
-            Transfers
+            {t('fileBrowser.transferQueue')}
             {activeCount > 0 && (
               <Badge
                 variant="secondary"
@@ -210,7 +212,7 @@ export function TransferQueue({
                             variant="ghost"
                             size="icon"
                             className="h-5 w-5 shrink-0 text-muted-foreground hover:text-foreground"
-                            title="Open file"
+                            title={t('fileBrowser.openFile')}
                             onClick={() =>
                               invoke("open_in_os", {
                                 path: item.destinationPath,

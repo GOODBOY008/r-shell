@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
+import { useI18n } from '@/lib/i18n';
 
 interface WelcomeScreenProps {
   onNewConnection: () => void;
@@ -29,27 +30,28 @@ interface WelcomeScreenProps {
 }
 
 export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
+  const { t } = useI18n();
   const quickActions = [
     {
       icon: Plus,
-      title: 'New Connection',
-      description: 'Connect via SSH, SFTP, FTP, or FTPS',
+      title: t('welcome.action.newConnection'),
+      description: t('welcome.action.newConnectionDescription'),
       action: onNewConnection,
       variant: 'default' as const,
       shortcut: '⌘N'
     },
     {
       icon: FolderTree,
-      title: 'Connection Manager',
-      description: 'Browse & organize saved connections',
+      title: t('welcome.action.connectionManager'),
+      description: t('welcome.action.connectionManagerDescription'),
       action: () => {},
       variant: 'outline' as const,
       highlight: 'Left sidebar ⌘B'
     },
     {
       icon: Settings,
-      title: 'Preferences',
-      description: 'Terminal themes, fonts & layout',
+      title: t('welcome.action.preferences'),
+      description: t('welcome.action.preferencesDescription'),
       action: onOpenSettings,
       variant: 'outline' as const,
       shortcut: '⌘,'
@@ -59,63 +61,63 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
   const features = [
     {
       icon: Terminal,
-      title: 'Interactive PTY Terminal',
-      description: 'Full xterm.js terminal with WebGL rendering, search, and web-link detection'
+      title: t('welcome.feature.terminal'),
+      description: t('welcome.feature.terminalDescription')
     },
     {
       icon: LayoutGrid,
-      title: 'Split Panes & Tab Groups',
-      description: 'Split in 4 directions with drag-and-drop tabs and unlimited nested splits'
+      title: t('welcome.feature.splitPanes'),
+      description: t('welcome.feature.splitPanesDescription')
     },
     {
       icon: FileText,
-      title: 'Dual-Panel File Browser',
-      description: 'FileZilla-style local + remote panels with transfer queue and progress tracking'
+      title: t('welcome.feature.fileBrowser'),
+      description: t('welcome.feature.fileBrowserDescription')
     },
     {
       icon: RefreshCw,
-      title: 'Directory Sync',
-      description: '4-step sync wizard — compare, review diffs, and synchronize directories'
+      title: t('welcome.feature.sync'),
+      description: t('welcome.feature.syncDescription')
     },
     {
       icon: MonitorDot,
-      title: 'System & GPU Monitor',
-      description: 'CPU, memory, disk, processes, and NVIDIA/AMD GPU metrics with real-time charts'
+      title: t('welcome.feature.systemMonitor'),
+      description: t('welcome.feature.systemMonitorDescription')
     },
     {
       icon: Network,
-      title: 'Network Monitor',
-      description: 'Per-interface bandwidth, latency, and active connections overview'
+      title: t('welcome.feature.networkMonitor'),
+      description: t('welcome.feature.networkMonitorDescription')
     },
     {
       icon: ScrollText,
-      title: 'Log Viewer',
-      description: 'Multi-source log monitoring with level filters, regex search, and live tail'
+      title: t('welcome.feature.logViewer'),
+      description: t('welcome.feature.logViewerDescription')
     },
     {
       icon: Palette,
-      title: 'Themes & Appearance',
-      description: '10 terminal color themes, 7 fonts, background images, and transparency'
+      title: t('welcome.feature.themes'),
+      description: t('welcome.feature.themesDescription')
     },
     {
       icon: Shield,
-      title: 'Secure Authentication',
-      description: 'Password, private key, and encrypted key with passphrase — plus auto-reconnect'
+      title: t('welcome.feature.auth'),
+      description: t('welcome.feature.authDescription')
     },
     {
       icon: History,
-      title: 'Session Restore',
-      description: 'Automatically reconnects your previous workspace on launch'
+      title: t('welcome.feature.restore'),
+      description: t('welcome.feature.restoreDescription')
     },
     {
       icon: ArrowDownUp,
-      title: 'Transfer Queue',
-      description: 'Queued file transfers with progress, speed, ETA, cancel, and retry controls'
+      title: t('welcome.feature.transferQueue'),
+      description: t('welcome.feature.transferQueueDescription')
     },
     {
       icon: Download,
-      title: 'Auto-Update',
-      description: 'Check for updates with download progress and one-click install-and-relaunch'
+      title: t('welcome.feature.update'),
+      description: t('welcome.feature.updateDescription')
     }
   ];
 
@@ -234,11 +236,11 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
                 <BookOpen className="h-4 w-4 text-muted-foreground" />
               </div>
               <div className="flex-1 space-y-2">
-                <h4 className="font-medium text-sm">Quick Tips</h4>
+                <h4 className="font-medium text-sm">{t('welcome.getStarted')}</h4>
                 <ul className="space-y-1.5 text-xs text-muted-foreground">
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">1.</span>
-                    <span>Add a server in the <strong>Connection Manager</strong> (left sidebar), then double-click to connect</span>
+                    <span>{t('welcome.tip.addServer')}</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">2.</span>
@@ -246,7 +248,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">3.</span>
-                    <span>The <strong>System Monitor</strong> and <strong>Logs</strong> panels appear automatically in the right sidebar once you connect</span>
+                    <span>{t('welcome.tip.monitor')}</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">4.</span>
@@ -266,10 +268,10 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
         <div className="text-center pb-4">
           <Button size="lg" onClick={onNewConnection} className="gap-2 shadow-lg">
             <Plus className="h-5 w-5" />
-            New Connection
+            {t('welcome.action.newConnection')}
           </Button>
           <p className="text-xs text-muted-foreground mt-2">
-            or pick a saved server from the left sidebar
+            {t('welcome.savedServerCta')}
           </p>
         </div>
       </div>

@@ -16,6 +16,7 @@ import {
 } from './ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
+import { useI18n } from '@/lib/i18n';
 import { 
   Plus, 
   FolderOpen, 
@@ -106,6 +107,7 @@ export function MenuBar({
   bottomPanelVisible,
   zenMode,
 }: MenuBarProps) {
+  const { t } = useI18n();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const cmdOrCtrl = isMac ? '⌘' : 'Ctrl';
 
@@ -148,24 +150,24 @@ export function MenuBar({
       {/* File Menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm">File</Button>
+          <Button variant="ghost" size="sm">{t('menu.file')}</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={onNewConnection}>
             <Plus className="mr-2 h-4 w-4" />
-            New Connection...
+            {t('menu.newConnection')}
             <DropdownMenuShortcut>{cmdOrCtrl}+N</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onOpenConnection}>
             <FolderOpen className="mr-2 h-4 w-4" />
-            Open Connection...
+            {t('menu.openConnection')}
             <DropdownMenuShortcut>{cmdOrCtrl}+O</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               <Download className="mr-2 h-4 w-4" />
-              Recent Connections
+              {t('menu.recentConnections')}
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent>
               {recentConnections.length > 0 ? (
@@ -182,7 +184,7 @@ export function MenuBar({
                 ))
               ) : (
                 <DropdownMenuItem disabled>
-                  <span className="text-muted-foreground">No recent connections</span>
+                  <span className="text-muted-foreground">{t('menu.noRecentConnections')}</span>
                 </DropdownMenuItem>
               )}
             </DropdownMenuSubContent>
@@ -190,23 +192,23 @@ export function MenuBar({
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onSaveConnection} disabled={!hasActiveConnection}>
             <Save className="mr-2 h-4 w-4" />
-            Save Connection
+            {t('menu.saveConnection')}
             <DropdownMenuShortcut>{cmdOrCtrl}+S</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Save className="mr-2 h-4 w-4" />
-            Save Connection As...
+            {t('menu.saveConnectionAs')}
             <DropdownMenuShortcut>{cmdOrCtrl}+Shift+S</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onCloseConnection} disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
-            Close Connection
+            {t('menu.closeConnection')}
             <DropdownMenuShortcut>{cmdOrCtrl}+W</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem>
             <X className="mr-2 h-4 w-4" />
-            Exit
+            {t('menu.exit')}
             <DropdownMenuShortcut>{cmdOrCtrl}+Q</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -215,49 +217,49 @@ export function MenuBar({
       {/* Edit Menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm">Edit</Button>
+          <Button variant="ghost" size="sm">{t('menu.edit')}</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={onCopy} disabled={!hasActiveConnection}>
             <Copy className="mr-2 h-4 w-4" />
-            Copy
+            {t('menu.copy')}
             <DropdownMenuShortcut>{cmdOrCtrl}+C</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onPaste} disabled={!hasActiveConnection || !canPaste}>
             <Clipboard className="mr-2 h-4 w-4" />
-            Paste
+            {t('menu.paste')}
             <DropdownMenuShortcut>{cmdOrCtrl}+V</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Scissors className="mr-2 h-4 w-4" />
-            Cut
+            {t('menu.cut')}
             <DropdownMenuShortcut>{cmdOrCtrl}+X</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onSelectAll} disabled={!hasActiveConnection}>
-            Select All
+            {t('menu.selectAll')}
             <DropdownMenuShortcut>{cmdOrCtrl}+A</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onFind} disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
-            Find...
+            {t('menu.find')}
             <DropdownMenuShortcut>{cmdOrCtrl}+F</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
-            Find Next
+            {t('menu.findNext')}
             <DropdownMenuShortcut>F3</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
-            Find Previous
+            {t('menu.findPrevious')}
             <DropdownMenuShortcut>Shift+F3</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Clear Screen
+            {t('menu.clearScreen')}
             <DropdownMenuShortcut>{cmdOrCtrl}+L</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -314,7 +316,7 @@ export function MenuBar({
       {/* Tools Menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm">Tools</Button>
+          <Button variant="ghost" size="sm">{t('menu.tools')}</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           {/* <DropdownMenuItem onClick={onOpenSFTP} disabled={!hasActiveSession}>
@@ -343,12 +345,12 @@ export function MenuBar({
           {/* <DropdownMenuSeparator /> */}
           <DropdownMenuItem onClick={onOpenSettings}>
             <Settings className="mr-2 h-4 w-4" />
-            Options...
+            {t('menu.options')}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onCheckForUpdates}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Check for Updates
+            {t('menu.checkUpdates')}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -356,39 +358,39 @@ export function MenuBar({
       {/* Connection Menu (renamed from Tab for clarity) */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm">Connection</Button>
+          <Button variant="ghost" size="sm">{t('menu.connection')}</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={onNewTab}>
             <Plus className="mr-2 h-4 w-4" />
-            New Tab
+            {t('menu.newTab')}
             <DropdownMenuShortcut>{cmdOrCtrl}+T</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onCloneTab} disabled={!hasActiveConnection}>
             <Copy className="mr-2 h-4 w-4" />
-            Duplicate Tab
+            {t('menu.duplicateTab')}
             <DropdownMenuShortcut>{cmdOrCtrl}+D</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onNextTab} disabled={!hasActiveConnection}>
             <ArrowRight className="mr-2 h-4 w-4" />
-            Next Tab
+            {t('menu.nextTab')}
             <DropdownMenuShortcut>{cmdOrCtrl}+→</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onPreviousTab} disabled={!hasActiveConnection}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Previous Tab
+            {t('menu.previousTab')}
             <DropdownMenuShortcut>{cmdOrCtrl}+←</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Reconnect
+            {t('menu.reconnect')}
             <DropdownMenuShortcut>F5</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
-            Disconnect
+            {t('menu.disconnect')}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -415,7 +417,7 @@ export function MenuBar({
                   : <PanelLeftOpen className="w-4 h-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{leftSidebarVisible ? 'Hide' : 'Show'} Connection Manager</TooltipContent>
+            <TooltipContent>{leftSidebarVisible ? t('menu.hideConnectionManager') : t('menu.showConnectionManager')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -426,7 +428,7 @@ export function MenuBar({
                   : <PanelBottomOpen className="w-4 h-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{bottomPanelVisible ? 'Hide' : 'Show'} File Browser</TooltipContent>
+            <TooltipContent>{bottomPanelVisible ? t('menu.hideFileBrowser') : t('menu.showFileBrowser')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -437,7 +439,7 @@ export function MenuBar({
                   : <PanelRightOpen className="w-4 h-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{rightSidebarVisible ? 'Hide' : 'Show'} Monitor Panel</TooltipContent>
+            <TooltipContent>{rightSidebarVisible ? t('menu.hideMonitorPanel') : t('menu.showMonitorPanel')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -451,7 +453,7 @@ export function MenuBar({
                 <Maximize2 className="w-4 h-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Toggle Zen Mode</TooltipContent>
+            <TooltipContent>{t('menu.toggleZenMode')}</TooltipContent>
           </Tooltip>
 
           <DropdownMenu>
@@ -463,17 +465,17 @@ export function MenuBar({
                   </Button>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
-              <TooltipContent>Layout Presets</TooltipContent>
+              <TooltipContent>{t('menu.layoutPresets')}</TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Layout Presets</DropdownMenuLabel>
+              <DropdownMenuLabel>{t('menu.layoutPresets')}</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onApplyPreset?.('Default')}>Default Layout</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onApplyPreset?.('Minimal')}>Minimal – Terminal Only</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onApplyPreset?.('Focus Mode')}>Focus Mode</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onApplyPreset?.('Full Stack')}>Full Stack – All Panels</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Default')}>{t('menu.layout.default')}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Minimal')}>{t('menu.layout.minimalTerminal')}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Focus Mode')}>{t('menu.layout.focusMode')}</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Full Stack')}>{t('menu.layout.fullStackPanels')}</DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onApplyPreset?.('Zen Mode')}>Zen Mode</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => onApplyPreset?.('Zen Mode')}>{t('menu.layout.zen')}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
@@ -483,7 +485,7 @@ export function MenuBar({
                 <Settings className="w-4 h-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Options</TooltipContent>
+            <TooltipContent>{t('menu.options')}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>

@@ -18,10 +18,146 @@ use websocket_server::WebSocketServer;
 // Global atomic to store the WebSocket port (shared between backend and frontend)
 pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_app_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> {
+    let menu = build_app_menu(&app, &locale).map_err(|e| e.to_string())?;
+    app.set_menu(menu).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn set_app_locale(_locale: String) -> Result<(), String> {
+    Ok(())
+}
+
 /// Build the native macOS menu bar (File / Edit / Tools / Connection / Window).
 /// Only compiled on macOS; other platforms keep the web-based MenuBar component.
 #[cfg(target_os = "macos")]
-fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+fn menu_text(locale: &str, key: &str) -> &'static str {
+    let language = locale
+        .split('-')
+        .next()
+        .unwrap_or("en")
+        .to_ascii_lowercase();
+    match language.as_str() {
+        "zh" => match key {
+            "file" => "文件",
+            "new_connection" => "新建连接...",
+            "save_connection" => "保存连接",
+            "close_tab" => "关闭标签页",
+            "edit" => "编辑",
+            "find" => "查找...",
+            "clear_screen" => "清屏",
+            "tools" => "工具",
+            "options" => "选项...",
+            "check_updates" => "检查更新",
+            "connection" => "连接",
+            "new_tab" => "新建标签页",
+            "duplicate_tab" => "复制标签页",
+            "next_tab" => "下一个标签页",
+            "prev_tab" => "上一个标签页",
+            "reconnect" => "重新连接",
+            "disconnect" => "断开连接",
+            "window" => "窗口",
+            _ => english_menu_text(key),
+        },
+        "de" => match key {
+            "file" => "Datei",
+            "new_connection" => "Neue Verbindung...",
+            "save_connection" => "Verbindung speichern",
+            "close_tab" => "Tab schließen",
+            "edit" => "Bearbeiten",
+            "find" => "Suchen...",
+            "clear_screen" => "Bildschirm leeren",
+            "tools" => "Werkzeuge",
+            "options" => "Optionen...",
+            "check_updates" => "Nach Updates suchen",
+            "connection" => "Verbindung",
+            "new_tab" => "Neuer Tab",
+            "duplicate_tab" => "Tab duplizieren",
+            "next_tab" => "Nächster Tab",
+            "prev_tab" => "Vorheriger Tab",
+            "reconnect" => "Neu verbinden",
+            "disconnect" => "Trennen",
+            "window" => "Fenster",
+            _ => english_menu_text(key),
+        },
+        "ja" => match key {
+            "file" => "ファイル",
+            "new_connection" => "新規接続...",
+            "save_connection" => "接続を保存",
+            "close_tab" => "タブを閉じる",
+            "edit" => "編集",
+            "find" => "検索...",
+            "clear_screen" => "画面をクリア",
+            "tools" => "ツール",
+            "options" => "オプション...",
+            "check_updates" => "更新を確認",
+            "connection" => "接続",
+            "new_tab" => "新規タブ",
+            "duplicate_tab" => "タブを複製",
+            "next_tab" => "次のタブ",
+            "prev_tab" => "前のタブ",
+            "reconnect" => "再接続",
+            "disconnect" => "切断",
+            "window" => "ウィンドウ",
+            _ => english_menu_text(key),
+        },
+        "ru" => match key {
+            "file" => "Файл",
+            "new_connection" => "Новое подключение...",
+            "save_connection" => "Сохранить подключение",
+            "close_tab" => "Закрыть вкладку",
+            "edit" => "Правка",
+            "find" => "Найти...",
+            "clear_screen" => "Очистить экран",
+            "tools" => "Инструменты",
+            "options" => "Параметры...",
+            "check_updates" => "Проверить обновления",
+            "connection" => "Подключение",
+            "new_tab" => "Новая вкладка",
+            "duplicate_tab" => "Дублировать вкладку",
+            "next_tab" => "Следующая вкладка",
+            "prev_tab" => "Предыдущая вкладка",
+            "reconnect" => "Переподключиться",
+            "disconnect" => "Отключиться",
+            "window" => "Окно",
+            _ => english_menu_text(key),
+        },
+        _ => english_menu_text(key),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn english_menu_text(key: &str) -> &'static str {
+    match key {
+        "file" => "File",
+        "new_connection" => "New Connection...",
+        "save_connection" => "Save Connection",
+        "close_tab" => "Close Tab",
+        "edit" => "Edit",
+        "find" => "Find...",
+        "clear_screen" => "Clear Screen",
+        "tools" => "Tools",
+        "options" => "Options...",
+        "check_updates" => "Check for Updates",
+        "connection" => "Connection",
+        "new_tab" => "New Tab",
+        "duplicate_tab" => "Duplicate Tab",
+        "next_tab" => "Next Tab",
+        "prev_tab" => "Previous Tab",
+        "reconnect" => "Reconnect",
+        "disconnect" => "Disconnect",
+        "window" => "Window",
+        _ => "",
+    }
+}
+#[cfg(target_os = "macos")]
+fn build_app_menu(
+    app: &tauri::AppHandle,
+    locale: &str,
+) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
     // ── r-shell (app) menu ────────────────────────────────────────────────────
@@ -47,13 +183,13 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
     let file_menu = Submenu::with_id_and_items(
         app,
         "m_file",
-        "File",
+        menu_text(locale, "file"),
         true,
         &[
             &MenuItem::with_id(
                 app,
                 "new_connection",
-                "New Connection...",
+                menu_text(locale, "new_connection"),
                 true,
                 Some("CmdOrCtrl+N"),
             )?,
@@ -61,14 +197,14 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
             &MenuItem::with_id(
                 app,
                 "save_connection",
-                "Save Connection",
+                menu_text(locale, "save_connection"),
                 true,
                 Some("CmdOrCtrl+S"),
             )?,
             &MenuItem::with_id(
                 app,
                 "close_connection",
-                "Close Tab",
+                menu_text(locale, "close_tab"),
                 true,
                 Some("CmdOrCtrl+W"),
             )?,
@@ -79,7 +215,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
     let edit_menu = Submenu::with_id_and_items(
         app,
         "m_edit",
-        "Edit",
+        menu_text(locale, "edit"),
         true,
         &[
             &PredefinedMenuItem::undo(app, None)?,
@@ -91,11 +227,17 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::select_all(app, None)?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "find", "Find...", true, Some("CmdOrCtrl+F"))?,
+            &MenuItem::with_id(
+                app,
+                "find",
+                menu_text(locale, "find"),
+                true,
+                Some("CmdOrCtrl+F"),
+            )?,
             &MenuItem::with_id(
                 app,
                 "clear_screen",
-                "Clear Screen",
+                menu_text(locale, "clear_screen"),
                 true,
                 Some("CmdOrCtrl+L"),
             )?,
@@ -106,15 +248,21 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
     let tools_menu = Submenu::with_id_and_items(
         app,
         "m_tools",
-        "Tools",
+        menu_text(locale, "tools"),
         true,
         &[
-            &MenuItem::with_id(app, "settings", "Options...", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "settings",
+                menu_text(locale, "options"),
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
                 app,
                 "check_updates",
-                "Check for Updates",
+                menu_text(locale, "check_updates"),
                 true,
                 None::<&str>,
             )?,
@@ -125,17 +273,53 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
     let connection_menu = Submenu::with_id_and_items(
         app,
         "m_connection",
-        "Connection",
+        menu_text(locale, "connection"),
         true,
         &[
-            &MenuItem::with_id(app, "new_tab", "New Tab", true, Some("CmdOrCtrl+T"))?,
-            &MenuItem::with_id(app, "clone_tab", "Duplicate Tab", true, Some("CmdOrCtrl+D"))?,
+            &MenuItem::with_id(
+                app,
+                "new_tab",
+                menu_text(locale, "new_tab"),
+                true,
+                Some("CmdOrCtrl+T"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "clone_tab",
+                menu_text(locale, "duplicate_tab"),
+                true,
+                Some("CmdOrCtrl+D"),
+            )?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "next_tab", "Next Tab", true, None::<&str>)?,
-            &MenuItem::with_id(app, "prev_tab", "Previous Tab", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "next_tab",
+                menu_text(locale, "next_tab"),
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(
+                app,
+                "prev_tab",
+                menu_text(locale, "prev_tab"),
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "reconnect", "Reconnect", true, Some("F5"))?,
-            &MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "reconnect",
+                menu_text(locale, "reconnect"),
+                true,
+                Some("F5"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "disconnect",
+                menu_text(locale, "disconnect"),
+                true,
+                None::<&str>,
+            )?,
         ],
     )?;
 
@@ -143,7 +327,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
     let window_menu = Submenu::with_id_and_items(
         app,
         "m_window",
-        "Window",
+        menu_text(locale, "window"),
         true,
         &[
             &PredefinedMenuItem::minimize(app, None)?,
@@ -181,10 +365,13 @@ pub fn run() {
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
+                #[cfg(not(target_os = "macos"))]
+                let _ = app;
+
                 // Register native macOS menu and forward item events to the frontend
                 #[cfg(target_os = "macos")]
                 {
-                    match build_app_menu(&app.handle()) {
+                    match build_app_menu(&app.handle(), "en-US") {
                         Ok(menu) => {
                             if let Err(e) = app.set_menu(menu) {
                                 tracing::warn!("Failed to set native menu: {}", e);
@@ -242,6 +429,7 @@ pub fn run() {
             commands::detect_gpu,
             commands::get_gpu_stats,
             commands::get_websocket_port,
+            set_app_locale,
             // Standalone SFTP/FTP commands
             commands::sftp_connect,
             commands::sftp_standalone_disconnect,

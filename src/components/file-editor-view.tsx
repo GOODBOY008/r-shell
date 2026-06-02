@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { useI18n } from "@/lib/i18n";
 import { Save, RefreshCw, FileWarning } from "lucide-react";
 import { Button } from "./ui/button";
 import { CodeEditor } from "./code-editor";
@@ -22,6 +23,7 @@ export function FileEditorView({
   fileName,
   isConnected,
 }: FileEditorViewProps) {
+  const { t } = useI18n();
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [loading, setLoading] = useState(true);
@@ -44,7 +46,7 @@ export function FileEditorView({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
-      toast.error("Failed to load file", { description: msg });
+      toast.error(t('fileBrowser.loadFileFailed'), { description: msg });
     } finally {
       setLoading(false);
     }
@@ -65,10 +67,10 @@ export function FileEditorView({
         content: contentRef.current,
       });
       setSavedContent(contentRef.current);
-      toast.success(`${fileName} saved`);
+      toast.success(t('fileBrowser.fileSaved', { name: fileName }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error("Failed to save file", { description: msg });
+      toast.error(t('fileBrowser.saveFileFailed'), { description: msg });
     } finally {
       setSaving(false);
     }
@@ -110,7 +112,7 @@ export function FileEditorView({
         <FileWarning className="h-8 w-8 opacity-50" />
         <span>Failed to load file: {error}</span>
         <Button variant="outline" size="sm" onClick={loadFile}>
-          <RefreshCw className="h-4 w-4 mr-1" /> Retry
+          <RefreshCw className="h-4 w-4 mr-1" /> {t('fileBrowser.retry')}
         </Button>
       </div>
     );
@@ -142,10 +144,10 @@ export function FileEditorView({
           className="h-6 px-2"
           onClick={handleSave}
           disabled={saving || !dirty}
-          title="Save (Ctrl+S)"
+          title={`${t('fileBrowser.saveFile')} (Ctrl+S)`}
         >
           <Save className="h-3.5 w-3.5 mr-1" />
-          Save
+          {t('fileBrowser.saveFile')}
         </Button>
       </div>
 
