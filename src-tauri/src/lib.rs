@@ -70,7 +70,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
                 "close_connection",
                 "Close Tab",
                 true,
-                Some("CmdOrCtrl+W"),
+                None::<&str>,
             )?,
         ],
     )?;

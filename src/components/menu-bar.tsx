@@ -59,6 +59,7 @@ interface MenuBarProps {
   onCloneTab?: () => void;
   onNextTab?: () => void;
   onPreviousTab?: () => void;
+  closeConnectionShortcutLabel?: string;
   onRecentConnectionSelect?: (connection: ConnectionData) => void;
   hasActiveConnection?: boolean;
   canPaste?: boolean;
@@ -93,6 +94,7 @@ export function MenuBar({
   onCloneTab,
   onNextTab,
   onPreviousTab,
+  closeConnectionShortcutLabel,
   onRecentConnectionSelect,
   hasActiveConnection = false,
   canPaste = true,
@@ -202,7 +204,7 @@ export function MenuBar({
           <DropdownMenuItem onClick={onCloseConnection} disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
             Close Connection
-            <DropdownMenuShortcut>{cmdOrCtrl}+W</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{closeConnectionShortcutLabel ?? `${cmdOrCtrl}+Shift+W`}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem>
             <X className="mr-2 h-4 w-4" />

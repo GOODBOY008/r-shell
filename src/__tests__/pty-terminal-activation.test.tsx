@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     writeln = vi.fn();
     write = vi.fn((_data: string, callback?: () => void) => callback?.());
     onSelectionChange = vi.fn(() => ({ dispose: vi.fn() }));
+    onLineFeed = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
     onData = vi.fn(() => ({ dispose: vi.fn() }));
     onResize = vi.fn(() => ({ dispose: vi.fn() }));
@@ -161,6 +162,19 @@ async function flushTimers() {
   });
 }
 
+function getCustomKeyHandler() {
+  const handler = mocks.terminals[0].attachCustomKeyEventHandler.mock.calls[0]?.[0];
+  expect(handler).toBeDefined();
+  return handler as (event: KeyboardEvent) => boolean;
+}
+
+async function flushPromises() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe('PtyTerminal activation', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -257,5 +271,73 @@ describe('PtyTerminal activation', () => {
     expect(mocks.terminals).toHaveLength(terminalCount);
     expect(mocks.webSockets).toHaveLength(webSocketCount);
     expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
+  });
+
+  it('pastes clipboard text into the PTY with Ctrl+V', async () => {
+    Object.defineProperty(navigator, 'platform', {
+      configurable: true,
+      value: 'Win32',
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: vi.fn().mockResolvedValue('pasted text'),
+      },
+    });
+    renderTerminal(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+
+    const preventDefault = vi.fn();
+    const handled = getCustomKeyHandler()({
+      key: 'v',
+      ctrlKey: true,
+      metaKey: false,
+      preventDefault,
+    } as unknown as KeyboardEvent);
+    await flushPromises();
+
+    expect(handled).toBe(false);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(mocks.webSockets[0].send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'Input',
+      connection_id: 'connection-1',
+      data: Array.from(new TextEncoder().encode('pasted text')),
+    }));
+  });
+
+  it('pastes clipboard text into the PTY with Command+V on macOS', async () => {
+    Object.defineProperty(navigator, 'platform', {
+      configurable: true,
+      value: 'MacIntel',
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: vi.fn().mockResolvedValue('mac paste'),
+      },
+    });
+    renderTerminal(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+
+    const preventDefault = vi.fn();
+    const handled = getCustomKeyHandler()({
+      key: 'v',
+      ctrlKey: false,
+      metaKey: true,
+      preventDefault,
+    } as unknown as KeyboardEvent);
+    await flushPromises();
+
+    expect(handled).toBe(false);
+    expect(preventDefault).toHaveBeenCalledOnce();
+    expect(mocks.webSockets[0].send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'Input',
+      connection_id: 'connection-1',
+      data: Array.from(new TextEncoder().encode('mac paste')),
+    }));
   });
 });

@@ -15,7 +15,14 @@ import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connec
 import { isDesktopProtocol } from './lib/protocol-config';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { useLayout, LayoutProvider } from './lib/layout-context';
-import { useKeyboardShortcuts, createLayoutShortcuts, createSplitViewShortcuts } from './lib/keyboard-shortcuts';
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  createLayoutShortcuts,
+  createSplitViewShortcuts,
+  loadKeyboardShortcutSettings,
+  useKeyboardShortcuts,
+} from './lib/keyboard-shortcuts';
+import type { SplitViewShortcutBindings } from './lib/keyboard-shortcuts';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
@@ -53,6 +60,9 @@ function AppContent() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
+  const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
+    () => loadKeyboardShortcutSettings(),
+  );
 
   // Right sidebar tab & log monitor integration
   const [rightSidebarTab, setRightSidebarTab] = useState("monitor");
@@ -82,46 +92,62 @@ function AppContent() {
     return Object.values(state.groups).flatMap(g => g.tabs);
   }, [state.groups]);
 
+  useEffect(() => {
+    const refreshKeyboardShortcutSettings = () => {
+      setKeyboardShortcutSettings(loadKeyboardShortcutSettings());
+    };
+
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, refreshKeyboardShortcutSettings);
+    window.addEventListener('storage', refreshKeyboardShortcutSettings);
+    return () => {
+      window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, refreshKeyboardShortcutSettings);
+      window.removeEventListener('storage', refreshKeyboardShortcutSettings);
+    };
+  }, []);
+
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
     const groupIds = Object.keys(state.groups);
-    return createSplitViewShortcuts({
-      splitRight: () => {
-        if (state.activeGroupId) {
-          dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'right' });
-        }
+    return createSplitViewShortcuts(
+      {
+        splitRight: () => {
+          if (state.activeGroupId) {
+            dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'right' });
+          }
+        },
+        splitDown: () => {
+          if (state.activeGroupId) {
+            dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'down' });
+          }
+        },
+        focusGroup: (index: number) => {
+          if (index < groupIds.length) {
+            dispatch({ type: 'ACTIVATE_GROUP', groupId: groupIds[index] });
+          }
+        },
+        closeTab: () => {
+          if (activeGroup && activeGroup.activeTabId) {
+            dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
+          }
+        },
+        nextTab: () => {
+          if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
+            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            const nextIndex = (currentIndex + 1) % activeGroup.tabs.length;
+            dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[nextIndex].id });
+          }
+        },
+        prevTab: () => {
+          if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
+            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            const prevIndex = (currentIndex - 1 + activeGroup.tabs.length) % activeGroup.tabs.length;
+            dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
+          }
+        },
       },
-      splitDown: () => {
-        if (state.activeGroupId) {
-          dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'down' });
-        }
-      },
-      focusGroup: (index: number) => {
-        if (index < groupIds.length) {
-          dispatch({ type: 'ACTIVATE_GROUP', groupId: groupIds[index] });
-        }
-      },
-      closeTab: () => {
-        if (activeGroup && activeGroup.activeTabId) {
-          dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
-        }
-      },
-      nextTab: () => {
-        if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
-          const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-          const nextIndex = (currentIndex + 1) % activeGroup.tabs.length;
-          dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[nextIndex].id });
-        }
-      },
-      prevTab: () => {
-        if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
-          const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-          const prevIndex = (currentIndex - 1 + activeGroup.tabs.length) % activeGroup.tabs.length;
-          dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
-        }
-      },
-    });
-  }, [state.activeGroupId, state.groups, activeGroup, dispatch]);
+      keyboardShortcutSettings,
+    );
+  }, [state.activeGroupId, state.groups, activeGroup, dispatch, keyboardShortcutSettings]);
 
   const layoutShortcuts = useMemo(() => createLayoutShortcuts({
     toggleLeftSidebar,
@@ -1516,6 +1542,7 @@ function AppContent() {
         }}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
+        closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
         hasActiveConnection={!!activeTab}
         canPaste={true}
         onToggleLeftSidebar={toggleLeftSidebar}

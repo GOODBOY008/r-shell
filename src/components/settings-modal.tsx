@@ -28,6 +28,12 @@ import {
   saveAppearanceSettings,
   terminalThemes 
 } from '../lib/terminal-config';
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  APP_SETTINGS_STORAGE_KEY,
+  DEFAULT_APP_KEYBOARD_SHORTCUTS,
+  loadKeyboardShortcutSettings,
+} from '../lib/keyboard-shortcuts';
 import { applyTheme, ThemeMode } from '../lib/utils';
 
 interface SettingsModalProps {
@@ -66,10 +72,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     enableNotifications: true,
     
     // Keyboard shortcuts
-    newSession: 'Ctrl+N',
-    closeSession: 'Ctrl+W',
-    nextTab: 'Ctrl+Tab',
-    previousTab: 'Ctrl+Shift+Tab',
+    newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+    closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
+    nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
+    previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
     
     // Advanced settings
     logLevel: 'info',
@@ -86,10 +92,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
       
       // Load other settings from localStorage
       try {
-        const savedSettings = localStorage.getItem('sshClientSettings');
+        const savedSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
         if (savedSettings) {
           const parsed = JSON.parse(savedSettings);
-          setSettings(prev => ({ ...prev, ...parsed }));
+          const keyboardShortcuts = loadKeyboardShortcutSettings();
+          setSettings(prev => ({
+            ...prev,
+            ...parsed,
+            closeSession: keyboardShortcuts.closeTab,
+            nextTab: keyboardShortcuts.nextTab,
+            previousTab: keyboardShortcuts.prevTab,
+          }));
         }
       } catch {
         // Ignore parsing errors
@@ -121,7 +134,8 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     applyTheme(settings.theme as ThemeMode);
     
     // Save other settings to localStorage
-    localStorage.setItem('sshClientSettings', JSON.stringify(settings));
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     onOpenChange(false);
   };
 
@@ -149,10 +163,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
         showSystemMonitor: true,
         showStatusBar: true,
         enableNotifications: true,
-        newSession: 'Ctrl+N',
-        closeSession: 'Ctrl+W',
-        nextTab: 'Ctrl+Tab',
-        previousTab: 'Ctrl+Shift+Tab',
+        newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+        closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
+        nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
+        previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
         logLevel: 'info',
         maxLogSize: 100,
         checkUpdates: true,
@@ -772,7 +786,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     <Input
                       value={settings.closeSession}
                       onChange={(e) => updateSetting('closeSession', e.target.value)}
-                      placeholder="Ctrl+W"
+                      placeholder={DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession}
                     />
                   </div>
                 </div>
@@ -798,7 +812,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="p-4 bg-muted rounded-lg">
                   <p className="text-sm text-muted-foreground">
-                    <strong>Note:</strong> Changes to keyboard shortcuts will take effect after restarting the application.
+                    <strong>Note:</strong> Changes to keyboard shortcuts take effect after saving.
                   </p>
                 </div>
               </CardContent>
