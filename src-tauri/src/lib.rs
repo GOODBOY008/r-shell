@@ -22,7 +22,8 @@ pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
 #[tauri::command]
 fn set_app_locale(app: tauri::AppHandle, locale: String) -> Result<(), String> {
     let menu = build_app_menu(&app, &locale).map_err(|e| e.to_string())?;
-    app.set_menu(menu).map_err(|e| e.to_string())
+    app.set_menu(menu).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[cfg(not(target_os = "macos"))]
