@@ -32,6 +32,12 @@ interface PtyTerminalProps {
  * 
  * Communication is done via WebSocket for low-latency bidirectional streaming.
  */
+
+/** Per-session output cap. When cumulative bytes written to xterm exceed this
+ *  value the scrollback is cleared automatically so V8 heap stays bounded.
+ *  50 MB of decoded text ≈ ~600k typical 80-char terminal lines. */
+const SESSION_OUTPUT_LIMIT_BYTES = 50 * 1024 * 1024;
+
 export function PtyTerminal({ 
   connectionId,
   connectionName,
@@ -82,15 +88,9 @@ export function PtyTerminal({
   // Auto-reconnect tracking after a successful session drops (e.g. sleep/wake, server timeout)
   const autoReconnectAfterDropRef = React.useRef(0);
   const MAX_AUTO_RECONNECT_AFTER_DROP = 5;
-  
-  // Flow control - inspired by ttyd
-  const flowControlRef = React.useRef({
-    written: 0,
-    pending: 0,
-    limit: 10000,
-    highWater: 5,
-    lowWater: 2,
-  });
+
+  // Cumulative bytes written to xterm this session — reset on clear.
+  const sessionOutputRef = React.useRef(0);
 
   // Get appearance settings - reloads when appearanceKey changes
   const appearance = React.useMemo(() => loadAppearanceSettings(), [appearanceKey]);
@@ -313,6 +313,13 @@ export function PtyTerminal({
       
       console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
       const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+      // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of
+      // encoding Vec<u8> as integer arrays.  The backend sends binary output
+      // frames with the format: [0x01][id_len: u16 BE][connection_id][payload]
+      ws.binaryType = 'arraybuffer';
+      // One streaming TextDecoder per WebSocket connection: preserves UTF-8
+      // multi-byte sequences that may be split across successive output frames.
+      const outputDecoder = new TextDecoder('utf-8');
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -330,7 +337,46 @@ export function PtyTerminal({
         ws.send(JSON.stringify(startMsg));
       };
 
+      // Credit-based flow control: the backend holds a Semaphore(0) per
+      // connection and only flushes a frame after acquiring a permit.  Every
+      // time xterm finishes processing a chunk we send one Resume message to
+      // grant a permit, so the WKWebView WebSocket receive queue is bounded
+      // to INITIAL_WINDOW frames regardless of how fast the remote produces data.
+      const writeOutput = (text: string) => {
+        // Enforce per-session memory cap so xterm's scrollback buffer can't
+        // grow without bound on sustained high-throughput output (e.g. `yes`).
+        sessionOutputRef.current += text.length;
+        if (sessionOutputRef.current >= SESSION_OUTPUT_LIMIT_BYTES) {
+          term.clear();
+          sessionOutputRef.current = 0;
+          term.writeln('\x1b[33m[Output limit reached \u2014 scrollback cleared to free memory]\x1b[0m');
+        }
+        // Always use the callback form so every processed chunk grants exactly
+        // 1 credit to the backend, keeping the pipeline bounded.
+        term.write(text, () => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'Resume', connection_id: connectionId }));
+          }
+        });
+      };
+
       ws.onmessage = (event) => {
+        // Binary frames carry raw PTY output.
+        // Format: [0x01][id_len: u16 BE][connection_id bytes][payload bytes]
+        if (event.data instanceof ArrayBuffer) {
+          const data = new Uint8Array(event.data);
+          if (data.length < 3 || data[0] !== 0x01) return;
+          const idLen = (data[1] << 8) | data[2];
+          const payloadOffset = 3 + idLen;
+          if (data.length < payloadOffset) return;
+          const frameConnectionId = new TextDecoder().decode(data.subarray(3, payloadOffset));
+          if (frameConnectionId !== connectionId) return;
+          const payload = data.subarray(payloadOffset);
+          if (payload.length === 0) return;
+          writeOutput(outputDecoder.decode(payload, { stream: true }));
+          return;
+        }
+
         try {
           const msg = JSON.parse(event.data);
           
@@ -362,51 +408,19 @@ export function PtyTerminal({
                 ptyGenerationRef.current = msg.generation;
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
                 signalReady(connectionId);
+                // Seed the credit pipeline so the PTY reader can start sending
+                // immediately without waiting for the first callback to fire.
+                const INITIAL_WINDOW = 4;
+                for (let i = 0; i < INITIAL_WINDOW; i++) {
+                  ws.send(JSON.stringify({ type: 'Resume', connection_id: connectionId }));
+                }
               }
               break;
             }
               
             case 'Output':
-              // Terminal output from PTY
-              // Implement flow control like ttyd
               if (msg.data && msg.data.length > 0) {
-                const text = new TextDecoder().decode(new Uint8Array(msg.data));
-                const flowControl = flowControlRef.current;
-                
-                flowControl.written += text.length;
-                
-                // Use callback-based write for flow control
-                if (flowControl.written > flowControl.limit) {
-                  term.write(text, () => {
-                    flowControl.pending = Math.max(flowControl.pending - 1, 0);
-                    
-                    // Send RESUME when pending drops below lowWater
-                    if (flowControl.pending < flowControl.lowWater) {
-                      if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({
-                          type: 'Resume',
-                          connection_id: connectionId,
-                        }));
-                      }
-                    }
-                  });
-                  
-                  flowControl.pending++;
-                  flowControl.written = 0;
-                  
-                  // Send PAUSE when pending exceeds highWater
-                  if (flowControl.pending > flowControl.highWater) {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        type: 'Pause',
-                        connection_id: connectionId,
-                      }));
-                    }
-                  }
-                } else {
-                  // Fast path: write immediately without callback
-                  term.write(text);
-                }
+                writeOutput(new TextDecoder().decode(new Uint8Array(msg.data)));
               }
               break;
               
@@ -650,6 +664,7 @@ export function PtyTerminal({
       resizeObserver.disconnect();
       if (fitTimer) clearTimeout(fitTimer);
       
+      term.reset(); // clear scrollback + viewport so GC can reclaim xterm buffers sooner
       term.dispose();
     };
   }, [connectionId, connectionName, host, username, terminalKey, reconnectKey]);

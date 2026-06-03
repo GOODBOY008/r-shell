@@ -598,7 +598,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           setNetworkHistory(prev => {
             const updated = [...prev, newHistoryPoint];
             // Keep only last 300 data points (5 minutes of data)
-            return updated.slice(-300);
+            return updated.slice(-60);
           });
         }
     };
@@ -650,7 +650,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           latency: Math.round(result.latency_ms * 10) / 10,
           timestamp: now.getTime(),
         };
-        setLatencyData(prev => [...prev, newDataPoint].slice(-100));
+        setLatencyData(prev => [...prev, newDataPoint].slice(-60));
       }
     };
 
@@ -876,6 +876,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                     stroke={GPU_COLORS[idx % GPU_COLORS.length]}
                                     strokeWidth={2}
                                     dot={false}
+                                    isAnimationActive={false}
                                   />
                                 );
                               })}
@@ -1067,6 +1068,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       strokeWidth={2}
                                       fill="url(#gpuUtilGradient)"
                                       dot={false}
+                                      isAnimationActive={false}
                                     />
                                     <Area
                                       type="monotone"
@@ -1075,6 +1077,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       strokeWidth={2}
                                       fill="url(#gpuMemGradient)"
                                       dot={false}
+                                      isAnimationActive={false}
                                     />
                                   </AreaChart>
                                 </ResponsiveContainer>
@@ -1134,6 +1137,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       stroke="#f97316"
                                       strokeWidth={2}
                                       dot={false}
+                                      isAnimationActive={false}
                                     />
                                   </LineChart>
                                 </ResponsiveContainer>
@@ -1389,6 +1393,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         fill="url(#uploadGradient)"
                         dot={false}
                         activeDot={{ r: 3, fill: '#ef4444', stroke: '#ef4444' }}
+                        isAnimationActive={false}
                       />
                       <Area
                         type="monotone"
@@ -1398,6 +1403,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         fill="url(#downloadGradient)"
                         dot={false}
                         activeDot={{ r: 3, fill: '#3b82f6', stroke: '#3b82f6' }}
+                        isAnimationActive={false}
                       />
                     </AreaChart>
                   </ResponsiveContainer>
@@ -1461,7 +1467,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         strokeWidth: 2,
                         filter: 'drop-shadow(0 2px 4px rgba(59, 130, 246, 0.4))'
                       }}
-                      animationDuration={300}
+                      isAnimationActive={false}
                     />
                   </AreaChart>
                 </ResponsiveContainer>

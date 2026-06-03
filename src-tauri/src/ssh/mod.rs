@@ -188,6 +188,7 @@ impl SshClient {
             let mut output = String::new();
             let mut code = None;
             let mut eof_received = false;
+            let mut server_closed = false;
 
             loop {
                 let msg = channel.wait().await;
@@ -208,13 +209,22 @@ impl SshClient {
                         }
                     }
                     Some(ChannelMsg::Close) => {
+                        server_closed = true;
                         break;
                     }
                     None => {
+                        server_closed = true;
                         break;
                     }
                     _ => {}
                 }
+            }
+
+            // Send SSH_MSG_CHANNEL_CLOSE if the server hasn't already closed the channel.
+            // Without this, russh's session keeps the channel in its internal map until
+            // the session is torn down, causing per-poll memory growth.
+            if !server_closed {
+                let _ = channel.close().await;
             }
 
             // Consider success if we got output and no explicit error code, or code 0
@@ -277,7 +287,7 @@ impl SshClient {
             // Create channels for bidirectional communication (like ttyd's pty_buf)
             // Increased capacity for better buffering during fast input
             let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1000); // Increased from 100
-            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(2000); // Increased from 1000
+            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(128); // Bounded: back-pressure to SSH window
 
             let channel_id = channel.id();
 
