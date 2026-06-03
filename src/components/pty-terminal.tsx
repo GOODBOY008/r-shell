@@ -313,7 +313,65 @@ export function PtyTerminal({
       
       console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
       const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+      ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
+      const outputDecoder = new TextDecoder();
+      const connectionIdDecoder = new TextDecoder();
+
+      const writeOutput = (data: Uint8Array) => {
+        if (data.length === 0) return;
+
+        const text = outputDecoder.decode(data);
+        const flowControl = flowControlRef.current;
+
+        flowControl.written += text.length;
+
+        // Use callback-based write for flow control
+        if (flowControl.written > flowControl.limit) {
+          term.write(text, () => {
+            flowControl.pending = Math.max(flowControl.pending - 1, 0);
+
+            // Send RESUME when pending drops below lowWater
+            if (flowControl.pending < flowControl.lowWater) {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'Resume',
+                  connection_id: connectionId,
+                }));
+              }
+            }
+          });
+
+          flowControl.pending++;
+          flowControl.written = 0;
+
+          // Send PAUSE when pending exceeds highWater
+          if (flowControl.pending > flowControl.highWater) {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({
+                type: 'Pause',
+                connection_id: connectionId,
+              }));
+            }
+          }
+        } else {
+          // Fast path: write immediately without callback
+          term.write(text);
+        }
+      };
+
+      const handleBinaryMessage = (data: Uint8Array) => {
+        if (data.length < 3 || data[0] !== 0x01) return;
+
+        const idLength = (data[1] << 8) | data[2];
+        const payloadOffset = 3 + idLength;
+        if (data.length < payloadOffset) return;
+
+        const frameConnectionId = connectionIdDecoder.decode(data.subarray(3, payloadOffset));
+        if (frameConnectionId !== connectionId) return;
+
+        writeOutput(data.subarray(payloadOffset));
+      };
 
       ws.onopen = () => {
         console.log(`[PTY Terminal] [${connectionId}] WebSocket connected`);
@@ -332,6 +390,20 @@ export function PtyTerminal({
 
       ws.onmessage = (event) => {
         try {
+          if (event.data instanceof ArrayBuffer) {
+            handleBinaryMessage(new Uint8Array(event.data));
+            return;
+          }
+
+          if (event.data instanceof Blob) {
+            void event.data.arrayBuffer().then((buffer) => {
+              if (isRunning) {
+                handleBinaryMessage(new Uint8Array(buffer));
+              }
+            });
+            return;
+          }
+
           const msg = JSON.parse(event.data);
           
           switch (msg.type) {
@@ -370,43 +442,7 @@ export function PtyTerminal({
               // Terminal output from PTY
               // Implement flow control like ttyd
               if (msg.data && msg.data.length > 0) {
-                const text = new TextDecoder().decode(new Uint8Array(msg.data));
-                const flowControl = flowControlRef.current;
-                
-                flowControl.written += text.length;
-                
-                // Use callback-based write for flow control
-                if (flowControl.written > flowControl.limit) {
-                  term.write(text, () => {
-                    flowControl.pending = Math.max(flowControl.pending - 1, 0);
-                    
-                    // Send RESUME when pending drops below lowWater
-                    if (flowControl.pending < flowControl.lowWater) {
-                      if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({
-                          type: 'Resume',
-                          connection_id: connectionId,
-                        }));
-                      }
-                    }
-                  });
-                  
-                  flowControl.pending++;
-                  flowControl.written = 0;
-                  
-                  // Send PAUSE when pending exceeds highWater
-                  if (flowControl.pending > flowControl.highWater) {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        type: 'Pause',
-                        connection_id: connectionId,
-                      }));
-                    }
-                  }
-                } else {
-                  // Fast path: write immediately without callback
-                  term.write(text);
-                }
+                writeOutput(new Uint8Array(msg.data));
               }
               break;
               

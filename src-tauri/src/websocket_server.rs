@@ -3,10 +3,13 @@ use crate::WEBSOCKET_PORT;
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, watch, Mutex};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -98,6 +101,77 @@ pub struct WebSocketServer {
     connection_manager: Arc<ConnectionManager>,
 }
 
+const WS_OUTPUT_QUEUE_CAPACITY: usize = 256;
+const OUTPUT_FLUSH_BYTES: usize = 16 * 1024;
+const OUTPUT_FLUSH_INTERVAL_MS: u128 = 10;
+const OUTPUT_QUEUE_SEND_TIMEOUT_MS: u64 = 100;
+const BINARY_OUTPUT_COMMAND: u8 = 0x01;
+
+type WsTx = mpsc::Sender<Message>;
+type PauseControls = Arc<Mutex<HashMap<String, watch::Sender<bool>>>>;
+
+#[derive(Debug, PartialEq, Eq)]
+enum QueueSendOutcome {
+    Sent,
+    Dropped,
+    Closed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PtyLifecycleEvent {
+    None,
+    Started {
+        connection_id: String,
+        generation: u64,
+    },
+    Closed {
+        connection_id: String,
+        generation: Option<u64>,
+    },
+}
+
+fn encode_output_frame(connection_id: &str, data: Vec<u8>) -> Vec<u8> {
+    let connection_id = connection_id.as_bytes();
+    let id_len = connection_id.len().min(u16::MAX as usize);
+    let mut frame = Vec::with_capacity(3 + id_len + data.len());
+    frame.push(BINARY_OUTPUT_COMMAND);
+    frame.extend_from_slice(&(id_len as u16).to_be_bytes());
+    frame.extend_from_slice(&connection_id[..id_len]);
+    frame.extend_from_slice(&data);
+    frame
+}
+
+async fn queue_ws_frame(tx: &WsTx, frame: Message) -> QueueSendOutcome {
+    match tokio::time::timeout(
+        Duration::from_millis(OUTPUT_QUEUE_SEND_TIMEOUT_MS),
+        tx.send(frame),
+    )
+    .await
+    {
+        Ok(Ok(())) => QueueSendOutcome::Sent,
+        Ok(Err(_)) => QueueSendOutcome::Closed,
+        Err(_) => QueueSendOutcome::Dropped,
+    }
+}
+
+async fn queue_ws_json(tx: &WsTx, msg: &WsMessage) -> Result<QueueSendOutcome> {
+    Ok(queue_ws_frame(tx, Message::Text(serde_json::to_string(msg)?)).await)
+}
+
+async fn flush_accumulated_output(
+    tx: &WsTx,
+    connection_id: &str,
+    accumulated: &mut Vec<u8>,
+) -> QueueSendOutcome {
+    if accumulated.is_empty() {
+        return QueueSendOutcome::Sent;
+    }
+
+    let data = std::mem::replace(accumulated, Vec::with_capacity(OUTPUT_FLUSH_BYTES));
+    let frame = encode_output_frame(connection_id, data);
+    queue_ws_frame(tx, Message::Binary(frame)).await
+}
+
 impl WebSocketServer {
     pub fn new(connection_manager: Arc<ConnectionManager>) -> Self {
         Self { connection_manager }
@@ -155,12 +229,14 @@ impl WebSocketServer {
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
         // Create a channel for sending messages back to WebSocket from PTY reader task
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx, mut rx) = mpsc::channel::<Message>(WS_OUTPUT_QUEUE_CAPACITY);
+        let pause_controls: PauseControls = Arc::new(Mutex::new(HashMap::new()));
+        let mut active_pty_generations: HashMap<String, u64> = HashMap::new();
 
         // Task to forward messages from channel to WebSocket
         let ws_sender_task = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
-                if ws_sender.send(Message::Text(msg)).await.is_err() {
+                if ws_sender.send(msg).await.is_err() {
                     break;
                 }
             }
@@ -214,19 +290,45 @@ impl WebSocketServer {
                             let error = WsMessage::Error {
                                 message: format!("Invalid message format: {}", e),
                             };
-                            let _ = tx.send(serde_json::to_string(&error)?);
+                            let _ = queue_ws_json(&tx, &error).await?;
                             continue;
                         }
                     };
 
                     // Handle the message
-                    match self.handle_message(ws_msg, tx.clone()).await {
-                        Ok(_) => {}
+                    match self
+                        .handle_message(ws_msg, tx.clone(), pause_controls.clone())
+                        .await
+                    {
+                        Ok(PtyLifecycleEvent::Started {
+                            connection_id,
+                            generation,
+                        }) => {
+                            active_pty_generations.insert(connection_id, generation);
+                        }
+                        Ok(PtyLifecycleEvent::Closed {
+                            connection_id,
+                            generation,
+                        }) => {
+                            let should_remove = match (
+                                active_pty_generations.get(&connection_id).copied(),
+                                generation,
+                            ) {
+                                (Some(active), Some(closed)) => active == closed,
+                                (Some(_), None) => true,
+                                _ => false,
+                            };
+                            if should_remove {
+                                active_pty_generations.remove(&connection_id);
+                            }
+                            pause_controls.lock().await.remove(&connection_id);
+                        }
+                        Ok(PtyLifecycleEvent::None) => {}
                         Err(e) => {
                             let error = WsMessage::Error {
                                 message: format!("Error handling message: {}", e),
                             };
-                            let _ = tx.send(serde_json::to_string(&error)?);
+                            let _ = queue_ws_json(&tx, &error).await?;
                         }
                     }
                 }
@@ -248,6 +350,20 @@ impl WebSocketServer {
         }
 
         // Cleanup
+        for (connection_id, generation) in active_pty_generations {
+            if let Err(e) = self
+                .connection_manager
+                .close_pty_connection(&connection_id, Some(generation))
+                .await
+            {
+                tracing::warn!(
+                    "Failed to close PTY session {} on WebSocket cleanup: {}",
+                    connection_id,
+                    e
+                );
+            }
+        }
+        pause_controls.lock().await.clear();
         ws_sender_task.abort();
 
         Ok(())
@@ -257,8 +373,9 @@ impl WebSocketServer {
     async fn handle_message(
         &self,
         msg: WsMessage,
-        tx: tokio::sync::mpsc::UnboundedSender<String>,
-    ) -> Result<()> {
+        tx: WsTx,
+        pause_controls: PauseControls,
+    ) -> Result<PtyLifecycleEvent> {
         match msg {
             WsMessage::StartPty {
                 connection_id,
@@ -292,22 +409,27 @@ impl WebSocketServer {
                 let response = WsMessage::Success {
                     message: format!("PTY connection started: {}", connection_id),
                 };
-                tx.send(serde_json::to_string(&response)?)?;
 
                 let started = WsMessage::PtyStarted {
                     connection_id: connection_id.clone(),
                     generation,
                 };
-                tx.send(serde_json::to_string(&started)?)?;
+                let _ = queue_ws_json(&tx, &response).await?;
+                let _ = queue_ws_json(&tx, &started).await?;
 
                 // Start reading from PTY and sending to WebSocket
                 let connection_manager = self.connection_manager.clone();
                 let connection_id_clone = connection_id.clone();
                 let tx_clone = tx.clone();
+                let (pause_tx, mut pause_rx) = watch::channel(false);
+                pause_controls
+                    .lock()
+                    .await
+                    .insert(connection_id.clone(), pause_tx);
 
                 tokio::spawn(async move {
                     // Buffer for accumulating small chunks
-                    let mut accumulated = Vec::with_capacity(8192);
+                    let mut accumulated = Vec::with_capacity(OUTPUT_FLUSH_BYTES);
                     let mut last_send = tokio::time::Instant::now();
 
                     loop {
@@ -315,6 +437,20 @@ impl WebSocketServer {
                         if cancel_token.is_cancelled() {
                             tracing::info!("PTY reader task cancelled for {}", connection_id_clone);
                             break;
+                        }
+
+                        while *pause_rx.borrow() {
+                            tokio::select! {
+                                _ = cancel_token.cancelled() => {
+                                    tracing::info!("PTY reader task cancelled while paused for {}", connection_id_clone);
+                                    return;
+                                }
+                                changed = pause_rx.changed() => {
+                                    if changed.is_err() {
+                                        return;
+                                    }
+                                }
+                            }
                         }
 
                         let read_result = tokio::select! {
@@ -330,22 +466,30 @@ impl WebSocketServer {
                                 if data.is_empty() {
                                     // Send accumulated data if we have any and timeout reached
                                     if !accumulated.is_empty()
-                                        && last_send.elapsed().as_millis() > 5
+                                        && last_send.elapsed().as_millis()
+                                            > OUTPUT_FLUSH_INTERVAL_MS
                                     {
-                                        let output = WsMessage::Output {
-                                            connection_id: connection_id_clone.clone(),
-                                            data: accumulated.clone(),
-                                        };
-
-                                        if let Ok(json) = serde_json::to_string(&output) {
-                                            if tx_clone.send(json).is_err() {
+                                        match flush_accumulated_output(
+                                            &tx_clone,
+                                            &connection_id_clone,
+                                            &mut accumulated,
+                                        )
+                                        .await
+                                        {
+                                            QueueSendOutcome::Sent => {}
+                                            QueueSendOutcome::Dropped => {
+                                                tracing::warn!(
+                                                    "Dropping PTY output for {} because WebSocket output queue is full",
+                                                    connection_id_clone
+                                                );
+                                            }
+                                            QueueSendOutcome::Closed => {
                                                 tracing::error!(
                                                     "Failed to send output to WebSocket"
                                                 );
                                                 break;
                                             }
                                         }
-                                        accumulated.clear();
                                         last_send = tokio::time::Instant::now();
                                     }
                                     continue;
@@ -355,21 +499,30 @@ impl WebSocketServer {
                                 accumulated.extend_from_slice(&data);
 
                                 // Send immediately if:
-                                // 1. Buffer is large enough (> 4KB)
-                                // 2. Or 5ms has passed since last send
-                                if accumulated.len() > 4096 || last_send.elapsed().as_millis() > 5 {
-                                    let output = WsMessage::Output {
-                                        connection_id: connection_id_clone.clone(),
-                                        data: accumulated.clone(),
-                                    };
-
-                                    if let Ok(json) = serde_json::to_string(&output) {
-                                        if tx_clone.send(json).is_err() {
+                                // 1. Buffer is large enough
+                                // 2. Or the flush interval has passed since last send
+                                if accumulated.len() >= OUTPUT_FLUSH_BYTES
+                                    || last_send.elapsed().as_millis() > OUTPUT_FLUSH_INTERVAL_MS
+                                {
+                                    match flush_accumulated_output(
+                                        &tx_clone,
+                                        &connection_id_clone,
+                                        &mut accumulated,
+                                    )
+                                    .await
+                                    {
+                                        QueueSendOutcome::Sent => {}
+                                        QueueSendOutcome::Dropped => {
+                                            tracing::warn!(
+                                                "Dropping PTY output for {} because WebSocket output queue is full",
+                                                connection_id_clone
+                                            );
+                                        }
+                                        QueueSendOutcome::Closed => {
                                             tracing::error!("Failed to send output to WebSocket");
                                             break;
                                         }
                                     }
-                                    accumulated.clear();
                                     last_send = tokio::time::Instant::now();
                                 }
                             }
@@ -378,14 +531,17 @@ impl WebSocketServer {
                                 let error_msg = WsMessage::Error {
                                     message: format!("Connection lost: {}", e),
                                 };
-                                if let Ok(json) = serde_json::to_string(&error_msg) {
-                                    let _ = tx_clone.send(json);
-                                }
+                                let _ = queue_ws_json(&tx_clone, &error_msg).await;
                                 break;
                             }
                         }
                     }
                 });
+
+                Ok(PtyLifecycleEvent::Started {
+                    connection_id,
+                    generation,
+                })
             }
             WsMessage::Input {
                 connection_id,
@@ -399,6 +555,7 @@ impl WebSocketServer {
                 self.connection_manager
                     .write_to_pty(&connection_id, data)
                     .await?;
+                Ok(PtyLifecycleEvent::None)
             }
             WsMessage::Resize {
                 connection_id,
@@ -412,19 +569,22 @@ impl WebSocketServer {
                 let response = WsMessage::Success {
                     message: format!("Terminal resized: {}x{}", cols, rows),
                 };
-                tx.send(serde_json::to_string(&response)?)?;
+                let _ = queue_ws_json(&tx, &response).await?;
+                Ok(PtyLifecycleEvent::None)
             }
             WsMessage::Pause { connection_id } => {
                 tracing::debug!("Pausing output for connection: {}", connection_id);
-                // Flow control: pause reading from PTY
-                // In a full implementation, we'd pause the output task
-                // For now, just acknowledge
+                if let Some(control) = pause_controls.lock().await.get(&connection_id) {
+                    let _ = control.send(true);
+                }
+                Ok(PtyLifecycleEvent::None)
             }
             WsMessage::Resume { connection_id } => {
                 tracing::debug!("Resuming output for connection: {}", connection_id);
-                // Flow control: resume reading from PTY
-                // In a full implementation, we'd resume the output task
-                // For now, just acknowledge
+                if let Some(control) = pause_controls.lock().await.get(&connection_id) {
+                    let _ = control.send(false);
+                }
+                Ok(PtyLifecycleEvent::None)
             }
             WsMessage::Close {
                 connection_id,
@@ -441,7 +601,11 @@ impl WebSocketServer {
                 let response = WsMessage::Success {
                     message: format!("PTY connection closed: {}", connection_id),
                 };
-                tx.send(serde_json::to_string(&response)?)?;
+                let _ = queue_ws_json(&tx, &response).await?;
+                Ok(PtyLifecycleEvent::Closed {
+                    connection_id,
+                    generation,
+                })
             }
 
             // ===== Desktop (RDP/VNC) message handling =====
@@ -467,15 +631,16 @@ impl WebSocketServer {
                         width: w,
                         height: h,
                     };
-                    tx.send(serde_json::to_string(&started)?)?;
+                    let _ = queue_ws_json(&tx, &started).await?;
 
                     // TODO: start frame streaming loop when protocol clients are implemented
                 } else {
                     let error = WsMessage::Error {
                         message: format!("Desktop connection not found: {}", connection_id),
                     };
-                    tx.send(serde_json::to_string(&error)?)?;
+                    let _ = queue_ws_json(&tx, &error).await?;
                 }
+                Ok(PtyLifecycleEvent::None)
             }
 
             WsMessage::DesktopKeyEvent {
@@ -493,6 +658,7 @@ impl WebSocketServer {
                         tracing::error!("Failed to send desktop key event: {}", e);
                     }
                 }
+                Ok(PtyLifecycleEvent::None)
             }
 
             WsMessage::DesktopPointerEvent {
@@ -511,6 +677,7 @@ impl WebSocketServer {
                         tracing::error!("Failed to send desktop pointer event: {}", e);
                     }
                 }
+                Ok(PtyLifecycleEvent::None)
             }
 
             WsMessage::ClipboardUpdate {
@@ -527,6 +694,7 @@ impl WebSocketServer {
                         tracing::error!("Failed to set desktop clipboard: {}", e);
                     }
                 }
+                Ok(PtyLifecycleEvent::None)
             }
 
             WsMessage::RequestFullFrame { connection_id } => {
@@ -540,6 +708,7 @@ impl WebSocketServer {
                         tracing::error!("Failed to request full frame: {}", e);
                     }
                 }
+                Ok(PtyLifecycleEvent::None)
             }
 
             WsMessage::CloseDesktop { connection_id } => {
@@ -554,14 +723,44 @@ impl WebSocketServer {
                 let response = WsMessage::Success {
                     message: format!("Desktop connection closed: {}", connection_id),
                 };
-                tx.send(serde_json::to_string(&response)?)?;
+                let _ = queue_ws_json(&tx, &response).await?;
+                Ok(PtyLifecycleEvent::None)
             }
 
             _ => {
                 tracing::warn!("Unexpected message type received");
+                Ok(PtyLifecycleEvent::None)
             }
         }
+    }
+}
 
-        Ok(())
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[test]
+    fn output_frame_encodes_connection_id_and_payload() {
+        let frame = encode_output_frame("conn-1", b"hello".to_vec());
+
+        assert_eq!(frame[0], BINARY_OUTPUT_COMMAND);
+        assert_eq!(u16::from_be_bytes([frame[1], frame[2]]), 6);
+        assert_eq!(&frame[3..9], b"conn-1");
+        assert_eq!(&frame[9..], b"hello");
+    }
+
+    #[tokio::test]
+    async fn bounded_ws_queue_drops_when_receiver_is_full() {
+        let (tx, _rx) = tokio::sync::mpsc::channel::<Message>(1);
+
+        assert_eq!(
+            queue_ws_frame(&tx, Message::Text("first".to_string())).await,
+            QueueSendOutcome::Sent
+        );
+        assert_eq!(
+            queue_ws_frame(&tx, Message::Text("second".to_string())).await,
+            QueueSendOutcome::Dropped
+        );
     }
 }

@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
     attachCustomKeyEventHandler = vi.fn();
     onData = vi.fn(() => ({ dispose: vi.fn() }));
     onResize = vi.fn(() => ({ dispose: vi.fn() }));
+    onLineFeed = vi.fn(() => ({ dispose: vi.fn() }));
     hasSelection = vi.fn(() => false);
     getSelection = vi.fn(() => '');
     selectAll = vi.fn();
