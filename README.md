@@ -170,10 +170,13 @@ R-Shell is a free, open-source, cross-platform SSH client that combines an inter
 | `Ctrl+\` | Split terminal right |
 | `Ctrl+Shift+\` | Split terminal down |
 | `Ctrl+1` – `9` | Focus terminal group |
-| `Ctrl+W` | Close active tab |
+| `Ctrl+Shift+W` | Close active tab |
 | `Ctrl+Tab` | Next tab |
+| `Cmd/Ctrl+V` | Paste into terminal |
 | `Cmd/Ctrl+F` | Search in terminal |
 | `F3` / `Shift+F3` | Find next / previous |
+
+Layout shortcuts are ignored while the terminal input is focused, so terminal-native bindings such as tmux `Ctrl+B` still reach the shell.
 
 ### 🔧 Additional Features
 - **VS Code-like layout** — resizable left/right sidebars + bottom panel with 5 layout presets (Default, Minimal, Focus, Full Stack, Zen)
