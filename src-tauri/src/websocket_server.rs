@@ -745,7 +745,7 @@ mod tests {
 
     #[test]
     fn output_frame_encodes_connection_id_and_payload() {
-        let frame = encode_output_frame("conn-1", b"hello".to_vec());
+        let frame = encode_output_frame("conn-1", b"hello");
 
         assert_eq!(frame[0], BINARY_OUTPUT_COMMAND);
         assert_eq!(u16::from_be_bytes([frame[1], frame[2]]), 6);
