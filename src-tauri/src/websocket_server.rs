@@ -130,14 +130,14 @@ enum PtyLifecycleEvent {
     },
 }
 
-fn encode_output_frame(connection_id: &str, data: Vec<u8>) -> Vec<u8> {
-    let connection_id = connection_id.as_bytes();
-    let id_len = connection_id.len().min(u16::MAX as usize);
+fn encode_output_frame(connection_id: &str, data: &[u8]) -> Vec<u8> {
+    let id_bytes = connection_id.as_bytes();
+    let id_len = id_bytes.len().min(u16::MAX as usize);
     let mut frame = Vec::with_capacity(3 + id_len + data.len());
     frame.push(BINARY_OUTPUT_COMMAND);
     frame.extend_from_slice(&(id_len as u16).to_be_bytes());
-    frame.extend_from_slice(&connection_id[..id_len]);
-    frame.extend_from_slice(&data);
+    frame.extend_from_slice(&id_bytes[..id_len]);
+    frame.extend_from_slice(data);
     frame
 }
 
@@ -167,8 +167,8 @@ async fn flush_accumulated_output(
         return QueueSendOutcome::Sent;
     }
 
-    let data = std::mem::replace(accumulated, Vec::with_capacity(OUTPUT_FLUSH_BYTES));
-    let frame = encode_output_frame(connection_id, data);
+    let frame = encode_output_frame(connection_id, accumulated);
+    accumulated.clear();
     queue_ws_frame(tx, Message::Binary(frame)).await
 }
 
@@ -442,7 +442,7 @@ impl WebSocketServer {
                             break;
                         }
 
-                        while *pause_rx.borrow() {
+                        while *pause_rx.borrow_and_update() {
                             tokio::select! {
                                 _ = cancel_token.cancelled() => {
                                     tracing::info!("PTY reader task cancelled while paused for {}", connection_id_clone);
