@@ -156,6 +156,17 @@ function renderTerminal(isActive: boolean) {
   );
 }
 
+function binaryOutputFrame(connectionId: string, payload: Uint8Array) {
+  const idBytes = new TextEncoder().encode(connectionId);
+  const frame = new Uint8Array(3 + idBytes.length + payload.length);
+  frame[0] = 0x01;
+  frame[1] = (idBytes.length >> 8) & 0xff;
+  frame[2] = idBytes.length & 0xff;
+  frame.set(idBytes, 3);
+  frame.set(payload, 3 + idBytes.length);
+  return frame.buffer;
+}
+
 async function flushTimers() {
   await act(async () => {
     await vi.runOnlyPendingTimersAsync();
@@ -258,5 +269,23 @@ describe('PtyTerminal activation', () => {
     expect(mocks.terminals).toHaveLength(terminalCount);
     expect(mocks.webSockets).toHaveLength(webSocketCount);
     expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
+  });
+
+  it('streams UTF-8 binary output across WebSocket frame boundaries', async () => {
+    renderTerminal(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+    const terminal = mocks.terminals[0];
+    const ws = mocks.webSockets[0];
+    terminal.write.mockClear();
+
+    const utf8 = new TextEncoder().encode('中');
+    await act(async () => {
+      ws.onmessage?.({ data: binaryOutputFrame('connection-1', utf8.slice(0, 1)) } as MessageEvent);
+      ws.onmessage?.({ data: binaryOutputFrame('connection-1', utf8.slice(1)) } as MessageEvent);
+    });
+
+    expect(terminal.write.mock.calls.map(([text]) => text).join('')).toBe('中');
   });
 });

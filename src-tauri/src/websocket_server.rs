@@ -172,6 +172,14 @@ async fn flush_accumulated_output(
     queue_ws_frame(tx, Message::Binary(frame)).await
 }
 
+fn should_remove_pty_state(active_generation: Option<u64>, closed_generation: Option<u64>) -> bool {
+    match (active_generation, closed_generation) {
+        (Some(active), Some(closed)) => active == closed,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
 impl WebSocketServer {
     pub fn new(connection_manager: Arc<ConnectionManager>) -> Self {
         Self { connection_manager }
@@ -310,18 +318,13 @@ impl WebSocketServer {
                             connection_id,
                             generation,
                         }) => {
-                            let should_remove = match (
+                            if should_remove_pty_state(
                                 active_pty_generations.get(&connection_id).copied(),
                                 generation,
                             ) {
-                                (Some(active), Some(closed)) => active == closed,
-                                (Some(_), None) => true,
-                                _ => false,
-                            };
-                            if should_remove {
                                 active_pty_generations.remove(&connection_id);
+                                pause_controls.lock().await.remove(&connection_id);
                             }
-                            pause_controls.lock().await.remove(&connection_id);
                         }
                         Ok(PtyLifecycleEvent::None) => {}
                         Err(e) => {
@@ -762,5 +765,13 @@ mod tests {
             queue_ws_frame(&tx, Message::Text("second".to_string())).await,
             QueueSendOutcome::Dropped
         );
+    }
+
+    #[test]
+    fn stale_lifecycle_close_does_not_remove_active_pause_control() {
+        assert!(!should_remove_pty_state(Some(2), Some(1)));
+        assert!(should_remove_pty_state(Some(2), Some(2)));
+        assert!(should_remove_pty_state(Some(2), None));
+        assert!(!should_remove_pty_state(None, Some(1)));
     }
 }

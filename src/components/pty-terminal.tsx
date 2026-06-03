@@ -321,7 +321,7 @@ export function PtyTerminal({
       const writeOutput = (data: Uint8Array) => {
         if (data.length === 0) return;
 
-        const text = outputDecoder.decode(data);
+        const text = outputDecoder.decode(data, { stream: true });
         const flowControl = flowControlRef.current;
 
         flowControl.written += text.length;
