@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+## [2.1.0] - 2026-06-04
+
+### 🗂️ R-Shell 2.1 — Directory Tree & Terminal Stability
+
+This release adds caching for the remote directory tree to preserve expand/collapse state and scroll position across tab switches, optimizes PTY terminal memory and flow control to prevent unbounded buffer growth, resolves keyboard shortcut conflicts, and fixes Windows SFTP upload compatibility.
+
+### Added
+
+- 🗂️ **Directory Tree Caching**: Remote directory tree expand/collapse state and scroll position are now cached and restored when switching between file browser tabs
+
+### Fixed
+
+- 🖥️ **PtyTerminal Performance & Flow Control**: Optimized terminal memory usage, implemented credit-based flow control, and added session output limits for more stable terminal behavior during heavy I/O
+- ⌨️ **Keyboard Shortcut Handling**: Resolved conflicts between terminal and application-level shortcuts; editable shortcut handling is now preserved correctly across component re-renders
+- 🪟 **Windows SFTP Upload**: File upload now works correctly for paths containing Windows-style basenames and folders (#24)
+
+
 ## [2.0.0] - 2026-05-30
 
 ### 🚀 R-Shell 2.0 — File Viewer & Performance
