@@ -23,6 +23,7 @@ import {
   Monitor,
 } from 'lucide-react';
 import { getDefaultPort, getAuthMethods, getHiddenFields, isDesktopProtocol } from '@/lib/protocol-config';
+import { useI18n } from '@/lib/i18n';
 
 interface ConnectionDialogProps {
   open: boolean;
@@ -73,6 +74,7 @@ export function ConnectionDialog({
   onConnect,
   editingConnection
 }: ConnectionDialogProps) {
+  const { t } = useI18n();
   const defaultConfig: ConnectionConfig = {
     name: '',
     protocol: 'SSH',
@@ -150,10 +152,10 @@ export function ConnectionDialog({
         privateKey: config.privateKeyPath,
       });
       setSavedProfiles(ConnectionProfileManager.getProfiles());
-      toast.success(`Saved profile: ${profile.name}`);
+      toast.success(t('connectionDialog.toast.savedProfile', { name: profile.name }));
       setShowSaveProfile(false);
     } catch (_error) {
-      toast.error('Failed to save profile');
+      toast.error(t('connectionDialog.toast.saveProfileFailed'));
     }
   };
 
@@ -168,13 +170,13 @@ export function ConnectionDialog({
       password: profile.password,
       privateKeyPath: profile.privateKey,
     });
-    toast.success(`Loaded profile: ${profile.name}`);
+    toast.success(t('connectionDialog.toast.loadedProfile', { name: profile.name }));
   };
 
   const _handleDeleteProfile = (id: string) => {
     if (ConnectionProfileManager.deleteProfile(id)) {
       setSavedProfiles(ConnectionProfileManager.getProfiles());
-      toast.success('Profile deleted');
+      toast.success(t('connectionDialog.toast.profileDeleted'));
     }
   };
 
@@ -208,10 +210,10 @@ export function ConnectionDialog({
     // VNC also doesn't require a username
     const requiresUsername = config.authMethod !== 'anonymous' && config.protocol !== 'VNC';
     if (!config.name || !config.host || (requiresUsername && !config.username)) {
-      toast.error('Missing Required Fields', {
+      toast.error(t('connectionDialog.validation.missingTitle'), {
         description: requiresUsername
-          ? 'Please fill in all required fields: Connection Name, Host, and Username.'
-          : 'Please fill in all required fields: Connection Name and Host.',
+          ? t('connectionDialog.validation.missingWithUsername')
+          : t('connectionDialog.validation.missingWithoutUsername'),
       });
       resetConnectionState();
       return;
@@ -219,16 +221,16 @@ export function ConnectionDialog({
 
     // Validate authentication method specific fields
     if (config.authMethod === 'password' && !config.password) {
-      toast.error('Password Required', {
-        description: 'Please enter a password for password authentication.',
+      toast.error(t('connectionDialog.validation.passwordTitle'), {
+        description: t('connectionDialog.validation.passwordDescription'),
       });
       resetConnectionState();
       return;
     }
 
     if (config.authMethod === 'publickey' && !config.privateKeyPath) {
-      toast.error('Private Key Required', {
-        description: 'Please select or enter the path to your SSH private key file.',
+      toast.error(t('connectionDialog.validation.privateKeyTitle'), {
+        description: t('connectionDialog.validation.privateKeyDescription'),
       });
       resetConnectionState();
       return;
@@ -356,10 +358,10 @@ export function ConnectionDialog({
         // Show error toast
         console.error('Connection failed:', result.error);
         if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
-          toast.info('Connection cancelled');
+          toast.info(t('connectionDialog.toast.cancelled'));
         } else {
-          toast.error('Connection Failed', {
-            description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
+          toast.error(t('connectionDialog.toast.failed'), {
+            description: result.error || t('app.connection.unableToServer'),
             duration: 5000,
           });
         }
@@ -367,9 +369,9 @@ export function ConnectionDialog({
     } catch (error) {
       console.error('Connection error:', error);
       if (cancelRequestedRef.current) {
-        toast.info('Connection cancelled');
+        toast.info(t('connectionDialog.toast.cancelled'));
       } else {
-        toast.error('Connection Error', {
+        toast.error(t('connectionDialog.toast.error'), {
           description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
           duration: 5000,
         });
@@ -403,7 +405,7 @@ export function ConnectionDialog({
         connection_id: connectionId
       });
       if (response.success) {
-        toast.info('Connection cancelled');
+        toast.info(t('connectionDialog.toast.cancelled'));
       }
       // Whether successful or not, we want to reset the state
       // The user clicked cancel, so we should stop the "connecting" state
@@ -442,9 +444,9 @@ export function ConnectionDialog({
               <Server className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <div>{editingConnection ? 'Edit Connection' : 'New Connection'}</div>
+              <div>{editingConnection ? t('connectionDialog.title.edit') : t('connectionDialog.title.new')}</div>
               <DialogDescription className="mt-1">
-                Configure connection settings and authentication options
+                {t('connectionDialog.description')}
               </DialogDescription>
             </div>
           </DialogTitle>
@@ -457,28 +459,28 @@ export function ConnectionDialog({
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Server className="h-3.5 w-3.5" />
-              <span>Connection</span>
+              <span>{t('connectionDialog.tab.connection')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="authentication"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Shield className="h-3.5 w-3.5" />
-              <span>Auth</span>
+              <span>{t('connectionDialog.tab.auth')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="proxy"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Network className="h-3.5 w-3.5" />
-              <span>Proxy</span>
+              <span>{t('connectionDialog.tab.proxy')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="advanced"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <TerminalIcon className="h-3.5 w-3.5" />
-              <span>Advanced</span>
+              <span>{t('connectionDialog.tab.advanced')}</span>
             </TabsTrigger>
           </TabsList>
 
@@ -487,25 +489,25 @@ export function ConnectionDialog({
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Server className="h-4 w-4" />
-                  Basic Connection Settings
+                  {t('connectionDialog.basic.title')}
                 </CardTitle>
                 <CardDescription>
-                  Configure the basic connection parameters for your connection.
+                  {t('connectionDialog.basic.description')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="connection-name">Connection Name</Label>
+                    <Label htmlFor="connection-name">{t('connectionDialog.connectionName')}</Label>
                     <Input
                       id="connection-name"
-                      placeholder="My Server"
+                      placeholder={t('connectionDialog.connectionNamePlaceholder')}
                       value={config.name}
                       onChange={(e) => updateConfig({ name: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="protocol">Protocol</Label>
+                    <Label htmlFor="protocol">{t('common.protocol')}</Label>
                     <Select
                       value={config.protocol}
                       onValueChange={(value: ConnectionConfig['protocol']) => {
@@ -538,16 +540,16 @@ export function ConnectionDialog({
 
                 <div className="grid grid-cols-3 gap-4">
                   <div className="col-span-2 space-y-2">
-                    <Label htmlFor="host">Host</Label>
+                    <Label htmlFor="host">{t('connectionDialog.host')}</Label>
                     <Input
                       id="host"
-                      placeholder="192.168.1.100 or example.com"
+                      placeholder={t('connectionDialog.hostPlaceholder')}
                       value={config.host}
                       onChange={(e) => updateConfig({ host: e.target.value })}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="port">Port</Label>
+                    <Label htmlFor="port">{t('common.port')}</Label>
                     <Input
                       id="port"
                       type="number"
@@ -560,7 +562,7 @@ export function ConnectionDialog({
                 {/* Username — hidden for VNC (VNC uses password-only auth) */}
                 {config.protocol !== 'VNC' && (
                   <div className="space-y-2">
-                    <Label htmlFor="username">Username</Label>
+                    <Label htmlFor="username">{t('common.username')}</Label>
                     <Input
                       id="username"
                       placeholder="root"
@@ -574,7 +576,7 @@ export function ConnectionDialog({
                 {config.protocol === 'RDP' && (
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="rdp-domain">Domain (optional)</Label>
+                      <Label htmlFor="rdp-domain">{t('connectionDialog.domain')}</Label>
                       <Input
                         id="rdp-domain"
                         placeholder="WORKGROUP"
@@ -583,7 +585,7 @@ export function ConnectionDialog({
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label>Display Resolution</Label>
+                      <Label>{t('connectionDialog.resolution')}</Label>
                       <Select
                         value={config.rdpResolution || 'fit'}
                         onValueChange={(value) => updateConfig({ rdpResolution: value as ConnectionConfig['rdpResolution'] })}
@@ -592,7 +594,7 @@ export function ConnectionDialog({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="fit">Fit to Window</SelectItem>
+                          <SelectItem value="fit">{t('connectionDialog.fitWindow')}</SelectItem>
                           <SelectItem value="1024x768">1024×768</SelectItem>
                           <SelectItem value="1280x720">1280×720 (HD)</SelectItem>
                           <SelectItem value="1920x1080">1920×1080 (Full HD)</SelectItem>
@@ -605,7 +607,7 @@ export function ConnectionDialog({
                 {/* VNC-specific: color depth */}
                 {config.protocol === 'VNC' && (
                   <div className="space-y-2">
-                    <Label>Color Depth</Label>
+                    <Label>{t('connectionDialog.colorDepth')}</Label>
                     <Select
                       value={config.vncColorDepth || '24'}
                       onValueChange={(value) => updateConfig({ vncColorDepth: value as ConnectionConfig['vncColorDepth'] })}
@@ -627,12 +629,12 @@ export function ConnectionDialog({
                   <div className="p-4 bg-muted rounded-lg">
                     <div className="flex items-center gap-2 mb-2">
                       <Monitor className="h-4 w-4" />
-                      <span className="font-medium">Remote Desktop</span>
+                      <span className="font-medium">{t('connectionDialog.remoteDesktop')}</span>
                     </div>
                     <p className="text-sm text-muted-foreground">
                       {config.protocol === 'RDP'
-                        ? 'RDP connects to Windows Remote Desktop. Requires NLA-compatible credentials.'
-                        : 'VNC connects to any host running a VNC server. Uses password-only authentication.'}
+                        ? t('connectionDialog.rdpInfo')
+                        : t('connectionDialog.vncInfo')}
                     </p>
                   </div>
                 )}
@@ -645,15 +647,15 @@ export function ConnectionDialog({
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Shield className="h-4 w-4" />
-                  Authentication Method
+                  {t('connectionDialog.auth.title')}
                 </CardTitle>
                 <CardDescription>
-                  Choose how to authenticate with the remote server.
+                  {t('connectionDialog.auth.description')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Authentication Method</Label>
+                  <Label>{t('connectionDialog.auth.title')}</Label>
                   <Select
                     value={config.authMethod}
                     onValueChange={(value: ConnectionConfig['authMethod']) => updateConfig({ authMethod: value })}
@@ -664,10 +666,10 @@ export function ConnectionDialog({
                     <SelectContent>
                       {getAuthMethods(config.protocol).map((method) => (
                         <SelectItem key={method} value={method}>
-                          {method === 'password' ? 'Password' :
-                           method === 'publickey' ? 'Public Key' :
-                           method === 'keyboard-interactive' ? 'Keyboard Interactive' :
-                           method === 'anonymous' ? 'Anonymous' : method}
+                          {method === 'password' ? t('connectionDialog.auth.password') :
+                           method === 'publickey' ? t('connectionDialog.auth.publicKey') :
+                           method === 'keyboard-interactive' ? t('connectionDialog.auth.keyboardInteractive') :
+                           method === 'anonymous' ? t('connectionDialog.auth.anonymous') : method}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -676,11 +678,11 @@ export function ConnectionDialog({
 
                 {config.authMethod === 'password' && (
                   <div className="space-y-2">
-                    <Label htmlFor="password">Password</Label>
+                    <Label htmlFor="password">{t('common.password')}</Label>
                     <Input
                       id="password"
                       type="password"
-                      placeholder="Enter password"
+                      placeholder={t('connectionDialog.passwordPlaceholder')}
                       value={config.password}
                       onChange={(e) => updateConfig({ password: e.target.value })}
                     />
@@ -690,23 +692,23 @@ export function ConnectionDialog({
                 {config.authMethod === 'publickey' && (
                   <div className="space-y-4">
                     <div className="space-y-2">
-                      <Label htmlFor="private-key">Private Key File</Label>
+                      <Label htmlFor="private-key">{t('connectionDialog.privateKey')}</Label>
                       <Input
                         id="private-key"
-                        placeholder="~/.ssh/id_rsa or ~/.ssh/id_ed25519"
+                        placeholder={t('connectionDialog.privateKeyPlaceholder')}
                         value={config.privateKeyPath}
                         onChange={(e) => updateConfig({ privateKeyPath: e.target.value })}
                       />
                       <p className="text-xs text-muted-foreground">
-                        Common locations: ~/.ssh/id_rsa, ~/.ssh/id_ed25519, ~/.ssh/id_ecdsa
+                        {t('connectionDialog.privateKeyHelp')}
                       </p>
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="passphrase">Passphrase (optional)</Label>
+                      <Label htmlFor="passphrase">{t('connectionDialog.passphrase')}</Label>
                       <Input
                         id="passphrase"
                         type="password"
-                        placeholder="Enter passphrase if key is encrypted"
+                        placeholder={t('connectionDialog.passphrasePlaceholder')}
                         value={config.passphrase}
                         onChange={(e) => updateConfig({ passphrase: e.target.value })}
                       />
@@ -717,7 +719,7 @@ export function ConnectionDialog({
                 {config.authMethod === 'anonymous' && (
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">
-                      Anonymous authentication will connect without credentials. Some FTP servers allow public access this way.
+                      {t('connectionDialog.anonymousInfo')}
                     </p>
                   </div>
                 )}
@@ -727,9 +729,9 @@ export function ConnectionDialog({
                     <Separator />
                     <div className="flex items-center justify-between">
                       <div className="space-y-0.5">
-                        <Label>Enable FTPS (FTP over TLS)</Label>
+                        <Label>{t('connectionDialog.ftps')}</Label>
                         <p className="text-sm text-muted-foreground">
-                          Encrypt the FTP connection using TLS for improved security
+                          {t('connectionDialog.ftpsDescription')}
                         </p>
                       </div>
                       <Switch
@@ -743,15 +745,15 @@ export function ConnectionDialog({
                 <div className="p-4 bg-muted rounded-lg">
                   <div className="flex items-center gap-2 mb-2">
                     <Key className="h-4 w-4" />
-                    <span className="font-medium">Security Note</span>
+                    <span className="font-medium">{t('connectionDialog.securityNote')}</span>
                   </div>
                   <p className="text-sm text-muted-foreground">
                     {config.authMethod === 'password' ? (
-                      <>For production environments, we recommend using public key authentication instead of passwords for enhanced security.</>
+                      <>{t('connectionDialog.securityPassword')}</>
                     ) : config.authMethod === 'anonymous' ? (
-                      <>Anonymous connections are not encrypted. Use FTPS for secure file transfers when possible.</>
+                      <>{t('connectionDialog.securityAnonymous')}</>
                     ) : (
-                      <>Public key authentication is more secure than passwords. R-Shell supports RSA, Ed25519, and ECDSA keys.</>
+                      <>{t('connectionDialog.securityPublicKey')}</>
                     )}
                   </p>
                 </div>
@@ -764,15 +766,15 @@ export function ConnectionDialog({
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Network className="h-4 w-4" />
-                  Proxy Settings
+                  {t('connectionDialog.proxy.title')}
                 </CardTitle>
                 <CardDescription>
-                  Configure proxy settings if you need to connect through a proxy server.
+                  {t('connectionDialog.proxy.description')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Proxy Type</Label>
+                  <Label>{t('connectionDialog.proxy.type')}</Label>
                   <Select
                     value={config.proxyType}
                     onValueChange={(value: string) => updateConfig({ proxyType: value as ConnectionConfig['proxyType'] })}
@@ -781,8 +783,8 @@ export function ConnectionDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">No Proxy</SelectItem>
-                      <SelectItem value="http">HTTP Proxy</SelectItem>
+                      <SelectItem value="none">{t('connectionDialog.proxy.none')}</SelectItem>
+                      <SelectItem value="http">{t('connectionDialog.proxy.http')}</SelectItem>
                       <SelectItem value="socks4">SOCKS4</SelectItem>
                       <SelectItem value="socks5">SOCKS5</SelectItem>
                     </SelectContent>
@@ -793,7 +795,7 @@ export function ConnectionDialog({
                   <>
                     <div className="grid grid-cols-3 gap-4">
                       <div className="col-span-2 space-y-2">
-                        <Label htmlFor="proxy-host">Proxy Host</Label>
+                        <Label htmlFor="proxy-host">{t('connectionDialog.proxy.host')}</Label>
                         <Input
                           id="proxy-host"
                           placeholder="proxy.example.com"
@@ -802,7 +804,7 @@ export function ConnectionDialog({
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="proxy-port">Proxy Port</Label>
+                        <Label htmlFor="proxy-port">{t('connectionDialog.proxy.port')}</Label>
                         <Input
                           id="proxy-port"
                           type="number"
@@ -814,19 +816,19 @@ export function ConnectionDialog({
 
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
-                        <Label htmlFor="proxy-username">Proxy Username</Label>
+                        <Label htmlFor="proxy-username">{t('connectionDialog.proxy.username')}</Label>
                         <Input
                           id="proxy-username"
-                          placeholder="Optional"
+                          placeholder={t('common.optional')}
                           onChange={(e) => updateConfig({ proxyUsername: e.target.value })}
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label htmlFor="proxy-password">Proxy Password</Label>
+                        <Label htmlFor="proxy-password">{t('connectionDialog.proxy.password')}</Label>
                         <Input
                           id="proxy-password"
                           type="password"
-                          placeholder="Optional"
+                          placeholder={t('common.optional')}
                           value={config.proxyPassword}
                           onChange={(e) => updateConfig({ proxyPassword: e.target.value })}
                         />
@@ -851,10 +853,10 @@ export function ConnectionDialog({
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2">
                         <TerminalIcon className="h-4 w-4" />
-                        Advanced Options
+                        {t('connectionDialog.advanced.title')}
                       </CardTitle>
                       <CardDescription>
-                        No advanced options are available for {config.protocol} connections.
+                        {t('connectionDialog.advanced.none', { protocol: config.protocol })}
                       </CardDescription>
                     </CardHeader>
                   </Card>
@@ -866,10 +868,10 @@ export function ConnectionDialog({
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <TerminalIcon className="h-4 w-4" />
-                      Advanced SSH Options
+                      {t('connectionDialog.advanced.sshTitle')}
                     </CardTitle>
                     <CardDescription>
-                      Fine-tune SSH connection behavior and performance.
+                      {t('connectionDialog.advanced.description')}
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -877,9 +879,9 @@ export function ConnectionDialog({
                       {!isCompHidden && (
                         <div className="flex items-center justify-between">
                           <div className="space-y-0.5">
-                            <Label>Enable Compression</Label>
+                            <Label>{t('connectionDialog.advanced.compression')}</Label>
                             <p className="text-sm text-muted-foreground">
-                              Compress data to improve performance over slow connections
+                              {t('connectionDialog.advanced.compressionDescription')}
                             </p>
                           </div>
                           <Switch
@@ -895,9 +897,9 @@ export function ConnectionDialog({
                         <>
                           <div className="flex items-center justify-between">
                             <div className="space-y-0.5">
-                              <Label>Keep Alive</Label>
+                              <Label>{t('connectionDialog.advanced.keepAlive')}</Label>
                               <p className="text-sm text-muted-foreground">
-                                Send keep-alive messages to prevent connection timeout
+                                {t('connectionDialog.advanced.keepAliveDescription')}
                               </p>
                             </div>
                             <Switch
@@ -909,7 +911,7 @@ export function ConnectionDialog({
                           {config.keepAlive && (
                             <div className="grid grid-cols-2 gap-4 ml-4">
                               <div className="space-y-2">
-                                <Label htmlFor="keep-alive-interval">Interval (seconds)</Label>
+                                <Label htmlFor="keep-alive-interval">{t('connectionDialog.advanced.interval')}</Label>
                                 <Input
                                   id="keep-alive-interval"
                                   type="number"
@@ -918,7 +920,7 @@ export function ConnectionDialog({
                                 />
                               </div>
                               <div className="space-y-2">
-                                <Label htmlFor="max-count">Max Count</Label>
+                                <Label htmlFor="max-count">{t('connectionDialog.advanced.maxCount')}</Label>
                                 <Input
                                   id="max-count"
                                   type="number"
@@ -952,13 +954,13 @@ export function ConnectionDialog({
                     onCheckedChange={setSaveAsConnection}
                   />
                   <Label htmlFor="save-connection" className="text-sm cursor-pointer">
-                    Save as persistent connection
+                    {t('connectionDialog.savePersistent')}
                   </Label>
                 </div>
                 {saveAsConnection && (
                   <Select value={connectionFolder} onValueChange={setConnectionFolder}>
                     <SelectTrigger className="w-[200px] h-8">
-                      <SelectValue placeholder="Select folder" />
+                      <SelectValue placeholder={t('connectionDialog.selectFolder')} />
                     </SelectTrigger>
                     <SelectContent>
                       {availableFolders.length > 0 ? (
@@ -968,7 +970,7 @@ export function ConnectionDialog({
                           </SelectItem>
                         ))
                       ) : (
-                        <SelectItem value="All Connections">All Connections</SelectItem>
+                      <SelectItem value="All Connections">{t('connectionManager.folder.allConnections')}</SelectItem>
                       )}
                     </SelectContent>
                   </Select>
@@ -983,10 +985,10 @@ export function ConnectionDialog({
                 onClick={handleCancelConnectionAttempt}
                 disabled={isCancelling}
               >
-                {isConnecting ? (isCancelling ? 'Cancelling...' : 'Stop') : 'Cancel'}
+                {isConnecting ? (isCancelling ? t('connectionDialog.cancelling') : t('common.stop')) : t('common.cancel')}
               </Button>
               <Button onClick={handleConnect} disabled={isConnecting || isCancelling} className="min-w-[140px]">
-                {isConnecting ? 'Connecting...' : editingConnection ? 'Update & Connect' : 'Connect'}
+                {isConnecting ? t('common.connecting') : editingConnection ? t('connectionDialog.updateAndConnect') : t('common.connect')}
               </Button>
             </div>
           </div>

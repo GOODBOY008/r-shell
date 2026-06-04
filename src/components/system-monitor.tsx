@@ -20,6 +20,7 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import { toast } from 'sonner';
+import { useI18n } from '@/lib/i18n';
 
 interface SystemStats {
   cpu: number;
@@ -153,6 +154,7 @@ const getProgressColor = (usage: number): string => {
 };
 
 export function SystemMonitor({ connectionId }: SystemMonitorProps) {
+  const { t } = useI18n();
   const [stats, setStats] = useState<SystemStats>({
     cpu: 0,
     memory: 0,
@@ -260,15 +262,15 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       });
       
       if (result.success) {
-        toast.success(`Process ${process.pid} terminated successfully`);
+        toast.success(t('monitor.toast.terminated', { pid: process.pid }));
         // Fire-and-forget refresh — failure here is non-critical
         void fetchProcesses().catch(e => console.error('Failed to refresh processes:', e));
       } else {
-        toast.error(`Failed to kill process: ${result.error || 'Unknown error'}`);
+        toast.error(t('monitor.toast.killFailed', { error: result.error || t('monitor.toast.unknownError') }));
       }
     } catch (error) {
       console.error('Failed to kill process:', error);
-      toast.error(`Failed to kill process: ${error}`);
+      toast.error(t('monitor.toast.killFailed', { error: String(error) }));
     }
     
     setProcessToKill(null);
@@ -679,13 +681,13 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5">
             <Activity className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">System Overview</h3>
+            <h3 className="text-xs font-medium truncate">{t('monitor.systemOverview')}</h3>
           </div>
           <Card>
             <CardContent className="p-2 space-y-1.5">
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
-                  <span className="text-xs font-medium">CPU</span>
+                  <span className="text-xs font-medium">{t('monitor.cpu')}</span>
                   <span className={`text-xs font-semibold ${getUsageColor(stats.cpu)}`}>
                     {stats.cpu.toFixed(1)}%
                   </span>
@@ -695,7 +697,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
-                  <span className="text-xs font-medium">Memory</span>
+                  <span className="text-xs font-medium">{t('monitor.memory')}</span>
                   <span className={`text-xs font-semibold ${getUsageColor(stats.memory)} truncate`} title={stats.memoryUsed && stats.memoryTotal ? `${stats.memoryUsed}MB / ${stats.memoryTotal}MB` : ''}>
                     {stats.memory.toFixed(1)}%
                   </span>
@@ -735,7 +737,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <div className="flex items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5">
                 <Cpu className="w-3 h-3 shrink-0" />
-                <h3 className="text-xs font-medium truncate">GPU Monitor</h3>
+                <h3 className="text-xs font-medium truncate">{t('monitor.gpuMonitor')}</h3>
               </div>
               {gpuDetection?.available && gpuDetection.gpus.length > 1 && (
                 <Select 
@@ -762,7 +764,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               <CardContent className="p-2">
                 {!gpuDetection?.available ? (
                   <div className="text-[10px] text-muted-foreground space-y-1">
-                    <p>No GPU detected or drivers not installed.</p>
+                    <p>{t('monitor.noGpu')}</p>
                     <p className="text-[9px]">Supported: NVIDIA (nvidia-smi), AMD (rocm-smi/sysfs)</p>
                   </div>
                 ) : selectedGpuIndex === 'all' ? (
@@ -906,7 +908,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                       const gpuInfo = gpuDetection.gpus.find(g => g.index === selectedGpuIndex) || gpuDetection.gpus[0];
                       
                       if (!currentGpu) {
-                        return <div className="text-[10px] text-muted-foreground">Loading GPU stats...</div>;
+                        return <div className="text-[10px] text-muted-foreground">{t('monitor.loadingGpu')}</div>;
                       }
                       
                       return (
@@ -1158,7 +1160,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5">
             <Terminal className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">Running Processes</h3>
+            <h3 className="text-xs font-medium truncate">{t('monitor.runningProcesses')}</h3>
           </div>
           <Card>
             <CardContent className="p-0">
@@ -1208,7 +1210,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             size="icon"
                             className="h-4 w-4"
                             onClick={() => setProcessToKill(process)}
-                            title="Kill process"
+                            title={t('monitor.killProcess')}
                           >
                             <X className="h-2.5 w-2.5" />
                           </Button>
@@ -1226,13 +1228,13 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5">
             <HardDrive className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">Disk Usage</h3>
+            <h3 className="text-xs font-medium truncate">{t('monitor.diskUsage')}</h3>
           </div>
           <Card>
             <CardContent className="p-0">
               {disks.length === 0 ? (
                 <div className="p-2 text-[10px] text-muted-foreground">
-                  No disk information available
+                  {t('monitor.noDisk')}
                 </div>
               ) : (
                 <div className="rounded-md border h-40 overflow-auto">
@@ -1273,7 +1275,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           <div className="flex items-center justify-between gap-1.5">
             <div className="flex items-center gap-1.5">
               <ArrowDownUp className="w-3 h-3 shrink-0" />
-              <h3 className="text-xs font-medium truncate">Network Usage</h3>
+              <h3 className="text-xs font-medium truncate">{t('monitor.networkUsage')}</h3>
             </div>
             {networkInterfaces.length > 0 && (
               <Select value={selectedInterface} onValueChange={(value) => {
@@ -1282,11 +1284,11 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                 setNetworkHistory([]);
               }}>
                 <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[100px] text-[9px] px-1.5 py-0">
-                  <SelectValue placeholder="Interface" />
+                  <SelectValue placeholder={t('monitor.interface')} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all" className="text-[10px]">
-                    All
+                    {t('monitor.all')}
                   </SelectItem>
                   {networkInterfaces.map(iface => (
                     <SelectItem key={iface} value={iface} className="text-[10px]">
@@ -1417,7 +1419,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         <div className="space-y-1.5">
           <div className="flex items-center gap-1.5">
             <Gauge className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">Network Latency</h3>
+            <h3 className="text-xs font-medium truncate">{t('monitor.networkLatency')}</h3>
           </div>
           <Card>
             <CardContent className="p-2">
@@ -1481,9 +1483,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       <AlertDialog open={!!processToKill} onOpenChange={(open) => !open && setProcessToKill(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Terminate Process?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to terminate process <strong>{processToKill?.pid}</strong>?
+          <AlertDialogTitle>{t('monitor.terminateTitle')}</AlertDialogTitle>
+          <AlertDialogDescription>
+              {t('monitor.terminateDescription', { pid: processToKill?.pid || '' })}
               <br />
               <span className="text-xs font-mono mt-2 block">
                 {processToKill?.command}
@@ -1493,12 +1495,12 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => processToKill && handleKillProcess(processToKill)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Terminate
+              {t('monitor.terminate')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

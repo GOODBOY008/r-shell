@@ -59,6 +59,7 @@ import {
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from './ui/context-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
 import { toast } from 'sonner';
+import { useI18n } from '@/lib/i18n';
 
 interface FileItem {
   name: string;
@@ -91,6 +92,7 @@ const sessionStateCache = new Map<string, {
 }>();
 
 export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, onClose: _onClose, onOpenInLogMonitor, onOpenInEditor }: IntegratedFileBrowserProps) {
+  const { t } = useI18n();
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
@@ -708,7 +710,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         type: "ENQUEUE",
         items: buildFileUploadItems(paths, currentPath),
       });
-      toast.info(`Queued ${paths.length} file(s) for upload`);
+      toast.info(t('fileBrowser.toast.queuedUpload', { count: paths.length }));
     } catch (error) {
       console.error('Upload dialog error:', error);
     }
@@ -774,16 +776,16 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           items: queuedItems,
         });
         toast.info(
-          `Queued ${queuedItems.length} file(s) from ${directoryPaths.length} folder(s); created ${createdDirectoryCount} remote folder(s)`,
+          t('fileBrowser.toast.queuedUpload', { count: queuedItems.length }),
         );
       } else if (dirErrors.length === 0) {
         // Folder(s) were empty — just refresh
         void loadFiles();
-        toast.info(`Created ${createdDirectoryCount} remote folder(s)`);
+        toast.info(t('fileBrowser.toast.folderCreated', { name: String(createdDirectoryCount) }));
       }
     } catch (error) {
       console.error('Upload folder dialog error:', error);
-      toast.error('Folder upload failed', {
+      toast.error(t('fileBrowser.toast.createFolderFailed'), {
         description:
           error instanceof Error ? error.message : 'Unable to upload folder.',
       });
@@ -827,7 +829,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           totalBytes: f.size,
         })),
       });
-      toast.info(`Queued ${filesToDownload.length} file(s) for download`);
+      toast.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
     } catch (error) {
       console.error('Download dialog error:', error);
     }
@@ -842,11 +844,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           connectionId,
           path: folderPath
         });
-        toast.success(`Folder "${folderName}" created`);
+        toast.success(t('fileBrowser.toast.folderCreated', { name: folderName }));
         void loadFiles();
       } catch (error) {
         console.error('Failed to create folder:', error);
-        toast.error('Failed to Create Folder', {
+        toast.error(t('fileBrowser.toast.createFolderFailed'), {
           description: error instanceof Error ? error.message : 'Unable to create directory on server.',
         });
       }
@@ -876,12 +878,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         isDirectory: deletingFile.type === 'directory'
       });
       
-      toast.success(`${deletingFile.name} deleted successfully`);
+      toast.success(t('fileBrowser.toast.deleted', { name: deletingFile.name }));
       setDeletingFile(null);
       void loadFiles();
     } catch (error) {
       console.error('[FileBrowser] Failed to delete file:', error);
-      toast.error('Failed to Delete File', {
+      toast.error(t('fileBrowser.toast.deleteFailed'), {
         description: error instanceof Error ? error.message : 'Unable to delete file from server.',
       });
     }
@@ -894,12 +896,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   const handleCopyFiles = (files: FileItem[]) => {
     setClipboard({ files, operation: 'copy' });
-    toast.success(`${files.length} item(s) copied to clipboard`);
+    toast.success(t('fileBrowser.toast.copied', { count: files.length }));
   };
 
   const handleCutFiles = (files: FileItem[]) => {
     setClipboard({ files, operation: 'cut' });
-    toast.success(`${files.length} item(s) cut to clipboard`);
+    toast.success(t('fileBrowser.toast.cut', { count: files.length }));
   };
 
   const handlePasteFiles = async () => {
@@ -924,12 +926,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         }
         
         const operation = clipboard.operation === 'copy' ? 'copied' : 'moved';
-        toast.success(`${clipboard.files.length} item(s) ${operation} successfully`);
+        toast.success(t('fileBrowser.toast.pasted', { count: clipboard.files.length, operation }));
         setClipboard(null);
         void loadFiles();
       } catch (error) {
         console.error('Failed to paste files:', error);
-        toast.error('Failed to Paste Files', {
+        toast.error(t('fileBrowser.toast.pasteFailed'), {
           description: error instanceof Error ? error.message : 'Unable to complete paste operation.',
         });
       }
@@ -953,13 +955,13 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           newPath: newPath
         });
         
-        toast.success(`"${renamingFile.name}" renamed to "${newFileName}"`);
+        toast.success(t('fileBrowser.toast.renamed', { oldName: renamingFile.name, newName: newFileName }));
         setRenamingFile(null);
         setNewFileName('');
         void loadFiles();
       } catch (error) {
         console.error('Failed to rename file:', error);
-        toast.error('Failed to Rename File', {
+        toast.error(t('fileBrowser.toast.renameFailed'), {
           description: error instanceof Error ? error.message : 'Unable to rename file on server.',
         });
       }
@@ -974,7 +976,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const handleCopyPath = (file: FileItem) => {
     const fullPath = `${currentPath}/${file.name}`;
     void navigator.clipboard.writeText(fullPath);
-    toast.success('Path copied to clipboard');
+    toast.success(t('fileBrowser.pathCopied'));
   };
 
   const handleFileInfo = (file: FileItem) => {
@@ -991,11 +993,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           path: filePath,
           content: ''
         });
-        toast.success(`File "${fileName}" created`);
+        toast.success(t('fileBrowser.toast.createdFile', { name: fileName }));
         void loadFiles();
       } catch (error) {
         console.error('Failed to create file:', error);
-        toast.error('Failed to Create File', {
+        toast.error(t('fileBrowser.toast.createFileFailed'), {
           description: error instanceof Error ? error.message : 'Unable to create file on server.',
         });
       }
@@ -1014,11 +1016,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         destPath: destPath
       });
       
-      toast.success(`"${file.name}" duplicated as "${newName}"`);
+      toast.success(t('fileBrowser.toast.duplicated', { oldName: file.name, newName }));
       void loadFiles();
     } catch (error) {
       console.error('Failed to duplicate file:', error);
-      toast.error('Failed to Duplicate File', {
+      toast.error(t('fileBrowser.toast.duplicateFailed'), {
         description: error instanceof Error ? error.message : 'Unable to duplicate file on server.',
       });
     }
@@ -1066,7 +1068,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       return entry?.isDirectory;
     });
     if (hasDirectory) {
-      toast.info('Directory drag-and-drop is not supported yet. Use the upload folder button.');
+      toast.info(t('fileBrowser.toast.dropDirectoryUnsupported'));
       return;
     }
 
@@ -1099,7 +1101,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         totalBytes: f.totalBytes,
       })),
     });
-    toast.info(`Queued ${fileItems.length} file(s) for upload to ${currentPath}`);
+    toast.info(t('fileBrowser.toast.queuedDropUpload', { count: fileItems.length, path: currentPath }));
   };
 
   const filteredFiles = files.filter(file => 
@@ -1261,7 +1263,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           </div>
 
           {/* Refresh */}
-          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-md" title="Refresh" onClick={() => loadFiles()} disabled={isLoading}>
+          <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-md" title={t('fileBrowser.refresh')} onClick={() => loadFiles()} disabled={isLoading}>
             <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </Button>
 
@@ -1270,10 +1272,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" onClick={handleCreateFolder}>
             <FolderPlus className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" title="Upload files" onClick={handleUpload}>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" title={t('fileBrowser.uploadFiles')} onClick={handleUpload}>
             <Upload className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" title="Upload folder" onClick={handleUploadFolder}>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 rounded-md px-2" title={t('fileBrowser.uploadFolder')} onClick={handleUploadFolder}>
             <FolderUp className="h-3.5 w-3.5" />
           </Button>
 
@@ -1281,7 +1283,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
           <div className="w-32 min-w-[7rem] shrink-0 sm:w-40">
             <Input
-              placeholder="Search..."
+              placeholder={t('common.search')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="h-6 border-border/60 bg-background/70 text-xs shadow-none placeholder:text-muted-foreground/70 focus-visible:bg-background"
@@ -1339,7 +1341,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                   <div className="bg-background/90 rounded-lg p-6 shadow-lg">
                     <Upload className="h-12 w-12 mx-auto mb-3 text-primary" />
                     <p className="font-medium">Drop files to upload</p>
-                    <p className="text-sm text-muted-foreground mt-1">Upload to {currentPath}</p>
+                    <p className="text-sm text-muted-foreground mt-1">{t('fileBrowser.uploadTo', { path: currentPath })}</p>
                   </div>
                 </div>
               )}
@@ -1493,7 +1495,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Eye className="mr-2 h-4 w-4" />
-                        Open
+                        {t('common.open')}
                       </ContextMenuItem>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Edit className="mr-2 h-4 w-4" />
@@ -1507,7 +1509,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                           onOpenInLogMonitor(fullPath);
                         }}>
                           <ScrollText className="mr-2 h-4 w-4" />
-                          Open in Log Monitor
+                          {t('fileBrowser.openInLogMonitor')}
                         </ContextMenuItem>
                       )}
                       <ContextMenuSeparator />
@@ -1519,7 +1521,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Folder className="mr-2 h-4 w-4" />
-                        Open Folder
+                        {t('fileBrowser.openFolder')}
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                     </>
@@ -1546,7 +1548,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                       
                       <ContextMenuItem onClick={() => handleRenameFile(file)}>
                         <FileEdit className="mr-2 h-4 w-4" />
-                        Rename
+                        {t('fileBrowser.rename')}
                       </ContextMenuItem>
                       <ContextMenuItem onClick={() => handleDuplicateFile(file)}>
                         <Layers className="mr-2 h-4 w-4" />
@@ -1561,12 +1563,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <>
                       <ContextMenuItem onClick={() => handleDownload(file)}>
                         <Download className="mr-2 h-4 w-4" />
-                        Download
+                        {t('fileBrowser.download')}
                       </ContextMenuItem>
                       {selectedFiles.size > 1 && (
                         <ContextMenuItem onClick={() => handleDownloadMultiple(files.filter(f => selectedFiles.has(f.name)))}>
                           <Download className="mr-2 h-4 w-4" />
-                          Download {selectedFiles.size} Selected
+                          {t('fileBrowser.downloadSelected', { count: selectedFiles.size })}
                         </ContextMenuItem>
                       )}
                       <ContextMenuSeparator />
@@ -1576,7 +1578,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                   {/* Information and sharing */}
                   <ContextMenuItem onClick={() => handleCopyPath(file)}>
                     <Link className="mr-2 h-4 w-4" />
-                    Copy Path
+                    {t('fileBrowser.copyPath')}
                   </ContextMenuItem>
                   <ContextMenuItem onClick={() => handleFileInfo(file)}>
                     <Info className="mr-2 h-4 w-4" />
@@ -1592,7 +1594,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                         onClick={() => handleDeleteFile(file)}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
-                        Delete
+                        {t('common.delete')}
                       </ContextMenuItem>
                     </>
                   )}
@@ -1610,7 +1612,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               </ContextMenuItem>
               <ContextMenuItem onClick={handleCreateFolder}>
                 <FolderPlus className="mr-2 h-4 w-4" />
-                New Folder
+                {t('fileBrowser.newFolder')}
               </ContextMenuItem>
               <ContextMenuSeparator />
               
@@ -1626,15 +1628,15 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               
               <ContextMenuItem onClick={handleUpload}>
                 <Upload className="mr-2 h-4 w-4" />
-                Upload Files
+                {t('fileBrowser.uploadFiles')}
               </ContextMenuItem>
               <ContextMenuItem onClick={handleUploadFolder}>
                 <FolderUp className="mr-2 h-4 w-4" />
-                Upload Folder
+                {t('fileBrowser.uploadFolder')}
               </ContextMenuItem>
               <ContextMenuItem onClick={() => loadFiles()}>
                 <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh
+                {t('fileBrowser.refresh')}
               </ContextMenuItem>
               <ContextMenuSeparator />
               
@@ -1662,21 +1664,15 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       <AlertDialog open={!!deletingFile} onOpenChange={(open) => !open && setDeletingFile(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deletingFile?.type === 'directory' ? 'Folder' : 'File'}?</AlertDialogTitle>
+            <AlertDialogTitle>{t('fileBrowser.deleteTitle', { type: deletingFile?.type === 'directory' ? t('fileBrowser.folder') : t('fileBrowser.file') })}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete "{deletingFile?.name}"?
-              {deletingFile?.type === 'directory' && (
-                <span className="block mt-2 text-destructive font-medium">
-                  Warning: This will delete the folder and all its contents.
-                </span>
-              )}
-              This action cannot be undone.
+              {t('fileBrowser.deleteDescription', { name: deletingFile?.name || '' })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={cancelDeleteFile}>Cancel</AlertDialogCancel>
+            <AlertDialogCancel onClick={cancelDeleteFile}>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction onClick={confirmDeleteFile} className="bg-destructive hover:bg-destructive/90">
-              Delete
+              {t('common.delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

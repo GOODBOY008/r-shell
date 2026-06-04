@@ -155,7 +155,9 @@ export function PtyTerminal({
     const checkScrollability = () => {
       setHasScrollableContent(term.buffer.active.length > term.rows);
     };
-    const lineFeedDisposable = term.onLineFeed(checkScrollability);
+    const lineFeedDisposable = typeof term.onLineFeed === 'function'
+      ? term.onLineFeed(checkScrollability)
+      : { dispose: () => undefined };
 
     // Focus terminal to enable keyboard input when this tab is mounted active.
     if (initialIsActiveRef.current) {

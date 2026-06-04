@@ -20,6 +20,7 @@ import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-c
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
 import { ErrorBoundary } from './components/error-boundary';
+import { useI18n } from './lib/i18n';
 import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
@@ -43,6 +44,7 @@ interface ConnectionNode {
 }
 
 function AppContent() {
+  const { t, locale } = useI18n();
   const [selectedConnection, setSelectedConnection] = useState<ConnectionNode | null>(null);
 
   // Terminal group state from context
@@ -131,6 +133,12 @@ function AppContent() {
   }), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode]);
 
   useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts], true);
+
+  useEffect(() => {
+    void invoke('set_app_locale', { locale }).catch(() => {
+      // Non-macOS builds accept the command as a no-op; ignore failures from older dev binaries.
+    });
+  }, [locale]);
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
@@ -528,7 +536,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connection.failed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -568,8 +576,8 @@ function AppContent() {
             dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
           } else {
             console.error('SSH connection failed:', result.error);
-            toast.error('Connection Failed', {
-              description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
+            toast.error(t('app.connection.failed'), {
+              description: result.error || t('app.connection.unableToServer'),
             });
             setEditingConnection({
               id: connection.id,
@@ -1036,7 +1044,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connection.failed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1059,7 +1067,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connection.failed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1097,7 +1105,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connection.failed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1146,7 +1154,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connection.failed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1312,8 +1320,8 @@ function AppContent() {
         ftpsEnabled: connectionData.ftpsEnabled,
       };
       await handleConnectionDialogConnect(config);
-      toast.success('Quick Connected', {
-        description: `Connected to ${connectionData.name}`,
+      toast.success(t('app.connection.quickConnected'), {
+        description: t('app.connection.connectedTo', { name: connectionData.name }),
       });
     } else {
       // SSH quick connect (existing behavior)
@@ -1352,13 +1360,13 @@ function AppContent() {
 
           handleConnectionDialogConnect(config);
 
-          toast.success('Quick Connected', {
-            description: `Connected to ${connectionData.name}`,
+          toast.success(t('app.connection.quickConnected'), {
+            description: t('app.connection.connectedTo', { name: connectionData.name }),
           });
         } else {
           console.error('Quick connect failed:', result.error);
-          toast.error('Connection Failed', {
-            description: result.error || 'Unable to connect. Please try again.',
+          toast.error(t('app.connection.failed'), {
+            description: result.error || t('app.connection.unableToConnect'),
           });
           setEditingConnection({
             id: connectionData.id,
@@ -1397,11 +1405,11 @@ function AppContent() {
 
   const restoreHighlights = useMemo(() => (
     [
-      { icon: ShieldCheck, label: 'Secrets stay encrypted locally' },
-      { icon: PlugZap, label: 'Auto reconnect with retry' },
-      { icon: Activity, label: 'Live status monitoring' },
+      { icon: ShieldCheck, label: t('app.restore.secret') },
+      { icon: PlugZap, label: t('app.restore.retry') },
+      { icon: Activity, label: t('app.restore.monitoring') },
     ]
-  ), []);
+  ), [t]);
 
   // Check if there are any tabs across all groups
   const hasAnyTabs = allTabs.length > 0;
@@ -1427,8 +1435,8 @@ function AppContent() {
                 <History className="h-6 w-6" />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">Workspace Restore</p>
-                <h3 className="mt-1 text-2xl font-semibold text-foreground">Bringing your connections back online</h3>
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">{t('app.restore.badge')}</p>
+                <h3 className="mt-1 text-2xl font-semibold text-foreground">{t('app.restore.title')}</h3>
               </div>
             </div>
 
@@ -1436,8 +1444,8 @@ function AppContent() {
               <div className="flex items-center justify-between text-sm text-muted-foreground" aria-live="polite">
                 <span>
                   {currentRestoreTarget
-                    ? `Reconnecting ${currentRestoreTarget.name}`
-                    : 'Preparing saved connections'}
+                    ? t('app.restore.reconnecting', { name: currentRestoreTarget.name })
+                    : t('app.restore.preparing')}
                 </span>
                 <span className="font-semibold text-foreground">
                   {restoringProgress.current} / {restoringProgress.total}
@@ -1460,7 +1468,7 @@ function AppContent() {
                     <p className="text-sm font-medium text-foreground">{currentRestoreTarget.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {currentRestoreTarget.username ? `${currentRestoreTarget.username}@` : ''}
-                      {currentRestoreTarget.host || 'unknown host'}
+                      {currentRestoreTarget.host || t('app.restore.unknownHost')}
                     </p>
                   </div>
                 </div>
@@ -1628,8 +1636,8 @@ function AppContent() {
               >
                 <Tabs value={rightSidebarTab} onValueChange={setRightSidebarTab} className="h-full flex flex-col">
                   <TabsList className="inline-flex w-auto mx-2 mt-2">
-                    <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
-                    <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
+                    <TabsTrigger value="monitor" className="text-xs px-2">{t('app.sidebar.monitor')}</TabsTrigger>
+                    <TabsTrigger value="logs" className="text-xs px-2">{t('app.sidebar.logs')}</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">

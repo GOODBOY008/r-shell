@@ -1,6 +1,7 @@
 import React from 'react';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
+import { useI18n } from '@/lib/i18n';
 
 interface StatusBarProps {
   activeConnection?: {
@@ -12,6 +13,8 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ activeConnection }: StatusBarProps) {
+  const { t } = useI18n();
+
   return (
     <div className="bg-muted border-t border-border px-4 py-1 flex items-center justify-between text-sm">
       <div className="flex items-center gap-4">
@@ -45,7 +48,7 @@ export function StatusBar({ activeConnection }: StatusBarProps) {
       
       <div className="flex items-center gap-4">
         <div className="text-muted-foreground">
-          Ready
+          {t('app.status.ready')}
         </div>
       </div>
     </div>

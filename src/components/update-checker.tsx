@@ -3,6 +3,7 @@ import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updat
 import { relaunch } from '@tauri-apps/plugin-process';
 // relaunch() calls the process plugin's restart command (process:allow-restart capability)
 import { toast } from 'sonner';
+import { useI18n } from '@/lib/i18n';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -23,6 +24,7 @@ type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'install
 const isTauriRuntime = () => typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
 
 export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
+  const { t } = useI18n();
   const [status, setStatus] = useState<UpdateStatus>('idle');
   const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
   const [progress, setProgress] = useState(0);
@@ -61,7 +63,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       } else {
         setStatus('idle');
         if (manual) {
-          toast.success('You are up to date.');
+          toast.success(t('update.upToDate'));
         }
       }
     } catch (caught) {
@@ -69,10 +71,10 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       setStatus('error');
       setError(message);
       if (manual) {
-        toast.error('Update check failed', { description: message });
+        toast.error(t('update.checkFailed'), { description: message });
       }
     }
-  }, []);
+  }, [t]);
 
   const handleDownload = useCallback(async () => {
     if (!updateInfo) {
@@ -111,9 +113,9 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       const message = caught instanceof Error ? caught.message : 'Failed to download update.';
       setStatus('error');
       setError(message);
-      toast.error('Update failed', { description: message });
+      toast.error(t('update.updateFailed'), { description: message });
     }
-  }, [updateInfo]);
+  }, [t, updateInfo]);
 
   const handleInstall = useCallback(async () => {
     if (!updateInfo) {
@@ -133,19 +135,19 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       const message = caught instanceof Error ? caught.message : 'Failed to install update.';
       setStatus('error');
       setError(message);
-      toast.error('Install failed', { description: message });
+      toast.error(t('update.installFailed'), { description: message });
     }
-  }, [updateInfo]);
+  }, [t, updateInfo]);
 
   useEffect(() => {
-    checkForUpdates(false);
+    void checkForUpdates(false);
   }, [checkForUpdates]);
 
   useEffect(() => {
     if (typeof checkSignal === 'number') {
       if (lastSignalRef.current !== checkSignal) {
         lastSignalRef.current = checkSignal;
-        checkForUpdates(true);
+        void checkForUpdates(true);
       }
     }
   }, [checkSignal, checkForUpdates]);
@@ -192,7 +194,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
           {status === 'downloading' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Downloading update</span>
+                <span>{t('update.downloading')}</span>
                 <span>{progress}%</span>
               </div>
               <Progress value={progress} />
@@ -203,7 +205,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
           )}
           {readyToInstall && (
             <p className="text-sm text-muted-foreground">
-              The update has been downloaded. Restart now to finish installing.
+              {t('update.readyToInstall')}
             </p>
           )}
         </div>
@@ -215,16 +217,16 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
               onClick={() => setDialogOpen(false)}
               disabled={busy}
             >
-              Later
+              {t('common.close')}
             </Button>
           )}
           {readyToInstall ? (
             <Button onClick={handleInstall} disabled={status === 'installing'}>
-              {status === 'installing' ? 'Restarting…' : 'Restart now'}
+              {status === 'installing' ? t('update.restarting') : t('update.restartNow')}
             </Button>
           ) : (
             <Button onClick={handleDownload} disabled={busy}>
-              {status === 'downloading' ? 'Downloading…' : 'Download update'}
+              {status === 'downloading' ? t('update.downloadingStatus') : t('update.download')}
             </Button>
           )}
         </AlertDialogFooter>

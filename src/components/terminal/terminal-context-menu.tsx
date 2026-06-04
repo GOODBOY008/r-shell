@@ -15,6 +15,7 @@ import {
   FileText,
   RefreshCw,
 } from 'lucide-react';
+import { useI18n } from '@/lib/i18n';
 
 interface TerminalContextMenuProps {
   children: React.ReactNode;
@@ -58,6 +59,7 @@ export function TerminalContextMenu({
   hasSelection,
   searchActive = false,
 }: TerminalContextMenuProps) {
+  const { t } = useI18n();
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -66,12 +68,12 @@ export function TerminalContextMenu({
       <ContextMenuContent className="w-64">
         <ContextMenuItem onClick={onCopy} disabled={!hasSelection}>
           <Copy className="mr-2 h-4 w-4" />
-          <span>Copy</span>
+          <span>{t('terminal.copy')}</span>
           <ContextMenuShortcut>{modKey}+C</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem onClick={onPaste}>
           <Clipboard className="mr-2 h-4 w-4" />
-          <span>Paste</span>
+          <span>{t('terminal.paste')}</span>
           <ContextMenuShortcut>{modKey}+V</ContextMenuShortcut>
         </ContextMenuItem>
         
@@ -79,14 +81,14 @@ export function TerminalContextMenu({
         
         <ContextMenuItem onClick={onSearch}>
           <Search className="mr-2 h-4 w-4" />
-          <span>Search</span>
+          <span>{t('terminal.search')}</span>
           <ContextMenuShortcut>{modKey}+F</ContextMenuShortcut>
         </ContextMenuItem>
         
         {searchActive && onFindNext && (
           <ContextMenuItem onClick={onFindNext}>
             <Search className="mr-2 h-4 w-4" />
-            <span>Find Next</span>
+            <span>{t('menu.findNext')}</span>
             <ContextMenuShortcut>F3</ContextMenuShortcut>
           </ContextMenuItem>
         )}
@@ -94,7 +96,7 @@ export function TerminalContextMenu({
         {searchActive && onFindPrevious && (
           <ContextMenuItem onClick={onFindPrevious}>
             <Search className="mr-2 h-4 w-4" />
-            <span>Find Previous</span>
+            <span>{t('menu.findPrevious')}</span>
             <ContextMenuShortcut>⇧F3</ContextMenuShortcut>
           </ContextMenuItem>
         )}
@@ -103,23 +105,23 @@ export function TerminalContextMenu({
         
         <ContextMenuItem onClick={onClear}>
           <Trash2 className="mr-2 h-4 w-4" />
-          <span>Clear Terminal</span>
+          <span>{t('terminal.clearTerminal')}</span>
         </ContextMenuItem>
         <ContextMenuItem onClick={onClearScrollback}>
           <Trash2 className="mr-2 h-4 w-4" />
-          <span>Clear Scrollback</span>
+          <span>{t('terminal.clearScrollback')}</span>
         </ContextMenuItem>
         
         <ContextMenuSeparator />
         
         <ContextMenuItem onClick={onSelectAll}>
           <FileText className="mr-2 h-4 w-4" />
-          <span>Select All</span>
+          <span>{t('terminal.selectAll')}</span>
           <ContextMenuShortcut>{modKey}+A</ContextMenuShortcut>
         </ContextMenuItem>
         <ContextMenuItem onClick={onSaveToFile}>
           <FileText className="mr-2 h-4 w-4" />
-          <span>Save Output to File</span>
+          <span>{t('terminal.saveOutput')}</span>
         </ContextMenuItem>
         
         {onReconnect && (
@@ -127,7 +129,7 @@ export function TerminalContextMenu({
             <ContextMenuSeparator />
             <ContextMenuItem onClick={onReconnect}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              <span>Reconnect Terminal</span>
+              <span>{t('terminal.reconnect')}</span>
             </ContextMenuItem>
           </>
         )}
