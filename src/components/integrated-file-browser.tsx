@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { withRetry, CancelledError } from '@/lib/async-retry';
@@ -91,6 +91,17 @@ const sessionStateCache = new Map<string, {
   searchTerm: string;
 }>();
 
+// Cache to store directory tree state (expanded dirs, loaded nodes) per connection.
+// Restored when the user switches back to a connection so the tree is in the
+// same expanded state they left it in.
+const treeStateCache = new Map<string, {
+  expanded: Set<string>;
+  nodes: Map<string, Array<{ path: string; name: string }>>;
+}>();
+
+// Cache to store the directory tree scroll position per connection.
+const treeScrollCache = new Map<string, number>();
+
 export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, onClose: _onClose, onOpenInLogMonitor, onOpenInEditor }: IntegratedFileBrowserProps) {
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -106,6 +117,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const effectiveConnectionIdRef = useRef<string | undefined>(undefined);
   // Monotonic counter: each loadFiles call stamps its own gen; stale responses are discarded.
   const loadGenRef = useRef(0);
+  // Tracks the connectionId for which files were last successfully loaded.
+  const lastLoadedConnectionIdRef = useRef<string | null>(null);
+  // Tracks the previous connectionId so the main load effect can skip
+  // connection-change loads (leaving them to the safety-net) and only handle
+  // path / isConnected changes within the same connection.
+  const prevConnectionIdRef = useRef<string | undefined>(undefined);
   // Tracks the path that is authoritative for the current connectionId.
   // Updated synchronously in the restore effect (before setState), so the load
   // effect always uses the correct path even before React re-renders with the
@@ -160,25 +177,24 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   ];
 
   // Restore or initialize state when connection changes.
-  // IMPORTANT: update effectiveConnectionIdRef FIRST (synchronous) so the save
-  // effect below can distinguish "same connection data changed" from "just switched".
+  // IMPORTANT: update effectiveConnectionIdRef and committedPathRef FIRST
+  // (synchronously) so the save effect and load effects read correct values.
+  //
+  // When switching to a connection that has cached state, we deliberately
+  // do NOT call any setState — this avoids an unnecessary re-render that
+  // would flash the previous connection's files.  The safety-net effect
+  // below handles loading fresh files for the new connection.
+  //
+  // For a brand-new connection (no cache), we reset state to defaults so the
+  // UI starts clean.
   useEffect(() => {
     effectiveConnectionIdRef.current = connectionId;
     if (connectionId) {
       const cached = sessionStateCache.get(connectionId);
-      // Update committedPathRef synchronously BEFORE setState so the load
-      // effect (which fires in the same commit) reads the correct path and
-      // doesn't request the previous connection's stale path on the new server.
       const newPath = cached?.currentPath ?? '/home';
       committedPathRef.current = newPath;
-      if (cached) {
-        setCurrentPath(cached.currentPath);
-        setFiles(cached.files);
-        setSelectedFiles(cached.selectedFiles);
-        setSearchTerm(cached.searchTerm);
-        setNavHistory([cached.currentPath]);
-        setNavIndex(0);
-      } else {
+      if (!cached) {
+        // New connection — reset state to defaults.
         setCurrentPath('/home');
         setFiles([]);
         setSelectedFiles(new Set());
@@ -186,6 +202,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         setNavHistory(['/home']);
         setNavIndex(0);
       }
+      // Cached connection: skip setState to avoid re-render.
+      // The safety-net effect will load fresh files.
     }
   }, [connectionId]);
 
@@ -206,17 +224,31 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   }, [currentPath, files, selectedFiles, searchTerm]);
 
+  // Main load effect: handles currentPath and isConnected changes within the
+  // SAME connection.  Connection switches are handled exclusively by the
+  // safety-net effect below, avoiding duplicate concurrent loads that race
+  // on the generation counter and can leave the file list empty.
   useEffect(() => {
-    if (isConnected && connectionId) {
-      // Always use committedPathRef.current rather than the closure-captured
-      // currentPath.  When connectionId changes, the restore effect has already
-      // updated committedPathRef synchronously to the correct path for the new
-      // connection, even though the currentPath state value (from the previous
-      // render) is still the old connection's stale path.
-      void loadFiles(committedPathRef.current);
-    }
+    if (!isConnected || !connectionId) return;
+    // Skip if connectionId just changed — the safety-net effect handles that.
+    if (prevConnectionIdRef.current !== connectionId) return;
+    void loadFiles(committedPathRef.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn; adding it would cause infinite re-renders
   }, [currentPath, isConnected, connectionId]);
+
+  // Safety-net: fires on every connectionId change AND when the connection
+  // (re-)establishes.  Guarantees a fresh directory load when switching
+  // connections, even if the main load effect was short-circuited by the
+  // generation counter during a rapid switch (A→B→A).  Also covers the
+  // case where isConnected was false at switch time (e.g. PtyTerminal
+  // auto-reconnecting) and later became true.
+  useEffect(() => {
+    prevConnectionIdRef.current = connectionId;
+    if (isConnected && connectionId) {
+      void loadFiles(committedPathRef.current);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn
+  }, [connectionId, isConnected]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -438,9 +470,47 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   }, [connectionId, isConnected]);
 
+  // Stable callbacks for DirectoryTree to persist its state per connection.
+  // These read connectionId from the closure, but since they're only invoked
+  // by DirectoryTree (which re-sets up its save effects on loadDirectory
+  // change), they always write to the correct connection's cache slot.
+  const handleSaveTreeState = useCallback(
+    (exp: Set<string>, nds: Map<string, Array<{ path: string; name: string }>>) => {
+      if (connectionId) treeStateCache.set(connectionId, { expanded: exp, nodes: nds });
+    },
+    [connectionId],
+  );
+
+  const handleSaveTreeScroll = useCallback(
+    (scrollTop: number) => {
+      if (connectionId) treeScrollCache.set(connectionId, scrollTop);
+    },
+    [connectionId],
+  );
+
+  // Compute the initial tree state from cache for the current connection.
+  // Memoized so DirectoryTree's reset effect sees stable deps between
+  // connection switches.
+  const treeInitialExpanded = useMemo(() => {
+    const cached = connectionId ? treeStateCache.get(connectionId) : undefined;
+    return cached ? new Set(cached.expanded) : undefined;
+  }, [connectionId]);
+
+  const treeInitialNodes = useMemo(() => {
+    const cached = connectionId ? treeStateCache.get(connectionId) : undefined;
+    return cached ? new Map(cached.nodes) : undefined;
+  }, [connectionId]);
+
+  const treeInitialScrollTop = useMemo(
+    () => (connectionId ? treeScrollCache.get(connectionId) : undefined),
+    [connectionId],
+  );
+
   const loadFiles = async (pathOverride?: string) => {
     if (!connectionId || !isConnected) {
-      setFiles([]);
+      // Don't clear files on disconnect — preserve the cached file list so
+      // the user still sees their directory contents when reconnecting or
+      // when isConnected briefly flickers during a tab switch.
       return;
     }
     
@@ -459,23 +529,16 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         { maxRetries: 2, baseDelayMs: 1000 },
       );
       
-      if (output) {
+      if (output && output.trim()) {
         // Parse ls -la --time-style=long-iso output to FileItem format
         // Format: perms links owner group size date time filename
         // Example: drwxr-xr-x  5 root root 72 2025-09-17 03:38 giga-sls
         const lines = output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
         
-        console.log('Parsing files from output:', output);
-        console.log('Found lines:', lines.length);
-        
         const parsedFiles: FileItem[] = lines.map(line => {
           const parts = line.trim().split(/\s+/);
           
-          console.log('Parsing line:', line);
-          console.log('Parts:', parts);
-          
           if (parts.length < 8) {
-            console.log('Skipping line - not enough parts:', parts.length);
             return null;
           }
           
@@ -496,11 +559,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             modifiedDate = new Date(`${dateStr}T${timeStr}`);
           }
           
-          console.log('Parsed file:', { name, type, permissions, owner, group, size, modified: modifiedDate });
-          
           // Skip . and .. entries
           if (name === '.' || name === '..') {
-            console.log('Skipping . or ..');
             return null;
           }
           
@@ -532,10 +592,55 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         
         if (gen !== loadGenRef.current) return; // stale — a newer load superseded us
         setFiles(parsedFiles);
+        // Sync the breadcrumb path with what was actually loaded.
+        // This is essential on connection switch: the restore effect
+        // intentionally skips setCurrentPath to avoid an extra re-render,
+        // so we update it here together with files in a single batched
+        // setState — breadcrumb and file list stay consistent.
+        if (currentPath !== targetPath) {
+          setCurrentPath(targetPath);
+          setNavHistory([targetPath]);
+          setNavIndex(0);
+          setSelectedFiles(new Set());
+        }
+        lastLoadedConnectionIdRef.current = connectionId;
+      } else {
+        // Empty or whitespace-only output — directory is genuinely empty
+        // or the SSH command returned nothing.
+        if (gen !== loadGenRef.current) return;
+        const emptyFiles: FileItem[] = targetPath !== '/' ? [{
+          name: '..',
+          type: 'directory',
+          size: 0,
+          modified: new Date(),
+          permissions: 'drwxr-xr-x',
+          owner: '-',
+          group: '-',
+          path: targetPath.split('/').slice(0, -1).join('/') || '/'
+        }] : [];
+        setFiles(emptyFiles);
+        if (currentPath !== targetPath) {
+          setCurrentPath(targetPath);
+          setNavHistory([targetPath]);
+          setNavIndex(0);
+          setSelectedFiles(new Set());
+        }
+        lastLoadedConnectionIdRef.current = connectionId;
       }
     } catch (error) {
       // CancelledError means a newer load superseded this one — discard silently.
       if (error instanceof CancelledError || gen !== loadGenRef.current) return;
+
+      // If the target path doesn't exist on this server (ls exit code 2),
+      // fall back to /home.  This commonly happens when switching to a
+      // connection whose cached path from a previous session doesn't exist
+      // on the new server (e.g. /etc/nginx on server A, but not on B).
+      if (targetPath !== '/home') {
+        committedPathRef.current = '/home';
+        void loadFiles('/home');
+        return;
+      }
+
       console.error('Failed to load files:', error);
       toast.error('Failed to Load Files', {
         description: error instanceof Error ? error.message : 'Unable to load remote directory contents.',
@@ -1324,6 +1429,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               currentPath={currentPath}
               onNavigate={navigateTo}
               disabled={!isConnected}
+              initialExpanded={treeInitialExpanded}
+              initialNodes={treeInitialNodes}
+              initialScrollTop={treeInitialScrollTop}
+              onSaveState={handleSaveTreeState}
+              onSaveScroll={handleSaveTreeScroll}
             />
           </ResizablePanel>
 

@@ -14,6 +14,22 @@ interface DirectoryTreeProps {
   currentPath: string;
   onNavigate: (path: string) => void;
   disabled?: boolean;
+  /**
+   * Cached expanded paths to restore on loadDirectory change (connection switch).
+   * When provided, the tree uses these instead of resetting to just "/".
+   */
+  initialExpanded?: Set<string>;
+  /**
+   * Cached loaded directory nodes to restore on loadDirectory change.
+   * When provided, the tree uses these instead of resetting to an empty map.
+   */
+  initialNodes?: Map<string, TreeNode[]>;
+  /** Called (debounced ~300ms) whenever the expanded set or loaded nodes change. */
+  onSaveState?: (expanded: Set<string>, nodes: Map<string, TreeNode[]>) => void;
+  /** Called (debounced ~200ms) after the user scrolls the tree container. */
+  onSaveScroll?: (scrollTop: number) => void;
+  /** Cached scroll top position to restore on connection switch. */
+  initialScrollTop?: number;
 }
 
 interface TreeNode {
@@ -62,12 +78,18 @@ export function DirectoryTree({
   currentPath,
   onNavigate,
   disabled = false,
+  initialExpanded,
+  initialNodes,
+  onSaveState,
+  onSaveScroll,
+  initialScrollTop,
 }: DirectoryTreeProps) {
   const [nodes, setNodes] = useState<Map<string, TreeNode[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["/"]));
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [focusPath, setFocusPath] = useState<string>(normalizePath(currentPath));
   const rowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const nodesRef = useRef(nodes);
   const loadingRef = useRef(loading);
@@ -125,11 +147,22 @@ export function DirectoryTree({
     [loadDirectory, disabled],
   );
 
+  // Reset or restore tree state when the data source changes (connection switch).
+  // If the parent supplies cached state (initialExpanded / initialNodes) we
+  // restore those — preserving which directories were expanded and already loaded.
+  // Without cached state (fresh connection), fall back to clean defaults.
   useEffect(() => {
-    setNodes(new Map());
-    setExpanded(new Set(["/"]));
+    setNodes(initialNodes ? new Map(initialNodes) : new Map());
+    setExpanded(initialExpanded ? new Set(initialExpanded) : new Set(["/"]));
     setLoading(new Set());
-  }, [loadDirectory]);
+
+    // Restore cached scroll position after the reset render.
+    // The currentPath effect below will scroll to the active row afterwards,
+    // which is fine — the active-row scroll takes visual precedence.
+    if (typeof initialScrollTop === "number" && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = initialScrollTop;
+    }
+  }, [loadDirectory, initialExpanded, initialNodes, initialScrollTop]);
 
   useEffect(() => {
     const normalized = normalizePath(currentPath);
@@ -180,6 +213,36 @@ export function DirectoryTree({
       activeRow.scrollIntoView({ block: "center", inline: "nearest" });
     }
   }, [currentPath, visibleRows]);
+
+  // Persist expanded + nodes state to the parent cache (debounced).
+  // This allows restoring the exact tree state when the user switches back
+  // to this connection later.
+  useEffect(() => {
+    if (!onSaveState) return;
+    const timer = setTimeout(() => {
+      onSaveState(expanded, nodes);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [expanded, nodes, onSaveState]);
+
+  // Persist scroll position to the parent cache (debounced).
+  useEffect(() => {
+    if (!onSaveScroll) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const handleScroll = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        onSaveScroll(container.scrollTop);
+      }, 200);
+    };
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, [onSaveScroll]);
 
   const toggleNode = useCallback(
     (path: string) => {
@@ -261,6 +324,7 @@ export function DirectoryTree({
         Directories
       </div>
       <div
+        ref={scrollContainerRef}
         className="flex-1 min-h-0 overflow-auto p-1.5 outline-none [scrollbar-gutter:stable]"
         role="tree"
         tabIndex={0}
