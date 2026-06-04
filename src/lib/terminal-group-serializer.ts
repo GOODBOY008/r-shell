@@ -52,14 +52,18 @@ export function saveState(state: TerminalGroupState): void {
           }];
         }),
       ),
-      tabToGroupMap: Object.fromEntries(
+    };
+
+    if (state.tabToGroupMap) {
+      filtered.tabToGroupMap = Object.fromEntries(
         Object.entries(state.tabToGroupMap).filter(([tabId]) => {
           const group = state.groups[state.tabToGroupMap[tabId]];
           const tab = group?.tabs.find(t => t.id === tabId);
           return tab?.tabType !== 'editor';
         }),
-      ),
-    };
+      );
+    }
+
     localStorage.setItem(STORAGE_KEY, serialize(filtered));
   } catch (e) {
     console.warn('Failed to save terminal group state to localStorage:', e);

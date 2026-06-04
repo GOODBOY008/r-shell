@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
     getSelection = vi.fn(() => '');
     selectAll = vi.fn();
     clear = vi.fn();
+    reset = vi.fn();
     dispose = vi.fn();
   }
 

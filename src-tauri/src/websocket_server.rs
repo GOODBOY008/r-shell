@@ -106,10 +106,10 @@ pub struct WebSocketServer {
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Back-pressure bound: maximum binary output frames queued between the PTY
-/// reader task and the WebSocket sender task.  When this fills up the PTY
-/// reader *blocks*, propagating pressure back through output_tx → SSH channel
-/// → TCP window → the remote process (e.g. `yes`).
+/// Maximum binary output frames queued between the PTY reader task and the
+/// WebSocket sender task. When this fills up the WebSocket-side reader blocks;
+/// the SSH channel reader keeps draining upstream output and drops overflow in
+/// `ssh::forward_pty_output` so russh buffers cannot grow without bound.
 const WS_OUTPUT_QUEUE_CAPACITY: usize = 256;
 
 /// Batch PTY output into frames of at most this size before sending.
@@ -181,7 +181,12 @@ fn encode_output_frame(connection_id: &str, data: &[u8]) -> Vec<u8> {
 /// Control messages are best-effort — a saturated channel returns `Dropped`.
 async fn send_control(tx: &WsTx, msg: &WsMessage) -> Result<SendOutcome> {
     let frame = Message::Text(serde_json::to_string(msg)?);
-    match tokio::time::timeout(Duration::from_millis(CONTROL_SEND_TIMEOUT_MS), tx.send(frame)).await {
+    match tokio::time::timeout(
+        Duration::from_millis(CONTROL_SEND_TIMEOUT_MS),
+        tx.send(frame),
+    )
+    .await
+    {
         Ok(Ok(())) => Ok(SendOutcome::Sent),
         Ok(Err(_)) => Ok(SendOutcome::Closed),
         Err(_) => Ok(SendOutcome::Dropped),
@@ -191,9 +196,9 @@ async fn send_control(tx: &WsTx, msg: &WsMessage) -> Result<SendOutcome> {
 /// Flush accumulated PTY bytes as a binary output frame.
 ///
 /// **Blocks** until the WS channel has room or the session is cancelled.
-/// This is the end-to-end backpressure mechanism: a full WS channel stalls
-/// the PTY reader, which stalls `output_tx`, which stalls `channel.wait()`,
-/// which exhausts the SSH window and stops the remote process from sending.
+/// This bounds the WebSocket-side queue. The SSH reader must not rely on this
+/// as upstream backpressure; it keeps draining the SSH channel and drops
+/// overflow before data reaches this layer.
 async fn flush_output(
     tx: &WsTx,
     connection_id: &str,
@@ -340,10 +345,16 @@ impl WebSocketServer {
                         .handle_message(ws_msg, tx.clone(), output_controls.clone())
                         .await
                     {
-                        Ok(PtyLifecycleEvent::Started { connection_id, generation }) => {
+                        Ok(PtyLifecycleEvent::Started {
+                            connection_id,
+                            generation,
+                        }) => {
                             active_pty_generations.insert(connection_id, generation);
                         }
-                        Ok(PtyLifecycleEvent::Closed { connection_id, generation }) => {
+                        Ok(PtyLifecycleEvent::Closed {
+                            connection_id,
+                            generation,
+                        }) => {
                             if should_remove_pty_state(
                                 active_pty_generations.get(&connection_id).copied(),
                                 generation,
@@ -431,7 +442,10 @@ impl WebSocketServer {
                 // 1 permit before each flush; the frontend grants permits via
                 // Resume messages (1 per frame processed by xterm).
                 let credits: OutputCredits = Arc::new(Semaphore::new(0));
-                output_controls.lock().await.insert(connection_id.clone(), Arc::clone(&credits));
+                output_controls
+                    .lock()
+                    .await
+                    .insert(connection_id.clone(), Arc::clone(&credits));
 
                 let response = WsMessage::Success {
                     message: format!("PTY connection started: {}", connection_id),
@@ -444,9 +458,10 @@ impl WebSocketServer {
                 };
                 send_control(&tx, &started).await?;
 
-                // Spawn the PTY reader task.
-                // `flush_output` blocks when the WS channel is full — this
-                // propagates back-pressure through output_tx to the SSH window.
+                // Spawn the PTY reader task. `flush_output` blocks when the WS
+                // channel is full, bounding the WebSocket-side queue. The SSH
+                // reader drains upstream output independently and drops
+                // overflow before it can accumulate inside russh.
                 let connection_manager = self.connection_manager.clone();
                 let connection_id_clone = connection_id.clone();
                 let tx_clone = tx.clone();
@@ -480,8 +495,7 @@ impl WebSocketServer {
                             Ok(data) if data.is_empty() => {
                                 // 1 ms poll returned nothing — flush if interval elapsed.
                                 if !accumulated.is_empty()
-                                    && last_flush.elapsed().as_millis()
-                                        >= OUTPUT_FLUSH_INTERVAL_MS
+                                    && last_flush.elapsed().as_millis() >= OUTPUT_FLUSH_INTERVAL_MS
                                 {
                                     // Wait for 1 frontend ACK before sending.
                                     let ok = tokio::select! {
@@ -509,8 +523,7 @@ impl WebSocketServer {
                             Ok(data) => {
                                 accumulated.extend_from_slice(&data);
                                 if accumulated.len() >= OUTPUT_FLUSH_BYTES
-                                    || last_flush.elapsed().as_millis()
-                                        >= OUTPUT_FLUSH_INTERVAL_MS
+                                    || last_flush.elapsed().as_millis() >= OUTPUT_FLUSH_INTERVAL_MS
                                 {
                                     // Wait for 1 frontend ACK before sending.
                                     let ok = tokio::select! {
@@ -746,5 +759,200 @@ impl WebSocketServer {
                 Ok(PtyLifecycleEvent::None)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ssh::{AuthMethod, SshConfig};
+    use futures::{SinkExt, StreamExt};
+    use std::time::Duration;
+    use tokio::time::{sleep, Instant};
+    use tokio_tungstenite::connect_async;
+
+    #[tokio::test]
+    #[ignore = "requires tools/paramiko_stress_ssh_server.py and R_SHELL_STRESS_SSH_PORT"]
+    async fn test_websocket_pty_memory_stays_bounded_when_frontend_stalls() -> Result<()> {
+        let port = std::env::var("R_SHELL_STRESS_SSH_PORT")
+            .expect("set R_SHELL_STRESS_SSH_PORT to the local stress SSH server port")
+            .parse::<u16>()
+            .expect("R_SHELL_STRESS_SSH_PORT must be a u16");
+        let duration = stress_env_u64("R_SHELL_STRESS_SECONDS", 60);
+        let max_growth_mb = stress_env_u64("R_SHELL_STRESS_MAX_GROWTH_MB", 96);
+        let connection_id = "stress-ws-pty".to_string();
+
+        let manager = Arc::new(ConnectionManager::new());
+        manager
+            .create_connection(
+                connection_id.clone(),
+                SshConfig {
+                    host: "127.0.0.1".to_string(),
+                    port,
+                    username: "test".to_string(),
+                    auth_method: AuthMethod::Password {
+                        password: "test".to_string(),
+                    },
+                },
+            )
+            .await?;
+
+        let server = WebSocketServer::new(Arc::clone(&manager));
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server_task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await?;
+            server.handle_connection(stream).await
+        });
+
+        let (mut ws, _) = connect_async(format!("ws://{}", addr)).await?;
+        ws.send(Message::Text(serde_json::to_string(
+            &WsMessage::StartPty {
+                connection_id: connection_id.clone(),
+                cols: 80,
+                rows: 24,
+            },
+        )?))
+        .await?;
+
+        let generation = wait_for_pty_started(&mut ws, &connection_id).await?;
+        for _ in 0..4 {
+            ws.send(Message::Text(serde_json::to_string(&WsMessage::Resume {
+                connection_id: connection_id.clone(),
+            })?))
+            .await?;
+        }
+        ws.send(Message::Text(serde_json::to_string(&WsMessage::Input {
+            connection_id: connection_id.clone(),
+            data: b"yes\n".to_vec(),
+        })?))
+        .await?;
+
+        let baseline = private_memory_bytes().expect("private memory must be measurable");
+        let deadline = Instant::now() + Duration::from_secs(duration);
+        let mut max_seen = baseline;
+        let mut received_frames = 0u64;
+        let mut received_bytes = 0u64;
+
+        while Instant::now() < deadline {
+            tokio::select! {
+                msg = ws.next() => {
+                    match msg {
+                        Some(Ok(Message::Binary(data))) => {
+                            received_frames += 1;
+                            received_bytes += data.len() as u64;
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(e)) => return Err(e.into()),
+                        None => break,
+                    }
+                }
+                _ = sleep(Duration::from_secs(1)) => {
+                    let current = private_memory_bytes().expect("private memory must be measurable");
+                    max_seen = max_seen.max(current);
+                    eprintln!(
+                        "websocket pty stress: frames={} bytes={} current={:.1} MB max={:.1} MB growth={:.1} MB",
+                        received_frames,
+                        received_bytes,
+                        bytes_to_mb(current),
+                        bytes_to_mb(max_seen),
+                        bytes_to_mb(max_seen.saturating_sub(baseline))
+                    );
+                }
+            }
+        }
+
+        ws.send(Message::Text(serde_json::to_string(&WsMessage::Close {
+            connection_id: connection_id.clone(),
+            generation: Some(generation),
+        })?))
+        .await
+        .ok();
+        ws.close(None).await.ok();
+        server_task.abort();
+        manager.close_connection(&connection_id).await.ok();
+
+        let growth = max_seen.saturating_sub(baseline);
+        assert!(
+            growth <= max_growth_mb * 1024 * 1024,
+            "private memory grew by {:.1} MB, expected <= {} MB",
+            bytes_to_mb(growth),
+            max_growth_mb
+        );
+
+        Ok(())
+    }
+
+    async fn wait_for_pty_started(
+        ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>,
+        expected_connection_id: &str,
+    ) -> Result<u64> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let Some(msg) = ws.next().await else {
+                break;
+            };
+            match msg? {
+                Message::Text(text) => {
+                    if let WsMessage::PtyStarted {
+                        connection_id,
+                        generation,
+                    } = serde_json::from_str::<WsMessage>(&text)?
+                    {
+                        if connection_id == expected_connection_id {
+                            return Ok(generation);
+                        }
+                    }
+                }
+                Message::Binary(_) => {}
+                _ => {}
+            }
+        }
+        Err(anyhow::anyhow!("timed out waiting for PtyStarted"))
+    }
+
+    fn stress_env_u64(name: &str, default: u64) -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default)
+    }
+
+    fn bytes_to_mb(bytes: u64) -> f64 {
+        bytes as f64 / 1024.0 / 1024.0
+    }
+
+    #[cfg(windows)]
+    fn private_memory_bytes() -> Option<u64> {
+        let output = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "(Get-Process -Id {}).PrivateMemorySize64",
+                    std::process::id()
+                ),
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+    }
+
+    #[cfg(not(windows))]
+    fn private_memory_bytes() -> Option<u64> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let kb = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())?;
+                return Some(kb * 1024);
+            }
+        }
+        None
     }
 }

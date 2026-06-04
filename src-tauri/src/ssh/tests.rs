@@ -347,3 +347,135 @@ mod key_loading_tests {
         key_path.to_string()
     }
 }
+
+#[cfg(test)]
+mod pty_output_flow_tests {
+    use super::super::{forward_pty_output, PtyOutputForwardStats};
+
+    #[test]
+    fn test_pty_output_drops_immediately_when_queue_is_full() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let mut stats = PtyOutputForwardStats::default();
+
+        assert!(forward_pty_output(&tx, b"first", &mut stats));
+        assert!(forward_pty_output(&tx, b"second", &mut stats));
+
+        assert_eq!(stats.dropped_chunks, 1);
+        assert_eq!(stats.dropped_bytes, 6);
+        assert_eq!(rx.try_recv().unwrap(), b"first".to_vec());
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[cfg(test)]
+mod pty_memory_stress_tests {
+    use super::super::{AuthMethod, SshClient, SshConfig};
+    use std::time::Duration;
+    use tokio::time::{sleep, Instant};
+
+    #[tokio::test]
+    #[ignore = "requires tools/paramiko_stress_ssh_server.py and R_SHELL_STRESS_SSH_PORT"]
+    async fn test_pty_output_memory_stays_bounded_when_output_is_not_consumed() {
+        let port = std::env::var("R_SHELL_STRESS_SSH_PORT")
+            .expect("set R_SHELL_STRESS_SSH_PORT to the local stress SSH server port")
+            .parse::<u16>()
+            .expect("R_SHELL_STRESS_SSH_PORT must be a u16");
+        let duration = stress_env_u64("R_SHELL_STRESS_SECONDS", 30);
+        let max_growth_mb = stress_env_u64("R_SHELL_STRESS_MAX_GROWTH_MB", 96);
+
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host: "127.0.0.1".to_string(),
+                port,
+                username: "test".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "test".to_string(),
+                },
+            })
+            .await
+            .expect("stress SSH server should accept test/test");
+
+        let pty = client
+            .create_pty_session(80, 24)
+            .await
+            .expect("PTY session should start");
+        pty.input_tx
+            .send(b"yes\n".to_vec())
+            .await
+            .expect("input channel should accept command");
+
+        let baseline = private_memory_bytes().expect("private memory must be measurable");
+        let deadline = Instant::now() + Duration::from_secs(duration);
+        let mut max_seen = baseline;
+
+        while Instant::now() < deadline {
+            sleep(Duration::from_secs(1)).await;
+            let current = private_memory_bytes().expect("private memory must be measurable");
+            max_seen = max_seen.max(current);
+            eprintln!(
+                "pty stress memory: current={:.1} MB max={:.1} MB growth={:.1} MB",
+                bytes_to_mb(current),
+                bytes_to_mb(max_seen),
+                bytes_to_mb(max_seen.saturating_sub(baseline))
+            );
+        }
+
+        pty.cancel.cancel();
+        drop(pty);
+        let _ = client.disconnect().await;
+
+        let growth = max_seen.saturating_sub(baseline);
+        assert!(
+            growth <= max_growth_mb * 1024 * 1024,
+            "private memory grew by {:.1} MB, expected <= {} MB",
+            bytes_to_mb(growth),
+            max_growth_mb
+        );
+    }
+
+    fn stress_env_u64(name: &str, default: u64) -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(default)
+    }
+
+    fn bytes_to_mb(bytes: u64) -> f64 {
+        bytes as f64 / 1024.0 / 1024.0
+    }
+
+    #[cfg(windows)]
+    fn private_memory_bytes() -> Option<u64> {
+        let output = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "(Get-Process -Id {}).PrivateMemorySize64",
+                    std::process::id()
+                ),
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8_lossy(&output.stdout).trim().parse().ok()
+    }
+
+    #[cfg(not(windows))]
+    fn private_memory_bytes() -> Option<u64> {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        for line in status.lines() {
+            if let Some(rest) = line.strip_prefix("VmRSS:") {
+                let kb = rest
+                    .split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())?;
+                return Some(kb * 1024);
+            }
+        }
+        None
+    }
+}

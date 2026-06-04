@@ -65,13 +65,7 @@ fn build_app_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tau
                 true,
                 Some("CmdOrCtrl+S"),
             )?,
-            &MenuItem::with_id(
-                app,
-                "close_connection",
-                "Close Tab",
-                true,
-                None::<&str>,
-            )?,
+            &MenuItem::with_id(app, "close_connection", "Close Tab", true, None::<&str>)?,
         ],
     )?;
 

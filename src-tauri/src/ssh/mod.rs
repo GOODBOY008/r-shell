@@ -66,7 +66,75 @@ pub struct PtySession {
     pub cancel: CancellationToken,
 }
 
+#[derive(Debug, Default)]
+struct PtyOutputForwardStats {
+    dropped_chunks: u64,
+    dropped_bytes: u64,
+}
+
 pub struct Client;
+
+fn forward_pty_output(
+    output_tx: &mpsc::Sender<Vec<u8>>,
+    data: &[u8],
+    stats: &mut PtyOutputForwardStats,
+) -> bool {
+    if data.is_empty() {
+        return true;
+    }
+
+    if output_tx.capacity() == 0 {
+        stats.dropped_chunks += 1;
+        stats.dropped_bytes += data.len() as u64;
+        return true;
+    }
+
+    match output_tx.try_send(data.to_vec()) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            stats.dropped_chunks += 1;
+            stats.dropped_bytes += data.len() as u64;
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    }
+}
+
+fn log_pty_output_drops(stats: &mut PtyOutputForwardStats) {
+    if stats.dropped_chunks == 0 {
+        return;
+    }
+
+    tracing::warn!(
+        "Dropped {} PTY output chunks ({} bytes) because the frontend output queue was full",
+        stats.dropped_chunks,
+        stats.dropped_bytes
+    );
+    *stats = PtyOutputForwardStats::default();
+}
+
+fn expand_key_path(key_path: &str) -> String {
+    if key_path.starts_with("~/") || key_path.starts_with("~\\") {
+        if let Some(home) = dirs::home_dir() {
+            let home_str = home.to_string_lossy();
+            return key_path.replacen('~', &home_str, 1);
+        }
+    }
+    key_path.to_string()
+}
+
+fn validate_public_key_file(auth_method: &AuthMethod) -> Result<()> {
+    if let AuthMethod::PublicKey { key_path, .. } = auth_method {
+        let expanded_path = expand_key_path(key_path);
+        if !std::path::Path::new(&expanded_path).exists() {
+            return Err(anyhow::anyhow!(
+                "SSH key file not found: {}. Please check the file path and try again.",
+                key_path
+            ));
+        }
+    }
+    Ok(())
+}
 
 #[async_trait::async_trait]
 impl client::Handler for Client {
@@ -86,6 +154,8 @@ impl SshClient {
     }
 
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+        validate_public_key_file(&config.auth_method)?;
+
         let ssh_config = client::Config {
             preferred: russh::Preferred {
                 key: PREFERRED_HOST_KEY_ALGOS,
@@ -120,24 +190,7 @@ impl SshClient {
             } => {
                 // Expand tilde in path — use dirs::home_dir() for cross-platform
                 // support (HOME is not set on Windows; USERPROFILE is used instead).
-                let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
-                    if let Some(home) = dirs::home_dir() {
-                        let home_str = home.to_string_lossy();
-                        key_path.replacen('~', &home_str, 1)
-                    } else {
-                        key_path.clone()
-                    }
-                } else {
-                    key_path.clone()
-                };
-
-                // Check if file exists
-                if !std::path::Path::new(&expanded_path).exists() {
-                    return Err(anyhow::anyhow!(
-                        "SSH key file not found: {}. Please check the file path and try again.",
-                        key_path
-                    ));
-                }
+                let expanded_path = expand_key_path(key_path);
 
                 // Read the key file and normalise CRLF line endings so that keys
                 // created or edited on Windows (which use \r\n) are parsed correctly
@@ -287,7 +340,7 @@ impl SshClient {
             // Create channels for bidirectional communication (like ttyd's pty_buf)
             // Increased capacity for better buffering during fast input
             let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1000); // Increased from 100
-            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(128); // Bounded: back-pressure to SSH window
+            let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(128); // Bounded: drop overflow while draining SSH
 
             let channel_id = channel.id();
 
@@ -322,22 +375,30 @@ impl SshClient {
             // but we also need `window_change()` which only requires `&self`.
             // We use `tokio::select!` to multiplex between output reading and resize.
             tokio::spawn(async move {
+                let mut output_stats = PtyOutputForwardStats::default();
                 loop {
                     tokio::select! {
                         msg = channel.wait() => {
                             match msg {
                                 Some(ChannelMsg::Data { data }) => {
-                                    if output_tx.send(data.to_vec()).await.is_err() {
+                                    if !forward_pty_output(&output_tx, data.as_ref(), &mut output_stats) {
                                         break;
+                                    }
+                                    if output_stats.dropped_chunks > 0 && output_tx.capacity() > 0 {
+                                        log_pty_output_drops(&mut output_stats);
                                     }
                                 }
                                 Some(ChannelMsg::ExtendedData { data, .. }) => {
                                     // stderr data (also send to output)
-                                    if output_tx.send(data.to_vec()).await.is_err() {
+                                    if !forward_pty_output(&output_tx, data.as_ref(), &mut output_stats) {
                                         break;
+                                    }
+                                    if output_stats.dropped_chunks > 0 && output_tx.capacity() > 0 {
+                                        log_pty_output_drops(&mut output_stats);
                                     }
                                 }
                                 Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                                    log_pty_output_drops(&mut output_stats);
                                     eprintln!("[PTY] Channel closed");
                                     break;
                                 }
