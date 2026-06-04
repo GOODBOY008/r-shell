@@ -10,25 +10,6 @@ export interface KeyboardShortcut {
   description: string;
 }
 
-export function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) {
-    return false;
-  }
-
-  const tagName = target.tagName.toLowerCase();
-  if (tagName === 'input' || tagName === 'textarea') {
-    return true;
-  }
-
-  const editableElement = target.closest('[contenteditable]');
-  if (!editableElement) {
-    return false;
-  }
-
-  const contentEditable = editableElement.getAttribute('contenteditable');
-  return contentEditable === '' || contentEditable?.toLowerCase() !== 'false';
-}
-
 /**
  * Hook to register keyboard shortcuts
  * Similar to VS Code's keyboard shortcuts system
@@ -40,10 +21,6 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
     const isMac = navigator.platform.toUpperCase().includes('MAC');
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) {
-        return;
-      }
-
       for (const shortcut of shortcuts) {
         const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
         // On macOS, treat Cmd (metaKey) as the equivalent of Ctrl for shortcut matching.
