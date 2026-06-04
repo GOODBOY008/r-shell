@@ -35,8 +35,10 @@ interface PtyTerminalProps {
 
 /** Per-session output cap. When cumulative bytes written to xterm exceed this
  *  value the scrollback is cleared automatically so V8 heap stays bounded.
- *  50 MB of decoded text ≈ ~600k typical 80-char terminal lines. */
-const SESSION_OUTPUT_LIMIT_BYTES = 50 * 1024 * 1024;
+ *  2 MB of decoded text ≈ ~25k typical 80-char terminal lines. Kept low to
+ *  prevent V8 heap fragmentation and WebGL texture-cache bloat during
+ *  sustained high-throughput output (e.g. `yes`). */
+const SESSION_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
 
 export function PtyTerminal({
   connectionId,
@@ -54,6 +56,7 @@ export function PtyTerminal({
   const searchRef = React.useRef<SearchAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
+  const webglAddonRef = React.useRef<WebglAddon | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const initialIsActiveRef = React.useRef(isActive);
   const wasActiveRef = React.useRef(isActive);
@@ -159,7 +162,15 @@ export function PtyTerminal({
     if (!appearance.backgroundImage) {
       try {
         const webglAddon = new WebglAddon();
+        // Dispose listener — xterm calls this when the addon is disposed
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose();
+          webglAddonRef.current = null;
+          rendererRef.current = 'canvas';
+          console.warn('[PTY Terminal] WebGL context lost, falling back to canvas');
+        });
         term.loadAddon(webglAddon);
+        webglAddonRef.current = webglAddon;
         rendererRef.current = 'webgl';
         console.log('[PTY Terminal] WebGL renderer loaded');
       } catch (e) {
@@ -282,6 +293,12 @@ export function PtyTerminal({
     // Set when a drop triggers auto-reconnect, so the Success message can
     // warn the user that a fresh shell was started.
     let isReconnectAfterDrop = false;
+
+    // RAF write batching state — lifted to effect scope so cleanup can cancel.
+    let writeBuffer = '';
+    let watermark = 0;
+    let rafId: number | null = null;
+    let creditsGranted = 0;
     
     // CRITICAL: Wait for terminal to have proper dimensions before connecting
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
@@ -363,27 +380,92 @@ export function PtyTerminal({
         ws.send(JSON.stringify(startMsg));
       };
 
-      // Credit-based flow control: the backend holds a Semaphore(0) per
-      // connection and only flushes a frame after acquiring a permit.  Every
-      // time xterm finishes processing a chunk we send one Resume message to
-      // grant a permit, so the WKWebView WebSocket receive queue is bounded
-      // to INITIAL_WINDOW frames regardless of how fast the remote produces data.
-      const writeOutput = (text: string) => {
+      // =========================================================================
+      // RAF-Based Write Batching + Watermark Flow Control
+      //
+      // Based on xterm.js best practices:
+      // - http://xtermjs.org/docs/guides/flowcontrol/
+      // - https://github.com/github/copilot-cli/issues/1805 (4-layer solution)
+      //
+      // Problem: calling term.write() for every WebSocket frame creates hundreds
+      // of write operations per second, each with its own callback. This
+      // overwhelms xterm's internal write buffer (hardcoded 50 MB limit) and
+      // creates massive GC pressure from per-chunk closures.
+      //
+      // Solution:
+      // 1. Accumulate all incoming frames in a string buffer.
+      // 2. Flush once per requestAnimationFrame (~60 writes/s instead of 100+).
+      // 3. Use watermark-based flow control: send Resume credits only when the
+      //    pending byte count drops below LOW_WATER, avoiding per-frame ACKs.
+      // =========================================================================
+
+      /** High watermark (bytes): above this, the buffer is considered "full" and
+       *  we stop granting credits until xterm drains below LOW_WATER.  128 KB
+       *  keeps the emulator snappy for keystrokes under fast input (xterm guide
+       *  recommends ≤ 500 KB for responsiveness). */
+      const HIGH_WATER = 128 * 1024;
+      /** Low watermark (bytes): below this, we grant a batch of credits to the
+       *  backend so it can send more data. */
+      const LOW_WATER = 16 * 1024;
+      /** How many credits to grant each time watermark drops below LOW_WATER.
+       *  Keeps the pipeline flowing without flooding the WS receive queue. */
+      const CREDIT_BATCH = 4;
+
+      const grantCredits = (count: number) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          // Send a single Resume per credit (backend Semaphore.add_permits(1))
+          const msg = JSON.stringify({ type: 'Resume', connection_id: connectionId });
+          for (let i = 0; i < count; i++) {
+            ws.send(msg);
+          }
+          creditsGranted += count;
+        }
+      };
+
+      const flushWriteBuffer = () => {
+        rafId = null;
+        if (!writeBuffer) return;
+
+        const data = writeBuffer;
+        writeBuffer = '';
+
         // Enforce per-session memory cap so xterm's scrollback buffer can't
         // grow without bound on sustained high-throughput output (e.g. `yes`).
-        sessionOutputRef.current += text.length;
+        sessionOutputRef.current += data.length;
         if (sessionOutputRef.current >= SESSION_OUTPUT_LIMIT_BYTES) {
+          term.reset();
           term.clear();
           sessionOutputRef.current = 0;
           term.writeln('\x1b[33m[Output limit reached \u2014 scrollback cleared to free memory]\x1b[0m');
         }
-        // Always use the callback form so every processed chunk grants exactly
-        // 1 credit to the backend, keeping the pipeline bounded.
-        term.write(text, () => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'Resume', connection_id: connectionId }));
+
+        // Single write per animation frame — the key optimisation.
+        // Reduces term.write() calls from hundreds/s to ~60/s.
+        term.write(data, () => {
+          // xterm finished processing this batch — update watermark
+          watermark = Math.max(watermark - data.length, 0);
+
+          // Watermark-based flow control: grant credits only when the
+          // pending buffer has drained below LOW_WATER.  Skip granting
+          // if watermark is still above HIGH_WATER (buffer still full).
+          if (watermark < LOW_WATER && watermark < HIGH_WATER && creditsGranted < CREDIT_BATCH * 2) {
+            grantCredits(CREDIT_BATCH);
+            creditsGranted = 0; // reset counter after granting
           }
         });
+
+        // If more data arrived during the write, schedule another flush
+        if (writeBuffer) {
+          rafId = requestAnimationFrame(flushWriteBuffer);
+        }
+      };
+
+      const enqueueOutput = (text: string) => {
+        writeBuffer += text;
+        watermark += text.length;
+        if (rafId === null) {
+          rafId = requestAnimationFrame(flushWriteBuffer);
+        }
       };
 
       ws.onmessage = (event) => {
@@ -399,7 +481,7 @@ export function PtyTerminal({
           if (frameConnectionId !== connectionId) return;
           const payload = data.subarray(payloadOffset);
           if (payload.length === 0) return;
-          writeOutput(outputDecoder.decode(payload, { stream: true }));
+          enqueueOutput(outputDecoder.decode(payload, { stream: true }));
           return;
         }
 
@@ -434,19 +516,19 @@ export function PtyTerminal({
                 ptyGenerationRef.current = msg.generation;
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
                 signalReady(connectionId);
-                // Seed the credit pipeline so the PTY reader can start sending
-                // immediately without waiting for the first callback to fire.
-                const INITIAL_WINDOW = 4;
-                for (let i = 0; i < INITIAL_WINDOW; i++) {
-                  ws.send(JSON.stringify({ type: 'Resume', connection_id: connectionId }));
-                }
+                // Credit-based flow control: seed the pipeline with initial
+                // credits so the PTY reader can start sending immediately.
+                // Ongoing credits are managed by the watermark-based flow
+                // control in the flush callback above.
+                const INITIAL_WINDOW = 2;
+                grantCredits(INITIAL_WINDOW);
               }
               break;
             }
               
             case 'Output':
               if (msg.data && msg.data.length > 0) {
-                writeOutput(new TextDecoder().decode(new Uint8Array(msg.data)));
+                enqueueOutput(new TextDecoder().decode(new Uint8Array(msg.data)));
               }
               break;
               
@@ -652,6 +734,15 @@ export function PtyTerminal({
       console.log(`[PTY Terminal] [${connectionId}] Cleaning up`);
       isRunning = false;
 
+      // Cancel any pending RAF write batch and discard queued data so no
+      // stale writes reach a terminal that is about to be disposed.
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      writeBuffer = '';
+      watermark = 0;
+
       // Close PTY connection via WebSocket — include generation so the
       // backend can ignore this close if a newer session already exists.
       const ws = wsRef.current;
@@ -667,6 +758,18 @@ export function PtyTerminal({
         ws.close();
       }
       ptyGenerationRef.current = null;
+
+      // CRITICAL: Null out WebSocket handlers to break closure reference chains.
+      // The onmessage/onclose/onerror handlers capture `term`, `outputDecoder`,
+      // and `enqueueOutput` via closures. Without nulling them out, V8 cannot GC
+      // these objects even after term.dispose(), causing ~1 GB of retained heap.
+      if (ws) {
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onopen = null;
+      }
+      wsRef.current = null;
       
       inputDisposable.dispose();
       resizeDisposable.dispose();
@@ -675,6 +778,12 @@ export function PtyTerminal({
       resizeObserver.disconnect();
       if (fitTimer) clearTimeout(fitTimer);
       
+      // Dispose WebGL addon FIRST so GPU textures are released before the
+      // terminal canvas is removed from the DOM.
+      if (webglAddonRef.current) {
+        try { webglAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
+        webglAddonRef.current = null;
+      }
       term.reset(); // clear scrollback + viewport so GC can reclaim xterm buffers sooner
       term.dispose();
     };

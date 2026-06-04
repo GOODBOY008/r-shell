@@ -293,7 +293,7 @@ export const defaultAppearanceSettings: TerminalAppearanceSettings = {
   cursorStyle: 'block',
   cursorBlink: true,
   theme: 'vs-code-dark',
-  scrollback: 10000,
+  scrollback: 500,
   allowTransparency: false,
   opacity: 100,
   // Background image defaults
@@ -313,7 +313,7 @@ export const defaultTerminalOptions: ITerminalOptions = {
   theme: defaultTerminalTheme,
   allowProposedApi: true,
   convertEol: true,
-  scrollback: 10000,
+  scrollback: 500,
   tabStopWidth: 8,
   allowTransparency: false,
   smoothScrollDuration: 0,
