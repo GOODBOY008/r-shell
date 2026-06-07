@@ -6,11 +6,22 @@ use crate::sftp_client::StandaloneSftpClient;
 use crate::ssh::{PtySession, SshClient, SshConfig};
 use crate::vnc_client::VncClient;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+
+/// State of a single active SOCKS proxy rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SocksProxyInfo {
+    pub proxy_id: String,
+    pub connection_id: String,
+    pub bind_address: String,
+    pub bind_port: u16,
+    pub active: bool,
+}
 
 pub struct ConnectionManager {
     connections: Arc<RwLock<HashMap<String, Arc<RwLock<SshClient>>>>>,
@@ -29,6 +40,8 @@ pub struct ConnectionManager {
     connection_types: Arc<RwLock<HashMap<String, String>>>,
     /// Cached OS info per SSH connection (auto-detected on first monitoring call)
     os_info_cache: OsInfoCache,
+    /// Active SOCKS proxy sessions (proxy_id → cancel token)
+    socks_proxies: Arc<RwLock<HashMap<String, (SocksProxyInfo, CancellationToken)>>>,
 }
 
 impl ConnectionManager {
@@ -43,6 +56,7 @@ impl ConnectionManager {
             desktop_connections: Arc::new(RwLock::new(HashMap::new())),
             connection_types: Arc::new(RwLock::new(HashMap::new())),
             os_info_cache: OsInfoCache::new(),
+            socks_proxies: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -100,6 +114,8 @@ impl ConnectionManager {
         }
         // Clean up cached OS info for this connection
         self.os_info_cache.remove(connection_id).await;
+        // Clean up SOCKS proxies for this connection
+        self.cleanup_socks_proxies(connection_id).await;
         Ok(())
     }
 
@@ -391,6 +407,90 @@ impl ConnectionManager {
             .ok_or_else(|| anyhow::anyhow!("Desktop connection not found: {}", connection_id))?;
         let client = client.read().await;
         client.start_frame_loop(frame_tx, cancel).await
+    }
+
+    // ===== SOCKS Proxy Management =====
+
+    /// Start a SOCKS4/5 proxy through the given SSH `connection_id`.
+    ///
+    /// Returns the actual port the proxy is listening on.
+    pub async fn start_socks_proxy(
+        &self,
+        proxy_id: String,
+        connection_id: &str,
+        bind_address: String,
+        bind_port: u16,
+    ) -> Result<u16> {
+        // Get the SSH session handle
+        let connections = self.connections.read().await;
+        let client = connections
+            .get(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {connection_id}"))?;
+        let handle = {
+            let client = client.read().await;
+            client
+                .get_session_handle()
+                .ok_or_else(|| anyhow::anyhow!("SSH session not available"))?
+        };
+        drop(connections);
+
+        let cancel = CancellationToken::new();
+        let proxy_cancel = cancel.clone();
+
+        let actual_port = crate::socks_proxy::start_socks_proxy(
+            handle,
+            bind_address.clone(),
+            bind_port,
+            proxy_cancel,
+        )
+        .await?;
+
+        // Track it
+        let info = SocksProxyInfo {
+            proxy_id: proxy_id.clone(),
+            connection_id: connection_id.to_string(),
+            bind_address,
+            bind_port: actual_port,
+            active: true,
+        };
+        let mut proxies = self.socks_proxies.write().await;
+        // Cancel any existing proxy with the same ID
+        if let Some((_, old_cancel)) = proxies.remove(&proxy_id) {
+            old_cancel.cancel();
+        }
+        proxies.insert(proxy_id, (info, cancel));
+
+        Ok(actual_port)
+    }
+
+    /// Stop a SOCKS proxy by ID.
+    pub async fn stop_socks_proxy(&self, proxy_id: &str) -> Result<()> {
+        let mut proxies = self.socks_proxies.write().await;
+        if let Some((_, cancel)) = proxies.remove(proxy_id) {
+            cancel.cancel();
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("SOCKS proxy not found: {proxy_id}"))
+        }
+    }
+
+    /// List all active SOCKS proxies.
+    pub async fn list_socks_proxies(&self) -> Vec<SocksProxyInfo> {
+        let proxies = self.socks_proxies.read().await;
+        proxies.values().map(|(info, _)| info.clone()).collect()
+    }
+
+    /// Clean up all SOCKS proxies for a given connection (called on disconnect).
+    pub async fn cleanup_socks_proxies(&self, connection_id: &str) {
+        let mut proxies = self.socks_proxies.write().await;
+        proxies.retain(|_, (info, cancel)| {
+            if info.connection_id == connection_id {
+                cancel.cancel();
+                false
+            } else {
+                true
+            }
+        });
     }
 }
 

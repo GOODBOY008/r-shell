@@ -5,6 +5,7 @@ import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
+import { PortForwardingPanel } from './components/port-forwarding-panel';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { SettingsModal } from './components/settings-modal';
@@ -1657,6 +1658,7 @@ function AppContent() {
                   <TabsList className="inline-flex w-auto mx-2 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
+                    <TabsTrigger value="port-forwarding" className="text-xs px-2">Port Fwd</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
@@ -1680,6 +1682,12 @@ function AppContent() {
                           />
                         </ErrorBoundary>
                       ) : null}
+                    </TabsContent>
+
+                    <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      <ErrorBoundary label="Port Forwarding">
+                        <PortForwardingPanel connectionId={activeConnection?.connectionId ?? null} />
+                      </ErrorBoundary>
                     </TabsContent>
                   </div>
                 </Tabs>
