@@ -535,8 +535,6 @@ export interface ActiveConnectionState {
   originalConnectionId?: string; // For duplicated tabs, reference to the original connection
   tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor'; // Tab type for SFTP/FTP, RDP/VNC, SSH, or remote file editing
   protocol?: string; // Protocol used (SSH, SFTP, FTP)
-  /** SOCKS4/5 proxies to restore after this connection reconnects */
-  proxies?: Array<{ bind_address: string; bind_port: number }>;
 }
 
 export class ActiveConnectionsManager {
