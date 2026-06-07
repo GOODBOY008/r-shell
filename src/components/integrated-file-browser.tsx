@@ -1442,7 +1442,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           {/* File list panel */}
           <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
             <div
-              className="relative h-full overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-sm"
+              className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm"
               onDragEnter={handleDragEnter}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
@@ -1459,94 +1459,92 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
               )}
 
-              <ScrollArea className="h-full [&>[data-slot=scroll-area-viewport]]:[scrollbar-gutter:stable]">
+              {/* Column Headers — outside ScrollArea so they never move */}
+              <div className="flex shrink-0 gap-2 border-b bg-muted/30 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
+                <div 
+                  className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                  style={{ width: `${columnWidths.name}px` }}
+                  onClick={() => handleSort('name')}
+                >
+                  <span>Name</span>
+                  {sortField === 'name' ? (
+                    sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                  ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
+                  <div 
+                    className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
+                    onMouseDown={(e) => handleResizeStart('name', e)}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
+                  </div>
+                </div>
+                <div 
+                  className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                  style={{ width: `${columnWidths.size}px` }}
+                  onClick={() => handleSort('size')}
+                >
+                  <span>Size</span>
+                  {sortField === 'size' ? (
+                    sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                  ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
+                  <div 
+                    className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
+                    onMouseDown={(e) => handleResizeStart('size', e)}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
+                  </div>
+                </div>
+                <div 
+                  className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                  style={{ width: `${columnWidths.modified}px` }}
+                  onClick={() => handleSort('modified')}
+                >
+                  <span>Modified</span>
+                  {sortField === 'modified' ? (
+                    sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                  ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
+                  <div 
+                    className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
+                    onMouseDown={(e) => handleResizeStart('modified', e)}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
+                  </div>
+                </div>
+                <div 
+                  className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
+                  style={{ width: `${columnWidths.permissions}px` }}
+                  onClick={() => handleSort('permissions')}
+                >
+                  <span>Permissions</span>
+                  {sortField === 'permissions' ? (
+                    sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                  ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
+                  <div 
+                    className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
+                    onMouseDown={(e) => handleResizeStart('permissions', e)}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
+                  </div>
+                </div>
+                <div 
+                  className="flex items-center cursor-pointer hover:text-foreground select-none" 
+                  style={{ width: `${columnWidths.owner}px` }}
+                  onClick={() => handleSort('owner')}
+                >
+                  <span>Owner</span>
+                  {sortField === 'owner' ? (
+                    sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
+                  ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
+                </div>
+              </div>
+
+              <ScrollArea className="flex-1 min-h-0 [&>[data-slot=scroll-area-viewport]]:[scrollbar-gutter:stable]">
                 <ContextMenu>
                   <ContextMenuTrigger asChild>
                     <div className="min-h-full p-1.5" data-columns-container>
-                      {/* Column Headers */}
-                      <div
-                        className="sticky top-0 z-10 flex gap-2 border-b bg-muted/30 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55"
-                      >
-                  <div 
-                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
-                    style={{ width: `${columnWidths.name}px` }}
-                    onClick={() => handleSort('name')}
-                  >
-                    <span>Name</span>
-                    {sortField === 'name' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
-                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
-                    <div 
-                      className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
-                      onMouseDown={(e) => handleResizeStart('name', e)}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
-                    </div>
-                  </div>
-                  <div 
-                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
-                    style={{ width: `${columnWidths.size}px` }}
-                    onClick={() => handleSort('size')}
-                  >
-                    <span>Size</span>
-                    {sortField === 'size' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
-                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
-                    <div 
-                      className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
-                      onMouseDown={(e) => handleResizeStart('size', e)}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
-                    </div>
-                  </div>
-                  <div 
-                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
-                    style={{ width: `${columnWidths.modified}px` }}
-                    onClick={() => handleSort('modified')}
-                  >
-                    <span>Modified</span>
-                    {sortField === 'modified' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
-                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
-                    <div 
-                      className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
-                      onMouseDown={(e) => handleResizeStart('modified', e)}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
-                    </div>
-                  </div>
-                  <div 
-                    className="flex items-center relative cursor-pointer hover:text-foreground select-none" 
-                    style={{ width: `${columnWidths.permissions}px` }}
-                    onClick={() => handleSort('permissions')}
-                  >
-                    <span>Permissions</span>
-                    {sortField === 'permissions' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
-                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
-                    <div 
-                      className="absolute right-[-4px] top-0 bottom-0 w-2 cursor-col-resize hover:bg-accent/50 group flex items-center justify-center"
-                      onMouseDown={(e) => handleResizeStart('permissions', e)}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <GripVertical className="h-3 w-3 opacity-0 group-hover:opacity-70" />
-                    </div>
-                  </div>
-                  <div 
-                    className="flex items-center cursor-pointer hover:text-foreground select-none" 
-                    style={{ width: `${columnWidths.owner}px` }}
-                    onClick={() => handleSort('owner')}
-                  >
-                    <span>Owner</span>
-                    {sortField === 'owner' ? (
-                      sortDirection === 'asc' ? <ArrowUp className="h-3 w-3 ml-1" /> : <ArrowDown className="h-3 w-3 ml-1" />
-                    ) : <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />}
-                  </div>
-                      </div>
-
                       {/* File Rows */}
                       {sortedFiles.map((file, index) => (
                         <ContextMenu key={index} onOpenChange={(open) => {
