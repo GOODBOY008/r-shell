@@ -161,37 +161,21 @@ function AppContent() {
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
-    const persist = async () => {
-      // Editor tabs are transient — exclude them from persistence
-      const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor');
-      if (persistableTabs.length === 0) {
-        ActiveConnectionsManager.clearActiveConnections();
-        return;
-      }
-      // Fetch currently active SOCKS proxies so they can be restored on next launch
-      let activeProxies: { connection_id: string; bind_address: string; bind_port: number }[] = [];
-      try {
-        activeProxies = await invoke("list_socks_proxies");
-      } catch {
-        // ignore
-      }
-      const activeConnections = persistableTabs.map((tab, index) => {
-        const tabProxies = activeProxies
-          .filter(p => p.connection_id === tab.id)
-          .map(p => ({ bind_address: p.bind_address, bind_port: p.bind_port }));
-        return {
-          tabId: tab.id,
-          connectionId: tab.id,
-          order: index,
-          originalConnectionId: tab.originalConnectionId,
-          tabType: tab.tabType,
-          protocol: tab.protocol,
-          ...(tabProxies.length > 0 ? { proxies: tabProxies } : {}),
-        };
-      });
+    // Editor tabs are transient — exclude them from persistence
+    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor');
+    if (persistableTabs.length > 0) {
+      const activeConnections = persistableTabs.map((tab, index) => ({
+        tabId: tab.id,
+        connectionId: tab.id,
+        order: index,
+        originalConnectionId: tab.originalConnectionId,
+        tabType: tab.tabType,
+        protocol: tab.protocol,
+      }));
       ActiveConnectionsManager.saveActiveConnections(activeConnections);
-    };
-    persist();
+    } else {
+      ActiveConnectionsManager.clearActiveConnections();
+    }
   }, [allTabs]);
 
   // Restore connections on mount
@@ -421,9 +405,13 @@ function AppContent() {
               }
 
               // Restore any SOCKS proxies associated with this connection
-              if (activeConn.proxies && activeConn.proxies.length > 0) {
-                for (const proxy of activeConn.proxies) {
-                  try {
+              const PROXY_STATE_KEY = "r-shell-socks-proxy-state";
+              try {
+                const raw = localStorage.getItem(PROXY_STATE_KEY);
+                if (raw) {
+                  const allProxies = JSON.parse(raw) as { connection_id: string; bind_address: string; bind_port: number }[];
+                  const myProxies = allProxies.filter(p => p.connection_id === activeConn.connectionId);
+                  for (const proxy of myProxies) {
                     const proxyId = `socks-${activeConn.connectionId}-restore-${Date.now()}-${Math.random()}`;
                     await invoke("start_socks_proxy", {
                       request: {
@@ -434,10 +422,10 @@ function AppContent() {
                       },
                     });
                     console.log(`✓ Restored SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} for ${connectionData.name}`);
-                  } catch (e) {
-                    console.warn(`Failed to restore SOCKS proxy ${proxy.bind_address}:${proxy.bind_port}:`, e);
                   }
                 }
+              } catch (e) {
+                console.warn("Failed to restore SOCKS proxies:", e);
               }
 
               restoredCount++;

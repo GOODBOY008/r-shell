@@ -6,12 +6,24 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 
+export const SOCKS_PROXY_STATE_KEY = "r-shell-socks-proxy-state";
+
 interface SocksProxyInfo {
   proxy_id: string;
   connection_id: string;
   bind_address: string;
   bind_port: number;
   active: boolean;
+}
+
+/** Persist current proxy list to localStorage so session restore can recreate them. */
+async function persistProxyState(): Promise<void> {
+  try {
+    const list = await invoke<SocksProxyInfo[]>("list_socks_proxies");
+    localStorage.setItem(SOCKS_PROXY_STATE_KEY, JSON.stringify(list));
+  } catch {
+    // ignore
+  }
 }
 
 interface PortForwardingPanelProps {
@@ -28,6 +40,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
     try {
       const list = await invoke<SocksProxyInfo[]>("list_socks_proxies");
       setProxies(list);
+      persistProxyState();
     } catch {
       // ignore
     }
@@ -62,6 +75,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
       });
       if (res.success) {
         toast.success(`SOCKS proxy started on ${bindAddress}:${res.actual_port ?? port}`);
+        await persistProxyState();
         refresh();
       } else {
         toast.error("Failed to start proxy", { description: res.error });
@@ -80,6 +94,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
       });
       if (res.success) {
         toast.success(res.output ?? "Proxy stopped");
+        await persistProxyState();
         refresh();
       } else {
         toast.error("Failed to stop proxy", { description: res.error });
