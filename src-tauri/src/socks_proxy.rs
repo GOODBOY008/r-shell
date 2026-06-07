@@ -1,9 +1,11 @@
 use anyhow::Result;
 use russh::ChannelMsg;
 use russh::client::Msg;
+use socket2::{Domain, Protocol, Socket, Type};
+use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::ssh::Client;
@@ -22,6 +24,19 @@ async fn read_until_null(stream: &mut TcpStream) -> Result<Vec<u8>> {
     }
 }
 
+/// Create a TCP listener with `SO_REUSEADDR` enabled so that restarting a
+/// SOCKS proxy on the same port works immediately, even if the previous
+/// listener's socket is still in `TIME_WAIT` (common on Windows).
+fn bind_with_reuseaddr(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
+    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
+    socket.set_reuse_address(true)?;
+    socket.bind(&addr.into())?;
+    socket.listen(128)?;
+    socket.set_nonblocking(true)?;
+    let listener = tokio::net::TcpListener::from_std(socket.into())?;
+    Ok(listener)
+}
+
 /// Start a SOCKS4/5 proxy on `bind_addr:bind_port` that forwards through the
 /// given SSH `handle`.  Returns the actual port the listener is bound to.
 ///
@@ -33,7 +48,11 @@ pub async fn start_socks_proxy(
     bind_port: u16,
     cancel: CancellationToken,
 ) -> Result<u16> {
-    let listener = TcpListener::bind(format!("{bind_addr}:{bind_port}")).await?;
+    let addr: SocketAddr = format!("{bind_addr}:{bind_port}")
+        .parse()
+        .map_err(|e| anyhow::anyhow!("Invalid bind address {bind_addr}:{bind_port}: {e}"))?;
+
+    let listener = bind_with_reuseaddr(addr)?;
     let actual_port = listener.local_addr()?.port();
 
     tracing::info!(
@@ -68,6 +87,8 @@ pub async fn start_socks_proxy(
                 }
             }
         }
+
+        tracing::debug!("SOCKS proxy accept loop exited");
     });
 
     Ok(actual_port)
@@ -123,8 +144,12 @@ async fn handle_socks_connection(
                 .channel_open_direct_tcpip(&host, port as u32, "127.0.0.1", 0)
                 .await
             {
-                Ok(ch) => ch,
+                Ok(ch) => {
+                    tracing::debug!("SSH direct-tcpip channel opened to {host}:{port}");
+                    ch
+                }
                 Err(e) => {
+                    tracing::warn!("SSH direct-tcpip failed to {host}:{port}: {e}");
                     send_socks4_reply(&mut stream, 0x5b).await?;
                     return Err(anyhow::anyhow!("SSH direct-tcpip failed: {e}"));
                 }
@@ -196,8 +221,12 @@ async fn handle_socks_connection(
                 .channel_open_direct_tcpip(&host, port as u32, "127.0.0.1", 0)
                 .await
             {
-                Ok(ch) => ch,
+                Ok(ch) => {
+                    tracing::debug!("SSH direct-tcpip channel opened to {host}:{port}");
+                    ch
+                }
                 Err(e) => {
+                    tracing::warn!("SSH direct-tcpip failed to {host}:{port}: {e}");
                     send_socks5_reply(&mut stream, 0x01).await?;
                     return Err(anyhow::anyhow!("SSH direct-tcpip failed: {e}"));
                 }
@@ -214,6 +243,12 @@ async fn handle_socks_connection(
 
 // ── bidirectional relay ─────────────────────────────────────────────────
 
+/// Relay data bidirectionally between a local TCP socket and an SSH channel.
+///
+/// Properly terminates the SSH channel:
+/// - Sends `SSH_MSG_CHANNEL_EOF` when local reads EOF
+/// - Sends `SSH_MSG_CHANNEL_CLOSE` if the server hasn't already closed
+/// - Shuts down the local socket writer on exit
 async fn relay_with_cancel(
     local: TcpStream,
     channel: russh::Channel<Msg>,
@@ -222,19 +257,33 @@ async fn relay_with_cancel(
     let (mut local_r, mut local_w) = tokio::io::split(local);
     let mut channel = channel;
     let mut buf = vec![0u8; 65536];
+    let mut server_closed = false;
+
+    tracing::debug!("relay started");
 
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => break,
+            _ = cancel.cancelled() => {
+                tracing::debug!("relay cancelled");
+                break;
+            }
             msg = channel.wait() => {
                 match msg {
-                    None => break,
+                    None => {
+                        tracing::debug!("relay channel wait returned None (closed)");
+                        server_closed = true;
+                        break;
+                    }
                     Some(ChannelMsg::Data { data }) => {
+                        tracing::trace!("relay channel -> local: {} bytes", data.len());
                         if local_w.write_all(&data[..]).await.is_err() {
+                            tracing::debug!("relay local write error (peer disconnected)");
                             break;
                         }
                     }
                     Some(ChannelMsg::Eof | ChannelMsg::Close) => {
+                        server_closed = true;
+                        tracing::debug!("relay received SSH channel close/eof");
                         let _ = local_w.shutdown().await;
                         break;
                     }
@@ -244,21 +293,34 @@ async fn relay_with_cancel(
             result = local_r.read(&mut buf) => {
                 match result {
                     Ok(0) => {
+                        tracing::debug!("relay local EOF");
                         let _ = channel.eof().await;
                         break;
                     }
                     Ok(n) => {
+                        tracing::trace!("relay local -> channel: {} bytes", n);
                         if channel.data(&buf[..n]).await.is_err() {
+                            tracing::debug!("relay channel write error");
                             break;
                         }
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::debug!("relay local read error: {e}");
+                        break;
+                    }
                 }
             }
         }
     }
 
     let _ = local_w.shutdown().await;
+
+    if !server_closed {
+        tracing::debug!("relay sending SSH channel close");
+        let _ = channel.close().await;
+    }
+
+    tracing::debug!("relay finished");
     Ok(())
 }
 
