@@ -76,7 +76,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
   const handleStop = async (proxyId: string) => {
     try {
       const res = await invoke<{ success: boolean; output?: string; error?: string }>("stop_socks_proxy", {
-        proxy_id: proxyId,
+        proxyId,
       });
       if (res.success) {
         toast.success(res.output ?? "Proxy stopped");
