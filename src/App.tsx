@@ -178,6 +178,30 @@ function AppContent() {
     }
   }, [allTabs]);
 
+  // Persist running SOCKS proxies to localStorage so they survive app restart.
+  // Only saves non-empty lists so the saved state is never overwritten by the
+  // initial "no proxies yet" read on a fresh backend.
+  const PROXY_STATE_KEY = "r-shell-socks-proxy-state";
+  useEffect(() => {
+    let cancelled = false;
+    const persist = async () => {
+      if (cancelled) return;
+      try {
+        const list = await invoke<{ connection_id: string; bind_address: string; bind_port: number }[]>("list_socks_proxies");
+        if (list.length > 0) {
+          localStorage.setItem(PROXY_STATE_KEY, JSON.stringify(list));
+        }
+      } catch {
+        // ignore
+      }
+    };
+    // Delay the first persist so the session-restore effect can read the
+    // stale saved state before we potentially overwrite it.
+    const timer = setTimeout(() => persist(), 1000);
+    const interval = setInterval(persist, 10_000);
+    return () => { cancelled = true; clearTimeout(timer); clearInterval(interval); };
+  }, []);
+
   // Restore connections on mount
   useEffect(() => {
     /** Race a promise against a timeout; rejects with a clear message on expiry. */

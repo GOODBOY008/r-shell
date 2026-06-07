@@ -40,7 +40,6 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
     try {
       const list = await invoke<SocksProxyInfo[]>("list_socks_proxies");
       setProxies(list);
-      persistProxyState();
     } catch {
       // ignore
     }
