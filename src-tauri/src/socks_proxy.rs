@@ -214,33 +214,24 @@ async fn handle_socks_connection(
 // ── bidirectional relay ─────────────────────────────────────────────────
 
 async fn relay_with_cancel(
-    mut local: TcpStream,
+    local: TcpStream,
     channel: russh::Channel<Msg>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let mut local = local;
     let mut stream = channel.into_stream();
-    let mut buf1 = vec![0u8; 65536];
-    let mut buf2 = vec![0u8; 65536];
 
-    loop {
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => break,
-            result = stream.read(&mut buf1) => {
-                let n = result.map_err(|e| anyhow::anyhow!("SSH read error: {e}"))?;
-                if n == 0 { break; }
-                local.write_all(&buf1[..n]).await
-                    .map_err(|e| anyhow::anyhow!("local write error: {e}"))?;
-            }
-            result = local.read(&mut buf2) => {
-                let n = result.map_err(|e| anyhow::anyhow!("local read error: {e}"))?;
-                if n == 0 { break; }
-                stream.write_all(&buf2[..n]).await
-                    .map_err(|e| anyhow::anyhow!("SSH write error: {e}"))?;
+    tokio::select! {
+        _ = cancel.cancelled() => {}
+        result = tokio::io::copy_bidirectional(&mut local, &mut stream) => {
+            if let Err(e) = result {
+                tracing::debug!("relay finished: {e}");
             }
         }
     }
 
+    // Gracefully close both sides
+    let _ = stream.shutdown().await;
     let _ = local.shutdown().await;
     Ok(())
 }
