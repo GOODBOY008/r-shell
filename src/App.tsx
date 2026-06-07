@@ -161,21 +161,37 @@ function AppContent() {
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
-    // Editor tabs are transient — exclude them from persistence
-    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor');
-    if (persistableTabs.length > 0) {
-      const activeConnections = persistableTabs.map((tab, index) => ({
-        tabId: tab.id,
-        connectionId: tab.id,
-        order: index,
-        originalConnectionId: tab.originalConnectionId,
-        tabType: tab.tabType,
-        protocol: tab.protocol,
-      }));
+    const persist = async () => {
+      // Editor tabs are transient — exclude them from persistence
+      const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor');
+      if (persistableTabs.length === 0) {
+        ActiveConnectionsManager.clearActiveConnections();
+        return;
+      }
+      // Fetch currently active SOCKS proxies so they can be restored on next launch
+      let activeProxies: { connection_id: string; bind_address: string; bind_port: number }[] = [];
+      try {
+        activeProxies = await invoke("list_socks_proxies");
+      } catch {
+        // ignore
+      }
+      const activeConnections = persistableTabs.map((tab, index) => {
+        const tabProxies = activeProxies
+          .filter(p => p.connection_id === tab.id)
+          .map(p => ({ bind_address: p.bind_address, bind_port: p.bind_port }));
+        return {
+          tabId: tab.id,
+          connectionId: tab.id,
+          order: index,
+          originalConnectionId: tab.originalConnectionId,
+          tabType: tab.tabType,
+          protocol: tab.protocol,
+          ...(tabProxies.length > 0 ? { proxies: tabProxies } : {}),
+        };
+      });
       ActiveConnectionsManager.saveActiveConnections(activeConnections);
-    } else {
-      ActiveConnectionsManager.clearActiveConnections();
-    }
+    };
+    persist();
   }, [allTabs]);
 
   // Restore connections on mount
@@ -402,6 +418,26 @@ function AppContent() {
                   reconnectCount: 0,
                 };
                 dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+              }
+
+              // Restore any SOCKS proxies associated with this connection
+              if (activeConn.proxies && activeConn.proxies.length > 0) {
+                for (const proxy of activeConn.proxies) {
+                  try {
+                    const proxyId = `socks-${activeConn.connectionId}-restore-${Date.now()}-${Math.random()}`;
+                    await invoke("start_socks_proxy", {
+                      request: {
+                        proxy_id: proxyId,
+                        connection_id: activeConn.connectionId,
+                        bind_address: proxy.bind_address,
+                        bind_port: proxy.bind_port,
+                      },
+                    });
+                    console.log(`✓ Restored SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} for ${connectionData.name}`);
+                  } catch (e) {
+                    console.warn(`Failed to restore SOCKS proxy ${proxy.bind_address}:${proxy.bind_port}:`, e);
+                  }
+                }
               }
 
               restoredCount++;
