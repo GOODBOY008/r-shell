@@ -5,7 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { invoke } from '@tauri-apps/api/core';
-import { loadAppearanceSettings, getThemeAwareTerminalOptions } from '../lib/terminal-config';
+import { loadAppearanceSettings, getThemeAwareTerminalOptions, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
@@ -973,6 +973,7 @@ export function PtyTerminal({
       }}
       style={{
         opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1,
+        backgroundColor: (terminalThemes[appearance.theme] || defaultTerminalTheme).background || '#1e1e1e',
       }}
     >
       {/* Background image layer */}
@@ -1001,10 +1002,10 @@ export function PtyTerminal({
         />
       )}
       
-      {/* Terminal padding wrapper — uses inset to shrink the area so FitAddon
-           measures the correct available height (padding on the terminal element
-           itself causes FitAddon to over-count rows by ~2). */}
-      <div className="absolute inset-4 z-10">
+      {/* Terminal wrapper — inset-0 fills the entire container so the terminal
+           occupies all available space. The container background matches the
+           terminal theme so any partial-row gap at the bottom is invisible. */}
+      <div className="absolute inset-0 z-10">
         <div ref={terminalRef} className="h-full w-full" />
       </div>
       <style>{`
@@ -1025,9 +1026,15 @@ export function PtyTerminal({
           border: 2px solid transparent;
           border-radius: 999px;
           background-clip: content-box;
+          min-height: 40px;
+        }
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar-thumb:hover {
+          background-color: rgba(148, 163, 184, 0.75);
         }
         .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar-track {
           background: transparent;
+          border-radius: 999px;
+          margin: 4px 0;
         }` : ''}
         /* Make xterm background transparent when background image is set */
         ${appearance.backgroundImage ? `
