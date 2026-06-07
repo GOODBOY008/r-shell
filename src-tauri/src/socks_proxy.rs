@@ -1,4 +1,5 @@
 use anyhow::Result;
+use russh::ChannelMsg;
 use russh::client::Msg;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -218,21 +219,46 @@ async fn relay_with_cancel(
     channel: russh::Channel<Msg>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut local = local;
-    let mut stream = channel.into_stream();
+    let (mut local_r, mut local_w) = tokio::io::split(local);
+    let mut channel = channel;
+    let mut buf = vec![0u8; 65536];
 
-    tokio::select! {
-        _ = cancel.cancelled() => {}
-        result = tokio::io::copy_bidirectional(&mut local, &mut stream) => {
-            if let Err(e) = result {
-                tracing::debug!("relay finished: {e}");
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            msg = channel.wait() => {
+                match msg {
+                    None => break,
+                    Some(ChannelMsg::Data { data }) => {
+                        if local_w.write_all(&data[..]).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(ChannelMsg::Eof | ChannelMsg::Close) => {
+                        let _ = local_w.shutdown().await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            result = local_r.read(&mut buf) => {
+                match result {
+                    Ok(0) => {
+                        let _ = channel.eof().await;
+                        break;
+                    }
+                    Ok(n) => {
+                        if channel.data(&buf[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
         }
     }
 
-    // Gracefully close both sides
-    let _ = stream.shutdown().await;
-    let _ = local.shutdown().await;
+    let _ = local_w.shutdown().await;
     Ok(())
 }
 
