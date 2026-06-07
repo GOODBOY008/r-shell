@@ -1041,6 +1041,33 @@ impl SshClient {
         Ok(SftpSession::new_with_config(channel.into_stream(), config).await?)
     }
 
+    /// Clone the session handle for use in SOCKS proxy / port forwarding.
+    pub fn get_session_handle(&self) -> Option<Arc<client::Handle<Client>>> {
+        self.session.clone()
+    }
+
+    /// Open a direct TCP/IP channel through the SSH server to an arbitrary
+    /// destination, as described in RFC 4254 §7.2.
+    ///
+    /// This is the low-level primitive used by SOCKS proxying.
+    pub async fn open_direct_tcpip(
+        &self,
+        host: &str,
+        port: u32,
+        origin: &str,
+        origin_port: u32,
+    ) -> Result<russh::Channel<russh::client::Msg>> {
+        match &self.session {
+            Some(session) => {
+                let channel = session
+                    .channel_open_direct_tcpip(host, port, origin, origin_port)
+                    .await?;
+                Ok(channel)
+            }
+            None => Err(anyhow::anyhow!("Not connected")),
+        }
+    }
+
     pub async fn upload_file_from_bytes(&self, data: &[u8], remote_path: &str) -> Result<u64> {
         if !self.is_connected() {
             return Err(anyhow::anyhow!("Not connected"));

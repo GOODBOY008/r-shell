@@ -8,6 +8,7 @@ import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
+import { PortForwardingPanel } from './components/port-forwarding-panel';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { HostKeyChangedDialog } from './components/host-key-changed-dialog';
@@ -377,6 +378,30 @@ function AppContent() {
       ActiveConnectionsManager.clearActiveConnections();
     }
   }, [allTabs]);
+
+  // Persist running SOCKS proxies to localStorage so they survive app restart.
+  // Only saves non-empty lists so the saved state is never overwritten by the
+  // initial "no proxies yet" read on a fresh backend.
+  const PROXY_STATE_KEY = "r-shell-socks-proxy-state";
+  useEffect(() => {
+    let cancelled = false;
+    const persist = async () => {
+      if (cancelled) return;
+      try {
+        const list = await invoke<{ connection_id: string; bind_address: string; bind_port: number }[]>("list_socks_proxies");
+        if (list.length > 0) {
+          localStorage.setItem(PROXY_STATE_KEY, JSON.stringify(list));
+        }
+      } catch {
+        // ignore
+      }
+    };
+    // Delay the first persist so the session-restore effect can read the
+    // stale saved state before we potentially overwrite it.
+    const timer = setTimeout(() => persist(), 1000);
+    const interval = setInterval(persist, 10_000);
+    return () => { cancelled = true; clearTimeout(timer); clearInterval(interval); };
+  }, []);
 
   // One-time migration: encrypt any legacy plaintext secrets still sitting in
   // localStorage (from app versions before encrypted-at-rest storage). The
@@ -2277,6 +2302,7 @@ function AppContent() {
                     <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
                     <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
+                    <TabsTrigger value="port-forwarding" className="text-xs px-2">{t('app.portForwarding')}</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
@@ -2308,6 +2334,12 @@ function AppContent() {
                           <QuickCommandsPanel activeTerminalId={activeTerminalId} />
                         </ErrorBoundary>
                       </div>
+                    </TabsContent>
+
+                    <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      <ErrorBoundary label={t('app.portForwarding')}>
+                        <PortForwardingPanel connectionId={activeConnection?.connectionId ?? null} />
+                      </ErrorBoundary>
                     </TabsContent>
                   </div>
                 </Tabs>

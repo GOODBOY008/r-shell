@@ -10,6 +10,7 @@ mod quit_guard;
 mod rdp_client;
 mod sftp_client;
 mod sftp_transfer;
+mod socks_proxy;
 mod ssh;
 mod vnc_client;
 mod websocket_server;
@@ -507,7 +508,23 @@ pub fn run() {
             commands::get_update_context,
             commands::updater_check,
             commands::updater_download_and_install,
-            // Note: PTY terminal I/O now uses WebSocket instead of IPC
+            // SOCKS proxy (Dynamic port forwarding) commands
+            commands::start_socks_proxy,
+            commands::stop_socks_proxy,
+            commands::list_socks_proxies,
+            commands::update_menu_language,
+            commands::get_system_locale,
+            // App quit guard (dirty file-editor windows + active SSH sessions)
+            commands::request_app_quit,
+            commands::confirm_app_quit,
+            commands::cancel_app_quit,
+            commands::editor_dirty_changed,
+            commands::credential_seal,
+            commands::credential_open,
+            // In-app updater (channel endpoints + Homebrew detection)
+            commands::get_update_context,
+            commands::updater_check,
+            commands::updater_download_and_install,            // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
         .build(tauri::generate_context!())
