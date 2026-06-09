@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
+import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { invoke } from '@tauri-apps/api/core';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
@@ -57,6 +58,7 @@ export function PtyTerminal({
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
   const webglAddonRef = React.useRef<WebglAddon | null>(null);
+  const clipboardAddonRef = React.useRef<ClipboardAddon | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const initialIsActiveRef = React.useRef(isActive);
   const wasActiveRef = React.useRef(isActive);
@@ -114,13 +116,19 @@ export function PtyTerminal({
   const pasteClipboardIntoPty = React.useCallback(async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (text && !sendInputToPty(text)) {
+      if (!text) return;
+      const term = xtermRef.current;
+      if (!term) {
         toast.error('Terminal not connected');
+        return;
       }
+      // term.paste() routes through xterm's onData handler,
+      // which calls sendInputToPty with proper bracketed paste wrapping
+      term.paste(text);
     } catch (_error) {
       toast.error('Failed to read from clipboard');
     }
-  }, [sendInputToPty]);
+  }, []);
 
   // Get appearance settings - reloads when appearanceKey changes
   const appearance = React.useMemo(() => loadAppearanceSettings(), [appearanceKey]);
@@ -154,6 +162,9 @@ export function PtyTerminal({
     term.loadAddon(fitAddon);
     term.loadAddon(webLinks);
     term.loadAddon(searchAddon);
+    const clipboardAddon = new ClipboardAddon();
+    term.loadAddon(clipboardAddon);
+    clipboardAddonRef.current = clipboardAddon;
     
     term.open(terminalRef.current);
     
@@ -204,7 +215,14 @@ export function PtyTerminal({
     term.onSelectionChange(() => {
       setHasSelection(term.hasSelection());
     });
-    
+
+    // NOTE: No custom paste event listener needed — xterm.js registers its own
+    // paste handler on the textarea that reads clipboard data, applies bracketed
+    // paste mode wrapping (ESC[200~/ESC[201~), and fires onData → sendInputToPty.
+    // Adding a second listener here caused double-paste on Ctrl+V.
+    // The context menu paste path (handlePaste → pasteClipboardIntoPty → term.paste())
+    // remains intact for right-click paste.
+
     // Custom key event handler to allow certain shortcuts to pass through to the app
     term.attachCustomKeyEventHandler((event) => {
       // During IME composition (Chinese/Japanese/Korean input methods, or any
@@ -222,6 +240,14 @@ export function PtyTerminal({
         return true;
       }
 
+      // xterm.js invokes this handler for keydown, keypress, AND keyup events.
+      // Without this guard, clipboard shortcuts (Ctrl+C copy, Ctrl+V paste, etc.)
+      // fire once per event type — causing 2-3× duplicate operations.
+      // Only process keydown; let xterm handle keypress/keyup normally.
+      if (event.type !== 'keydown') {
+        return true;
+      }
+
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modKey = isMac ? event.metaKey : event.ctrlKey;
       const key = event.key.toLowerCase();
@@ -236,12 +262,6 @@ export function PtyTerminal({
         return false;
       }
 
-      if (modKey && key === 'v') {
-        event.preventDefault();
-        void pasteClipboardIntoPty();
-        return false;
-      }
-      
       // Handle search shortcut
       if (modKey && key === 'f') {
         event.preventDefault();
@@ -784,10 +804,14 @@ export function PtyTerminal({
         try { webglAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
         webglAddonRef.current = null;
       }
+      if (clipboardAddonRef.current) {
+        try { clipboardAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
+        clipboardAddonRef.current = null;
+      }
       term.reset(); // clear scrollback + viewport so GC can reclaim xterm buffers sooner
       term.dispose();
     };
-  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey, pasteClipboardIntoPty, sendInputToPty]);
+  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey, sendInputToPty]);
   // NOTE: themeKey and appearanceKey are intentionally NOT in the deps above.
   // Including them would tear down the WebSocket + PTY session on every theme
   // change (e.g. macOS auto Dark/Light switch), killing any running remote
