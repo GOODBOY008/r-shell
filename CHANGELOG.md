@@ -5,8 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.1] - 2026-06-09
 
+### 🖥️ R-Shell 2.1.1 — Terminal & File Browser Fixes
+
+### Fixed
+
+- 🖥️ **Duplicate Paste Prevention**: Terminal paste operations no longer insert duplicate content when using keyboard or middle-click paste
+- 🖥️ **Terminal Background & Layout Styling**: Enhanced PTY terminal background rendering and layout for improved visual clarity
+- 📁 **File Browser Layout Responsiveness**: Improved file list panel layout and resize behavior for a more consistent browsing experience
 
 ## [2.1.0] - 2026-06-04
 
