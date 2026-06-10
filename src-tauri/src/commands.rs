@@ -523,7 +523,11 @@ pub async fn rename_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("mv '{}' '{}'", shell_escape_single_quoted(&old_path), shell_escape_single_quoted(&new_path));
+    let command = format!(
+        "mv '{}' '{}'",
+        shell_escape_single_quoted(&old_path),
+        shell_escape_single_quoted(&new_path)
+    );
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
