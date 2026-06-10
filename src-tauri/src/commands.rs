@@ -3078,6 +3078,82 @@ pub async fn desktop_resize(
     c.resize(width, height).await.map_err(|e| e.to_string())
 }
 
+// ========== SOCKS Proxy Commands ==========
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StartSocksProxyRequest {
+    pub proxy_id: String,
+    pub connection_id: String,
+    pub bind_address: Option<String>,
+    pub bind_port: u16,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StartSocksProxyResponse {
+    pub success: bool,
+    pub actual_port: Option<u16>,
+    pub error: Option<String>,
+}
+
+/// Start a SOCKS4/5 proxy through an existing SSH connection.
+/// This is equivalent to Xshell's "Dynamic (SOCKS4/5)" port forwarding.
+#[tauri::command]
+pub async fn start_socks_proxy(
+    request: StartSocksProxyRequest,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<StartSocksProxyResponse, String> {
+    let bind_address = request.bind_address.unwrap_or_else(|| "127.0.0.1".to_string());
+
+    match state
+        .start_socks_proxy(
+            request.proxy_id,
+            &request.connection_id,
+            bind_address,
+            request.bind_port,
+        )
+        .await
+    {
+        Ok(port) => Ok(StartSocksProxyResponse {
+            success: true,
+            actual_port: Some(port),
+            error: None,
+        }),
+        Err(e) => Ok(StartSocksProxyResponse {
+            success: false,
+            actual_port: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+/// Stop a running SOCKS proxy by ID.
+#[tauri::command]
+pub async fn stop_socks_proxy(
+    proxy_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    match state.stop_socks_proxy(&proxy_id).await {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some(format!("SOCKS proxy '{}' stopped", proxy_id)),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+/// List all active SOCKS proxies.
+#[tauri::command]
+pub async fn list_socks_proxies(
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<Vec<crate::connection_manager::SocksProxyInfo>, String> {
+    Ok(state.list_socks_proxies().await)
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]

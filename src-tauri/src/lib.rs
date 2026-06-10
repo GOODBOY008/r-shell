@@ -5,6 +5,7 @@ mod ftp_client;
 mod os_detect;
 mod rdp_client;
 mod sftp_client;
+mod socks_proxy;
 mod ssh;
 mod vnc_client;
 mod websocket_server;
@@ -273,6 +274,10 @@ pub fn run() {
             commands::desktop_request_frame,
             commands::desktop_set_clipboard,
             commands::desktop_resize,
+            // SOCKS proxy (Dynamic port forwarding) commands
+            commands::start_socks_proxy,
+            commands::stop_socks_proxy,
+            commands::list_socks_proxies,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])

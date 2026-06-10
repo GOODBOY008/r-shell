@@ -5,6 +5,7 @@ import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
+import { PortForwardingPanel } from './components/port-forwarding-panel';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { SettingsModal } from './components/settings-modal';
@@ -176,6 +177,30 @@ function AppContent() {
       ActiveConnectionsManager.clearActiveConnections();
     }
   }, [allTabs]);
+
+  // Persist running SOCKS proxies to localStorage so they survive app restart.
+  // Only saves non-empty lists so the saved state is never overwritten by the
+  // initial "no proxies yet" read on a fresh backend.
+  const PROXY_STATE_KEY = "r-shell-socks-proxy-state";
+  useEffect(() => {
+    let cancelled = false;
+    const persist = async () => {
+      if (cancelled) return;
+      try {
+        const list = await invoke<{ connection_id: string; bind_address: string; bind_port: number }[]>("list_socks_proxies");
+        if (list.length > 0) {
+          localStorage.setItem(PROXY_STATE_KEY, JSON.stringify(list));
+        }
+      } catch {
+        // ignore
+      }
+    };
+    // Delay the first persist so the session-restore effect can read the
+    // stale saved state before we potentially overwrite it.
+    const timer = setTimeout(() => persist(), 1000);
+    const interval = setInterval(persist, 10_000);
+    return () => { cancelled = true; clearTimeout(timer); clearInterval(interval); };
+  }, []);
 
   // Restore connections on mount
   useEffect(() => {
@@ -401,6 +426,30 @@ function AppContent() {
                   reconnectCount: 0,
                 };
                 dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+              }
+
+              // Restore any SOCKS proxies associated with this connection
+              const PROXY_STATE_KEY = "r-shell-socks-proxy-state";
+              try {
+                const raw = localStorage.getItem(PROXY_STATE_KEY);
+                if (raw) {
+                  const allProxies = JSON.parse(raw) as { connection_id: string; bind_address: string; bind_port: number }[];
+                  const myProxies = allProxies.filter(p => p.connection_id === activeConn.connectionId);
+                  for (const proxy of myProxies) {
+                    const proxyId = `socks-${activeConn.connectionId}-restore-${Date.now()}-${Math.random()}`;
+                    await invoke("start_socks_proxy", {
+                      request: {
+                        proxy_id: proxyId,
+                        connection_id: activeConn.connectionId,
+                        bind_address: proxy.bind_address,
+                        bind_port: proxy.bind_port,
+                      },
+                    });
+                    console.log(`✓ Restored SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} for ${connectionData.name}`);
+                  }
+                }
+              } catch (e) {
+                console.warn("Failed to restore SOCKS proxies:", e);
               }
 
               restoredCount++;
@@ -1657,6 +1706,7 @@ function AppContent() {
                   <TabsList className="inline-flex w-auto mx-1 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
+                    <TabsTrigger value="port-forwarding" className="text-xs px-2">Port Fwd</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
@@ -1680,6 +1730,12 @@ function AppContent() {
                           />
                         </ErrorBoundary>
                       ) : null}
+                    </TabsContent>
+
+                    <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      <ErrorBoundary label="Port Forwarding">
+                        <PortForwardingPanel connectionId={activeConnection?.connectionId ?? null} />
+                      </ErrorBoundary>
                     </TabsContent>
                   </div>
                 </Tabs>
