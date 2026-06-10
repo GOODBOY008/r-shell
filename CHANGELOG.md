@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-06-10
+
+### 📂 R-Shell 2.2 — OS-Native File Drag & Drop
+
+This release adds OS-native drag-and-drop support for mixed files and folders, with reliable coordinate event fallback handling.
+
+### Added
+
+- 📂 **OS-Native File & Folder Drag-and-Drop**: Terminal now supports mixed file and folder drag-and-drop from the OS, with improved coordinate event fallback for cross-platform reliability
+
+### Fixed
+
+- 🖥️ **File Drop Coordinate Handling**: Resolved unreliable drag event coordinate extraction by implementing a multi-level `clientX`/`clientY` fallback chain across `dragOver`, `dragEnter`, and `drop` events
+
+### Changed
+
+- 🎨 **Right Sidebar Tab Styling**: Adjusted tabs padding and overflow styles for a cleaner sidebar appearance
+
 ## [2.1.1] - 2026-06-09
 
 ### 🖥️ R-Shell 2.1.1 — Terminal & File Browser Fixes
