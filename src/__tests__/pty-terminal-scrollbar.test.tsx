@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
     getSelection = vi.fn(() => '');
     selectAll = vi.fn();
     clear = vi.fn();
+    reset = vi.fn();
     dispose = vi.fn();
   }
 
@@ -81,7 +82,7 @@ vi.mock('@xterm/addon-web-links', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function WebglAddon() {
-    return { dispose: vi.fn() };
+    return { dispose: vi.fn(), onContextLoss: vi.fn() };
   }),
 }));
 
@@ -99,16 +100,26 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 vi.mock('../lib/terminal-config', () => ({
+  defaultTerminalTheme: {
+    background: '#000000',
+  },
+  terminalThemes: {
+    'vs-code-dark': {
+      background: '#000000',
+    },
+  },
   loadAppearanceSettings: vi.fn(() => ({
     allowTransparency: false,
     backgroundImage: '',
     opacity: 100,
+    theme: 'vs-code-dark',
   })),
   getThemeAwareTerminalOptions: vi.fn(() => ({
     cursorBlink: true,
     cursorStyle: 'block',
     fontFamily: 'monospace',
     fontSize: 14,
+    scrollback: 10000,
     theme: {},
   })),
 }));

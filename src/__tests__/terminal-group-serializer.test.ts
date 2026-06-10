@@ -28,6 +28,7 @@ function makeState(): TerminalGroupState {
       '1': { id: '1', tabs: [makeTab('t1')], activeTabId: 't1' },
     },
     activeGroupId: '1',
+    tabToGroupMap: { t1: '1' },
     gridLayout: { type: 'leaf', groupId: '1' },
     nextGroupId: 2,
   };

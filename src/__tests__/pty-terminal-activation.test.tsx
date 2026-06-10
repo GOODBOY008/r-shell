@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
     getSelection = vi.fn(() => '');
     selectAll = vi.fn();
     clear = vi.fn();
+    reset = vi.fn();
     dispose = vi.fn();
   }
 
@@ -88,7 +89,7 @@ vi.mock('@xterm/addon-web-links', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function WebglAddon() {
-    return { dispose: vi.fn() };
+    return { dispose: vi.fn(), onContextLoss: vi.fn() };
   }),
 }));
 
@@ -106,16 +107,26 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 vi.mock('../lib/terminal-config', () => ({
+  defaultTerminalTheme: {
+    background: '#000000',
+  },
+  terminalThemes: {
+    'vs-code-dark': {
+      background: '#000000',
+    },
+  },
   loadAppearanceSettings: vi.fn(() => ({
     allowTransparency: false,
     backgroundImage: '',
     opacity: 100,
+    theme: 'vs-code-dark',
   })),
   getThemeAwareTerminalOptions: vi.fn(() => ({
     cursorBlink: true,
     cursorStyle: 'block',
     fontFamily: 'monospace',
     fontSize: 14,
+    scrollback: 10000,
     theme: {},
   })),
 }));
@@ -273,7 +284,8 @@ describe('PtyTerminal activation', () => {
     expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
   });
 
-  it('pastes clipboard text into the PTY with Ctrl+V', async () => {
+  it('lets xterm handle Ctrl+V paste without duplicate custom send', async () => {
+    const readText = vi.fn().mockResolvedValue('pasted text');
     Object.defineProperty(navigator, 'platform', {
       configurable: true,
       value: 'Win32',
@@ -281,7 +293,7 @@ describe('PtyTerminal activation', () => {
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
-        readText: vi.fn().mockResolvedValue('pasted text'),
+        readText,
       },
     });
     renderTerminal(true);
@@ -291,6 +303,7 @@ describe('PtyTerminal activation', () => {
 
     const preventDefault = vi.fn();
     const handled = getCustomKeyHandler()({
+      type: 'keydown',
       key: 'v',
       ctrlKey: true,
       metaKey: false,
@@ -298,16 +311,13 @@ describe('PtyTerminal activation', () => {
     } as unknown as KeyboardEvent);
     await flushPromises();
 
-    expect(handled).toBe(false);
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(mocks.webSockets[0].send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'Input',
-      connection_id: 'connection-1',
-      data: Array.from(new TextEncoder().encode('pasted text')),
-    }));
+    expect(handled).toBe(true);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
   });
 
-  it('pastes clipboard text into the PTY with Command+V on macOS', async () => {
+  it('lets xterm handle Command+V paste without duplicate custom send on macOS', async () => {
+    const readText = vi.fn().mockResolvedValue('mac paste');
     Object.defineProperty(navigator, 'platform', {
       configurable: true,
       value: 'MacIntel',
@@ -315,7 +325,7 @@ describe('PtyTerminal activation', () => {
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
       value: {
-        readText: vi.fn().mockResolvedValue('mac paste'),
+        readText,
       },
     });
     renderTerminal(true);
@@ -325,6 +335,7 @@ describe('PtyTerminal activation', () => {
 
     const preventDefault = vi.fn();
     const handled = getCustomKeyHandler()({
+      type: 'keydown',
       key: 'v',
       ctrlKey: false,
       metaKey: true,
@@ -332,12 +343,8 @@ describe('PtyTerminal activation', () => {
     } as unknown as KeyboardEvent);
     await flushPromises();
 
-    expect(handled).toBe(false);
-    expect(preventDefault).toHaveBeenCalledOnce();
-    expect(mocks.webSockets[0].send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'Input',
-      connection_id: 'connection-1',
-      data: Array.from(new TextEncoder().encode('mac paste')),
-    }));
+    expect(handled).toBe(true);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
   });
 });

@@ -26,7 +26,9 @@ import {
   defaultAppearanceSettings, 
   loadAppearanceSettings,
   saveAppearanceSettings,
-  terminalThemes 
+  terminalThemes,
+  MIN_TERMINAL_SCROLLBACK,
+  MAX_TERMINAL_SCROLLBACK,
 } from '../lib/terminal-config';
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -356,8 +358,8 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                   <Slider
                     value={[terminalAppearance.scrollback]}
                     onValueChange={([value]) => updateTerminalAppearance('scrollback', value)}
-                    min={1000}
-                    max={100000}
+                    min={MIN_TERMINAL_SCROLLBACK}
+                    max={MAX_TERMINAL_SCROLLBACK}
                     step={1000}
                   />
                 </div>
