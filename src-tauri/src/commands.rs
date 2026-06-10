@@ -2650,6 +2650,55 @@ pub async fn open_in_os(path: String) -> Result<(), String> {
     open::that(&path).map_err(|e| format!("Failed to open '{}': {}", path, e))
 }
 
+/// Metadata for a local path. Returned by `stat_local_path` so the frontend can
+/// cheaply decide (without recursing) whether a dropped filesystem entry is a
+/// file or a directory before building an upload plan.
+///
+/// `is_symlink` is true iff the path itself is a symlink (we read the link's own
+/// metadata). `is_directory` / `size` follow the link's target; if the target is
+/// missing (broken link or network share down) we fall back to the link's own
+/// metadata so `exists` stays true and the path is treated as a file (size 0).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalPathStat {
+    pub exists: bool,
+    pub is_directory: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub async fn stat_local_path(path: String) -> Result<LocalPathStat, String> {
+    use std::fs;
+    let p = std::path::Path::new(&path);
+    // `symlink_metadata` never follows the link — works on Windows without the
+    // SE_CREATE_SYMBOLIC_LINK privilege.
+    let sym = match fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(_) => {
+            return Ok(LocalPathStat {
+                exists: false,
+                is_directory: false,
+                is_symlink: false,
+                size: 0,
+            })
+        }
+    };
+    let is_symlink = sym.file_type().is_symlink();
+    // Follow the link; if the target is missing (broken link, unmounted share,
+    // etc.) fall back to the link's own metadata so `exists` stays true and we
+    // still surface the entry as a (zero-byte) file to the upload pipeline.
+    let md = match fs::metadata(p) {
+        Ok(m) => m,
+        Err(_) => sym,
+    };
+    Ok(LocalPathStat {
+        exists: true,
+        is_directory: md.is_dir(),
+        is_symlink,
+        size: if md.is_file() { md.len() } else { 0 },
+    })
+}
+
 // ========== Directory Synchronization ==========
 
 /// A file entry with a relative path (used for recursive listing comparisons).

@@ -12,9 +12,13 @@ import {
 import {
   buildDirectoryUploadPlan,
   buildFileUploadItems,
+  buildMixedDropUploadPlan,
+  type DroppedPathStat,
+  type LocalPathStat,
   type LocalRecursiveUploadEntry,
   type UploadQueueInput,
 } from '@/lib/upload-paths';
+import { useWebviewFileDrop } from '@/lib/use-webview-file-drop';
 import { TransferQueue } from './transfer-queue';
 import { DirectoryTree } from './directory-tree';
 import {
@@ -150,9 +154,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   
-  // Drag and drop state
-  const [isDraggingOver, setIsDraggingOver] = useState(false);
-  const [_dragCounter, setDragCounter] = useState(0);
+  // Drag and drop state — driven by the `useWebviewFileDrop` hook below,
+  // which owns the global Tauri `onDragDropEvent` subscription.
 
   // Navigation history state (back/forward)
   const [navHistory, setNavHistory] = useState<string[]>(['/home']);
@@ -1134,83 +1137,120 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
-  // Drag and drop handlers
-  const handleDragEnter = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragCounter(prev => prev + 1);
-    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-      setIsDraggingOver(true);
-    }
-  };
+  // Drag and drop: the hook owns the Tauri `onDragDropEvent` subscription and
+  // hit-tests `event.position` (physical px → CSS px) against `dropZoneRef`.
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+  // Stable ref to the hook's `clearDragOver`; captured via ref so the drop
+  // handler can clear the overlay defensively without creating a circular
+  // callback dependency (the hook takes `handleOsFilesDropped` as `onDrop`,
+  // and we need to call `clearDragOver` from inside that same handler).
+  const clearDragOverRef = useRef<() => void>(() => {});
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragCounter(prev => {
-      const newCount = prev - 1;
-      if (newCount === 0) {
-        setIsDraggingOver(false);
+  const handleOsFilesDropped = useCallback(async (paths: string[]) => {
+    // Defensive: clear the overlay immediately before any async work. The hook
+    // already clears on `drop`, but some OS/driver combinations never deliver
+    // the drop event (observed intermittently on macOS) and the overlay would
+    // otherwise remain visible until the 10 s safety timer fires.
+    clearDragOverRef.current();
+    if (!isConnected || paths.length === 0) return;
+    try {
+      // Stat each path in parallel so we know which are files vs directories.
+      const stats = await Promise.all(
+        paths.map((p) =>
+          invoke<LocalPathStat>("stat_local_path", { path: p }),
+        ),
+      );
+
+      // Recurse each dropped directory in parallel to gather entries.
+      const directoryEntries = await Promise.all(
+        stats.map(async (s, idx) => {
+          if (!s.is_directory) return undefined;
+          try {
+            return await invoke<LocalRecursiveUploadEntry[]>(
+              "list_local_files_recursive",
+              { path: paths[idx], excludePatterns: [] },
+            );
+          } catch (err) {
+            console.error(
+              `list_local_files_recursive(${paths[idx]}) failed:`,
+              err,
+            );
+            return [];
+          }
+        }),
+      );
+
+      const dropped: DroppedPathStat[] = paths.map((p, i) => ({
+        path: p,
+        stat: stats[i],
+        entries: directoryEntries[i] ?? undefined,
+      }));
+
+      const plan = buildMixedDropUploadPlan(dropped, currentPath);
+
+      // Create remote directories in order (depth-first). Shell quoting is
+      // handled on the Rust side; failures are accumulated and reported.
+      let createdDirectoryCount = 0;
+      const dirErrors: string[] = [];
+      for (const remoteDirectory of plan.directories) {
+        try {
+          await invoke<boolean>("create_directory", {
+            connectionId,
+            path: remoteDirectory,
+          });
+          createdDirectoryCount += 1;
+        } catch (err) {
+          dirErrors.push(
+            `${remoteDirectory}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
-      return newCount;
-    });
-  };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDraggingOver(false);
-    setDragCounter(0);
-
-    const items = Array.from(e.dataTransfer.items);
-    if (items.length === 0) return;
-
-    // Check for directory drops
-    const hasDirectory = items.some(item => {
-      const entry = item.webkitGetAsEntry?.();
-      return entry?.isDirectory;
-    });
-    if (hasDirectory) {
-      toast.info('Directory drag-and-drop is not supported yet. Use the upload folder button.');
-      return;
-    }
-
-    const droppedFiles = Array.from(e.dataTransfer.files).filter(f => f.size > 0);
-    if (droppedFiles.length === 0) return;
-
-    // In Tauri, dropped files have a `path` property with the local filesystem path
-    const fileItems: Array<{ fileName: string; sourcePath: string; totalBytes: number }> = [];
-    for (const file of droppedFiles) {
-      // Tauri provides the file path via File.path
-      const filePath = (file as File & { path?: string }).path;
-      if (filePath) {
-        fileItems.push({
-          fileName: file.name,
-          sourcePath: filePath,
-          totalBytes: file.size,
+      if (dirErrors.length > 0) {
+        toast.warning(`${dirErrors.length} directory creation(s) failed`, {
+          description: dirErrors.slice(0, 3).join("\n"),
         });
       }
+
+      if (plan.items.length > 0) {
+        dispatchTransfer({ type: "ENQUEUE", items: plan.items });
+        toast.info(
+          `Queued ${plan.items.length} file(s) for upload to ${currentPath}` +
+            (createdDirectoryCount > 0
+              ? `; created ${createdDirectoryCount} folder(s)`
+              : ""),
+        );
+      } else if (dirErrors.length === 0 && plan.skipped.length === 0) {
+        // Nothing to upload — refresh the listing in case folders were created.
+        void loadFiles();
+        if (createdDirectoryCount > 0) {
+          toast.info(`Created ${createdDirectoryCount} remote folder(s)`);
+        }
+      }
+
+      if (plan.skipped.length > 0) {
+        toast.warning(
+          `${plan.skipped.length} dropped path(s) could not be uploaded`,
+          { description: plan.skipped.slice(0, 3).map((s) => s.path).join("\n") },
+        );
+      }
+    } catch (error) {
+      console.error("OS drop handler error:", error);
+      toast.error("Drop upload failed", {
+        description:
+          error instanceof Error ? error.message : "Unable to process dropped files.",
+      });
     }
+  }, [connectionId, currentPath, isConnected, loadFiles]);
 
-    if (fileItems.length === 0) return;
-
-    dispatchTransfer({
-      type: "ENQUEUE",
-      items: fileItems.map((f) => ({
-        fileName: f.fileName,
-        direction: "upload" as const,
-        sourcePath: f.sourcePath,
-        destinationPath: currentPath === '/' ? `/${f.fileName}` : `${currentPath}/${f.fileName}`,
-        totalBytes: f.totalBytes,
-      })),
-    });
-    toast.info(`Queued ${fileItems.length} file(s) for upload to ${currentPath}`);
-  };
+  const { isDragOver: isDraggingOver, clearDragOver } = useWebviewFileDrop({
+    enabled: isConnected,
+    targetRef: dropZoneRef,
+    onDrop: handleOsFilesDropped,
+    priority: 0,
+  });
+  // Keep the ref in sync with the latest clearDragOver identity.
+  clearDragOverRef.current = clearDragOver;
 
   const filteredFiles = files.filter(file => 
     file.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -1276,7 +1316,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   return (
     <div className={`h-full flex flex-col bg-background border-t ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
       {/* File Browser Toolbar */}
-      <div className="relative z-10 px-2 pt-2 pb-1">
+      <div className="relative z-10 pt-2 pb-1">
         <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border/70 bg-background/90 px-1.5 py-1 text-xs shadow-sm backdrop-blur-sm scrollbar-none">
           {/* Back */}
           <Button
@@ -1410,7 +1450,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       </div>
 
       {/* File List + Directory Tree */}
-      <div className="min-h-0 flex-1 px-2 pb-2">
+      <div className="min-h-0 flex-1 pb-2">
         <ResizablePanelGroup
           direction="horizontal"
           autoSaveId="integrated-file-browser-split"
@@ -1442,18 +1482,15 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           {/* File list panel */}
           <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
             <div
+              ref={dropZoneRef}
               className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm"
-              onDragEnter={handleDragEnter}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
             >
               {/* Drag overlay */}
               {isDraggingOver && (
                 <div className="absolute inset-0 bg-accent/20 border-2 border-dashed border-primary z-50 flex items-center justify-center pointer-events-none">
                   <div className="bg-background/90 rounded-lg p-6 shadow-lg">
                     <Upload className="h-12 w-12 mx-auto mb-3 text-primary" />
-                    <p className="font-medium">Drop files to upload</p>
+                    <p className="font-medium">Drop files or folders to upload</p>
                     <p className="text-sm text-muted-foreground mt-1">Upload to {currentPath}</p>
                   </div>
                 </div>

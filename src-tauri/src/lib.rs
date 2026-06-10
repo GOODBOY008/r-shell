@@ -261,6 +261,7 @@ pub fn run() {
             commands::rename_local_item,
             commands::create_local_directory,
             commands::open_in_os,
+            commands::stat_local_path,
             // Directory synchronization commands
             commands::list_local_files_recursive,
             commands::list_remote_files_recursive,

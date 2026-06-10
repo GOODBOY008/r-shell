@@ -24,6 +24,12 @@ import {
   transferQueueReducer,
   getNextQueuedTransfer,
 } from "@/lib/transfer-queue-reducer";
+import {
+  buildMixedDropUploadPlan,
+  type DroppedPathStat,
+  type LocalPathStat,
+  type LocalRecursiveUploadEntry,
+} from "@/lib/upload-paths";
 
 // ---------- Types ----------
 
@@ -241,6 +247,116 @@ export function FileBrowserView({
       toast.info(`Queued ${fileItems.length} file(s) for upload`);
     },
     [],
+  );
+
+  // ------ OS-native file drop onto the remote panel ------
+  // Stat each path in parallel, recurse each dropped directory, build a single
+  // upload plan, create remote directories depth-first, then enqueue files.
+  const handleOsFilesDropped = useCallback(
+    async (paths: string[]) => {
+      if (!isConnected || paths.length === 0) return;
+      const remotePath = remotePanelRef.current?.getCurrentPath() ?? "/";
+      try {
+        const stats = await Promise.all(
+          paths.map((p) =>
+            invoke<LocalPathStat>("stat_local_path", { path: p }),
+          ),
+        );
+        const directoryEntries = await Promise.all(
+          stats.map(async (s, idx) => {
+            if (!s.is_directory) return undefined;
+            try {
+              return await invoke<LocalRecursiveUploadEntry[]>(
+                "list_local_files_recursive",
+                { path: paths[idx], excludePatterns: [] },
+              );
+            } catch (err) {
+              console.error(
+                `list_local_files_recursive(${paths[idx]}) failed:`,
+                err,
+              );
+              return [];
+            }
+          }),
+        );
+
+        const dropped: DroppedPathStat[] = paths.map((p, i) => ({
+          path: p,
+          stat: stats[i],
+          entries: directoryEntries[i] ?? undefined,
+        }));
+        const plan = buildMixedDropUploadPlan(dropped, remotePath);
+
+        // Create remote directories depth-first. `create_remote_directory`
+        // returns { success, error? } rather than throwing, so we accumulate
+        // failures into a single warning toast.
+        let createdDirectoryCount = 0;
+        const dirErrors: string[] = [];
+        for (const remoteDirectory of plan.directories) {
+          try {
+            const result = await invoke<{
+              success: boolean;
+              error?: string;
+            }>("create_remote_directory", {
+              connectionId,
+              path: remoteDirectory,
+            });
+            if (result.success) {
+              createdDirectoryCount += 1;
+            } else {
+              dirErrors.push(
+                `${remoteDirectory}: ${result.error ?? "create failed"}`,
+              );
+            }
+          } catch (err) {
+            dirErrors.push(
+              `${remoteDirectory}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+
+        if (dirErrors.length > 0) {
+          toast.warning(`${dirErrors.length} directory creation(s) failed`, {
+            description: dirErrors.slice(0, 3).join("\n"),
+          });
+        }
+
+        if (plan.items.length > 0) {
+          dispatchTransfer({ type: "ENQUEUE", items: plan.items });
+          toast.info(
+            `Queued ${plan.items.length} file(s) for upload to ${remotePath}` +
+              (createdDirectoryCount > 0
+                ? `; created ${createdDirectoryCount} folder(s)`
+                : ""),
+          );
+        } else if (dirErrors.length === 0 && plan.skipped.length === 0) {
+          // Folder(s) were empty — refresh listing.
+          remotePanelRef.current?.refresh();
+          if (createdDirectoryCount > 0) {
+            toast.info(`Created ${createdDirectoryCount} remote folder(s)`);
+          }
+        }
+
+        if (plan.skipped.length > 0) {
+          toast.warning(
+            `${plan.skipped.length} dropped path(s) could not be uploaded`,
+            {
+              description: plan.skipped
+                .slice(0, 3)
+                .map((s) => s.path)
+                .join("\n"),
+            },
+          );
+        }
+      } catch (err) {
+        console.error("OS drop handler error:", err);
+        toast.error("Drop upload failed", {
+          description:
+            err instanceof Error ? err.message : "Unable to process dropped files.",
+        });
+      }
+    },
+    [connectionId, isConnected],
   );
 
   const enqueueDownload = useCallback(
@@ -505,6 +621,7 @@ export function FileBrowserView({
               onFocus={() => setActivePanel("remote")}
               showPermissions={true}
               disabled={!isConnected}
+              onOsFilesDropped={handleOsFilesDropped}
             />
           </ResizablePanel>
         </ResizablePanelGroup>

@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildDirectoryUploadPlan,
   buildFileUploadItems,
+  buildMixedDropUploadPlan,
   getLocalPathBasename,
   joinRemotePath,
   normalizeRelativeUploadPath,
+  type DroppedPathStat,
 } from "../lib/upload-paths";
 
 describe("getLocalPathBasename", () => {
@@ -225,5 +227,209 @@ describe("buildDirectoryUploadPlan", () => {
     for (let i = 1; i < depths.length; i++) {
       expect(depths[i]).toBeGreaterThanOrEqual(depths[i - 1]);
     }
+  });
+});
+
+describe("buildMixedDropUploadPlan", () => {
+  const stat = (overrides: Partial<DroppedPathStat["stat"]> = {}): DroppedPathStat["stat"] => ({
+    exists: true,
+    is_directory: false,
+    is_symlink: false,
+    size: 0,
+    ...overrides,
+  });
+
+  it("returns an empty plan when given no paths", () => {
+    const plan = buildMixedDropUploadPlan([], "/remote");
+    expect(plan.directories).toEqual([]);
+    expect(plan.items).toEqual([]);
+    expect(plan.skipped).toEqual([]);
+  });
+
+  it("uploads a single Unix file using its basename and stat size", () => {
+    const plan = buildMixedDropUploadPlan(
+      [{ path: "/home/me/notes.md", stat: stat({ size: 123 }) }],
+      "/srv",
+    );
+    expect(plan.directories).toEqual([]);
+    expect(plan.skipped).toEqual([]);
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]).toEqual({
+      fileName: "notes.md",
+      direction: "upload",
+      sourcePath: "/home/me/notes.md",
+      destinationPath: "/srv/notes.md",
+      totalBytes: 123,
+    });
+  });
+
+  it("uploads a single Windows file preserving backslashes in sourcePath", () => {
+    const plan = buildMixedDropUploadPlan(
+      [
+        {
+          path: "C:\\Users\\me\\Downloads\\report.pdf",
+          stat: stat({ size: 4096 }),
+        },
+      ],
+      "/remote",
+    );
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0].sourcePath).toBe(
+      "C:\\Users\\me\\Downloads\\report.pdf",
+    );
+    // Remote path uses forward slashes only.
+    expect(plan.items[0].destinationPath).toBe("/remote/report.pdf");
+    expect(plan.items[0].destinationPath).not.toContain("\\");
+    expect(plan.items[0].totalBytes).toBe(4096);
+  });
+
+  it("handles a single folder with nested files (depth-first directories)", () => {
+    const plan = buildMixedDropUploadPlan(
+      [
+        {
+          path: "/home/me/project",
+          stat: stat({ is_directory: true }),
+          entries: [
+            { relative_path: "src/main.rs", name: "main.rs", size: 100, file_type: "File" },
+            { relative_path: "src", name: "src", size: 0, file_type: "Directory" },
+            { relative_path: "README.md", name: "README.md", size: 50, file_type: "File" },
+          ],
+        },
+      ],
+      "/var/www",
+    );
+    expect(plan.skipped).toEqual([]);
+    expect(plan.directories).toEqual([
+      "/var/www/project",
+      "/var/www/project/src",
+    ]);
+    expect(plan.items.map((i) => i.destinationPath)).toEqual(
+      expect.arrayContaining([
+        "/var/www/project/README.md",
+        "/var/www/project/src/main.rs",
+      ]),
+    );
+  });
+
+  it("combines a file + folder + missing path into one plan", () => {
+    const plan = buildMixedDropUploadPlan(
+      [
+        { path: "/tmp/a.txt", stat: stat({ size: 7 }) },
+        {
+          path: "/tmp/folder",
+          stat: stat({ is_directory: true }),
+          entries: [
+            { relative_path: "b.txt", name: "b.txt", size: 3, file_type: "File" },
+          ],
+        },
+        { path: "/tmp/gone.txt", stat: stat({ exists: false }) },
+      ],
+      "/remote",
+    );
+
+    expect(plan.items).toHaveLength(2);
+    expect(plan.directories).toEqual(["/remote/folder"]);
+    expect(plan.skipped).toEqual([
+      { path: "/tmp/gone.txt", reason: "missing" },
+    ]);
+  });
+
+  it("treats symlink-to-file as a regular file upload", () => {
+    const plan = buildMixedDropUploadPlan(
+      [
+        {
+          path: "/home/me/link-to-file",
+          stat: stat({ is_symlink: true, size: 42 }),
+        },
+      ],
+      "/remote",
+    );
+    expect(plan.directories).toEqual([]);
+    expect(plan.skipped).toEqual([]);
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0].destinationPath).toBe("/remote/link-to-file");
+    expect(plan.items[0].totalBytes).toBe(42);
+  });
+
+  it("treats symlink-to-directory as a directory (recurses via provided entries)", () => {
+    const plan = buildMixedDropUploadPlan(
+      [
+        {
+          path: "/home/me/link-to-dir",
+          stat: stat({ is_symlink: true, is_directory: true }),
+          entries: [
+            { relative_path: "inner.txt", name: "inner.txt", size: 8, file_type: "File" },
+          ],
+        },
+      ],
+      "/remote",
+    );
+    expect(plan.directories).toEqual(["/remote/link-to-dir"]);
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0].destinationPath).toBe("/remote/link-to-dir/inner.txt");
+  });
+
+  it("treats a broken symlink (size 0) as an empty-file upload", () => {
+    // `stat_local_path` falls back to the symlink's own metadata when the
+    // target is missing, so this comes through as exists=true, size=0.
+    const plan = buildMixedDropUploadPlan(
+      [
+        {
+          path: "/home/me/broken-link",
+          stat: stat({ is_symlink: true, size: 0 }),
+        },
+      ],
+      "/remote",
+    );
+    expect(plan.skipped).toEqual([]);
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0].totalBytes).toBe(0);
+  });
+
+  it("dedupes remote directories across two dropped folders sharing a root name", () => {
+    // Two different local folders both named "logs" — should produce only
+    // one remote `/remote/logs` directory entry (last-writer dedupe by path).
+    const plan = buildMixedDropUploadPlan(
+      [
+        {
+          path: "/tmp/a/logs",
+          stat: stat({ is_directory: true }),
+          entries: [
+            { relative_path: "a.log", name: "a.log", size: 1, file_type: "File" },
+          ],
+        },
+        {
+          path: "/tmp/b/logs",
+          stat: stat({ is_directory: true }),
+          entries: [
+            { relative_path: "b.log", name: "b.log", size: 2, file_type: "File" },
+          ],
+        },
+      ],
+      "/remote",
+    );
+    // Both folders produce `/remote/logs` as their remote root — deduped.
+    expect(plan.directories.filter((d) => d === "/remote/logs")).toHaveLength(1);
+    // Both files are still uploaded.
+    expect(plan.items).toHaveLength(2);
+  });
+
+  it("cross-OS round-trip: Windows UNC source → Unix remote preserves backslashes in sourcePath, forward slashes in destinationPath", () => {
+    const plan = buildMixedDropUploadPlan(
+      [
+        {
+          path: "\\\\server\\share\\folder\\file.txt",
+          stat: stat({ size: 99 }),
+        },
+      ],
+      "/srv",
+    );
+    expect(plan.items).toHaveLength(1);
+    const item = plan.items[0];
+    expect(item.sourcePath).toBe("\\\\server\\share\\folder\\file.txt");
+    expect(item.sourcePath).toContain("\\");
+    expect(item.destinationPath).toBe("/srv/file.txt");
+    expect(item.destinationPath).not.toContain("\\");
+    expect(item.fileName).toBe("file.txt");
   });
 });

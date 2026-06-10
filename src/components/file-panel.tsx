@@ -46,6 +46,7 @@ import {
   localParentPath,
   localBreadcrumbSegments,
 } from "@/lib/file-entry-types";
+import { useWebviewFileDrop } from "@/lib/use-webview-file-drop";
 
 // ---------- Types ----------
 
@@ -76,6 +77,10 @@ export interface FilePanelProps {
 
   // Disabled state (e.g., remote when not connected)
   disabled?: boolean;
+
+  // OS-native drag-and-drop from Finder / Explorer / Nautilus.
+  // Only meaningful for the remote panel (local has no remote to upload to).
+  onOsFilesDropped?: (paths: string[]) => void | Promise<void>;
 }
 
 export interface FilePanelRef {
@@ -109,6 +114,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       onPathChange,
       showPermissions = false,
       disabled = false,
+      onOsFilesDropped,
     },
     ref,
   ) {
@@ -131,6 +137,19 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       permissions: 85,
     });
     const containerRef = useRef<HTMLDivElement>(null);
+
+    // OS-native file drop — enabled only on the remote panel when the parent
+    // supplied a handler and the panel isn't disabled. Hit-test uses the
+    // container's bounding rect via the singleton Tauri `onDragDropEvent`
+    // subscription in `useWebviewFileDrop`.
+    const { isDragOver: isOsDragOver } = useWebviewFileDrop({
+      enabled: mode === "remote" && !disabled && !!onOsFilesDropped,
+      targetRef: containerRef,
+      onDrop: (paths) => {
+        if (onOsFilesDropped) void Promise.resolve(onOsFilesDropped(paths));
+      },
+      priority: 1,
+    });
 
     // Use the appropriate path helpers based on mode
     const getParentPath = mode === "local" ? localParentPath : parentPath;
@@ -477,10 +496,14 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         ? "bg-blue-500/20 dark:bg-blue-400/20"
         : "bg-emerald-500/20 dark:bg-emerald-400/20";
 
+    // Show the ring overlay for either cross-panel drag or OS drop;
+    // the inner banner picks the right copy below.
+    const showDropOverlay = isDragOver || isOsDragOver;
+
     return (
       <div
         ref={containerRef}
-        className={`h-full flex flex-col relative bg-background text-foreground ${borderClass} rounded-sm overflow-hidden ${isDragOver ? "ring-2 ring-primary ring-inset bg-primary/5" : ""}`}
+        className={`h-full flex flex-col relative bg-background text-foreground ${borderClass} rounded-sm overflow-hidden ${showDropOverlay ? "ring-2 ring-primary ring-inset bg-primary/5" : ""}`}
         onClick={onFocus}
         onKeyDown={handleKeyDown}
         onDragOver={handleDragOver}
@@ -786,11 +809,16 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           </ContextMenuContent>
         </ContextMenu>
 
-        {/* Drop overlay */}
-        {isDragOver && (
+        {/* Drop overlay — cross-panel drag shows "Drop to upload/download";
+            OS-native drop on remote shows "Drop files or folders to upload". */}
+        {showDropOverlay && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary rounded-sm pointer-events-none">
             <div className="text-sm font-medium text-primary">
-              {mode === "local" ? "Drop to download" : "Drop to upload"}
+              {isOsDragOver
+                ? "Drop files or folders to upload"
+                : mode === "local"
+                  ? "Drop to download"
+                  : "Drop to upload"}
             </div>
           </div>
         )}
