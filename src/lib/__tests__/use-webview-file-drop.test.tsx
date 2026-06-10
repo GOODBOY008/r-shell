@@ -271,6 +271,47 @@ describe("useWebviewFileDrop", () => {
     expect(spy).toHaveBeenLastCalledWith(true);
   });
 
+  it("falls back to raw coordinates when DPR conversion misses (4K logical pixels)", async () => {
+    // On some 4K setups Tauri reports position already in CSS/logical pixels
+    // despite the PhysicalPosition type. With DPR=2, a raw (100, 50) would
+    // convert to (50, 25) and miss the rect; the fallback should try raw
+    // values and hit.
+    setDpr(2);
+    const onDrop = vi.fn();
+    // Rect in CSS space: (80, 40) → (160, 120). Raw position (100, 50) is
+    // already in CSS space — DPR-converted (50, 25) would miss.
+    const rect = makeRect(80, 40, 80, 80);
+    const spy = vi.fn();
+
+    render(
+      <DropZone enabled onDrop={onDrop} rect={rect} onDragOverChange={spy} />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fire({
+      type: "enter",
+      position: { x: 100, y: 50 }, // already CSS pixels
+      paths: ["/tmp/a.txt"],
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(spy).toHaveBeenLastCalledWith(true);
+
+    // Drop at same position should fire onDrop
+    fire({
+      type: "drop",
+      position: { x: 100, y: 50 },
+      paths: ["/tmp/a.txt"],
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onDrop).toHaveBeenCalledTimes(1);
+  });
+
   it("picks the highest-priority winner when zones overlap", async () => {
     const onDropA = vi.fn();
     const onDropB = vi.fn();

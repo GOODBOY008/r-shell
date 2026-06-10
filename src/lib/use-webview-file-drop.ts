@@ -61,14 +61,11 @@ let unlistenPromise: Promise<UnlistenFn> | null = null;
 let refCount = 0;
 let nextId = 1;
 
-function pickWinner(event: DragDropEvent): Subscriber | null {
-  // For `leave` there's no position — no winner.
-  if (event.type === "leave") return null;
-
-  const dpr = window.devicePixelRatio || 1;
-  const cssX = event.position.x / dpr;
-  const cssY = event.position.y / dpr;
-
+/**
+ * Test whether a CSS-space point hits any enabled subscriber's bounding rect.
+ * Returns the winning subscriber, or null if the point is outside all zones.
+ */
+function hitTest(cssX: number, cssY: number): Subscriber | null {
   let winner: Subscriber | null = null;
   for (const sub of subscribers) {
     if (!sub.enabled) continue;
@@ -92,6 +89,30 @@ function pickWinner(event: DragDropEvent): Subscriber | null {
     }
   }
   return winner;
+}
+
+function pickWinner(event: DragDropEvent): Subscriber | null {
+  // For `leave` there's no position — no winner.
+  if (event.type === "leave") return null;
+
+  const rawX = event.position.x;
+  const rawY = event.position.y;
+
+  // Self-detecting coordinate resolution.
+  // `event.position` is typed as `PhysicalPosition`, but on some OS/Tauri
+  // builds (especially multi-monitor with mixed DPR) the values may already
+  // be in CSS/logical pixels. We try the DPR conversion first (correct for
+  // true physical pixels, e.g. 1080p at 1×), then fall back to raw values
+  // (correct when Tauri already reports logical pixels, e.g. some 4K setups).
+  const dpr = window.devicePixelRatio || 1;
+  if (dpr !== 1) {
+    const cssX = rawX / dpr;
+    const cssY = rawY / dpr;
+    const winner = hitTest(cssX, cssY);
+    if (winner) return winner;
+  }
+  // Fallback: treat raw values as CSS pixels (no conversion).
+  return hitTest(rawX, rawY);
 }
 
 function setAllDragOver(value: boolean) {

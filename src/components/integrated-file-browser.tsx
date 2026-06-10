@@ -1484,6 +1484,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             <div
               ref={dropZoneRef}
               className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm"
+              // Required on Linux/WebKit2GTK: without preventDefault the browser
+              // never signals "drop accepted", so Tauri's native drop signal
+              // never fires. Also suppresses the browser's default file-open
+              // behavior on drop.
+              onDragOver={(e) => e.preventDefault()}
             >
               {/* Drag overlay */}
               {isDraggingOver && (

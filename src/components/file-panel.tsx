@@ -418,10 +418,13 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     };
 
     const handleDragOver = (e: React.DragEvent) => {
-      // Only accept drops from the other panel
+      // Always prevent default so the browser shows a "copy" cursor and,
+      // critically, allows Tauri's native drop signal to fire on
+      // Linux/WebKit2GTK (which rejects the drop when preventDefault is
+      // missing). This covers both cross-panel drags and OS file drops.
+      e.preventDefault();
+      e.stopPropagation();
       if (e.dataTransfer.types.includes(DRAG_MIME)) {
-        e.preventDefault();
-        e.stopPropagation();
         setIsDragOver(true);
       }
     };
