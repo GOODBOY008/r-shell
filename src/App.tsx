@@ -1654,14 +1654,14 @@ function AppContent() {
                 onResize={(size) => setRightSidebarSize(size)}
               >
                 <Tabs value={rightSidebarTab} onValueChange={setRightSidebarTab} className="h-full flex flex-col">
-                  <TabsList className="inline-flex w-auto mx-2 mt-2">
+                  <TabsList className="inline-flex w-auto mx-1 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
                     <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <div className="h-full overflow-auto p-2">
+                      <div className="h-full overflow-hidden px-1 py-2">
                         {activeConnection ? (
                           <ErrorBoundary label="System Monitor">
                             <SystemMonitor connectionId={activeConnection.connectionId} />
