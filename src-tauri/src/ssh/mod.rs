@@ -88,7 +88,7 @@ impl SshClient {
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
         let ssh_config = client::Config {
             preferred: russh::Preferred {
-                key: PREFERRED_HOST_KEY_ALGOS,
+                key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
                 ..russh::Preferred::DEFAULT
             },
             // Send a keepalive every 60 s. After 3 missed replies russh closes

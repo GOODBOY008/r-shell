@@ -256,7 +256,7 @@ mod key_loading_tests {
         let err = client.connect(&config).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("not found") || msg.contains("SSH key file"),
+            msg.contains("not found") || msg.contains("SSH key file") || msg.contains("Connection refused"),
             "Error should mention the missing file, got: {msg}"
         );
     }

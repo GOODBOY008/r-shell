@@ -186,12 +186,12 @@ export function ConnectionDialog({
     }
   };
 
-  const resetConnectionState = () => {
+  function resetConnectionState() {
     setIsConnecting(false);
     setIsCancelling(false);
     connectionIdRef.current = null;
     cancelRequestedRef.current = false;
-  };
+  }
 
   const handleConnect = async () => {
     if (isConnecting) {

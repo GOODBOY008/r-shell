@@ -27,19 +27,19 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
-russh = { version = "0.43", features = ["openssl", "vendored-openssl"] }
-russh-keys = { version = "0.43", features = ["vendored-openssl"] }
+russh = { version = "0.44", features = ["openssl"] }
+russh-keys = { version = "0.44", features = [] }
 russh-sftp = "2"
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-tokio-tungstenite = "0.21"
+tokio-tungstenite = "0.29"
 futures = "0.3"
 tokio-util = "0.7"
 suppaftp = { version = "6", features = ["async-native-tls"] }
 async-std = "1"
-dirs = "5"
+dirs = "6"
 open = "5"
 
 [dev-dependencies]

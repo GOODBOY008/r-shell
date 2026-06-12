@@ -70,7 +70,7 @@ impl StandaloneSftpClient {
     pub async fn connect(config: &SftpConfig) -> Result<Self> {
         let ssh_config = client::Config {
             preferred: russh::Preferred {
-                key: crate::ssh::PREFERRED_HOST_KEY_ALGOS,
+                key: std::borrow::Cow::Borrowed(crate::ssh::PREFERRED_HOST_KEY_ALGOS),
                 ..russh::Preferred::DEFAULT
             },
             ..client::Config::default()

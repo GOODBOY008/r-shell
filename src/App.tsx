@@ -1414,12 +1414,9 @@ function AppContent() {
     status: activeConnection.status,
   } : undefined;
 
-  const restoringPercent = useMemo(() => {
-    if (!restoringProgress.total) {
-      return 0;
-    }
-    return Math.min(100, Math.round((restoringProgress.current / restoringProgress.total) * 100));
-  }, [restoringProgress]);
+  const restoringPercent = !restoringProgress.total
+    ? 0
+    : Math.min(100, Math.round((restoringProgress.current / restoringProgress.total) * 100));
 
   const restoreHighlights = useMemo(() => (
     [

@@ -104,7 +104,7 @@ export function SFTPPanel({
           const group = parts[3];
           const size = parseInt(parts[4]) || 0;
           const name = parts.slice(8).join(' ');
-          const type = permissions.startsWith('d') ? 'directory' : 'file';
+          const type: 'directory' | 'file' = permissions.startsWith('d') ? 'directory' : 'file';
           
           return {
             name,
@@ -114,7 +114,7 @@ export function SFTPPanel({
             permissions,
             owner,
             group
-          } as FileItem;
+          };
         }).filter(f => f !== null);
         
         // Add parent directory navigation

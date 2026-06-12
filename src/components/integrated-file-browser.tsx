@@ -509,7 +509,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     [connectionId],
   );
 
-  const loadFiles = async (pathOverride?: string) => {
+  async function loadFiles(pathOverride?: string) {
     if (!connectionId || !isConnected) {
       // Don't clear files on disconnect — preserve the cached file list so
       // the user still sees their directory contents when reconnecting or
@@ -553,7 +553,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           const dateStr = parts[5];
           const timeStr = parts[6];
           const name = parts.slice(7).join(' ');
-          const type = permissions.startsWith('d') ? 'directory' : 'file';
+          const type: 'directory' | 'file' = permissions.startsWith('d') ? 'directory' : 'file';
           
           // Parse the modification date from ls output
           let modifiedDate = new Date();
@@ -576,7 +576,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             owner,
             group,
             path: targetPath === '/' ? `/${name}` : `${targetPath}/${name}`
-          } as FileItem;
+          };
         }).filter(f => f !== null);
         
         // Add parent directory navigation
@@ -966,7 +966,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
-  const handleDeleteFile = (file: FileItem) => {
+  function handleDeleteFile(file: FileItem) {
     console.log('[FileBrowser] Opening delete confirmation for:', file.name);
     setDeletingFile(file);
   };
@@ -1005,17 +1005,17 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     setDeletingFile(null);
   };
 
-  const handleCopyFiles = (files: FileItem[]) => {
+  function handleCopyFiles(files: FileItem[]) {
     setClipboard({ files, operation: 'copy' });
     toast.success(`${files.length} item(s) copied to clipboard`);
   };
 
-  const handleCutFiles = (files: FileItem[]) => {
+  function handleCutFiles(files: FileItem[]) {
     setClipboard({ files, operation: 'cut' });
     toast.success(`${files.length} item(s) cut to clipboard`);
   };
 
-  const handlePasteFiles = async () => {
+  async function handlePasteFiles() {
     if (clipboard) {
       try {
         for (const file of clipboard.files) {
@@ -1049,7 +1049,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
-  const handleRenameFile = (file: FileItem) => {
+  function handleRenameFile(file: FileItem) {
     setRenamingFile(file);
     setNewFileName(file.name);
   };
@@ -1079,7 +1079,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
-  const handleRenameCancel = () => {
+  function handleRenameCancel() {
     setRenamingFile(null);
     setNewFileName('');
   };

@@ -316,9 +316,6 @@ export const defaultTerminalOptions: ITerminalOptions = {
   scrollback: 500,
   tabStopWidth: 8,
   allowTransparency: false,
-  smoothScrollDuration: 0,
-  fastScrollModifier: 'shift',
-  fastScrollSensitivity: 5,
   scrollSensitivity: 1,
 };
 

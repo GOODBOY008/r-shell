@@ -180,7 +180,7 @@ fn encode_output_frame(connection_id: &str, data: &[u8]) -> Vec<u8> {
 /// Send a JSON control message with a timeout.
 /// Control messages are best-effort — a saturated channel returns `Dropped`.
 async fn send_control(tx: &WsTx, msg: &WsMessage) -> Result<SendOutcome> {
-    let frame = Message::Text(serde_json::to_string(msg)?);
+    let frame = Message::Text(serde_json::to_string(msg)?.into());
     match tokio::time::timeout(Duration::from_millis(CONTROL_SEND_TIMEOUT_MS), tx.send(frame)).await {
         Ok(Ok(())) => Ok(SendOutcome::Sent),
         Ok(Err(_)) => Ok(SendOutcome::Closed),
@@ -208,7 +208,7 @@ async fn flush_output(
     tokio::select! {
         biased;
         _ = cancel.cancelled() => SendOutcome::Closed,
-        result = tx.send(Message::Binary(frame)) => match result {
+        result = tx.send(Message::Binary(frame.into())) => match result {
             Ok(()) => SendOutcome::Sent,
             Err(_) => SendOutcome::Closed,
         }
