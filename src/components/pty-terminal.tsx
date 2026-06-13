@@ -829,6 +829,7 @@ export function PtyTerminal({
     term.options.fontFamily = opts.fontFamily;
     term.options.cursorStyle = opts.cursorStyle;
     term.options.cursorBlink = opts.cursorBlink;
+    term.options.scrollback = opts.scrollback;
     // Refit so any font-size change propagates as a PTY resize.
     fitRef.current?.fit();
   }, [themeKey, appearanceKey]);

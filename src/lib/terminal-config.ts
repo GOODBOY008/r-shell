@@ -31,6 +31,29 @@ export interface TerminalAppearanceSettings {
   backgroundImagePosition: 'cover' | 'contain' | 'center' | 'tile';
 }
 
+export const DEFAULT_TERMINAL_SCROLLBACK = 10000;
+export const MIN_TERMINAL_SCROLLBACK = 1000;
+export const MAX_TERMINAL_SCROLLBACK = 50000;
+
+export function normalizeScrollbackLines(value: unknown): number {
+  const numericValue = typeof value === 'number' ? value : Number(value);
+
+  if (!Number.isFinite(numericValue) || numericValue < MIN_TERMINAL_SCROLLBACK) {
+    return DEFAULT_TERMINAL_SCROLLBACK;
+  }
+
+  return Math.min(Math.round(numericValue), MAX_TERMINAL_SCROLLBACK);
+}
+
+export function normalizeAppearanceSettings(
+  settings: TerminalAppearanceSettings,
+): TerminalAppearanceSettings {
+  return {
+    ...settings,
+    scrollback: normalizeScrollbackLines(settings.scrollback),
+  };
+}
+
 export const defaultTerminalTheme: ITheme = {
   foreground: '#d4d4d4',
   background: '#1e1e1e',
@@ -293,7 +316,7 @@ export const defaultAppearanceSettings: TerminalAppearanceSettings = {
   cursorStyle: 'block',
   cursorBlink: true,
   theme: 'vs-code-dark',
-  scrollback: 500,
+  scrollback: DEFAULT_TERMINAL_SCROLLBACK,
   allowTransparency: false,
   opacity: 100,
   // Background image defaults
@@ -313,7 +336,7 @@ export const defaultTerminalOptions: ITerminalOptions = {
   theme: defaultTerminalTheme,
   allowProposedApi: true,
   convertEol: true,
-  scrollback: 500,
+  scrollback: DEFAULT_TERMINAL_SCROLLBACK,
   tabStopWidth: 8,
   allowTransparency: false,
   scrollSensitivity: 1,
@@ -333,7 +356,7 @@ export function getTerminalOptions(appearance: TerminalAppearanceSettings): ITer
     letterSpacing: appearance.letterSpacing,
     cursorStyle: appearance.cursorStyle,
     cursorBlink: appearance.cursorBlink,
-    scrollback: appearance.scrollback,
+    scrollback: normalizeScrollbackLines(appearance.scrollback),
     allowTransparency: needsTransparency,
     theme: needsTransparency ? {
       ...theme,
@@ -346,8 +369,13 @@ export function loadAppearanceSettings(): TerminalAppearanceSettings {
   try {
     const saved = localStorage.getItem('terminalAppearance');
     if (saved) {
-      const parsed = JSON.parse(saved);
-      return { ...defaultAppearanceSettings, ...parsed };
+      const parsed = JSON.parse(saved) as unknown;
+      if (parsed && typeof parsed === 'object') {
+        return normalizeAppearanceSettings({
+          ...defaultAppearanceSettings,
+          ...(parsed as Partial<TerminalAppearanceSettings>),
+        });
+      }
     }
   } catch (e) {
     console.error('Failed to load terminal appearance settings:', e);
@@ -357,7 +385,7 @@ export function loadAppearanceSettings(): TerminalAppearanceSettings {
 
 export function saveAppearanceSettings(settings: TerminalAppearanceSettings): void {
   try {
-    localStorage.setItem('terminalAppearance', JSON.stringify(settings));
+    localStorage.setItem('terminalAppearance', JSON.stringify(normalizeAppearanceSettings(settings)));
   } catch (e) {
     console.error('Failed to save terminal appearance settings:', e);
   }
@@ -453,7 +481,7 @@ export function getThemeAwareTerminalOptions(appearance: TerminalAppearanceSetti
     letterSpacing: appearance.letterSpacing,
     cursorStyle: appearance.cursorStyle,
     cursorBlink: appearance.cursorBlink,
-    scrollback: appearance.scrollback,
+    scrollback: normalizeScrollbackLines(appearance.scrollback),
     allowTransparency: needsTransparency,
     theme: needsTransparency ? {
       ...theme,
