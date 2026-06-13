@@ -151,10 +151,21 @@ export function DirectoryTree({
   // If the parent supplies cached state (initialExpanded / initialNodes) we
   // restore those — preserving which directories were expanded and already loaded.
   // Without cached state (fresh connection), fall back to clean defaults.
+  //
+  // IMPORTANT: nodesRef and loadingRef are updated synchronously here (not just
+  // via their own useEffect) so that loadChildren — which runs later in the same
+  // effect cycle — sees the reset/restored values instead of stale data from the
+  // previous connection.  Without this, loadChildren's guard
+  // `nodesRef.current.has(path)` would return true for the old connection's
+  // loaded paths and skip the fresh load, leaving the tree showing only "/".
   useEffect(() => {
-    setNodes(initialNodes ? new Map(initialNodes) : new Map());
+    const newNodes = initialNodes ? new Map(initialNodes) : new Map();
+    setNodes(newNodes);
+    nodesRef.current = newNodes;
+
     setExpanded(initialExpanded ? new Set(initialExpanded) : new Set(["/"]));
     setLoading(new Set());
+    loadingRef.current = new Set();
 
     // Restore cached scroll position after the reset render.
     // The currentPath effect below will scroll to the active row afterwards,
