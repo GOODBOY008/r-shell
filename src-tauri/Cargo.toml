@@ -27,7 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
-russh = { version = "0.44", features = ["openssl"] }
+russh = { version = "0.44", features = ["openssl", "vendored-openssl"] }
 russh-keys = { version = "0.44", features = [] }
 russh-sftp = "2"
 anyhow = "1"
