@@ -1,21 +1,20 @@
 <div align="center">
 
-# R-Shell — Lightweight, Fast SSH Client for macOS, Windows & Linux
+# R-Shell — Lightweight SSH Client for macOS, Windows & Linux
 
 [![GitHub license](https://img.shields.io/github/license/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/blob/main/LICENSE)
 [![Test](https://github.com/GOODBOY008/r-shell/actions/workflows/test.yml/badge.svg)](https://github.com/GOODBOY008/r-shell/actions/workflows/test.yml)
 [![Release](https://github.com/GOODBOY008/r-shell/actions/workflows/release.yml/badge.svg)](https://github.com/GOODBOY008/r-shell/actions/workflows/release.yml)
 [![GitHub stars](https://img.shields.io/github/stars/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/issues)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri)](https://tauri.app/)
 [![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
 [![Rust](https://img.shields.io/badge/Rust-Latest-orange?logo=rust)](https://www.rust-lang.org/)
 
-A modern, lightweight SSH/SFTP/FTP client built with Rust and Tauri 2. Uses ~98% less memory than FinalShell (~34 MB vs ~1.7 GB). Installer under 10 MB — 12× smaller.
+A modern SSH/SFTP/FTP/RDP/VNC client built with Rust and Tauri 2. **~98% less memory** than Java-based alternatives (~34 MB vs ~1.7 GB). Installer under 10 MB.
 
-**Low memory** · **Native speed** · **Multi-protocol** · **Split terminals** · **SFTP file manager** · **GPU monitoring** · **Log viewer** · **Directory sync**
+**Low memory** · **Native speed** · **Multi-protocol** · **Remote desktop** · **Split terminals** · **SFTP file manager** · **GPU monitoring** · **Log viewer** · **Directory sync**
 
-[Why R-Shell?](#-why-r-shell) · [Features](#-features) · [Install](#-installation) · [Screenshots](#-screenshots) · [Contributing](CONTRIBUTING.md) · [License](LICENSE)
+[Features](#-features) · [Install](#-installation) · [Screenshots](#-screenshots) · [Development](#-development) · [Contributing](#-contributing)
 
 </div>
 
@@ -32,135 +31,139 @@ A modern, lightweight SSH/SFTP/FTP client built with Rust and Tauri 2. Uses ~98%
 
 ## 🚀 Why R-Shell?
 
-Most popular SSH clients (FinalShell, MobaXterm, Xshell) are built on Java or Electron, which means high memory usage even when idle. R-Shell is built with Rust + Tauri 2, delivering native performance with a fraction of the memory footprint.
+Most SSH clients (FinalShell, MobaXterm, Xshell) run on Java or Electron — burning memory even at idle. R-Shell uses Rust + Tauri 2 for native performance at a fraction of the cost.
 
-### Memory Comparison (Real-World Test)
+### Memory Comparison
 
-Both apps running side-by-side on macOS (Apple Silicon, 16 GB RAM), measured with macOS `footprint` (same metric as Activity Monitor):
+Measured on macOS (Apple Silicon, 16 GB RAM) using `footprint`:
 
 | App | Technology | Memory | Relative |
 |-----|-----------|--------|----------|
 | **R-Shell** | Rust + Tauri 2 | **~34 MB** | **1×** |
-| FinalShell | Java (Identifier: st) | **~1.7 GB** | **~50×** |
+| FinalShell | Java | **~1.7 GB** | **~50×** |
 
-> R-Shell uses approximately **98% less memory** than FinalShell — that's **~1.7 GB saved** for your IDE, browser, and Docker.
-
-### Installer Size Comparison
+### Installer Size
 
 | Platform | R-Shell | FinalShell | Savings |
-|----------|---------|-----------|---------|
-| **Windows** | **3.99 MB** | 64 MB | **~16×** smaller |
-| **macOS** | **8.13 MB** | 102 MB | **~12×** smaller |
+|----------|---------|-----------|----------|
+| **Windows** | **3.99 MB** | 64 MB | **16×** smaller |
+| **macOS** | **8.13 MB** | 102 MB | **12×** smaller |
 
-> No bundled JVM, no Chromium — Tauri uses the OS native webview, so the installer stays tiny.
-
-### Why does this matter?
-
-- Developers often keep SSH clients open all day alongside IDEs, browsers, and Docker
-- FinalShell alone can consume over 10% of a 16 GB machine's RAM while idle
-- Rust's zero-cost abstractions mean low memory without sacrificing features
-- No JVM startup overhead — R-Shell launches instantly
+> No bundled JVM or Chromium — Tauri uses the OS native webview.
 
 ---
 
 ## 🎯 About
 
-R-Shell is a free, open-source, cross-platform SSH client that combines an interactive terminal, a dual-panel file manager, real-time system & GPU monitoring, and log viewing — all in one VS Code-like workspace. Built with Rust for native performance and minimal resource usage, it's a lightweight alternative to FinalShell, MobaXterm, and Xshell.
+R-Shell combines an interactive terminal, dual-panel file manager, remote desktop viewer (RDP/VNC), real-time system/GPU monitoring, and log viewing in a single VS Code-like workspace. Built with Rust for native performance and minimal resource usage.
 
-- 🚀 **Native Performance** — Tauri 2 + Rust backend, not Electron or Java. ~34 MB memory footprint vs FinalShell's ~1.7 GB.
-- 🎨 **AI-Generated Frontend** — The UI was generated from [Figma designs](https://www.figma.com/make/uUd7WO54vPnv03SmioKWqj/SSH-Client-Application)
-- 🤖 **AI-Assisted Development** — The entire codebase is built with **GitHub Copilot**
-- 🌍 **Cross-Platform** — macOS, Windows, and Linux
+- **Native Performance** — Tauri 2 + Rust backend, not Electron or Java
+- **AI-Generated Frontend** — UI generated from [Figma designs](https://www.figma.com/make/uUd7WO54vPnv03SmioKWqj/SSH-Client-Application)
+- **AI-Assisted Development** — Entire codebase built with **GitHub Copilot**
+- **Cross-Platform** — macOS, Windows, and Linux
 
 ---
 
 ## ✨ Features
 
 ### 🔌 Multi-Protocol Connections
+
 | Protocol | Authentication | Description |
 |----------|---------------|-------------|
-| **SSH** | Password, Public Key (with passphrase) | Full interactive PTY terminal |
+| **SSH** | Password, Public Key | Full interactive PTY terminal |
 | **SFTP** | Password, Public Key | Standalone file transfer sessions |
 | **FTP** | Password, Anonymous | Plain FTP file transfers |
 | **FTPS** | Password, Anonymous | FTP over TLS |
+| **RDP** | Password | Remote Desktop Protocol |
+| **VNC** | Password | Virtual Network Computing |
 
-- **Connection Manager** — Tree-view sidebar with folders, favorites, tags, drag-and-drop organization
-- **Connection Profiles** — Save, import/export (JSON), duplicate, edit saved connections
-- **Session Restore** — Automatically reconnects your previous workspace on launch
+- **Connection Manager** — Tree-view sidebar with folders, favorites, tags, and drag-and-drop
+- **Connection Profiles** — Save, import/export (JSON), duplicate, and edit connections
+- **Session Restore** — Automatically reconnects your workspace on launch
 - **Quick Connect** — Toolbar dropdown with recent connections
 - **Auto Reconnect** — Exponential backoff reconnection (up to 5 attempts)
 
 ### 💻 Interactive PTY Terminal
-- **Full terminal emulation** via xterm.js v5 — supports vim, htop, top, less, and all interactive programs
-- **WebSocket streaming** — low-latency bidirectional I/O with flow control (inspired by ttyd)
-- **WebGL renderer** — hardware-accelerated rendering with automatic canvas fallback
-- **Terminal search** — regex and case-sensitive search with F3 navigation
-- **Context menu** — copy, paste, select all, clear, save to file, reconnect
-- **IME / CJK input** — full support for Chinese, Japanese, Korean input methods
+
+- **Full terminal emulation** — xterm.js v5 with support for vim, htop, top, less, and all interactive programs
+- **WebSocket streaming** — Low-latency bidirectional I/O with flow control
+- **WebGL renderer** — Hardware-accelerated rendering with automatic canvas fallback
+- **Terminal search** — Regex and case-sensitive search with F3 navigation
+- **Context menu** — Copy, paste, select all, clear, save to file, reconnect
+- **IME / CJK input** — Full support for Chinese, Japanese, Korean input methods
 
 ### 🪟 Split Panes & Tab Groups
+
 - **Split in 4 directions** — Up, Down, Left, Right
-- **Recursive grid layout** — unlimited nested splits with resizable panels
-- **Tab management** — add, close, duplicate, reorder (drag-and-drop), move between groups
-- **Drop zone overlay** — drag tabs onto 5 drop zones (up/down/left/right/center)
-- **Keyboard shortcuts** — Ctrl+\ split, Ctrl+1-9 focus group, Ctrl+Tab cycle tabs
+- **Recursive grid layout** — Unlimited nested splits with resizable panels
+- **Tab management** — Add, close, duplicate, reorder (drag-and-drop), move between groups
+- **Drop zone overlay** — Drag tabs onto 5 drop zones (up/down/left/right/center)
+- **Keyboard shortcuts** — `Ctrl+\` split, `Ctrl+1-9` focus group, `Ctrl+Tab` cycle tabs
 
 ### 📁 Dual-Panel File Manager (FileZilla-style)
-- **Local + Remote panels** — side-by-side browsing with upload/download buttons
-- **Works over SSH, SFTP, FTP, and FTPS** — unified file operations across all protocols
-- **File operations** — create, rename, delete, copy files and directories
-- **Breadcrumb navigation** — editable address bar with click-to-navigate
-- **Sort & filter** — by name, size, date, permissions, owner (ascending/descending)
-- **Multi-select** — select multiple files for batch operations
-- **Transfer queue** — queued transfers with progress, speed, ETA, cancel, and retry
-- **Recursive directory transfer** — uploads/downloads entire directory trees
+
+- **Local + Remote panels** — Side-by-side browsing with upload/download buttons
+- **Multi-protocol** — Works over SSH, SFTP, FTP, and FTPS
+- **File operations** — Create, rename, delete, copy files and directories
+- **Breadcrumb navigation** — Editable address bar with click-to-navigate
+- **Sort & filter** — By name, size, date, permissions, owner (ascending/descending)
+- **Multi-select** — Select multiple files for batch operations
+- **Transfer queue** — Queued transfers with progress, speed, ETA, cancel, and retry
+- **Recursive directory transfer** — Upload/download entire directory trees
 
 ### 🔄 Directory Synchronization
+
 - **4-step sync wizard** — Configure → Compare → Review → Sync
 - **Sync directions** — Local-to-Remote or Remote-to-Local
-- **Comparison criteria** — Size, Modified time, or both
-- **Diff preview** — per-item checkboxes with upload/download/delete/skip actions
-- **Exclude patterns** — skip `.git`, `node_modules`, `.DS_Store`, etc.
+- **Comparison criteria** — Size, modified time, or both
+- **Diff preview** — Per-item checkboxes with upload/download/delete/skip actions
+- **Exclude patterns** — Skip `.git`, `node_modules`, `.DS_Store`, etc.
 
 ### 📊 System Monitoring
-- **CPU** — real-time usage percentage with color-coded thresholds
-- **Memory & Swap** — total, used, free with percentage bars
-- **Disk** — per-mount filesystem usage with progress bars
-- **Uptime & Load Average** — at a glance
-- **Process Manager** — list processes sorted by CPU/MEM, kill with confirmation
+
+- **CPU** — Real-time usage with color-coded thresholds
+- **Memory & Swap** — Total, used, free with percentage bars
+- **Disk** — Per-mount filesystem usage with progress bars
+- **Uptime & Load Average** — At a glance
+- **Process Manager** — List processes sorted by CPU/MEM, kill with confirmation
 - **Real-time charts** — CPU history and memory area charts (Recharts)
 
 ### 🎮 GPU Monitoring
-- **NVIDIA** (nvidia-smi) — utilization, memory, temperature, power, fan speed, encoder/decoder
+
+- **NVIDIA** (nvidia-smi) — Utilization, memory, temperature, power, fan speed, encoder/decoder
 - **AMD** — GPU stats support
 - **Multi-GPU** — GPU selector with individual or "all" view
-- **History charts** — utilization, memory, temperature over time
-- **Temperature thresholds** — color-coded: green < 60°C, yellow < 75°C, orange < 85°C, red ≥ 85°C
+- **History charts** — Utilization, memory, temperature over time
+- **Temperature thresholds** — Green < 60°C, yellow < 75°C, orange < 85°C, red ≥ 85°C
 
 ### 🌐 Network Monitoring
-- **Bandwidth** — per-interface rx/tx bytes per second
-- **Latency** — real-time network latency measurements
-- **Active connections** — protocol, local/remote address, state, PID
-- **Usage charts** — download/upload history
+
+- **Bandwidth** — Per-interface rx/tx bytes per second
+- **Latency** — Real-time network latency measurements
+- **Active connections** — Protocol, local/remote address, state, PID
+- **Usage charts** — Download/upload history
 
 ### 📋 Log Monitoring
-- **Multi-source** — log files, journalctl services, Docker containers, custom paths
-- **Auto-discovery** — automatically finds available log sources on the remote host
+
+- **Multi-source** — Log files, journalctl services, Docker containers, custom paths
+- **Auto-discovery** — Finds available log sources on the remote host
 - **Level filtering** — ERROR, WARN, INFO, DEBUG, TRACE filter chips
-- **Regex search** — with match highlighting
-- **Live tail** — configurable refresh interval (1s – 30s)
-- **Line numbers + timestamps + level badges** — parsed from common log formats
-- **Download** — save log content locally
+- **Regex search** — With match highlighting
+- **Live tail** — Configurable refresh interval (1s – 30s)
+- **Rich formatting** — Line numbers, timestamps, and level badges parsed from common log formats
+- **Download** — Save log content locally
 
 ### 🎨 Appearance & Customization
+
 - **10 terminal color themes** — VS Code Dark, Monokai, Solarized Dark/Light, Dracula, One Dark, Nord, Gruvbox Dark, Tokyo Night, Matrix
-- **Dark / Light / Auto** — application theme follows system preference
+- **Dark / Light / Auto** — Application theme follows system preference
 - **7 font families** — Menlo, JetBrains Mono, Fira Code, Source Code Pro, Consolas, Monaco, Courier New
-- **Configurable** — font size, line height, letter spacing, cursor style (block/underline/bar), scrollback (1K–100K lines)
-- **Background images** — custom image with opacity, blur, and position controls
-- **Terminal transparency** — configurable opacity
+- **Configurable** — Font size, line height, letter spacing, cursor style (block/underline/bar), scrollback (1K–100K lines)
+- **Background images** — Custom image with opacity, blur, and position controls
+- **Terminal transparency** — Configurable opacity
 
 ### ⌨️ Keyboard Shortcuts
+
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+B` | Toggle Connection Manager |
@@ -169,43 +172,44 @@ R-Shell is a free, open-source, cross-platform SSH client that combines an inter
 | `Ctrl+Z` | Toggle Zen Mode |
 | `Ctrl+\` | Split terminal right |
 | `Ctrl+Shift+\` | Split terminal down |
-| `Ctrl+1` – `9` | Focus terminal group |
+| `Ctrl+1` – `Ctrl+9` | Focus terminal group |
 | `Ctrl+Shift+W` | Close active tab |
 | `Ctrl+Tab` | Next tab |
 | `Cmd/Ctrl+V` | Paste into terminal |
 | `Cmd/Ctrl+F` | Search in terminal |
 | `F3` / `Shift+F3` | Find next / previous |
 
-Layout shortcuts are ignored while the terminal input is focused, so terminal-native bindings such as tmux `Ctrl+B` still reach the shell.
+> Layout shortcuts are ignored while the terminal input is focused, so terminal-native bindings (e.g. tmux `Ctrl+B`) still reach the shell.
 
 ### 🔧 Additional Features
-- **VS Code-like layout** — resizable left/right sidebars + bottom panel with 5 layout presets (Default, Minimal, Focus, Full Stack, Zen)
-- **Auto-update** — check for updates with download progress and install-and-relaunch
+
+- **VS Code-like layout** — Resizable left/right sidebars + bottom panel with 5 layout presets (Default, Minimal, Focus, Full Stack, Zen)
+- **Remote Desktop** — Built-in RDP and VNC viewer with clipboard sync and dynamic resizing
+- **Auto-update** — Check for updates with download progress and install-and-relaunch
 - **Menu bar** — File, Edit, Tools, Connection menus with full keyboard shortcuts
-- **Status bar** — active connection name, protocol badge, connection status indicator
-- **49 Tauri commands** — comprehensive Rust backend API
+- **Status bar** — Active connection name, protocol badge, connection status indicator
 
 ---
 
 ## 🛠 Tech Stack
 
-### Backend — Why It's Lightweight
-- **Tauri 2** — native desktop framework, uses the OS webview instead of bundling Chromium (unlike Electron)
-- **Rust** — zero-cost abstractions, no garbage collector, no JVM — this is why R-Shell uses ~34 MB vs FinalShell's ~1.7 GB
-- **russh / russh-sftp** — pure Rust SSH & SFTP protocol implementation
+### Backend
+- **Tauri 2** — Native desktop framework using the OS webview (no bundled Chromium)
+- **Rust** — Zero-cost abstractions, no GC, no JVM — ~34 MB vs ~1.7 GB
+- **russh / russh-sftp** — Pure Rust SSH & SFTP implementation
 - **suppaftp** — FTP/FTPS client
-- **tokio** — async runtime with minimal overhead
+- **tokio** — Async runtime with minimal overhead
 - **tokio-tungstenite** — WebSocket server for PTY streaming
-- **sysinfo** — system stats collection
+- **sysinfo** — System stats collection
 
 ### Frontend
-- **React 19** + **TypeScript** — type-safe modern React
-- **Tailwind CSS** — utility-first styling
+- **React 19** + **TypeScript** — Type-safe modern React
+- **Tailwind CSS** — Utility-first styling
 - **Radix UI / shadcn/ui** — 48+ accessible component primitives
-- **xterm.js v5** — terminal emulation with WebGL, search, web-links, fit, overlay addons
-- **Recharts** — data visualization for monitoring
-- **React Hook Form** — form handling
-- **Lucide Icons** — icon set
+- **xterm.js v5** — Terminal emulation with WebGL, search, web-links, fit, and overlay addons
+- **Recharts** — Data visualization for monitoring
+- **React Hook Form** — Form handling
+- **Lucide Icons** — Icon set
 
 ---
 
@@ -276,9 +280,9 @@ pnpm test:e2e      # E2E
 ### Version Bumping
 
 ```bash
-pnpm run version:patch   # 1.0.0 → 1.0.1
-pnpm run version:minor   # 1.0.0 → 1.1.0
-pnpm run version:major   # 1.0.0 → 2.0.0
+pnpm run version:patch   # 2.2.0 → 2.2.1
+pnpm run version:minor   # 2.2.0 → 2.3.0
+pnpm run version:major   # 2.2.0 → 3.0.0
 ```
 
 ---
@@ -298,7 +302,7 @@ r-shell/
 │   │   ├── sync-dialog.tsx    # Directory synchronization
 │   │   ├── transfer-*.tsx     # Transfer queue & controls
 │   │   ├── system-monitor.tsx # CPU/MEM/Disk/GPU monitor
-│   │   ├── network-monitor.tsx# Network stats
+│   │   ├── network-monitor.tsx # Network stats
 │   │   ├── log-monitor.tsx    # Multi-source log viewer
 │   │   └── settings-modal.tsx # 6-tab settings
 │   ├── lib/                   # State management & utilities
@@ -307,10 +311,10 @@ r-shell/
 │   └── src/
 │       ├── ssh/               # SSH/SFTP implementation
 │       ├── ftp_client.rs      # FTP/FTPS client
-│       ├── commands.rs        # 49 Tauri commands
-│       ├── websocket_server.rs# PTY WebSocket streaming
+│       ├── commands.rs        # 54 Tauri commands
+│       ├── websocket_server.rs # PTY WebSocket streaming
 │       └── connection_manager.rs # Thread-safe session lifecycle
-└── docs/                      # Documentation
+└── scripts/                   # Version bump and build scripts
 ```
 
 ---
@@ -322,9 +326,6 @@ We welcome contributions! This project is an experiment in AI-assisted developme
 **Quick Links:**
 - [Contributing Guidelines](CONTRIBUTING.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
-- [Version Bump Guide](docs/VERSION_BUMP.md)
-- [Layout Guide](LAYOUT_GUIDE.md)
-- [Quick Start](QUICKSTART.md)
 
 ### How to Contribute
 

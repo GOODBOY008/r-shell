@@ -169,7 +169,7 @@ export function GroupTabBar({
         }
       };
 
-      const onUp = (ev: PointerEvent) => {
+      const onUp = (ev: PointerEvent | FocusEvent) => {
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onUp);
         document.removeEventListener('pointercancel', onUp);
@@ -187,10 +187,12 @@ export function GroupTabBar({
           return;
         }
 
-        // Calculate drop target
-        const dropTarget = findDropTargetAt(ev.clientX, ev.clientY);
+        // Calculate drop target (only available for pointer events, not blur)
+        const clientX = 'clientX' in ev ? ev.clientX : 0;
+        const clientY = 'clientY' in ev ? ev.clientY : 0;
+        const dropTarget = (clientX || clientY) ? findDropTargetAt(clientX, clientY) : null;
         if (dropTarget) {
-          const targetIndex = calcInsertionIndex(dropTarget.element, ev.clientX);
+          const targetIndex = calcInsertionIndex(dropTarget.element, clientX);
           const { tabId: dragTabId, sourceGroupId } = activeDrag;
 
           if (sourceGroupId === dropTarget.groupId) {
