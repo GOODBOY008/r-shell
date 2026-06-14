@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-06-14
+
+### 🖥️ R-Shell 2.3 — Tab Drag Reorder & Terminal Reliability
+
+This release adds drag-and-drop tab reordering in the terminal bar, fixes a directory-tree ref synchronization bug, normalizes terminal scrollback across sessions, and bumps key dependencies.
+
+### Added
+
+- 🖱️ **Terminal Tab Drag-and-Drop Reordering**: Tabs in the terminal tab bar can now be rearranged by dragging with the pointer for a more flexible workspace layout
+
+### Fixed
+
+- 🗂️ **Directory Tree Ref Synchronization**: Fixed a bug where directory-tree refs could fall out of sync with component state on initial load, causing stale or missing expansion data
+- 📜 **Terminal Scrollback Normalization**: Restored the default scrollback buffer to 10,000 lines and added normalization so all sessions start with a consistent scrollback limit (#34)
+
+### Changed
+
+- 📦 **Dependency Updates**: Bumped `openssh` and other dependencies for improved security and stability (#38)
+- 📖 **README & Test Fixes**: Updated README content and resolved a unit-test issue
+
 ## [2.2.0] - 2026-06-10
 
 ### 📂 R-Shell 2.2 — OS-Native File Drag & Drop
