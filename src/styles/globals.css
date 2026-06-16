@@ -92,6 +92,8 @@
 }
 
 .dark {
+  color-scheme: dark;
+
   /* Base colors */
   --background: #0f172a;
   --foreground: #f1f5f9;
@@ -341,7 +343,7 @@ body {
   scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
 }
 
-.dark * {
+:is(.dark *) {
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
@@ -371,11 +373,11 @@ body {
   background: transparent;
 }
 
-.dark *::-webkit-scrollbar-thumb {
+:is(.dark *)::-webkit-scrollbar-thumb {
   background-color: rgba(255, 255, 255, 0.2);
 }
 
-.dark *::-webkit-scrollbar-thumb:hover {
+:is(.dark *)::-webkit-scrollbar-thumb:hover {
   background-color: rgba(255, 255, 255, 0.45);
 }
 
