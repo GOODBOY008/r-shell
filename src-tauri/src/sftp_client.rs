@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+use crate::proxy::{connect_via_proxy, ProxyConfig};
 use crate::ssh::Client;
 
 /// Configuration for a standalone SFTP connection (SSH transport, no PTY).
@@ -16,6 +17,9 @@ pub struct SftpConfig {
     pub port: u16,
     pub username: String,
     pub auth_method: SftpAuthMethod,
+    /// Optional proxy tunnel — same semantics as `SshConfig::proxy`.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -75,30 +79,30 @@ impl StandaloneSftpClient {
             },
             ..client::Config::default()
         };
-        let connection_timeout = Duration::from_secs(10);
+        let connection_timeout = Duration::from_secs(15);
 
-        let mut ssh_session = tokio::time::timeout(
+        // Establish the TCP layer — direct or via proxy (HTTP/SOCKS4/SOCKS5).
+        let stream = tokio::time::timeout(
             connection_timeout,
-            client::connect(
-                Arc::new(ssh_config),
-                (&config.host[..], config.port),
-                Client,
-            ),
+            connect_via_proxy(&config.host, config.port, config.proxy.as_ref()),
         )
         .await
         .map_err(|_| {
             anyhow::anyhow!(
-                "SFTP connection timed out after 10 seconds. Please check the host and network."
+                "SFTP connection timed out after 15 seconds. Please check the host and network."
             )
-        })?
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to connect to {}:{}: {}",
-                config.host,
-                config.port,
-                e
-            )
-        })?;
+        })??;
+
+        let mut ssh_session = client::connect_stream(Arc::new(ssh_config), stream, Client)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to connect to {}:{}: {}",
+                    config.host,
+                    config.port,
+                    e
+                )
+            })?;
 
         // Authenticate
         let authenticated = match &config.auth_method {

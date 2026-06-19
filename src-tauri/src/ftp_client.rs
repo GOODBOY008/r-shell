@@ -3,6 +3,7 @@ use async_std::io::ReadExt;
 use serde::Deserialize;
 use std::time::Duration;
 
+use crate::proxy::{connect_via_proxy, ProxyConfig};
 use crate::sftp_client::{FileEntry, FileEntryType};
 
 /// Configuration for an FTP/FTPS connection.
@@ -14,6 +15,9 @@ pub struct FtpConfig {
     pub password: String,
     pub ftps_enabled: bool,
     pub anonymous: bool,
+    /// Optional proxy tunnel — same semantics as `SshConfig::proxy`.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 /// Wrapper enum to handle both plain and TLS FTP streams.
@@ -51,35 +55,54 @@ impl FtpClient {
         let addr = format!("{}:{}", config.host, config.port);
 
         tracing::info!(
-            "FTP connecting to {} (ftps={}, anonymous={})",
+            "FTP connecting to {} (ftps={}, anonymous={}, proxy={})",
             addr,
             config.ftps_enabled,
-            config.anonymous
+            config.anonymous,
+            config.proxy.as_ref().map(|p| p.is_enabled()).unwrap_or(false)
         );
 
-        // Use async_std timeout since suppaftp uses async_std internally
-        let timeout_duration = Duration::from_secs(15);
+        // Establish the TCP layer — direct or via proxy (HTTP/SOCKS4/SOCKS5).
+        // `connect_via_proxy` returns a tokio TcpStream; suppaftp expects an
+        // async-std TcpStream, so we round-trip through std::net::TcpStream.
+        // The stream stays non-blocking across both conversions.
+        let connect_timeout = Duration::from_secs(15);
+        let tokio_stream = tokio::time::timeout(
+            connect_timeout,
+            connect_via_proxy(&config.host, config.port, config.proxy.as_ref()),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "FTP connection to {} timed out after 15s. Check host and network.",
+                addr
+            )
+        })??;
+        let std_stream = tokio_stream
+            .into_std()
+            .map_err(|e| anyhow::anyhow!("Failed to convert TCP stream: {}", e))?;
+        let async_std_stream = async_std::net::TcpStream::from(std_stream);
+        // suppaftp's connect_with_stream reads the server greeting, so keep
+        // the same timeout wrapper as the direct path.
+        let async_std_stream = async_std::future::timeout(
+            connect_timeout,
+            async move { async_std_stream },
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("FTP stream setup timed out"))?;
 
         let mut stream_kind = if config.ftps_enabled {
-            let ftp_stream = async_std::future::timeout(
-                timeout_duration,
-                suppaftp::AsyncNativeTlsFtpStream::connect(&addr),
+            tracing::info!("FTPS TCP connected (via proxy tunnel), starting TLS handshake...");
+
+            let secure_stream = suppaftp::AsyncNativeTlsFtpStream::connect_with_stream(
+                async_std_stream,
             )
             .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "FTPS connection timed out after 15s. Check host {} and port {}.",
-                    config.host,
-                    config.port
-                )
-            })?
-            .map_err(|e| anyhow::anyhow!("FTPS TCP connect to {} failed: {}", addr, e))?;
-
-            tracing::info!("FTPS TCP connected, starting TLS handshake...");
+            .map_err(|e| anyhow::anyhow!("FTPS greeting from {} failed: {}", addr, e))?;
 
             let tls_connector =
                 suppaftp::async_native_tls::TlsConnector::new().danger_accept_invalid_certs(true);
-            let secure_stream = ftp_stream
+            let secure_stream = secure_stream
                 .into_secure(
                     suppaftp::AsyncNativeTlsConnector::from(tls_connector),
                     &config.host,
@@ -90,19 +113,9 @@ impl FtpClient {
             tracing::info!("FTPS TLS handshake complete");
             FtpStreamKind::Secure(secure_stream)
         } else {
-            let ftp_stream = async_std::future::timeout(
-                timeout_duration,
-                suppaftp::AsyncFtpStream::connect(&addr),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "FTP connection timed out after 15s. Check host {} and port {}.",
-                    config.host,
-                    config.port
-                )
-            })?
-            .map_err(|e| anyhow::anyhow!("FTP TCP connect to {} failed: {}", addr, e))?;
+            let ftp_stream = suppaftp::AsyncFtpStream::connect_with_stream(async_std_stream)
+                .await
+                .map_err(|e| anyhow::anyhow!("FTP greeting from {} failed: {}", addr, e))?;
 
             tracing::info!("FTP TCP connected to {}", addr);
             FtpStreamKind::Plain(ftp_stream)
@@ -367,6 +380,7 @@ mod tests {
             password: pass,
             ftps_enabled: false,
             anonymous: false,
+            proxy: None,
         })
     }
 

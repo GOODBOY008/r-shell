@@ -3,6 +3,7 @@ mod connection_manager;
 mod desktop_protocol;
 mod ftp_client;
 mod os_detect;
+mod proxy;
 mod rdp_client;
 mod sftp_client;
 mod ssh;

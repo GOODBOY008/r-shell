@@ -18,6 +18,7 @@ mod tests {
             auth_method: AuthMethod::Password {
                 password: TEST_PASSWORD.to_string(),
             },
+            proxy: None,
         }
     }
 
@@ -95,6 +96,7 @@ mod tests {
             auth_method: AuthMethod::Password {
                 password: "wrongpassword".to_string(),
             },
+            proxy: None,
         };
 
         let result = client_write.connect(&config).await;
@@ -250,6 +252,7 @@ mod key_loading_tests {
                 key_path: "/nonexistent/path/id_rsa".to_string(),
                 passphrase: None,
             },
+            proxy: None,
         };
 
         let mut client = SshClient::new();

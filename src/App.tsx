@@ -13,6 +13,7 @@ import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
 import { isDesktopProtocol } from './lib/protocol-config';
+import { buildProxyPayload } from './lib/proxy-config';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
@@ -314,6 +315,7 @@ function AppContent() {
                     password: connectionData.password || '',
                     key_path: connectionData.privateKeyPath || null,
                     passphrase: connectionData.passphrase || null,
+                    proxy: buildProxyPayload(connectionData),
                   }
                 }),
                 CONNECT_TIMEOUT_MS,
@@ -330,6 +332,7 @@ function AppContent() {
                     password: connectionData.password || '',
                     ftps_enabled: connectionData.ftpsEnabled ?? false,
                     anonymous: connectionData.authMethod === 'anonymous',
+                    proxy: buildProxyPayload(connectionData),
                   }
                 }),
                 CONNECT_TIMEOUT_MS,
@@ -375,6 +378,7 @@ function AppContent() {
                     password: connectionData.password || '',
                     key_path: connectionData.privateKeyPath || null,
                     passphrase: connectionData.passphrase || null,
+                    proxy: buildProxyPayload(connectionData),
                   }
                 }
               ),
@@ -535,6 +539,7 @@ function AppContent() {
                 password: connectionData.password || '',
                 key_path: connectionData.privateKeyPath || null,
                 passphrase: connectionData.passphrase || null,
+                proxy: buildProxyPayload(connectionData),
               }
             });
           } else {
@@ -547,6 +552,7 @@ function AppContent() {
                 password: connectionData.password || '',
                 ftps_enabled: connectionData.ftpsEnabled ?? false,
                 anonymous: connectionData.authMethod === 'anonymous',
+                proxy: buildProxyPayload(connectionData),
               }
             });
           }
@@ -573,6 +579,7 @@ function AppContent() {
                 password: connectionData.password || '',
                 key_path: connectionData.privateKeyPath || null,
                 passphrase: connectionData.passphrase || null,
+                proxy: buildProxyPayload(connectionData),
               }
             }
           );
@@ -727,6 +734,7 @@ function AppContent() {
                 password: connectionData.password || '',
                 key_path: connectionData.privateKeyPath || null,
                 passphrase: connectionData.passphrase || null,
+                proxy: buildProxyPayload(connectionData),
               }
             });
           } else {
@@ -739,6 +747,7 @@ function AppContent() {
                 password: connectionData.password || '',
                 ftps_enabled: connectionData.ftpsEnabled ?? false,
                 anonymous: connectionData.authMethod === 'anonymous',
+                proxy: buildProxyPayload(connectionData),
               }
             });
           }
@@ -766,6 +775,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              proxy: buildProxyPayload(connectionData),
             }
           }
         );
@@ -868,6 +878,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              proxy: buildProxyPayload(connectionData),
             }
           });
         } else {
@@ -880,6 +891,7 @@ function AppContent() {
               password: connectionData.password || '',
               ftps_enabled: connectionData.ftpsEnabled ?? false,
               anonymous: connectionData.authMethod === 'anonymous',
+              proxy: buildProxyPayload(connectionData),
             }
           });
         }
@@ -911,6 +923,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              proxy: buildProxyPayload(connectionData),
             }
           }
         );
@@ -1044,6 +1057,7 @@ function AppContent() {
                 password: config.password || '',
                 key_path: config.privateKeyPath || null,
                 passphrase: config.passphrase || null,
+                proxy: buildProxyPayload(config),
               }
             });
           } else {
@@ -1056,6 +1070,7 @@ function AppContent() {
                 password: config.password || '',
                 ftps_enabled: config.ftpsEnabled ?? false,
                 anonymous: config.authMethod === 'anonymous',
+                proxy: buildProxyPayload(config),
               }
             });
           }
@@ -1153,6 +1168,7 @@ function AppContent() {
                 password: config.password || '',
                 key_path: config.privateKeyPath || null,
                 passphrase: config.passphrase || null,
+                proxy: buildProxyPayload(config),
               }
             });
           } else {
@@ -1165,6 +1181,7 @@ function AppContent() {
                 password: config.password || '',
                 ftps_enabled: config.ftpsEnabled ?? false,
                 anonymous: config.authMethod === 'anonymous',
+                proxy: buildProxyPayload(config),
               }
             });
           }
@@ -1336,6 +1353,11 @@ function AppContent() {
         privateKeyPath: connectionData.privateKeyPath,
         passphrase: connectionData.passphrase,
         ftpsEnabled: connectionData.ftpsEnabled,
+        proxyType: connectionData.proxyType,
+        proxyHost: connectionData.proxyHost,
+        proxyPort: connectionData.proxyPort,
+        proxyUsername: connectionData.proxyUsername,
+        proxyPassword: connectionData.proxyPassword,
       };
       await handleConnectionDialogConnect(config);
       toast.success('Quick Connected', {
@@ -1356,6 +1378,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              proxy: buildProxyPayload(connectionData),
             }
           }
         );

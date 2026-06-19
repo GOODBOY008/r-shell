@@ -23,6 +23,12 @@ export interface ConnectionData {
   password?: string; // Note: In production, this should be encrypted
   privateKeyPath?: string;
   passphrase?: string;
+  // Proxy tunnel (applies to SSH / SFTP / FTP / FTPS / RDP / VNC)
+  proxyType?: 'none' | 'http' | 'socks4' | 'socks5';
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  proxyPassword?: string;
   // FTP-specific
   ftpsEnabled?: boolean;
   // RDP-specific

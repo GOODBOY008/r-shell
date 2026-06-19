@@ -1,6 +1,7 @@
 use crate::connection_manager::ConnectionManager;
 use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
+use crate::proxy::ProxyConfig;
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
 use crate::ssh::{AuthMethod, SshConfig};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,11 @@ pub struct ConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// Optional proxy tunnel (HTTP / SOCKS4 / SOCKS5). Omitted or `null`
+    /// for direct connections; included with `proxy_type: "none"` when the
+    /// frontend wants to persist the disabled state.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +79,7 @@ pub async fn ssh_connect(
         port: request.port,
         username: request.username,
         auth_method,
+        proxy: request.proxy,
     };
 
     match state
@@ -2024,6 +2031,9 @@ pub struct SftpConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// Optional proxy tunnel — same shape as `ConnectRequest::proxy`.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[tauri::command]
@@ -2047,6 +2057,7 @@ pub async fn sftp_connect(
         port: request.port,
         username: request.username,
         auth_method: auth,
+        proxy: request.proxy,
     };
 
     match state
@@ -2092,6 +2103,9 @@ pub struct FtpConnectRequest {
     pub password: Option<String>,
     pub ftps_enabled: bool,
     pub anonymous: bool,
+    /// Optional proxy tunnel — same shape as `ConnectRequest::proxy`.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[tauri::command]
@@ -2124,6 +2138,7 @@ pub async fn ftp_connect(
         },
         ftps_enabled: request.ftps_enabled,
         anonymous: request.anonymous,
+        proxy: request.proxy,
     };
 
     match state

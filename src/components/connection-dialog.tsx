@@ -23,6 +23,7 @@ import {
   Monitor,
 } from 'lucide-react';
 import { getDefaultPort, getAuthMethods, getHiddenFields, isDesktopProtocol } from '@/lib/protocol-config';
+import { buildProxyPayload } from '@/lib/proxy-config';
 
 interface ConnectionDialogProps {
   open: boolean;
@@ -257,6 +258,11 @@ export function ConnectionDialog({
             domain: config.domain,
             rdpResolution: config.rdpResolution,
             vncColorDepth: config.vncColorDepth,
+            proxyType: config.proxyType,
+            proxyHost: config.proxyHost,
+            proxyPort: config.proxyPort,
+            proxyUsername: config.proxyUsername,
+            proxyPassword: config.proxyPassword,
             lastConnected: new Date().toISOString(),
           });
         } else if (saveAsConnection) {
@@ -275,6 +281,11 @@ export function ConnectionDialog({
             domain: config.domain,
             rdpResolution: config.rdpResolution,
             vncColorDepth: config.vncColorDepth,
+            proxyType: config.proxyType,
+            proxyHost: config.proxyHost,
+            proxyPort: config.proxyPort,
+            proxyUsername: config.proxyUsername,
+            proxyPassword: config.proxyPassword,
           });
         }
 
@@ -305,6 +316,7 @@ export function ConnectionDialog({
             password: config.password || '',
             key_path: config.privateKeyPath || null,
             passphrase: config.passphrase || null,
+            proxy: buildProxyPayload(config),
           }
         }
       );
@@ -323,6 +335,11 @@ export function ConnectionDialog({
             password: config.password,
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
+            proxyType: config.proxyType,
+            proxyHost: config.proxyHost,
+            proxyPort: config.proxyPort,
+            proxyUsername: config.proxyUsername,
+            proxyPassword: config.proxyPassword,
             lastConnected: new Date().toISOString(),
           });
         } else if (saveAsConnection) {
@@ -339,6 +356,11 @@ export function ConnectionDialog({
             password: config.password,
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
+            proxyType: config.proxyType,
+            proxyHost: config.proxyHost,
+            proxyPort: config.proxyPort,
+            proxyUsername: config.proxyUsername,
+            proxyPassword: config.proxyPassword,
           });
         }
 

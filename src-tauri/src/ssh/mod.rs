@@ -9,6 +9,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::proxy::{connect_via_proxy, ProxyConfig};
+
 /// Preferred host-key algorithms advertised to the server, ordered from most to
 /// least preferred.  RSA variants (including the legacy `ssh-rsa` / SHA-1) are
 /// included so that older servers that only offer RSA host keys are still
@@ -29,6 +31,11 @@ pub struct SshConfig {
     pub port: u16,
     pub username: String,
     pub auth_method: AuthMethod,
+    /// Optional proxy tunnel. When `Some` and enabled, the SSH TCP
+    /// connection is established through the proxy before the SSH
+    /// handshake runs on top of it.
+    #[serde(default)]
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,15 +106,30 @@ impl SshClient {
             ..client::Config::default()
         };
 
-        // Connection timeout: 3 seconds
-        let connection_timeout = Duration::from_secs(3);
-
-        let mut ssh_session = tokio::time::timeout(
+        // Establish the TCP layer — direct or via proxy (HTTP/SOCKS4/SOCKS5).
+        // The SSH handshake then runs over the resulting byte stream.
+        let connection_timeout = Duration::from_secs(15);
+        let stream = tokio::time::timeout(
             connection_timeout,
-            client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client)
-        ).await
-            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
-            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?;
+            connect_via_proxy(&config.host, config.port, config.proxy.as_ref()),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Connection timed out after 15 seconds. Please check the host address and network connectivity."
+            )
+        })??;
+
+        let mut ssh_session = client::connect_stream(Arc::new(ssh_config), stream, Client)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to connect to {}:{}: {}",
+                    config.host,
+                    config.port,
+                    e
+                )
+            })?;
 
         let authenticated = match &config.auth_method {
             AuthMethod::Password { password } => ssh_session
