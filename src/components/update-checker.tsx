@@ -13,6 +13,7 @@ import {
 } from './ui/alert-dialog';
 import { Progress } from './ui/progress';
 import { Button } from './ui/button';
+import { APP_SETTINGS_STORAGE_KEY } from '@/lib/keyboard-shortcuts';
 
 interface UpdateCheckerProps {
   checkSignal?: number;
@@ -21,6 +22,20 @@ interface UpdateCheckerProps {
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'ready' | 'error';
 
 const isTauriRuntime = () => typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
+
+/** Read the user's "auto check for updates" preference from localStorage. */
+const isAutoCheckEnabled = () => {
+  try {
+    // The settings modal persists the full settings object (including
+    // checkUpdates) under this single key; see SettingsModal.handleSave.
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return true; // default: enabled
+    const parsed = JSON.parse(raw);
+    return parsed.checkUpdates !== false;
+  } catch {
+    return true;
+  }
+};
 
 export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
   const [status, setStatus] = useState<UpdateStatus>('idle');
@@ -31,8 +46,10 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
   const lastSignalRef = useRef<number | undefined>(checkSignal);
   const downloadTotalRef = useRef<number | null>(null);
   const downloadedBytesRef = useRef(0);
+  const busyRef = useRef(false);
 
   const busy = status === 'downloading' || status === 'installing' || status === 'checking';
+  busyRef.current = busy;
   const readyToInstall = status === 'ready' || status === 'installing';
 
   const resetState = useCallback(() => {
@@ -45,16 +62,32 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
 
   const checkForUpdates = useCallback(async (manual: boolean) => {
     if (!isTauriRuntime()) {
+      if (manual) {
+        toast.info('Updates are not available in development mode.');
+      }
+      return;
+    }
+
+    // Guard against concurrent checks (rapid clicks, overlapping auto+manual)
+    if (busyRef.current) {
       return;
     }
 
     setStatus('checking');
     setError(null);
 
+    if (manual) {
+      toast.loading('Checking for updates…', { id: 'update-check' });
+    }
+
     try {
       const update = await check();
 
-      if (update?.available) {
+      if (manual) {
+        toast.dismiss('update-check');
+      }
+
+      if (update) {
         setUpdateInfo(update);
         setStatus('available');
         setDialogOpen(true);
@@ -65,7 +98,29 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
         }
       }
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : 'Failed to check for updates.';
+      if (manual) {
+        toast.dismiss('update-check');
+      }
+
+      const raw = caught instanceof Error ? caught.message : 'Failed to check for updates.';
+      // Tauri updater throws when the endpoint is unreachable or returns invalid
+      // data. Map the common Rust error substrings to friendlier messages.
+      const lower = raw.toLowerCase();
+      const message =
+        lower.includes('404') || lower.includes('not found')
+          ? 'Update server is not configured for this version.'
+          : lower.includes('network') ||
+              lower.includes('dns') ||
+              lower.includes('timeout') ||
+              lower.includes('connection refused') ||
+              lower.includes('failed to connect')
+            ? 'Could not reach the update server. Check your internet connection.'
+            : lower.includes('signature') ||
+                lower.includes('verify') ||
+                lower.includes('verification') ||
+                lower.includes('invalid')
+              ? 'Update verification failed. Please try again later.'
+              : raw;
       setStatus('error');
       setError(message);
       if (manual) {
@@ -138,7 +193,9 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
   }, [updateInfo]);
 
   useEffect(() => {
-    checkForUpdates(false);
+    if (isAutoCheckEnabled()) {
+      checkForUpdates(false);
+    }
   }, [checkForUpdates]);
 
   useEffect(() => {

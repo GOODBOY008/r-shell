@@ -19,7 +19,8 @@ import {
   Monitor,
   Image,
   Upload,
-  X
+  X,
+  RefreshCw
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -42,9 +43,10 @@ interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAppearanceChange?: (settings: TerminalAppearanceSettings) => void;
+  onCheckForUpdates?: () => void;
 }
 
-export function SettingsModal({ open, onOpenChange, onAppearanceChange }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckForUpdates }: SettingsModalProps) {
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
   
   const [settings, setSettings] = useState({
@@ -869,10 +871,25 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                       Automatically check for application updates
                     </p>
                   </div>
-                  <Switch
-                    checked={settings.checkUpdates}
-                    onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
-                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        onCheckForUpdates?.();
+                        // Close the modal so the update dialog / toast is not obscured.
+                        onOpenChange(false);
+                      }}
+                      className="gap-1.5"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Check Now
+                    </Button>
+                    <Switch
+                      checked={settings.checkUpdates}
+                      onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
+                    />
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between">

@@ -1703,6 +1703,7 @@ function AppContent() {
           // Appearance changes are handled by individual PtyTerminal instances
           // via their own settings listeners in TerminalGroupView
         }}
+        onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />
 
       <Toaster richColors position="top-right" />

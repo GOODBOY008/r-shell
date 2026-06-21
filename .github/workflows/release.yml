@@ -73,8 +73,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'r-shell ${{ github.ref_name }}'
@@ -83,6 +83,133 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+  # Generate and upload latest.json for the in-app updater.
+  # Skips pre-release tags so a beta/alpha never becomes the `latest` release
+  # and hijack the updater manifest for stable users.
+  upload-updater-json:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Poll for release assets to become available
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # GitHub may take a while to finalize assets uploaded by the matrix jobs.
+          # Wait (up to ~5 min) until at least one updater artifact is visible.
+          for i in $(seq 1 30); do
+            COUNT=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+              | jq '[.assets[]? | select(.name | endswith(".sig") or endswith(".app.tar.gz") or endswith(".AppImage") or endswith("-setup.exe"))] | length')
+            echo "attempt $i: $COUNT updater-related assets visible"
+            if [ "${COUNT:-0}" -ge 4 ]; then
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Generate latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAG="$GITHUB_REF_NAME"
+
+          # Fetch the release to get asset download URLs.
+          RELEASE_JSON=$(curl -sL \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+
+          # A minisign signature is base64 text on a single line. Tauri .sig
+          # files follow this shape; reject anything that does not look right
+          # (e.g. an HTML 404 body returned with a 200 by a CDN) instead of
+          # injecting garbage into the manifest.
+          get_signature() {
+            local sig_asset_name="$1"
+            local sig_url sig_body
+            sig_url=$(echo "$RELEASE_JSON" | jq -r --arg name "$sig_asset_name" '.assets[] | select(.name == $name) | .browser_download_url')
+            if [ -z "$sig_url" ] || [ "$sig_url" = "null" ]; then
+              echo ""
+              return
+            fi
+            sig_body=$(curl -sL "$sig_url" | tr -d '\n' | tr -d '[:space:]')
+            # minisign/tauri signatures are base64-ish and reasonably long.
+            if printf '%s' "$sig_body" | grep -Eq '^[A-Za-z0-9+/=]{32,}$'; then
+              printf '%s' "$sig_body"
+            else
+              echo ""
+            fi
+          }
+
+          # Select the first asset whose name matches a regex, returning both
+          # its download URL and file name as "url<TAB>name". Using regex
+          # instead of literal `endswith` keeps us tolerant of version
+          # prefixes and architecture naming variants (e.g. x64 vs x86_64).
+          pick_asset() {
+            local pattern="$1"
+            echo "$RELEASE_JSON" | jq -r --arg p "$pattern" \
+              'first(.assets[] | select(.name | test($p))) | "\(.browser_download_url)\t\(.name)" // empty'
+          }
+
+          add_platform() {
+            local key="$1" pattern="$2"
+            local picked asset_name url sig
+            picked=$(pick_asset "$pattern")
+            if [ -z "$picked" ]; then
+              return
+            fi
+            url="${picked%%$'\t'*}"
+            asset_name="${picked##*$'\t'}"
+            sig=$(get_signature "${asset_name}.sig")
+            if [ -z "$sig" ]; then
+              echo "::warning::No valid signature for $asset_name; $key will be skipped."
+              return
+            fi
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg k "$key" --arg url "$url" --arg sig "$sig" \
+              '. + {($k): {"url": $url, "signature": $sig}}')
+          }
+
+          PLATFORMS='{}'
+
+          # Tauri v2 asset naming (productName "r-shell"):
+          #   macOS arm64  -> r-shell_<v>_aarch64.app.tar.gz
+          #   macOS x86_64 -> r-shell_<v>_x64.app.tar.gz        (uses "x64", NOT "x86_64")
+          #   Linux x86_64 -> r-shell_<v>_amd64.AppImage
+          #   Windows x64  -> r-shell_<v>_x64-setup.exe          (NSIS)
+          add_platform "darwin-aarch64"  'aarch64\.app\.tar\.gz$'
+          add_platform "darwin-x86_64"   '_x64\.app\.tar\.gz$'
+          add_platform "linux-x86_64"    'amd64\.AppImage$'
+          add_platform "windows-x86_64"  'x64-setup\.exe$'
+
+          # Fail loudly rather than shipping an empty/partial manifest that
+          # would silently break updates for every platform.
+          PLATFORM_COUNT=$(echo "$PLATFORMS" | jq 'length')
+          if [ "${PLATFORM_COUNT:-0}" -eq 0 ]; then
+            echo "::error::No updater assets were resolved from the release. Aborting latest.json upload."
+            exit 1
+          fi
+
+          # Build the final latest.json. version omits the leading "v".
+          jq -n --arg version "$VERSION" --arg notes "See release page for details." --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson platforms "$PLATFORMS" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' > latest.json
+
+          cat latest.json
+
+      - name: Upload latest.json to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Generate SHA256 checksums for Homebrew
   generate-checksums:
