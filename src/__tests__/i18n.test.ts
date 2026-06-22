@@ -1,5 +1,6 @@
 import i18n from '../lib/i18n';
-import { describe, it, expect } from 'vitest';
+import { changeLanguage, applyLanguageFromPreference, getLanguagePreference, AUTO } from '../lib/i18n';
+import { describe, it, expect, beforeEach } from 'vitest';
 
 describe('i18n', () => {
   it('should initialize with English', () => {
@@ -28,5 +29,34 @@ describe('i18n', () => {
     const plural = i18n.t('fileBrowser.toast.queuedUpload', { count: 5 });
     expect(single).toContain('1 file');
     expect(plural).toContain('5 files');
+  });
+});
+
+describe('i18n language preference', () => {
+  beforeEach(() => {
+    localStorage.removeItem('r-shell-language');
+  });
+
+  it('defaults to the AUTO sentinel when no preference is stored', () => {
+    expect(getLanguagePreference()).toBe(AUTO);
+  });
+
+  it('persists an explicit choice as the concrete code', async () => {
+    await changeLanguage('zh');
+    expect(getLanguagePreference()).toBe('zh-CN');
+    expect(i18n.language).toBe('zh-CN');
+  });
+
+  it('persists the AUTO sentinel without storing a concrete code', async () => {
+    await changeLanguage(AUTO);
+    expect(getLanguagePreference()).toBe(AUTO);
+  });
+
+  it('applyLanguageFromPreference re-applies the stored concrete preference', async () => {
+    await changeLanguage('zh-CN');
+    // Simulate the app restarting: i18n resets to en, but storage holds zh-CN.
+    await i18n.changeLanguage('en');
+    await applyLanguageFromPreference();
+    expect(i18n.language).toBe('zh-CN');
   });
 });
