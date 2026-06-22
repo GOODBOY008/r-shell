@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 // relaunch() calls the process plugin's restart command (process:allow-restart capability)
@@ -38,6 +39,7 @@ const isAutoCheckEnabled = () => {
 };
 
 export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<UpdateStatus>('idle');
   const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
   const [progress, setProgress] = useState(0);
@@ -235,7 +237,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {status === 'ready' ? 'Update ready to install' : 'Update available'}
+            {status === 'ready' ? 'Update ready to install' : t('updateChecker.updateAvailable')}
           </AlertDialogTitle>
           <AlertDialogDescription>
             {updateInfo?.version
@@ -249,7 +251,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
           {status === 'downloading' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Downloading update</span>
+                <span>{t('updateChecker.downloading')}</span>
                 <span>{progress}%</span>
               </div>
               <Progress value={progress} />

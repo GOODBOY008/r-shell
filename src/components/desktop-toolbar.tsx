@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from './ui/button';
 import { Maximize2, Minimize2, Monitor, Power, RectangleHorizontal } from 'lucide-react';
 
@@ -21,6 +22,7 @@ export function DesktopToolbar({
   onToggleFullScreen,
   onDisconnect,
 }: DesktopToolbarProps) {
+  const { t } = useTranslation();
   const [visible, setVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -64,14 +66,14 @@ export function DesktopToolbar({
           size="sm"
           className="h-7 px-2 text-xs"
           onClick={onToggleScalingMode}
-          title={scalingMode === 'fit' ? 'Switch to 1:1' : 'Switch to Fit to Window'}
+          title={scalingMode === 'fit' ? t('desktopToolbar.switchTo11') : t('desktopToolbar.switchToFit')}
         >
           {scalingMode === 'fit' ? (
             <RectangleHorizontal className="h-3.5 w-3.5 mr-1" />
           ) : (
             <Monitor className="h-3.5 w-3.5 mr-1" />
           )}
-          {scalingMode === 'fit' ? 'Fit' : '1:1'}
+          {scalingMode === 'fit' ? t('desktopToolbar.fit') : t('desktopToolbar.oneToOne')}
         </Button>
 
         {protocol === 'RDP' && (
@@ -80,7 +82,7 @@ export function DesktopToolbar({
             size="sm"
             className="h-7 px-2 text-xs"
             onClick={onSendCtrlAltDel}
-            title="Send Ctrl+Alt+Del"
+            title={t('desktopToolbar.sendCtrlAltDel')}
           >
             Ctrl+Alt+Del
           </Button>
@@ -91,7 +93,7 @@ export function DesktopToolbar({
           size="sm"
           className="h-7 px-2 text-xs"
           onClick={onToggleFullScreen}
-          title={isFullScreen ? 'Exit Full Screen' : 'Full Screen'}
+          title={isFullScreen ? t('desktopToolbar.exitFullScreen') : t('desktopToolbar.fullScreen')}
         >
           {isFullScreen ? (
             <Minimize2 className="h-3.5 w-3.5" />
@@ -107,7 +109,7 @@ export function DesktopToolbar({
           size="sm"
           className="h-7 px-2 text-xs text-destructive hover:text-destructive"
           onClick={onDisconnect}
-          title="Disconnect"
+          title={t('desktopToolbar.disconnect')}
         >
           <Power className="h-3.5 w-3.5" />
         </Button>

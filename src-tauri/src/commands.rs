@@ -3078,6 +3078,33 @@ pub async fn desktop_resize(
     c.resize(width, height).await.map_err(|e| e.to_string())
 }
 
+// ========== Native Menu i18n ==========
+
+/// Rebuild the native macOS menu bar with translated labels from the frontend.
+/// On non-macOS platforms this is a no-op.
+#[tauri::command]
+pub async fn update_menu_language(
+    app: tauri::AppHandle,
+    translations: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let menu = crate::build_app_menu(&app, move |key: &str| {
+            translations
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| crate::default_menu_text(key))
+        })
+        .map_err(|e| e.to_string())?;
+        app.set_menu(menu).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, translations);
+    }
+    Ok(())
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]

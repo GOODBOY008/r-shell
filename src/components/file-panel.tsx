@@ -6,6 +6,7 @@ import React, {
   useImperativeHandle,
   forwardRef,
 } from "react";
+import { useTranslation } from 'react-i18next';
 import { toast } from "sonner";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -118,6 +119,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     },
     ref,
   ) {
+    const { t } = useTranslation();
     const [currentPath, setCurrentPath] = useState(initialPath ?? "/");
     const [entries, setEntries] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(false);
@@ -189,7 +191,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           setSelectedNames(new Set());
           setLastSelectedIndex(null);
         } catch (err) {
-          toast.error(`Failed to load directory`, {
+          toast.error(t('filePanel.toast.loadFailed'), {
             description: err instanceof Error ? err.message : String(err),
           });
         } finally {
@@ -343,10 +345,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       const fullPath = pathJoin(currentPath, name);
       try {
         await onDelete(fullPath, isDirectory);
-        toast.success("Deleted", { description: name });
+        toast.success(t('filePanel.toast.deleted'), { description: name });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error("Delete failed", {
+        toast.error(t('filePanel.toast.deleteFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -354,17 +356,17 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     const handleRename = async (oldName: string) => {
       if (!onRename) return;
-      const newName = prompt("New name:", oldName);
+      const newName = prompt(t('filePanel.prompt.rename'), oldName);
       if (!newName || newName === oldName) return;
       try {
         await onRename(
           pathJoin(currentPath, oldName),
           pathJoin(currentPath, newName),
         );
-        toast.success("Renamed", { description: `${oldName} → ${newName}` });
+        toast.success(t('filePanel.toast.renamed'), { description: `${oldName} → ${newName}` });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error("Rename failed", {
+        toast.error(t('filePanel.toast.renameFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -372,14 +374,14 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     const handleCreateDir = async () => {
       if (!onCreateDirectory) return;
-      const name = prompt("Directory name:");
+      const name = prompt(t('filePanel.prompt.directoryName'));
       if (!name) return;
       try {
         await onCreateDirectory(pathJoin(currentPath, name));
-        toast.success("Directory created", { description: name });
+        toast.success(t('filePanel.toast.directoryCreated'), { description: name });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error("Create directory failed", {
+        toast.error(t('filePanel.toast.createDirectoryFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -387,7 +389,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     const handleCopyPath = (name: string) => {
       navigator.clipboard.writeText(pathJoin(currentPath, name));
-      toast.success("Path copied");
+      toast.success(t('filePanel.toast.pathCopied'));
     };
 
     const handleTransfer = () => {
@@ -521,7 +523,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant={mode === "local" ? "outline" : "secondary"}
             className="text-[10px] px-1.5 py-0 h-5"
           >
-            {mode === "local" ? "Local" : "Remote"}
+            {t(mode === "local" ? 'filePanel.panel.local' : 'filePanel.panel.remote')}
           </Badge>
           <span className="text-[10px] text-muted-foreground truncate flex-1">
             {label}
@@ -534,7 +536,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="Go up"
+            title={t('filePanel.toolbar.goUp')}
             disabled={disabled || currentPath === "/"}
             onClick={() => loadDirectory(getParentPath(currentPath))}
           >
@@ -544,7 +546,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="Home"
+            title={t('filePanel.toolbar.home')}
             disabled={disabled}
             onClick={() => loadDirectory(initialPath ?? "/")}
           >
@@ -554,7 +556,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="Refresh"
+            title={t('filePanel.toolbar.refresh')}
             disabled={disabled}
             onClick={() => loadDirectory(currentPath)}
           >
@@ -585,7 +587,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <div className="flex items-center shrink-0 h-6 rounded bg-muted/50 px-1.5 gap-1">
             <Search className="h-3 w-3 text-muted-foreground/60 shrink-0" />
             <input
-              placeholder="Filter…"
+              placeholder={t('filePanel.toolbar.filter')}
               className="h-full w-24 text-[10px] bg-transparent outline-none placeholder:text-muted-foreground/50"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
@@ -596,7 +598,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="New folder"
+            title={t('filePanel.toolbar.newFolder')}
             disabled={disabled}
             onClick={handleCreateDir}
           >
@@ -614,7 +616,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                 </div>
               ) : filteredEntries.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-xs text-muted-foreground">
-                  {filter ? "No matches" : "Empty directory"}
+                  {filter ? t('filePanel.empty.noMatches') : t('filePanel.empty.emptyDirectory')}
                 </div>
               ) : (
                 <table className="w-full text-[11px]" style={{ tableLayout: "fixed" }}>
@@ -633,7 +635,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         onClick={() => handleSortClick("name")}
                       >
                         <span className="inline-flex items-center">
-                          Name
+                          {t('filePanel.column.name')}
                           <SortIndicator column="name" />
                         </span>
                         <div
@@ -649,7 +651,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         onClick={() => handleSortClick("size")}
                       >
                         <span className="inline-flex items-center justify-end w-full">
-                          Size
+                          {t('filePanel.column.size')}
                           <SortIndicator column="size" />
                         </span>
                         <div
@@ -665,7 +667,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         onClick={() => handleSortClick("modified")}
                       >
                         <span className="inline-flex items-center">
-                          Modified
+                          {t('filePanel.column.modified')}
                           <SortIndicator column="modified" />
                         </span>
                         {showPermissions && (
@@ -680,7 +682,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                       </th>
                       {showPermissions && (
                         <th className="text-left px-2 py-0.5 font-medium relative">
-                          Perms
+                          {t('filePanel.column.permissions')}
                         </th>
                       )}
                     </tr>
@@ -728,8 +730,8 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                   <Download className="h-3.5 w-3.5 mr-2" />
                                 )}
                                 {mode === "local"
-                                  ? "Upload to remote"
-                                  : "Download to local"}
+                                  ? t('filePanel.contextMenu.uploadToRemote')
+                                  : t('filePanel.contextMenu.downloadToLocal')}
                               </ContextMenuItem>
                             )}
                             {entry.file_type === "Directory" &&
@@ -748,8 +750,8 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                     <FolderDown className="h-3.5 w-3.5 mr-2" />
                                   )}
                                   {mode === "local"
-                                    ? "Upload directory to remote"
-                                    : "Download directory to local"}
+                                    ? t('filePanel.contextMenu.uploadDirToRemote')
+                                    : t('filePanel.contextMenu.downloadDirToLocal')}
                                 </ContextMenuItem>
                               )}
                             {mode === "local" && onOpenInOS && (
@@ -761,20 +763,20 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                 }
                               >
                                 <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                                Open in OS
+                                {t('filePanel.contextMenu.openInOS')}
                               </ContextMenuItem>
                             )}
                             <ContextMenuItem
                               onClick={() => handleRename(entry.name)}
                             >
                               <Pencil className="h-3.5 w-3.5 mr-2" />
-                              Rename
+                              {t('filePanel.contextMenu.rename')}
                             </ContextMenuItem>
                             <ContextMenuItem
                               onClick={() => handleCopyPath(entry.name)}
                             >
                               <Copy className="h-3.5 w-3.5 mr-2" />
-                              Copy path
+                              {t('filePanel.contextMenu.copyPath')}
                             </ContextMenuItem>
                             <ContextMenuSeparator />
                             <ContextMenuItem
@@ -787,7 +789,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                               }
                             >
                               <Trash2 className="h-3.5 w-3.5 mr-2" />
-                              Delete
+                              {t('filePanel.contextMenu.delete')}
                             </ContextMenuItem>
                           </ContextMenuContent>
                         </ContextMenu>
@@ -802,12 +804,12 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <ContextMenuContent>
             <ContextMenuItem onClick={handleCreateDir}>
               <FolderPlus className="h-3.5 w-3.5 mr-2" />
-              Create directory
+              {t('filePanel.contextMenu.createDirectory')}
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => loadDirectory(currentPath)}>
               <RefreshCw className="h-3.5 w-3.5 mr-2" />
-              Refresh
+              {t('filePanel.contextMenu.refresh')}
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
@@ -818,10 +820,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary rounded-sm pointer-events-none">
             <div className="text-sm font-medium text-primary">
               {isOsDragOver
-                ? "Drop files or folders to upload"
+                ? t('filePanel.dropOverlay.osDrop')
                 : mode === "local"
-                  ? "Drop to download"
-                  : "Drop to upload"}
+                  ? t('filePanel.dropOverlay.downloadHere')
+                  : t('filePanel.dropOverlay.uploadHere')}
             </div>
           </div>
         )}
@@ -829,11 +831,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* Status bar */}
         <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t bg-muted/30 shrink-0">
           <span>
-            {filteredEntries.length} item
-            {filteredEntries.length !== 1 ? "s" : ""}
+            {t('filePanel.statusBar.items', { count: filteredEntries.length })}
             {selectedNames.size > 0 && (
               <>
-                {` · ${selectedNames.size} selected`}
+                {` · ${t('filePanel.statusBar.selected', { count: selectedNames.size })}`}
                 {(() => {
                   const totalSize = entries
                     .filter(

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { Save, RefreshCw, FileWarning } from "lucide-react";
@@ -22,6 +23,7 @@ export function FileEditorView({
   fileName,
   isConnected,
 }: FileEditorViewProps) {
+  const { t } = useTranslation();
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [loading, setLoading] = useState(true);
@@ -44,7 +46,7 @@ export function FileEditorView({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
-      toast.error("Failed to load file", { description: msg });
+      toast.error(t('fileEditorView.failedToLoad'), { description: msg });
     } finally {
       setLoading(false);
     }
@@ -65,10 +67,10 @@ export function FileEditorView({
         content: contentRef.current,
       });
       setSavedContent(contentRef.current);
-      toast.success(`${fileName} saved`);
+      toast.success(t('fileEditorView.fileSaved', { fileName }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error("Failed to save file", { description: msg });
+      toast.error(t('fileEditorView.failedToSave'), { description: msg });
     } finally {
       setSaving(false);
     }
@@ -90,7 +92,7 @@ export function FileEditorView({
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground">
         <FileWarning className="h-8 w-8 mr-3 opacity-50" />
-        <span>Connection lost. Reconnect to continue editing.</span>
+        <span>{t('fileEditorView.connectionLost')}</span>
       </div>
     );
   }
@@ -99,7 +101,7 @@ export function FileEditorView({
     return (
       <div className="h-full flex items-center justify-center text-muted-foreground">
         <RefreshCw className="h-5 w-5 animate-spin mr-2" />
-        Loading {fileName}…
+        {t('fileEditorView.loading', { fileName })}
       </div>
     );
   }
@@ -108,9 +110,9 @@ export function FileEditorView({
     return (
       <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-3">
         <FileWarning className="h-8 w-8 opacity-50" />
-        <span>Failed to load file: {error}</span>
+        <span>{t('fileEditorView.failedToLoadError', { error })}</span>
         <Button variant="outline" size="sm" onClick={loadFile}>
-          <RefreshCw className="h-4 w-4 mr-1" /> Retry
+          <RefreshCw className="h-4 w-4 mr-1" /> {t('fileEditorView.retry')}
         </Button>
       </div>
     );
@@ -124,7 +126,7 @@ export function FileEditorView({
           {filePath}
         </span>
         {dirty && (
-          <span className="text-yellow-500 text-[10px] font-medium">MODIFIED</span>
+          <span className="text-yellow-500 text-[10px] font-medium">{t('fileEditorView.modified')}</span>
         )}
         <Button
           variant="ghost"
@@ -132,7 +134,7 @@ export function FileEditorView({
           className="h-6 px-2"
           onClick={loadFile}
           disabled={loading}
-          title="Reload from server"
+          title={t('fileEditorView.reload')}
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
@@ -142,10 +144,10 @@ export function FileEditorView({
           className="h-6 px-2"
           onClick={handleSave}
           disabled={saving || !dirty}
-          title="Save (Ctrl+S)"
+          title={t('fileEditorView.saveTooltip')}
         >
           <Save className="h-3.5 w-3.5 mr-1" />
-          Save
+          {t('fileEditorView.save')}
         </Button>
       </div>
 

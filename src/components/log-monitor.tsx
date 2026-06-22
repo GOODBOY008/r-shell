@@ -18,6 +18,7 @@ import React, {
   useMemo,
   useCallback,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import {
@@ -242,6 +243,7 @@ const SOURCE_TYPE_LABELS: Record<string, { icon: React.ReactNode; label: string 
 // ── Component ──
 
 export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }: LogMonitorProps) {
+  const { t } = useTranslation();
   // Source state
   const [sources, setSources] = useState<LogSource[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState("");
@@ -280,15 +282,15 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
       if (result.success) {
         setSources(result.sources);
         if (result.sources.length === 0) {
-          toast.info("No log sources discovered");
+          toast.info(t('logMonitor.noSourcesDiscovered'));
         }
       } else {
-        toast.error("Failed to discover log sources", {
+        toast.error(t('logMonitor.failedToDiscoverSources'), {
           description: result.error,
         });
       }
     } catch (err) {
-      toast.error("Failed to discover log sources", {
+      toast.error(t('logMonitor.failedToDiscoverSources'), {
         description: err instanceof Error ? err.message : String(err),
       });
     } finally {
@@ -361,13 +363,13 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
             });
           }
         } else if (!isAutoRefresh) {
-          toast.error("Failed to load log", {
-            description: result.error ?? "Unknown error",
+          toast.error(t('logMonitor.failedToLoadLog'), {
+            description: result.error ?? t('logMonitor.unknownError'),
           });
         }
       } catch (err) {
         if (!isAutoRefresh) {
-          toast.error("Failed to load log", {
+          toast.error(t('logMonitor.failedToLoadLog'), {
             description: err instanceof Error ? err.message : String(err),
           });
         }
@@ -597,7 +599,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
   if (!connectionId) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-        Connect to a server to view logs
+        {t('logMonitor.connectToViewLogs')}
       </div>
     );
   }
@@ -611,7 +613,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         <div className="flex items-center gap-1 px-2 py-1 border-b bg-muted/30 shrink-0">
           <Select value={selectedSourceId} onValueChange={handleSourceChange}>
             <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
-              <SelectValue placeholder="Select log source…" />
+              <SelectValue placeholder={t('logMonitor.selectLogSource')} />
             </SelectTrigger>
             <SelectContent className="max-h-[300px]">
               {Object.entries(groupedSources).map(([type, items]) => {
@@ -650,7 +652,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                 <SelectGroup>
                   <SelectLabel className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                     <FolderOpen className="h-3 w-3 inline mr-1" />
-                    Custom Paths
+                    {t('logMonitor.customPaths')}
                   </SelectLabel>
                   {sources
                     .filter((s) => s.category === "custom")
@@ -685,7 +687,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                 />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Rediscover log sources</TooltipContent>
+            <TooltipContent side="bottom">{t('logMonitor.rediscoverSources')}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -699,7 +701,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                 <Plus className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Add custom log path</TooltipContent>
+            <TooltipContent side="bottom">{t('logMonitor.addCustomPath')}</TooltipContent>
           </Tooltip>
 
           <Separator orientation="vertical" className="h-4 mx-0.5" />
@@ -725,7 +727,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {autoRefresh ? "Stop live tail" : "Start live tail"}
+              {autoRefresh ? t('logMonitor.stopLiveTail') : t('logMonitor.startLiveTail')}
             </TooltipContent>
           </Tooltip>
 
@@ -774,7 +776,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                 <Download className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Download logs</TooltipContent>
+            <TooltipContent side="bottom">{t('logMonitor.downloadLogs')}</TooltipContent>
           </Tooltip>
         </div>
 
@@ -782,7 +784,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         {showCustomInput && (
           <div className="flex items-center gap-1.5 px-2 py-1 border-b bg-muted/20 shrink-0">
             <Input
-              placeholder="/var/log/myapp/app.log"
+              placeholder={t('logMonitor.customPathPlaceholder')}
               value={customPath}
               onChange={(e) => setCustomPath(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAddCustomPath()}
@@ -795,7 +797,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
               onClick={handleAddCustomPath}
               disabled={!customPath.trim()}
             >
-              Add
+              {t('logMonitor.add')}
             </Button>
             <Button
               size="icon"
@@ -814,7 +816,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
           <div className="relative flex-1 min-w-0">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
             <Input
-              placeholder="Search logs…"
+              placeholder={t('logMonitor.searchLogs')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="h-7 text-xs pl-7 pr-7"
@@ -841,7 +843,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                 .*
               </Toggle>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Toggle regex search</TooltipContent>
+            <TooltipContent side="bottom">{t('logMonitor.toggleRegex')}</TooltipContent>
           </Tooltip>
 
           <Separator orientation="vertical" className="h-4 mx-0.5" />
@@ -868,7 +870,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  Filter {level.toUpperCase()} ({count})
+                  {t('logMonitor.filterLevel', { level: level.toUpperCase(), count })}
                 </TooltipContent>
               </Tooltip>
             );
@@ -887,7 +889,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
             <SelectContent>
               {LINE_COUNT_OPTIONS.map((n) => (
                 <SelectItem key={n} value={String(n)} className="text-xs">
-                  {n} lines
+                  {t('logMonitor.nLines', { count: n })}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -905,11 +907,11 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                 {isLoading ? (
                   <RefreshCw className="h-3 w-3 animate-spin" />
                 ) : (
-                  "Load"
+                  t('logMonitor.load')
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">Reload log content</TooltipContent>
+            <TooltipContent side="bottom">{t('logMonitor.reloadContent')}</TooltipContent>
           </Tooltip>
         </div>
 
@@ -922,7 +924,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
           {!selectedSourceId ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
               <FileText className="h-8 w-8 opacity-40" />
-              <p className="text-xs">Select a log source to begin</p>
+              <p className="text-xs">{t('logMonitor.selectSourceToBegin')}</p>
               {sources.length === 0 && !isDiscovering && (
                 <Button
                   variant="outline"
@@ -931,22 +933,22 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                   onClick={discoverSources}
                 >
                   <RefreshCw className="h-3 w-3 mr-1" />
-                  Discover Sources
+                  {t('logMonitor.discoverSources')}
                 </Button>
               )}
             </div>
           ) : isLoading && rawLines.length === 0 ? (
             <div className="flex items-center justify-center h-full text-muted-foreground gap-2">
               <RefreshCw className="h-4 w-4 animate-spin" />
-              <span className="text-xs">Loading logs…</span>
+              <span className="text-xs">{t('logMonitor.loadingLogs')}</span>
             </div>
           ) : filteredLines.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-1">
               <AlertCircle className="h-6 w-6 opacity-40" />
               <p className="text-xs">
                 {rawLines.length > 0
-                  ? "No matching lines with current filters"
-                  : "No log content"}
+                  ? t('logMonitor.noMatchingLines')
+                  : t('logMonitor.noLogContent')}
               </p>
             </div>
           ) : (
@@ -1003,8 +1005,8 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
           {/* Line counts */}
           <span>
             {filteredLines.length === parsedLines.length
-              ? `${parsedLines.length} lines`
-              : `${filteredLines.length} / ${parsedLines.length} lines`}
+              ? t('logMonitor.nLines', { count: parsedLines.length })
+              : t('logMonitor.filteredLines', { filtered: filteredLines.length, total: parsedLines.length })}
           </span>
 
           {/* Level statistics */}
@@ -1031,7 +1033,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
                 </span>
-                <span className="text-green-400">Live</span>
+                <span className="text-green-400">{t('logMonitor.live')}</span>
               </span>
             )}
 
@@ -1050,8 +1052,8 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
               </TooltipTrigger>
               <TooltipContent side="top">
                 {scrollLocked
-                  ? "Auto-scroll locked to bottom"
-                  : "Click to auto-scroll to bottom"}
+                  ? t('logMonitor.scrollLocked')
+                  : t('logMonitor.scrollUnlocked')}
               </TooltipContent>
             </Tooltip>
           </div>

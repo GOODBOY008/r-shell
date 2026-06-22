@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SearchAddon } from '@xterm/addon-search';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -13,6 +14,7 @@ interface TerminalSearchBarProps {
 }
 
 export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose }: TerminalSearchBarProps) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [useRegex, setUseRegex] = useState(false);
@@ -110,7 +112,7 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
         <Input
           ref={inputRef}
           type="text"
-          placeholder="Find in terminal..."
+          placeholder={t('terminalSearchBar.findInTerminal')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -126,7 +128,7 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
             size="icon"
             className="h-8 w-8"
             onClick={() => setCaseSensitive(!caseSensitive)}
-            title="Match Case"
+            title={t('terminalSearchBar.matchCase')}
           >
             <CaseSensitive className="h-4 w-4" />
           </Button>
@@ -137,7 +139,7 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
             size="icon"
             className="h-8 w-8"
             onClick={() => setUseRegex(!useRegex)}
-            title="Use Regular Expression"
+            title={t('terminalSearchBar.useRegex')}
           >
             <Regex className="h-4 w-4" />
           </Button>
@@ -150,7 +152,7 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
             size="icon"
             className="h-8 w-8"
             onClick={() => performSearch('previous')}
-            title="Previous Match (Shift+F3)"
+            title={t('terminalSearchBar.previousMatch')}
           >
             <ChevronUp className="h-4 w-4" />
           </Button>
@@ -161,7 +163,7 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
             size="icon"
             className="h-8 w-8"
             onClick={() => performSearch('next')}
-            title="Next Match (F3)"
+            title={t('terminalSearchBar.nextMatch')}
           >
             <ChevronDown className="h-4 w-4" />
           </Button>
@@ -173,7 +175,7 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
           size="icon"
           className="h-8 w-8"
           onClick={onClose}
-          title="Close (Esc)"
+          title={t('terminalSearchBar.close')}
         >
           <X className="h-4 w-4" />
         </Button>
