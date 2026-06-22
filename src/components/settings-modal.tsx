@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { changeLanguage } from '@/lib/i18n';
+import { changeLanguage, getLanguagePreference, AUTO } from '@/lib/i18n';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -49,7 +49,13 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckForUpdates }: SettingsModalProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  // The user's language *choice* ("auto" or a concrete code), tracked in state
+  // so the picker updates immediately on selection. We cannot derive this from
+  // the applied language alone: switching to "English" while "Auto" already
+  // resolves to English leaves the applied language unchanged, so a derived
+  // value would not refresh and the Select would appear stuck.
+  const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
   
   const [settings, setSettings] = useState({
@@ -722,13 +728,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                 <div className="space-y-2">
                   <Label>{t('settings.language.label')}</Label>
                   <Select
-                    value={i18n.language}
-                    onValueChange={(value) => changeLanguage(value)}
+                    value={languagePref}
+                    onValueChange={(value) => {
+                      setLanguagePref(value);
+                      void changeLanguage(value);
+                    }}
                   >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value={AUTO}>{t('settings.language.auto')}</SelectItem>
                       <SelectItem value="en">{t('settings.language.en')}</SelectItem>
                       <SelectItem value="zh-CN">{t('settings.language.zhCN')}</SelectItem>
                     </SelectContent>

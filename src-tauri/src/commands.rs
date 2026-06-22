@@ -3105,6 +3105,13 @@ pub async fn update_menu_language(
     Ok(())
 }
 
+/// Return the OS-level locale string (e.g. "en-US", "zh-CN").
+/// Used on first run to match the app language to the user's system preference.
+#[tauri::command]
+pub fn get_system_locale() -> Result<String, String> {
+    sys_locale::get_locale().ok_or_else(|| "Failed to detect system locale".to_string())
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]

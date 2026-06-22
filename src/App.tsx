@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { applyLanguageFromPreference } from './lib/i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
@@ -93,6 +94,11 @@ function AppContent() {
   const allTabs = useMemo(() => {
     return Object.values(state.groups).flatMap(g => g.tabs);
   }, [state.groups]);
+
+  // Apply stored language preference (follows OS locale when set to "system")
+  useEffect(() => {
+    void applyLanguageFromPreference();
+  }, []);
 
   useEffect(() => {
     const refreshKeyboardShortcutSettings = () => {

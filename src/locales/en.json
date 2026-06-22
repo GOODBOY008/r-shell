@@ -298,8 +298,9 @@
     },
     "language": {
       "label": "Language",
+      "auto": "Auto (System)",
       "en": "English",
-      "zhCN": "简体中文"
+      "zhCN": "Chinese (Simplified)"
     },
     "button": {
       "resetToDefaults": "Reset to Defaults",

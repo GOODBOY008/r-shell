@@ -314,6 +314,7 @@ pub fn run() {
             commands::desktop_set_clipboard,
             commands::desktop_resize,
             commands::update_menu_language,
+            commands::get_system_locale,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
