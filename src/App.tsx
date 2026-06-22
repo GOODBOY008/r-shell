@@ -95,7 +95,7 @@ function AppContent() {
     return Object.values(state.groups).flatMap(g => g.tabs);
   }, [state.groups]);
 
-  // Apply stored language preference (follows OS locale when set to "system")
+  // Apply stored language preference (follows OS locale when set to "auto")
   useEffect(() => {
     void applyLanguageFromPreference();
   }, []);
