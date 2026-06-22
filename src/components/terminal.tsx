@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -20,6 +21,7 @@ interface TerminalProps {
 }
 
 export function Terminal({ connectionId, connectionName, host = 'localhost', username = 'user', appearanceKey = 0 }: TerminalProps) {
+  const { t } = useTranslation();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -312,7 +314,7 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
         <div className="absolute top-2 right-2 bg-background border rounded-md shadow-lg p-2 flex items-center gap-2 z-10">
           <Input
             type="text"
-            placeholder="Search..."
+            placeholder={t('terminal.search')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             onKeyDown={(e) => {

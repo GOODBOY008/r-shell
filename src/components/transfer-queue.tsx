@@ -1,4 +1,5 @@
 import React, { useEffect, useRef } from "react";
+import { useTranslation } from 'react-i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -87,6 +88,7 @@ export function TransferQueue({
   expanded,
   onToggleExpanded,
 }: TransferQueueProps) {
+  const { t } = useTranslation();
   const activeCount = getActiveTransferCount(transfers);
   const prevActiveCount = useRef(activeCount);
 
@@ -121,20 +123,20 @@ export function TransferQueue({
             ) : (
               <ChevronUp className="h-3 w-3" />
             )}
-            Transfers
+            {t('transferQueue.transfers')}
             {activeCount > 0 && (
               <Badge
                 variant="secondary"
                 className="text-[10px] px-1.5 py-0 h-4"
               >
-                {activeCount} active
+                {t('transferQueue.active', { count: activeCount })}
               </Badge>
             )}
             {completedCount > 0 && (
-              <span className="text-green-500">{completedCount} done</span>
+              <span className="text-green-500">{t('transferQueue.done', { count: completedCount })}</span>
             )}
             {failedCount > 0 && (
-              <span className="text-destructive">{failedCount} failed</span>
+              <span className="text-destructive">{t('transferQueue.failed', { count: failedCount })}</span>
             )}
           </span>
           {transfers.length > 0 && (
@@ -148,7 +150,7 @@ export function TransferQueue({
               }}
             >
               <Trash2 className="h-3 w-3 mr-1" />
-              Clear
+              {t('transferQueue.clear')}
             </Button>
           )}
         </button>
@@ -157,7 +159,7 @@ export function TransferQueue({
         <ScrollArea className="max-h-40">
           {transfers.length === 0 ? (
             <div className="flex items-center justify-center h-12 text-xs text-muted-foreground">
-              No transfers
+              {t('transferQueue.noTransfers')}
             </div>
           ) : (
             <div className="divide-y divide-border/40">
@@ -210,7 +212,7 @@ export function TransferQueue({
                             variant="ghost"
                             size="icon"
                             className="h-5 w-5 shrink-0 text-muted-foreground hover:text-foreground"
-                            title="Open file"
+                            title={t('transferQueue.openFile')}
                             onClick={() =>
                               invoke("open_in_os", {
                                 path: item.destinationPath,
@@ -223,7 +225,7 @@ export function TransferQueue({
                             variant="ghost"
                             size="icon"
                             className="h-5 w-5 shrink-0 text-muted-foreground hover:text-foreground"
-                            title="Show in folder"
+                            title={t('transferQueue.showInFolder')}
                             onClick={() => {
                               const dir =
                                 item.destinationPath.substring(
@@ -260,7 +262,7 @@ export function TransferQueue({
                       variant="ghost"
                       size="icon"
                       className="h-5 w-5 shrink-0"
-                      title="Retry"
+                      title={t('transferQueue.retry')}
                       onClick={() =>
                         dispatch({ type: "RETRY", id: item.id })
                       }
@@ -275,6 +277,7 @@ export function TransferQueue({
                       variant="ghost"
                       size="icon"
                       className="h-5 w-5 shrink-0"
+                      title={t('transferQueue.cancel')}
                       onClick={() =>
                         dispatch({ type: "CANCEL", id: item.id })
                       }

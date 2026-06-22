@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ChevronRight, Folder, Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -84,6 +85,7 @@ export function DirectoryTree({
   onSaveScroll,
   initialScrollTop,
 }: DirectoryTreeProps) {
+  const { t } = useTranslation();
   const [nodes, setNodes] = useState<Map<string, TreeNode[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["/"]));
   const [loading, setLoading] = useState<Set<string>>(new Set());
@@ -133,7 +135,7 @@ export function DirectoryTree({
           return next;
         });
       } catch (err) {
-        toast.error("Failed to load directories", {
+        toast.error(t('directoryTree.loadFailed'), {
           description: `${normalizedPath}: ${err instanceof Error ? err.message : String(err)}`,
         });
       } finally {
@@ -332,7 +334,7 @@ export function DirectoryTree({
   return (
     <div className="h-full w-full flex flex-col overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-sm">
       <div className="px-2 py-1 flex items-center border-b bg-muted/30 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
-        Directories
+        {t('directoryTree.directories')}
       </div>
       <div
         ref={scrollContainerRef}
@@ -377,8 +379,8 @@ export function DirectoryTree({
                       toggleNode(row.path);
                     }
                   }}
-                  title={isExpanded ? `Collapse ${row.name}` : `Expand ${row.name}`}
-                  aria-label={isExpanded ? `Collapse ${row.name}` : `Expand ${row.name}`}
+                  title={isExpanded ? t('directoryTree.collapse', { name: row.name }) : t('directoryTree.expand', { name: row.name })}
+                  aria-label={isExpanded ? t('directoryTree.collapse', { name: row.name }) : t('directoryTree.expand', { name: row.name })}
                   disabled={!canExpand || disabled}
                 >
                   <ChevronRight
@@ -393,7 +395,7 @@ export function DirectoryTree({
                     setFocusPath(row.path);
                     onNavigate(row.path);
                   }}
-                  aria-label={`Navigate to ${row.path}`}
+                  aria-label={t('directoryTree.navigateTo', { path: row.path })}
                   disabled={disabled}
                 >
                   <Folder className="h-4 w-4 text-blue-500 shrink-0" />

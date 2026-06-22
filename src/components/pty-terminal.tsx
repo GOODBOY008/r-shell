@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -51,6 +52,7 @@ export function PtyTerminal({
   isActive = true,
   onConnectionStatusChange
 }: PtyTerminalProps) {
+  const { t } = useTranslation();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -119,14 +121,14 @@ export function PtyTerminal({
       if (!text) return;
       const term = xtermRef.current;
       if (!term) {
-        toast.error('Terminal not connected');
+        toast.error(t('ptyTerminal.terminalNotConnected'));
         return;
       }
       // term.paste() routes through xterm's onData handler,
       // which calls sendInputToPty with proper bracketed paste wrapping
       term.paste(text);
     } catch (_error) {
-      toast.error('Failed to read from clipboard');
+      toast.error(t('ptyTerminal.failedToReadClipboard'));
     }
   }, []);
 
@@ -869,9 +871,9 @@ export function PtyTerminal({
     if (term?.hasSelection()) {
       const selection = term.getSelection();
       navigator.clipboard.writeText(selection).then(() => {
-        toast.success('Copied to clipboard');
+        toast.success(t('ptyTerminal.copiedToClipboard'));
       }).catch(() => {
-        toast.error('Failed to copy to clipboard');
+        toast.error(t('ptyTerminal.failedToCopyClipboard'));
       });
     }
   }, []);
@@ -928,7 +930,7 @@ export function PtyTerminal({
       void onReconnectTab(connectionId);
     } else {
       // Fallback: reconnect only the WebSocket/PTY loop (no SSH re-auth).
-      toast.info('Reconnecting terminal…');
+      toast.info(t('ptyTerminal.reconnectingTerminal'));
       reconnectAttemptsRef.current = 0;
       connectionStatusRef.current = 'connecting';
       onConnectionStatusChange?.(connectionId, 'connecting');
@@ -963,9 +965,9 @@ export function PtyTerminal({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       
-      toast.success('Terminal output saved');
+      toast.success(t('ptyTerminal.outputSaved'));
     } catch (error) {
-      toast.error('Failed to save output');
+      toast.error(t('ptyTerminal.failedToSaveOutput'));
       console.error('Save error:', error);
     }
   }, []);

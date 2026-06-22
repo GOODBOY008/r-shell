@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { 
@@ -54,21 +55,7 @@ interface ToolbarProps {
   zenMode?: boolean;
 }
 
-function formatLastConnected(dateString?: string): string {
-  if (!dateString) return '';
-  const date = new Date(dateString);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  const diffHours = Math.floor(diffMs / 3600000);
-  const diffDays = Math.floor(diffMs / 86400000);
-  
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  if (diffDays < 7) return `${diffDays}d ago`;
-  return date.toLocaleDateString();
-}
+
 
 export function Toolbar({
   onNewConnection,
@@ -87,6 +74,8 @@ export function Toolbar({
   bottomPanelVisible,
   zenMode
 }: ToolbarProps) {
+  const { t } = useTranslation();
+
   return (
     <TooltipProvider>
       <div className="border-b border-border bg-background px-2 py-1 flex items-center gap-1">
@@ -96,7 +85,7 @@ export function Toolbar({
               <Plus className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>New Connection</TooltipContent>
+          <TooltipContent>{t('toolbar.newConnection')}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -105,7 +94,7 @@ export function Toolbar({
               <FolderOpen className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Open Connection</TooltipContent>
+          <TooltipContent>{t('toolbar.openConnection')}</TooltipContent>
         </Tooltip>
 
         {/* Quick Connect Dropdown */}
@@ -118,12 +107,12 @@ export function Toolbar({
                 </Button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
-            <TooltipContent>Quick Connect</TooltipContent>
+            <TooltipContent>{t('toolbar.quickConnect')}</TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="start" className="w-72">
             <DropdownMenuLabel className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
-              Recent Connections
+              {t('toolbar.recentConnections')}
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             {recentConnections.length > 0 ? (
@@ -142,7 +131,19 @@ export function Toolbar({
                   </div>
                   {connection.lastConnected && (
                     <span className="text-xs text-muted-foreground flex-shrink-0">
-                      {formatLastConnected(connection.lastConnected)}
+                      {(() => {
+                        const date = new Date(connection.lastConnected);
+                        const now = new Date();
+                        const diffMs = now.getTime() - date.getTime();
+                        const diffMins = Math.floor(diffMs / 60000);
+                        const diffHours = Math.floor(diffMs / 3600000);
+                        const diffDays = Math.floor(diffMs / 86400000);
+                        if (diffMins < 1) return t('toolbar.justNow');
+                        if (diffMins < 60) return t('toolbar.minutesAgo', { count: diffMins });
+                        if (diffHours < 24) return t('toolbar.hoursAgo', { count: diffHours });
+                        if (diffDays < 7) return t('toolbar.daysAgo', { count: diffDays });
+                        return date.toLocaleDateString();
+                      })()}
                     </span>
                   )}
                 </DropdownMenuItem>
@@ -150,8 +151,8 @@ export function Toolbar({
             ) : (
               <div className="px-2 py-4 text-center text-sm text-muted-foreground">
                 <Clock className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                <p>No recent connections</p>
-                <p className="text-xs mt-1">Connect to a server to see it here</p>
+                <p>{t('toolbar.noRecentConnections')}</p>
+                <p className="text-xs mt-1">{t('toolbar.noRecentConnectionsDesc')}</p>
               </div>
             )}
             {recentConnections.length > 0 && (
@@ -159,7 +160,7 @@ export function Toolbar({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={onNewConnection} className="text-primary">
                   <Plus className="w-4 h-4 mr-2" />
-                  New Connection
+                  {t('toolbar.newConnection')}
                 </DropdownMenuItem>
               </>
             )}
@@ -261,7 +262,7 @@ export function Toolbar({
               <Settings className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Options</TooltipContent>
+          <TooltipContent>{t('toolbar.options')}</TooltipContent>
         </Tooltip>
 
         <Separator orientation="vertical" className="h-4 mx-1" />
@@ -278,7 +279,7 @@ export function Toolbar({
               {leftSidebarVisible ? <PanelLeftClose className="w-4 h-4" /> : <PanelLeftOpen className="w-4 h-4" />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{leftSidebarVisible ? 'Hide' : 'Show'} Connection Manager</TooltipContent>
+          <TooltipContent>{t(leftSidebarVisible ? 'common.hide' : 'common.show')} {t('toolbar.toggleConnectionManager')}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -292,7 +293,7 @@ export function Toolbar({
               {bottomPanelVisible ? <PanelBottomClose className="w-4 h-4" /> : <PanelBottomOpen className="w-4 h-4" />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{bottomPanelVisible ? 'Hide' : 'Show'} File Browser</TooltipContent>
+          <TooltipContent>{t(bottomPanelVisible ? 'common.hide' : 'common.show')} {t('toolbar.toggleFileBrowser')}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -306,7 +307,7 @@ export function Toolbar({
               {rightSidebarVisible ? <PanelRightClose className="w-4 h-4" /> : <PanelRightOpen className="w-4 h-4" />}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>{rightSidebarVisible ? 'Hide' : 'Show'} Monitor Panel</TooltipContent>
+          <TooltipContent>{t(rightSidebarVisible ? 'common.hide' : 'common.show')} {t('toolbar.toggleMonitorPanel')}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -320,7 +321,7 @@ export function Toolbar({
               <Maximize2 className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Toggle Zen Mode (Ctrl+K Z)</TooltipContent>
+          <TooltipContent>{t('toolbar.toggleZenMode')}</TooltipContent>
         </Tooltip>
 
         {/* Layout Presets Dropdown */}
@@ -333,26 +334,26 @@ export function Toolbar({
                 </Button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
-            <TooltipContent>Layout Presets</TooltipContent>
+            <TooltipContent>{t('toolbar.layoutPresets')}</TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Layout Presets</DropdownMenuLabel>
+            <DropdownMenuLabel>{t('toolbar.layoutPresets')}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => onApplyPreset?.('Default')}>
-              Default Layout
+              {t('toolbar.defaultLayout')}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onApplyPreset?.('Minimal')}>
-              Minimal - Terminal Only
+              {t('toolbar.minimalTerminalOnly')}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onApplyPreset?.('Focus Mode')}>
-              Focus Mode
+              {t('toolbar.focusMode')}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onApplyPreset?.('Full Stack')}>
-              Full Stack - All Panels
+              {t('toolbar.fullStackAllPanels')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => onApplyPreset?.('Zen Mode')}>
-              Zen Mode
+              {t('toolbar.zenMode')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

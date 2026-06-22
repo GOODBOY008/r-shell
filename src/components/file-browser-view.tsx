@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useReducer, useRef } from "react";
+import { useTranslation } from 'react-i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import {
@@ -52,6 +53,7 @@ export function FileBrowserView({
   isConnected,
   onReconnect,
 }: FileBrowserViewProps) {
+  const { t } = useTranslation();
   const [activePanel, setActivePanel] = useState<"local" | "remote">("local");
   const [transfers, dispatchTransfer] = useReducer(transferQueueReducer, []);
   const [queueExpanded, setQueueExpanded] = useState(false);
@@ -195,14 +197,14 @@ export function FileBrowserView({
             // Show success toast with quick-open actions
             const destPath = nextItem.destinationPath;
             const destDir = destPath.substring(0, destPath.lastIndexOf("/")) || "/";
-            toast.success(`Downloaded ${nextItem.fileName}`, {
+            toast.success(t('fileBrowser.toast.downloaded', { name: nextItem.fileName }), {
               duration: 5000,
               action: {
-                label: "Open File",
+                label: t('fileBrowser.transfer.openFile'),
                 onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
               },
               cancel: {
-                label: "Show in Folder",
+                label: t('fileBrowser.transfer.showInFolder'),
                 onClick: () => { void invoke("open_in_os", { path: destDir }).catch(() => {}); },
               },
             });
@@ -244,7 +246,7 @@ export function FileBrowserView({
           totalBytes: f.size,
         })),
       });
-      toast.info(`Queued ${fileItems.length} file(s) for upload`);
+      toast.info(t('fileBrowser.toast.queuedUpload', { count: fileItems.length }));
     },
     [],
   );
@@ -316,7 +318,7 @@ export function FileBrowserView({
         }
 
         if (dirErrors.length > 0) {
-          toast.warning(`${dirErrors.length} directory creation(s) failed`, {
+          toast.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
             description: dirErrors.slice(0, 3).join("\n"),
           });
         }
@@ -324,22 +326,22 @@ export function FileBrowserView({
         if (plan.items.length > 0) {
           dispatchTransfer({ type: "ENQUEUE", items: plan.items });
           toast.info(
-            `Queued ${plan.items.length} file(s) for upload to ${remotePath}` +
+            t('fileBrowser.toast.queuedUploadToPath', { count: plan.items.length, path: remotePath }) +
               (createdDirectoryCount > 0
-                ? `; created ${createdDirectoryCount} folder(s)`
+                ? "; " + t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount })
                 : ""),
           );
         } else if (dirErrors.length === 0 && plan.skipped.length === 0) {
           // Folder(s) were empty — refresh listing.
           remotePanelRef.current?.refresh();
           if (createdDirectoryCount > 0) {
-            toast.info(`Created ${createdDirectoryCount} remote folder(s)`);
+            toast.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
           }
         }
 
         if (plan.skipped.length > 0) {
           toast.warning(
-            `${plan.skipped.length} dropped path(s) could not be uploaded`,
+            t('fileBrowser.toast.droppedPathsSkipped', { count: plan.skipped.length }),
             {
               description: plan.skipped
                 .slice(0, 3)
@@ -350,9 +352,9 @@ export function FileBrowserView({
         }
       } catch (err) {
         console.error("OS drop handler error:", err);
-        toast.error("Drop upload failed", {
+        toast.error(t('fileBrowser.toast.dropUploadFailed'), {
           description:
-            err instanceof Error ? err.message : "Unable to process dropped files.",
+            err instanceof Error ? err.message : t('fileBrowser.toast.dropUploadFailedDesc'),
         });
       }
     },
@@ -374,7 +376,7 @@ export function FileBrowserView({
           totalBytes: f.size,
         })),
       });
-      toast.info(`Queued ${fileItems.length} file(s) for download`);
+      toast.info(t('fileBrowser.toast.queuedDownload', { count: fileItems.length }));
     },
     [],
   );
@@ -527,11 +529,11 @@ export function FileBrowserView({
       <div className="h-full w-full flex flex-col items-center justify-center bg-muted/30 gap-3">
         <WifiOff className="h-10 w-10 text-muted-foreground" />
         <p className="text-sm text-muted-foreground">
-          Connection lost to {connectionName}
+          {t('fileBrowser.disconnected', { name: connectionName })}
         </p>
         {onReconnect && (
           <Button variant="outline" size="sm" onClick={onReconnect}>
-            <RotateCcw className="h-4 w-4 mr-1" /> Reconnect
+            <RotateCcw className="h-4 w-4 mr-1" /> {t('common.reconnect')}
           </Button>
         )}
       </div>
@@ -562,7 +564,7 @@ export function FileBrowserView({
             <FilePanel
               ref={localPanelRef}
               mode="local"
-              label="Local"
+              label={t('fileBrowser.local')}
               isActive={activePanel === "local"}
               initialPath={localHomePath}
               onLoadDirectory={loadLocalDirectory}
@@ -589,7 +591,7 @@ export function FileBrowserView({
               variant="ghost"
               size="icon"
               className="h-7 w-7"
-              title="Sync directories (Ctrl+Shift+S)"
+              title={t('fileBrowser.toolbar.syncDirectories')}
               onClick={() => setSyncDialogOpen(true)}
               disabled={!isConnected}
             >

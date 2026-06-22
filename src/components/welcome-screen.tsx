@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation, Trans } from 'react-i18next';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { 
@@ -29,27 +30,28 @@ interface WelcomeScreenProps {
 }
 
 export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
+  const { t } = useTranslation();
   const quickActions = [
     {
       icon: Plus,
-      title: 'New Connection',
-      description: 'Connect via SSH, SFTP, FTP, or FTPS',
+      title: t('welcome.newConnection'),
+      description: t('welcome.newConnectionDesc'),
       action: onNewConnection,
       variant: 'default' as const,
       shortcut: '⌘N'
     },
     {
       icon: FolderTree,
-      title: 'Connection Manager',
-      description: 'Browse & organize saved connections',
+      title: t('welcome.connectionManager'),
+      description: t('welcome.connectionManagerDesc'),
       action: () => {},
       variant: 'outline' as const,
       highlight: 'Left sidebar ⌘B'
     },
     {
       icon: Settings,
-      title: 'Preferences',
-      description: 'Terminal themes, fonts & layout',
+      title: t('welcome.preferences'),
+      description: t('welcome.preferencesDesc'),
       action: onOpenSettings,
       variant: 'outline' as const,
       shortcut: '⌘,'
@@ -59,63 +61,63 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
   const features = [
     {
       icon: Terminal,
-      title: 'Interactive PTY Terminal',
-      description: 'Full xterm.js terminal with WebGL rendering, search, and web-link detection'
+      title: t('welcome.feature.terminal'),
+      description: t('welcome.feature.terminalDesc')
     },
     {
       icon: LayoutGrid,
-      title: 'Split Panes & Tab Groups',
-      description: 'Split in 4 directions with drag-and-drop tabs and unlimited nested splits'
+      title: t('welcome.feature.splitPanes'),
+      description: t('welcome.feature.splitPanesDesc')
     },
     {
       icon: FileText,
-      title: 'Dual-Panel File Browser',
-      description: 'FileZilla-style local + remote panels with transfer queue and progress tracking'
+      title: t('welcome.feature.fileBrowser'),
+      description: t('welcome.feature.fileBrowserDesc')
     },
     {
       icon: RefreshCw,
-      title: 'Directory Sync',
-      description: '4-step sync wizard — compare, review diffs, and synchronize directories'
+      title: t('welcome.feature.dirSync'),
+      description: t('welcome.feature.dirSyncDesc')
     },
     {
       icon: MonitorDot,
-      title: 'System & GPU Monitor',
-      description: 'CPU, memory, disk, processes, and NVIDIA/AMD GPU metrics with real-time charts'
+      title: t('welcome.feature.systemMonitor'),
+      description: t('welcome.feature.systemMonitorDesc')
     },
     {
       icon: Network,
-      title: 'Network Monitor',
-      description: 'Per-interface bandwidth, latency, and active connections overview'
+      title: t('welcome.feature.networkMonitor'),
+      description: t('welcome.feature.networkMonitorDesc')
     },
     {
       icon: ScrollText,
-      title: 'Log Viewer',
-      description: 'Multi-source log monitoring with level filters, regex search, and live tail'
+      title: t('welcome.feature.logViewer'),
+      description: t('welcome.feature.logViewerDesc')
     },
     {
       icon: Palette,
-      title: 'Themes & Appearance',
-      description: '10 terminal color themes, 7 fonts, background images, and transparency'
+      title: t('welcome.feature.themes'),
+      description: t('welcome.feature.themesDesc')
     },
     {
       icon: Shield,
-      title: 'Secure Authentication',
-      description: 'Password, private key, and encrypted key with passphrase — plus auto-reconnect'
+      title: t('welcome.feature.secureAuth'),
+      description: t('welcome.feature.secureAuthDesc')
     },
     {
       icon: History,
-      title: 'Session Restore',
-      description: 'Automatically reconnects your previous workspace on launch'
+      title: t('welcome.feature.sessionRestore'),
+      description: t('welcome.feature.sessionRestoreDesc')
     },
     {
       icon: ArrowDownUp,
-      title: 'Transfer Queue',
-      description: 'Queued file transfers with progress, speed, ETA, cancel, and retry controls'
+      title: t('welcome.feature.transferQueue'),
+      description: t('welcome.feature.transferQueueDesc')
     },
     {
       icon: Download,
-      title: 'Auto-Update',
-      description: 'Check for updates with download progress and one-click install-and-relaunch'
+      title: t('welcome.feature.autoUpdate'),
+      description: t('welcome.feature.autoUpdateDesc')
     }
   ];
 
@@ -136,9 +138,9 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
               <Terminal className="h-8 w-8 text-primary" />
             </div>
             <div className="text-left">
-              <h1 className="text-2xl font-bold tracking-tight">R-Shell</h1>
+              <h1 className="text-2xl font-bold tracking-tight">{t('app.title')}</h1>
               <p className="text-muted-foreground text-sm">
-                Modern SSH / SFTP / FTP client built with Tauri
+                {t('app.description')}
               </p>
             </div>
           </div>
@@ -162,10 +164,10 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-lg">
               <Zap className="h-4 w-4" />
-              Get Started
+              {t('welcome.getStarted')}
             </CardTitle>
             <CardDescription className="text-xs">
-              Create a new session or manage your saved connections
+              {t('welcome.getStartedDesc')}
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-3">
@@ -234,27 +236,27 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
                 <BookOpen className="h-4 w-4 text-muted-foreground" />
               </div>
               <div className="flex-1 space-y-2">
-                <h4 className="font-medium text-sm">Quick Tips</h4>
+                <h4 className="font-medium text-sm">{t('welcome.quickTips')}</h4>
                 <ul className="space-y-1.5 text-xs text-muted-foreground">
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">1.</span>
-                    <span>Add a server in the <strong>Connection Manager</strong> (left sidebar), then double-click to connect</span>
+                    <Trans i18nKey="welcome.tip1" components={{ strong: <strong /> }} />
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">2.</span>
-                    <span>Split the terminal with <kbd className="px-1.5 py-0.5 bg-background border rounded text-xs">⌘\</kbd> (right) or <kbd className="px-1.5 py-0.5 bg-background border rounded text-xs">⌘⇧\</kbd> (down) for side-by-side sessions</span>
+                    <Trans i18nKey="welcome.tip2" components={{ strong: <strong /> }} />
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">3.</span>
-                    <span>The <strong>System Monitor</strong> and <strong>Logs</strong> panels appear automatically in the right sidebar once you connect</span>
+                    <Trans i18nKey="welcome.tip3" components={{ strong: <strong /> }} />
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">4.</span>
-                    <span>Open the <strong>SFTP file browser</strong> with <kbd className="px-1.5 py-0.5 bg-background border rounded text-xs">⌘J</kbd> to manage remote files below the terminal</span>
+                    <Trans i18nKey="welcome.tip4" components={{ strong: <strong /> }} />
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="text-primary mt-0.5">5.</span>
-                    <span>Your sessions are saved automatically — R-Shell will restore them next time you launch</span>
+                    <Trans i18nKey="welcome.tip5" components={{ strong: <strong /> }} />
                   </li>
                 </ul>
               </div>
@@ -266,10 +268,10 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
         <div className="text-center pb-4">
           <Button size="lg" onClick={onNewConnection} className="gap-2 shadow-lg">
             <Plus className="h-5 w-5" />
-            New Connection
+            {t('welcome.newConnection')}
           </Button>
           <p className="text-xs text-muted-foreground mt-2">
-            or pick a saved server from the left sidebar
+            {t('welcome.orPickFromSidebar')}
           </p>
         </div>
       </div>
