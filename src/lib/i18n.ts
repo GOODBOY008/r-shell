@@ -33,29 +33,10 @@ async function syncNativeMenu(): Promise<void> {
     }
     await invoke('update_menu_language', { translations });
   } catch (e) {
-    // Expected on non-macOS or when Tauri bridge is unavailable
+    // Expected on non-macOS or when the Tauri bridge is unavailable
     console.warn('[i18n] Native menu sync skipped:', e);
   }
 }
-
-const DETECTED_LANG = (() => {
-  try {
-    return localStorage.getItem('r-shell-language') ?? navigator.language?.split('-')[0] ?? 'en';
-  } catch {
-    return 'en';
-  }
-})();
-
-i18n.use(initReactI18next).init({
-  resources: {
-    en: { translation: en },
-    'zh-CN': { translation: zhCN },
-  },
-  lng: DETECTED_LANG === 'zh' ? 'zh-CN' : DETECTED_LANG,
-  fallbackLng: 'en',
-  interpolation: { escapeValue: false },
-  returnNull: false,
-});
 
 const STORAGE_KEY = 'r-shell-language';
 
@@ -83,6 +64,30 @@ function readPreference(): string {
     return AUTO;
   }
 }
+
+/**
+ * Synchronous first-paint guess for the applied language, derived from the
+ * stored preference via {@link readPreference}. For {@link AUTO} we can't yet
+ * await the OS-locale Tauri call, so we fall back to navigator.language;
+ * `applyLanguageFromPreference()` corrects this shortly after mount once the
+ * async OS locale resolves.
+ */
+const INITIAL_LANG = (() => {
+  const pref = readPreference();
+  if (pref === AUTO) return resolveCode(navigator.language ?? 'en');
+  return resolveCode(pref);
+})();
+
+i18n.use(initReactI18next).init({
+  resources: {
+    en: { translation: en },
+    'zh-CN': { translation: zhCN },
+  },
+  lng: INITIAL_LANG,
+  fallbackLng: 'en',
+  interpolation: { escapeValue: false },
+  returnNull: false,
+});
 
 /**
  * Resolve a preference value to a concrete i18n language code.

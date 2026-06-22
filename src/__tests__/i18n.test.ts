@@ -52,6 +52,21 @@ describe('i18n language preference', () => {
     expect(getLanguagePreference()).toBe(AUTO);
   });
 
+  it('resolves AUTO to navigator.language when the Tauri bridge is unavailable', async () => {
+    // jsdom has no Tauri bridge, so resolvePreference(AUTO) must fall through
+    // to navigator.language. Stub it to a Chinese locale and verify the
+    // applied language follows, while the stored preference stays AUTO.
+    const original = navigator.language;
+    Object.defineProperty(navigator, 'language', { value: 'zh-CN', configurable: true });
+    try {
+      await changeLanguage(AUTO);
+      expect(getLanguagePreference()).toBe(AUTO);
+      expect(i18n.language).toBe('zh-CN');
+    } finally {
+      Object.defineProperty(navigator, 'language', { value: original, configurable: true });
+    }
+  });
+
   it('applyLanguageFromPreference re-applies the stored concrete preference', async () => {
     await changeLanguage('zh-CN');
     // Simulate the app restarting: i18n resets to en, but storage holds zh-CN.
