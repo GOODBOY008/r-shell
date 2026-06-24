@@ -76,3 +76,26 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --check
         continue-on-error: true
+
+  # Lightweight i18n key-parity check. Pure Node.js — no Rust/Tauri deps needed,
+  # so it runs on a single platform and fails fast independently of the matrix.
+  i18n:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check locale key parity (en.json ↔ zh-CN.json)
+        run: pnpm i18n:check
