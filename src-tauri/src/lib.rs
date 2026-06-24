@@ -278,6 +278,7 @@ pub fn run() {
             commands::rename_file,
             commands::create_file,
             commands::read_file_content,
+            commands::read_remote_file_base64,
             commands::copy_file,
             commands::detect_gpu,
             commands::get_gpu_stats,

@@ -3,6 +3,7 @@ use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
 use crate::ssh::{AuthMethod, SshConfig};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -573,6 +574,83 @@ pub async fn read_file_content(
         Ok(output) => Ok(output),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Response for `read_remote_file_base64`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Base64FileResponse {
+    pub data: String,
+    pub size: u64,
+    pub mime_type: String,
+}
+
+/// Read a remote file and return its content as base64 with an inferred MIME type.
+/// Used for image previews in the embedded file viewer. Refuses files > 20 MB.
+#[tauri::command]
+pub async fn read_remote_file_base64(
+    connection_id: String,
+    path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<Base64FileResponse, String> {
+    let connection = state
+        .get_connection(&connection_id)
+        .await
+        .ok_or("Connection not found")?;
+
+    let client = connection.read().await;
+
+    // Refuse very large files to avoid memory / performance issues
+    let size_cmd = format!("stat -c '%s' '{}' 2>/dev/null || stat -f '%z' '{}'", path, path);
+    let size_str = client
+        .execute_command(&size_cmd)
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let file_size: u64 = size_str.parse().unwrap_or(0);
+    if file_size > 20 * 1024 * 1024 {
+        return Err(format!(
+            "File too large for preview ({} MB). Download it first to open with your local application.",
+            file_size / (1024 * 1024)
+        ));
+    }
+
+    // Read raw bytes via `cat` then base64-encode on the remote side.
+    // `base64 -w0` (GNU) disables line wrapping; on macOS `base64` wraps by default,
+    // so we pipe through `tr -d '\n'` as a portable fallback.
+    let b64_cmd = format!(
+        "base64 -w0 '{}' 2>/dev/null || base64 '{}' | tr -d '\\n'",
+        path, path
+    );
+    let b64_data = client
+        .execute_command(&b64_cmd)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Infer MIME type from extension
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "tiff" | "tif" => "image/tiff",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
+    };
+
+    Ok(Base64FileResponse {
+        data: b64_data.trim().to_string(),
+        size: file_size,
+        mime_type: mime.to_string(),
+    })
 }
 
 #[tauri::command]

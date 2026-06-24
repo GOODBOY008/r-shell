@@ -215,6 +215,7 @@
     "description": "自定义您的 SSH 客户端体验和首选项",
     "tab": {
       "terminal": "终端",
+      "editor": "编辑器",
       "connection": "连接",
       "security": "安全",
       "interface": "界面",
@@ -245,6 +246,24 @@
       "imageBlur": "图片模糊度：{{blur}}px",
       "imagePosition": "图片位置",
       "imageSizeWarning": "图片必须小于 5MB"
+    },
+    "editor": {
+      "title": "代码编辑器",
+      "desc": "配置用于查看和编辑远程文件的内置文本编辑器。",
+      "theme": "主题",
+      "fontFamily": "字体",
+      "fontSize": "字号：{{size}}px",
+      "tabSize": "制表符宽度：{{size}} 空格",
+      "lineNumbers": "行号",
+      "lineNumbersDesc": "在侧边栏显示行号",
+      "wordWrap": "自动换行",
+      "wordWrapDesc": "将长行软换行以适应视口宽度",
+      "highlightActiveLine": "高亮当前行",
+      "highlightActiveLineDesc": "视觉高亮光标所在的行",
+      "foldGutter": "代码折叠",
+      "foldGutterDesc": "在侧边栏显示折叠/展开箭头",
+      "bracketMatching": "括号匹配",
+      "bracketMatchingDesc": "当光标位于括号旁边时高亮匹配的括号"
     },
     "connection": {
       "title": "连接设置",
@@ -1039,7 +1058,14 @@
     "modified": "已修改",
     "reload": "从服务器重新加载",
     "saveTooltip": "保存（Ctrl+S）",
-    "save": "保存"
+    "save": "保存",
+    "imagePreviewFailed": "无法预览图片",
+    "binaryFileTitle": "二进制文件",
+    "binaryFileDesc": "“{{fileName}}” 是二进制文件，无法在内置文本编辑器中编辑。请下载后用本地应用打开。",
+    "downloadAndOpen": "下载并用本地应用打开",
+    "downloading": "正在下载…",
+    "openedWithOs": "{{fileName}} 已用本地应用打开",
+    "failedToOpenWithOs": "无法用本地应用打开文件"
   },
   "desktopViewer": {
     "clipboardAccessDenied": "剪贴板访问被拒绝",

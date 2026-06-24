@@ -22,7 +22,8 @@ import {
   Image,
   Upload,
   X,
-  RefreshCw
+  RefreshCw,
+  Code2
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -40,6 +41,14 @@ import {
   loadKeyboardShortcutSettings,
 } from '../lib/keyboard-shortcuts';
 import { applyTheme, ThemeMode } from '../lib/utils';
+import {
+  loadEditorConfig,
+  saveEditorConfig,
+  dispatchEditorConfigChanged,
+  DEFAULT_EDITOR_CONFIG,
+  EDITOR_THEMES,
+  type EditorConfig,
+} from '@/lib/editor-config';
 
 interface SettingsModalProps {
   open: boolean;
@@ -50,13 +59,9 @@ interface SettingsModalProps {
 
 export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckForUpdates }: SettingsModalProps) {
   const { t } = useTranslation();
-  // The user's language *choice* ("auto" or a concrete code), tracked in state
-  // so the picker updates immediately on selection. We cannot derive this from
-  // the applied language alone: switching to "English" while "Auto" already
-  // resolves to English leaves the applied language unchanged, so a derived
-  // value would not refresh and the Select would appear stuck.
   const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
+  const [editorConfig, setEditorConfig] = useState<EditorConfig>(DEFAULT_EDITOR_CONFIG);
   
   const [settings, setSettings] = useState({
     // Terminal settings
@@ -102,6 +107,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     if (open) {
       const appearance = loadAppearanceSettings();
       setTerminalAppearance(appearance);
+      setEditorConfig(loadEditorConfig());
       
       // Load other settings from localStorage
       try {
@@ -143,6 +149,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
       onAppearanceChange(terminalAppearance);
     }
     
+    // Save editor config and notify live editors
+    saveEditorConfig(editorConfig);
+    dispatchEditorConfigChanged();
+    
     // Apply the theme immediately
     applyTheme(settings.theme as ThemeMode);
     
@@ -156,6 +166,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     if (confirm(t('settings.resetConfirm'))) {
       // Reset terminal appearance
       setTerminalAppearance(defaultAppearanceSettings);
+      setEditorConfig(DEFAULT_EDITOR_CONFIG);
       
       // Reset other settings to default values
       setSettings({
@@ -216,6 +227,13 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
             >
               <TerminalIcon className="h-3.5 w-3.5" />
               <span>{t('settings.tab.terminal')}</span>
+            </TabsTrigger>
+            <TabsTrigger 
+              value="editor" 
+              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
+            >
+              <Code2 className="h-3.5 w-3.5" />
+              <span>{t('settings.tab.editor')}</span>
             </TabsTrigger>
             <TabsTrigger 
               value="connection" 
@@ -564,6 +582,148 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       <div style={{ color: terminalThemes[terminalAppearance.theme]?.yellow }}>-rw-r--r--</div>
                     </div>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="editor" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Code2 className="h-4 w-4" />
+                  {t('settings.editor.title')}
+                </CardTitle>
+                <CardDescription>
+                  {t('settings.editor.desc')}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Theme & Font */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.theme')}</Label>
+                    <Select
+                      value={editorConfig.theme}
+                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, theme: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {EDITOR_THEMES.map(theme => (
+                          <SelectItem key={theme.id} value={theme.id}>{theme.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.fontFamily')}</Label>
+                    <Select
+                      value={editorConfig.fontFamily}
+                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, fontFamily: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="'JetBrains Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace">JetBrains Mono</SelectItem>
+                        <SelectItem value="'Fira Code', Menlo, Monaco, 'Courier New', monospace">Fira Code</SelectItem>
+                        <SelectItem value="'Source Code Pro', Menlo, Monaco, 'Courier New', monospace">Source Code Pro</SelectItem>
+                        <SelectItem value="Menlo, Monaco, 'Courier New', monospace">Menlo</SelectItem>
+                        <SelectItem value="Consolas, monospace">Consolas</SelectItem>
+                        <SelectItem value="Monaco, monospace">Monaco</SelectItem>
+                        <SelectItem value="'Courier New', monospace">Courier New</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.fontSize', { size: editorConfig.fontSize })}</Label>
+                    <Slider
+                      value={[editorConfig.fontSize]}
+                      onValueChange={([value]) => setEditorConfig(prev => ({ ...prev, fontSize: value }))}
+                      min={10}
+                      max={28}
+                      step={1}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.tabSize', { size: editorConfig.tabSize })}</Label>
+                    <Select
+                      value={String(editorConfig.tabSize)}
+                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, tabSize: Number(value) }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="2">2 spaces</SelectItem>
+                        <SelectItem value="4">4 spaces</SelectItem>
+                        <SelectItem value="8">8 spaces</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Toggle options */}
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.lineNumbers')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.lineNumbersDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.lineNumbers}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, lineNumbers: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.wordWrap')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.wordWrapDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.wordWrap}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, wordWrap: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.highlightActiveLine')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.highlightActiveLineDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.highlightActiveLine}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, highlightActiveLine: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.foldGutter')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.foldGutterDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.foldGutter}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, foldGutter: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.bracketMatching')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.bracketMatchingDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.bracketMatching}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, bracketMatching: checked }))}
+                  />
                 </div>
               </CardContent>
             </Card>

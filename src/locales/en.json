@@ -215,6 +215,7 @@
     "description": "Customize your SSH client experience and preferences",
     "tab": {
       "terminal": "Terminal",
+      "editor": "Editor",
       "connection": "Connection",
       "security": "Security",
       "interface": "Interface",
@@ -245,6 +246,24 @@
       "imageBlur": "Image Blur: {{blur}}px",
       "imagePosition": "Image Position",
       "imageSizeWarning": "Image must be less than 5MB"
+    },
+    "editor": {
+      "title": "Code Editor",
+      "desc": "Configure the embedded text editor used for viewing and editing remote files.",
+      "theme": "Theme",
+      "fontFamily": "Font Family",
+      "fontSize": "Font Size: {{size}}px",
+      "tabSize": "Tab Size: {{size}} spaces",
+      "lineNumbers": "Line Numbers",
+      "lineNumbersDesc": "Show line numbers in the gutter",
+      "wordWrap": "Word Wrap",
+      "wordWrapDesc": "Soft-wrap long lines to fit the viewport",
+      "highlightActiveLine": "Highlight Active Line",
+      "highlightActiveLineDesc": "Visually highlight the line where the cursor is",
+      "foldGutter": "Code Folding",
+      "foldGutterDesc": "Show fold/unfold arrows in the gutter",
+      "bracketMatching": "Bracket Matching",
+      "bracketMatchingDesc": "Highlight matching brackets when the cursor is next to one"
     },
     "connection": {
       "title": "Connection Settings",
@@ -1039,7 +1058,14 @@
     "modified": "MODIFIED",
     "reload": "Reload from server",
     "saveTooltip": "Save (Ctrl+S)",
-    "save": "Save"
+    "save": "Save",
+    "imagePreviewFailed": "Unable to preview image",
+    "binaryFileTitle": "Binary file",
+    "binaryFileDesc": "\"{{fileName}}\" is a binary file and cannot be edited in the embedded text editor. Download it to open with your local application.",
+    "downloadAndOpen": "Download & Open with Local App",
+    "downloading": "Downloading…",
+    "openedWithOs": "{{fileName}} opened with local application",
+    "failedToOpenWithOs": "Failed to open file with local application"
   },
   "desktopViewer": {
     "clipboardAccessDenied": "Clipboard access denied",
