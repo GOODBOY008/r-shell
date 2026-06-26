@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 
 // ── Hoisted mocks (must exist before vi.mock factories run) ─────────────────
@@ -68,27 +68,14 @@ function makeUpdate(version = '9.9.9', body?: string) {
   };
 }
 
-function enableTauri() {
-  (window as any).__TAURI__ = {};
-}
-
-function disableTauri() {
-  delete (window as any).__TAURI__;
-}
-
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('UpdateChecker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    enableTauri();
     // Default: check() resolves to null (no update)
     mockCheck.mockResolvedValue(null);
-  });
-
-  afterEach(() => {
-    disableTauri();
   });
 
   // ── Auto-check on mount ────────────────────────────────────────────────
@@ -111,26 +98,6 @@ describe('UpdateChecker', () => {
       // Give time for the effect to run
       await act(async () => { await new Promise(r => setTimeout(r, 50)); });
       expect(mockCheck).not.toHaveBeenCalled();
-    });
-
-    it('skips check() in non-Tauri runtime (browser dev mode)', async () => {
-      disableTauri();
-      render(<UpdateChecker />);
-      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
-      expect(mockCheck).not.toHaveBeenCalled();
-    });
-
-    it('shows info toast on manual check in non-Tauri runtime', async () => {
-      disableTauri();
-      const { rerender } = render(<UpdateChecker checkSignal={0} />);
-      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
-      expect(mockCheck).not.toHaveBeenCalled();
-
-      // Manual check in dev mode → info toast
-      rerender(<UpdateChecker checkSignal={1} />);
-      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
-      expect(mockCheck).not.toHaveBeenCalled();
-      expect(mockToast.info).toHaveBeenCalledWith('Updates are not available in development mode.');
     });
 
     it('shows no toast on silent auto-check when no update', async () => {

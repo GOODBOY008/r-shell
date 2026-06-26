@@ -22,8 +22,6 @@ interface UpdateCheckerProps {
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'ready' | 'error';
 
-const isTauriRuntime = () => typeof window !== 'undefined' && Boolean((window as any).__TAURI__);
-
 /** Read the user's "auto check for updates" preference from localStorage. */
 const isAutoCheckEnabled = () => {
   try {
@@ -63,13 +61,6 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
   }, []);
 
   const checkForUpdates = useCallback(async (manual: boolean) => {
-    if (!isTauriRuntime()) {
-      if (manual) {
-        toast.info('Updates are not available in development mode.');
-      }
-      return;
-    }
-
     // Guard against concurrent checks (rapid clicks, overlapping auto+manual)
     if (busyRef.current) {
       return;
