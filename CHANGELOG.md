@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-06-26
+
+### 🌍 R-Shell 2.4 — Internationalization & Auto-Update
+
+This release introduces full app internationalization via `react-i18next` (with English and Simplified Chinese, plus system-locale auto-detection), adds a manual update checker that reads `latest.json` from the release feed, refreshes the dark-mode scrollbar styling, and modernizes the CI runner versions.
+
+> 🙏 **Special thanks to [@htazq](https://github.com/htazq)** for thoroughly testing the i18n feature and drafting the initial PR that kicked off this internationalization work!
+
+### Added
+
+- 🌍 **App Internationalization (i18n)**: Integrated `react-i18next` to support multiple languages throughout the UI, with `en` (English) as the source locale and `zh-CN` (Simplified Chinese) translations
+- 🌐 **System Locale Language Preference**: Added an `AUTO` language option that detects and follows the OS locale on startup, so R-Shell launches in the user's system language by default
+- 🔄 **Manual Update Check**: Added a manual update checker that reads `latest.json` published with each release, letting users check for newer versions from within the app
+
+### Changed
+
+- 🛠️ **CI Runner Upgrades**: Upgraded the GitHub Actions used in CI workflows to their latest versions for reliability and security
+- 🔍 **i18n Key-Parity Check**: Added a lightweight CI workflow that verifies translation key parity between `en.json` and `zh-CN.json` to prevent missing translations
+- 🎨 **Dark Mode Scrollbar Styling**: Improved the dark-mode scrollbar styling selectors for a more consistent native look
+
+### Fixed
+
+- 🐛 **AUTO Language Preference Handling**: Fixed initialization and handling of the `AUTO` language preference so the detected locale is applied reliably on first launch
+
 ## [2.3.0] - 2026-06-14
 
 ### 🖥️ R-Shell 2.3 — Tab Drag Reorder & Terminal Reliability
