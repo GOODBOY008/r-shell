@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { changeLanguage, getLanguagePreference, AUTO } from '@/lib/i18n';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
@@ -23,7 +23,9 @@ import {
   Upload,
   X,
   RefreshCw,
-  Code2
+  Code2,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -202,6 +204,62 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     }
   };
 
+  // --- Scrollable tab bar logic ---
+  const tabListRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const [activeTab, setActiveTab] = useState('terminal');
+
+  const checkScroll = useCallback(() => {
+    const el = tabListRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 1);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = tabListRef.current;
+    if (!el) return;
+    checkScroll();
+    const observer = new ResizeObserver(checkScroll);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [open, checkScroll]);
+
+  // Auto-scroll to center the active tab
+  const scrollToActiveTab = useCallback(() => {
+    const el = tabListRef.current;
+    if (!el) return;
+    const activeTrigger = el.querySelector('[data-state="active"]') as HTMLElement | null;
+    if (!activeTrigger) return;
+    activeTrigger.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    // Slight delay so DOM has the active trigger rendered
+    const raf = requestAnimationFrame(scrollToActiveTab);
+    return () => cancelAnimationFrame(raf);
+  }, [activeTab, open, scrollToActiveTab]);
+
+  const scrollTabs = (dir: 'left' | 'right') => {
+    const el = tabListRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir === 'left' ? -150 : 150, behavior: 'smooth' });
+  };
+
+  // Tab definitions
+  const tabItems = [
+    { value: 'terminal', icon: TerminalIcon, labelKey: 'settings.tab.terminal' },
+    { value: 'editor', icon: Code2, labelKey: 'settings.tab.editor' },
+    { value: 'connection', icon: Network, labelKey: 'settings.tab.connection' },
+    { value: 'security', icon: Shield, labelKey: 'settings.tab.security' },
+    { value: 'interface', icon: Palette, labelKey: 'settings.tab.interface' },
+    { value: 'keyboard', icon: Keyboard, labelKey: 'settings.tab.keyboard' },
+    { value: 'advanced', icon: Monitor, labelKey: 'settings.tab.advanced' },
+  ] as const;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
@@ -219,58 +277,56 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="terminal" className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="w-full justify-start rounded-none border-b bg-transparent h-auto p-0 px-4 gap-1 overflow-x-auto">
-            <TabsTrigger 
-              value="terminal" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
+          {/* Scrollable tab bar with fade edges and scroll arrows */}
+          <div className="relative border-b">
+            {/* Left scroll button */}
+            {canScrollLeft && (
+              <div className="absolute left-0 top-0 bottom-0 z-10 flex items-center pl-1 pr-6 bg-gradient-to-r from-background via-background/95 to-transparent pointer-events-none">
+                <button
+                  type="button"
+                  onClick={() => scrollTabs('left')}
+                  className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
+                  tabIndex={-1}
+                  aria-label="Scroll left"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5 text-foreground" />
+                </button>
+              </div>
+            )}
+
+            {/* Right scroll button */}
+            {canScrollRight && (
+              <div className="absolute right-0 top-0 bottom-0 z-10 flex items-center justify-end pr-1 pl-6 bg-gradient-to-l from-background via-background/95 to-transparent pointer-events-none">
+                <button
+                  type="button"
+                  onClick={() => scrollTabs('right')}
+                  className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
+                  tabIndex={-1}
+                  aria-label="Scroll right"
+                >
+                  <ChevronRight className="h-3.5 w-3.5 text-foreground" />
+                </button>
+              </div>
+            )}
+
+            <TabsList
+              ref={tabListRef}
+              className="w-full justify-start rounded-none bg-transparent h-auto p-0 px-4 gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden scroll-smooth"
+              onScroll={checkScroll}
             >
-              <TerminalIcon className="h-3.5 w-3.5" />
-              <span>{t('settings.tab.terminal')}</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="editor" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Code2 className="h-3.5 w-3.5" />
-              <span>{t('settings.tab.editor')}</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="connection" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Network className="h-3.5 w-3.5" />
-              <span>{t('settings.tab.connection')}</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="security" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Shield className="h-3.5 w-3.5" />
-              <span>{t('settings.tab.security')}</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="interface" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Palette className="h-3.5 w-3.5" />
-              <span>{t('settings.tab.interface')}</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="keyboard" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Keyboard className="h-3.5 w-3.5" />
-              <span>{t('settings.tab.keyboard')}</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="advanced" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Monitor className="h-3.5 w-3.5" />
-              <span>{t('settings.tab.advanced')}</span>
-            </TabsTrigger>
-          </TabsList>
+              {tabItems.map(({ value, icon: Icon, labelKey }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{t(labelKey)}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
 
           <TabsContent value="terminal" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
