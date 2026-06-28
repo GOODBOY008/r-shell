@@ -560,6 +560,7 @@
       "syncDirectories": "Sync directories (Ctrl+Shift+S)"
     },
     "selected": "{{count}} selected",
+    "loading": "Loading\u2026",
     "downloadSelected": "Download {{count}} Selected",
     "deleteFolderTitle": "Delete Folder?",
     "deleteFileTitle": "Delete File?",
@@ -568,6 +569,20 @@
     "deleteConfirm": "Are you sure you want to delete \"{{name}}\"?",
     "deleteFolderWarning": "Warning: This will delete the folder and all its contents.",
     "cannotBeUndone": "This action cannot be undone.",
+    "status": {
+      "items": "{{dirs}} folders, {{files}} files",
+      "selectedSize": "{{size}} selected"
+    },
+    "empty": {
+      "noResults": "No files match your search"
+    },
+    "time": {
+      "justNow": "just now",
+      "minutesAgo": "{{count}} min ago",
+      "hoursAgo": "{{count}}h ago",
+      "yesterday": "yesterday",
+      "daysAgo": "{{count}}d ago"
+    },
     "transfer": {
       "openFile": "Open File",
       "showInFolder": "Show in Folder",
@@ -756,6 +771,7 @@
       "noMatches": "No matches",
       "emptyDirectory": "Empty directory"
     },
+    "loading": "Loading…",
     "column": {
       "name": "Name",
       "size": "Size",

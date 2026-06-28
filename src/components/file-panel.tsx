@@ -123,6 +123,8 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     const [currentPath, setCurrentPath] = useState(initialPath ?? "/");
     const [entries, setEntries] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(false);
+    const [showOverlay, setShowOverlay] = useState(false);
+    const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [filter, setFilter] = useState("");
     const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
     const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(
@@ -183,6 +185,9 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       async (path: string) => {
         if (disabled) return;
         setLoading(true);
+        // Show overlay immediately and keep it visible for at least 300ms
+        if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+        setShowOverlay(true);
         try {
           const result = await onLoadDirectory(path);
           setEntries(result);
@@ -196,6 +201,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           });
         } finally {
           setLoading(false);
+          overlayTimerRef.current = setTimeout(() => setShowOverlay(false), 300);
         }
       },
       [onLoadDirectory, disabled, onPathChange],
@@ -609,10 +615,11 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* File list */}
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className={`flex-1 min-h-0 overflow-y-auto transition-opacity duration-150 ${showOverlay && entries.length > 0 ? "opacity-40" : ""}`}>
               {loading && entries.length === 0 ? (
-                <div className="flex items-center justify-center h-32">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <div className="flex flex-col items-center justify-center h-40 gap-2">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+                  <span className="text-[11px] text-muted-foreground/60">{t('filePanel.loading')}</span>
                 </div>
               ) : filteredEntries.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-xs text-muted-foreground">
@@ -813,6 +820,16 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
+
+        {/* Loading overlay — at panel root to avoid ContextMenu stacking issues */}
+        {showOverlay && entries.length > 0 && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+            <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-sm border border-border/50">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground">{t('filePanel.loading')}</span>
+            </div>
+          </div>
+        )}
 
         {/* Drop overlay — cross-panel drag shows "Drop to upload/download";
             OS-native drop on remote shows "Drop files or folders to upload". */}

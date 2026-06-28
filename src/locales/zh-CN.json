@@ -560,6 +560,7 @@
       "syncDirectories": "同步目录（Ctrl+Shift+S）"
     },
     "selected": "已选择 {{count}} 项",
+    "loading": "加载中\u2026",
     "downloadSelected": "下载选中的 {{count}} 项",
     "deleteFolderTitle": "删除文件夹？",
     "deleteFileTitle": "删除文件？",
@@ -568,6 +569,20 @@
     "deleteConfirm": "确定要删除 \"{{name}}\" 吗？",
     "deleteFolderWarning": "警告：这将删除该文件夹及其所有内容。",
     "cannotBeUndone": "此操作无法撤销。",
+    "status": {
+      "items": "{{dirs}} 个文件夹，{{files}} 个文件",
+      "selectedSize": "已选择 {{size}}"
+    },
+    "empty": {
+      "noResults": "没有匹配搜索的文件"
+    },
+    "time": {
+      "justNow": "刚刚",
+      "minutesAgo": "{{count}} 分钟前",
+      "hoursAgo": "{{count}} 小时前",
+      "yesterday": "昨天",
+      "daysAgo": "{{count}} 天前"
+    },
     "transfer": {
       "openFile": "打开文件",
       "showInFolder": "在文件夹中显示",
@@ -756,6 +771,7 @@
       "noMatches": "无匹配",
       "emptyDirectory": "空目录"
     },
+    "loading": "加载中…",
     "column": {
       "name": "名称",
       "size": "大小",
