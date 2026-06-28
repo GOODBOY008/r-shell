@@ -313,7 +313,22 @@
       "checkUpdatesDesc": "Automatically check for application updates",
       "checkNow": "Check Now",
       "enableTelemetry": "Enable Telemetry",
-      "enableTelemetryDesc": "Help improve the application by sending anonymous usage data"
+      "enableTelemetryDesc": "Help improve the application by sending anonymous usage data",
+      "configBackup": "Config Backup",
+      "configBackupDesc": "Export or import your full configuration to transfer connections and settings to another machine.",
+      "exportConfig": "Export Config",
+      "exportConfigDesc": "Save all connections, settings and preferences to a JSON file.",
+      "importConfig": "Import Config",
+      "importConfigDesc": "Restore configuration from a previously exported JSON file.",
+      "exportSuccess": "Configuration exported successfully",
+      "exportCancelled": "Export cancelled",
+      "importSuccess": "Configuration imported successfully",
+      "importSuccessDesc": "{{connections}} connections, {{profiles}} profiles imported",
+      "importCancelled": "Import cancelled",
+      "importFailed": "Import failed",
+      "exportFailed": "Export failed",
+      "passwordWarning": "Warning: The exported file contains passwords in plaintext. Keep it secure.",
+      "mergeOption": "Merge with existing"
     },
     "language": {
       "label": "Language",

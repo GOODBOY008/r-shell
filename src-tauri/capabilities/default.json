@@ -10,6 +10,15 @@
     "core:webview:allow-create-webview-window",
     "opener:default",
     "dialog:default",
+    "fs:default",
+    "fs:allow-write-text-file",
+    "fs:allow-read-text-file",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "**" }
+      ]
+    },
     "updater:default",
     "process:allow-restart"
   ]

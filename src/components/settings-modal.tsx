@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { changeLanguage, getLanguagePreference, AUTO } from '@/lib/i18n';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
@@ -21,11 +22,13 @@ import {
   Monitor,
   Image,
   Upload,
+  Download,
   X,
   RefreshCw,
   Code2,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -51,6 +54,11 @@ import {
   EDITOR_THEMES,
   type EditorConfig,
 } from '@/lib/editor-config';
+import {
+  exportAllConfig,
+  importAllConfig,
+} from '@/lib/config-export-import';
+import { Checkbox } from './ui/checkbox';
 
 interface SettingsModalProps {
   open: boolean;
@@ -64,6 +72,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
   const [editorConfig, setEditorConfig] = useState<EditorConfig>(DEFAULT_EDITOR_CONFIG);
+  const [importMerge, setImportMerge] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   
   const [settings, setSettings] = useState({
     // Terminal settings
@@ -130,6 +141,54 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
       }
     }
   }, [open]);
+
+  const handleExportConfig = async () => {
+    setIsExporting(true);
+    try {
+      const saved = await exportAllConfig();
+      if (saved) {
+        toast.success(t('settings.advanced.exportSuccess'));
+      } else {
+        toast.info(t('settings.advanced.exportCancelled'));
+      }
+    } catch (error) {
+      console.error('[export-config]', error);
+      toast.error(t('settings.advanced.exportFailed'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportConfig = async () => {
+    setIsImporting(true);
+    try {
+      const result = await importAllConfig(importMerge);
+      if (result) {
+        toast.success(t('settings.advanced.importSuccess'), {
+          description: t('settings.advanced.importSuccessDesc', {
+            connections: result.connections,
+            profiles: result.profiles,
+          }),
+        });
+        // Reload settings that may have changed
+        const appearance = loadAppearanceSettings();
+        setTerminalAppearance(appearance);
+        setEditorConfig(loadEditorConfig());
+        if (onAppearanceChange) onAppearanceChange(appearance);
+      } else {
+        toast.info(t('settings.advanced.importCancelled'));
+      }
+    } catch (error) {
+      console.error('[import-config]', error);
+      toast.error(t('settings.advanced.importFailed'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   const updateTerminalAppearance = <K extends keyof TerminalAppearanceSettings>(
     key: K, 
@@ -1147,6 +1206,82 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                     checked={settings.telemetry}
                     onCheckedChange={(checked) => updateSetting('telemetry', checked)}
                   />
+                </div>
+
+                <Separator />
+
+                {/* Config Backup Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Monitor className="h-4 w-4" />
+                    <Label className="text-base font-medium">{t('settings.advanced.configBackup')}</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {t('settings.advanced.configBackupDesc')}
+                  </p>
+
+                  {/* Warning about passwords */}
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                    <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      {t('settings.advanced.passwordWarning')}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {t('settings.advanced.exportConfigDesc')}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleExportConfig}
+                        disabled={isExporting || isImporting}
+                        className="gap-1.5 flex-shrink-0"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        {t('settings.advanced.exportConfig')}
+                      </Button>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">{t('settings.advanced.importConfig')}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {t('settings.advanced.importConfigDesc')}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="import-merge"
+                            checked={importMerge}
+                            onCheckedChange={(checked) => setImportMerge(checked === true)}
+                          />
+                          <label
+                            htmlFor="import-merge"
+                            className="text-xs text-muted-foreground cursor-pointer select-none"
+                          >
+                            {t('settings.advanced.mergeOption')}
+                          </label>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleImportConfig}
+                          disabled={isExporting || isImporting}
+                          className="gap-1.5"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          {t('settings.advanced.importConfig')}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>

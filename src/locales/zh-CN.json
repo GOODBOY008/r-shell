@@ -313,7 +313,22 @@
       "checkUpdatesDesc": "自动检查应用程序更新",
       "checkNow": "立即检查",
       "enableTelemetry": "启用遥测",
-      "enableTelemetryDesc": "通过发送匿名使用数据帮助改进应用程序"
+      "enableTelemetryDesc": "通过发送匿名使用数据帮助改进应用程序",
+      "configBackup": "配置备份",
+      "configBackupDesc": "导出或导入完整配置，以便将连接和设置迁移到另一台设备。",
+      "exportConfig": "导出配置",
+      "exportConfigDesc": "将所有连接、设置和偏好保存为 JSON 文件。",
+      "importConfig": "导入配置",
+      "importConfigDesc": "从之前导出的 JSON 文件恢复配置。",
+      "exportSuccess": "配置导出成功",
+      "exportCancelled": "已取消导出",
+      "importSuccess": "配置导入成功",
+      "importSuccessDesc": "已导入 {{connections}} 个连接、{{profiles}} 个配置文件",
+      "importCancelled": "已取消导入",
+      "importFailed": "导入失败",
+      "exportFailed": "导出失败",
+      "passwordWarning": "警告：导出的文件包含明文密码，请妥善保管。",
+      "mergeOption": "与现有数据合并"
     },
     "language": {
       "label": "语言",
