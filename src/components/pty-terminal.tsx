@@ -7,7 +7,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { invoke } from '@tauri-apps/api/core';
-import { loadAppearanceSettings, getThemeAwareTerminalOptions, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
+import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
@@ -1000,7 +1000,11 @@ export function PtyTerminal({
       }}
       style={{
         opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1,
-        backgroundColor: (terminalThemes[appearance.theme] || defaultTerminalTheme).background || '#1e1e1e',
+        // Use the theme-aware resolved background so the container matches the
+        // xterm theme exactly. The raw terminalThemes[appearance.theme] lookup
+        // skips light-mode auto-switching, which left a mismatched dark strip at
+        // the bottom of a light terminal (and vice versa).
+        backgroundColor: getThemeAwareTerminalTheme(appearance).background || (terminalThemes[appearance.theme] || defaultTerminalTheme).background || '#1e1e1e',
       }}
     >
       {/* Background image layer */}
