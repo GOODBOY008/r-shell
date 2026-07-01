@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0] - 2026-07-01
+
+### 🛠️ R-Shell 2.5 — Settings, Editor & File Browser Polish
+
+This release adds a configuration export/import backup feature, user-configurable settings for the embedded code editor, a scrollable tab bar with navigation buttons in the settings modal, and improved loading overlays and styling for the file browser panels, plus a fix for theme-aware terminal background coloring.
+
+### Added
+
+- 💾 **Config Export/Import Backup**: Added an export/import feature in settings that lets users back up and restore their R-Shell configuration
+- 📝 **Embedded Editor Settings**: Added user-configurable settings for the embedded code editor, so editor preferences can be customized from within the app
+- 🧭 **Scrollable Settings Tab Bar**: Added a scrollable tab bar with navigation buttons in the settings modal for easier navigation when many options are present
+- ⏳ **File Browser Loading Overlays**: Improved loading overlays for the file browser panels for clearer feedback during file operations
+
+### Changed
+
+- 🎨 **File Panel UI Styles**: Updated UI styles for file panels to refresh their look and feel
+- 🧪 **Update-Checker Tests**: Removed Tauri runtime tests and checks from the update-checker test suite
+
+### Fixed
+
+- 🐛 **Terminal Background Color**: Resolved theme-aware background color handling for the terminal container so it correctly follows the active theme
+
 ## [2.4.0] - 2026-06-26
 
 ### 🌍 R-Shell 2.4 — Internationalization & Auto-Update
