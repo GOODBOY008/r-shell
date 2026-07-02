@@ -737,23 +737,20 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const pad = (n: number) => String(n).padStart(2, '0');
+
   const formatRelativeDate = (date: Date) => {
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-    const diffMin = Math.floor(diffSec / 60);
-    const diffHr = Math.floor(diffMin / 60);
-    const diffDay = Math.floor(diffHr / 24);
-    if (diffSec < 60) return t('fileBrowser.time.justNow');
-    if (diffMin < 60) return t('fileBrowser.time.minutesAgo', { count: diffMin });
-    if (diffHr < 24) return t('fileBrowser.time.hoursAgo', { count: diffHr });
-    if (diffDay === 1) return t('fileBrowser.time.yesterday');
-    if (diffDay < 7) return t('fileBrowser.time.daysAgo', { count: diffDay });
-    return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const y = date.getFullYear();
+    const m = pad(date.getMonth() + 1);
+    const d = pad(date.getDate());
+    const hh = pad(date.getHours());
+    const mm = pad(date.getMinutes());
+    const ss = pad(date.getSeconds());
+    return `${y}-${m}-${d} ${hh}:${mm}:${ss}`;
   };
 
   const formatDate = (date: Date) => {
-    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
+    return formatRelativeDate(date);
   };
 
   const getFileIcon = (file: FileItem) => {

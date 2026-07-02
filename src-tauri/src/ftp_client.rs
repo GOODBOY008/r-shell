@@ -322,7 +322,7 @@ fn parse_ftp_list_line(line: &str) -> Option<FileEntry> {
     let month = tokens[5];
     let day = tokens[6];
     let time_or_year = tokens[7];
-    let modified = Some(format!("{} {} {}", month, day, time_or_year));
+    let modified = parse_ftp_modified(month, day, time_or_year);
     // Name is everything after the 8th token (handles spaces in names)
     let name = tokens[8..].join(" ");
     // For symlinks, strip the " -> target" part from the name
@@ -339,6 +339,49 @@ fn parse_ftp_list_line(line: &str) -> Option<FileEntry> {
         permissions: Some(perms_str.to_string()),
         file_type,
     })
+}
+
+/// Parse FTP `ls` date fields ("Mon DD HH:MM" or "Mon DD YYYY") into "yyyy-mm-dd hh:mm:ss".
+fn parse_ftp_modified(month_str: &str, day_str: &str, time_or_year: &str) -> Option<String> {
+    let month_num = match month_str {
+        "Jan" => 1u32, "Feb" => 2, "Mar" => 3, "Apr" => 4,
+        "May" => 5, "Jun" => 6, "Jul" => 7, "Aug" => 8,
+        "Sep" => 9, "Oct" => 10, "Nov" => 11, "Dec" => 12,
+        _ => return None,
+    };
+    let day: u32 = day_str.parse().unwrap_or(1);
+
+    if time_or_year.contains(':') {
+        // Recent file: "HH:MM" — use current year, seconds = 00
+        let parts: Vec<&str> = time_or_year.splitn(2, ':').collect();
+        let hh: u32 = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let mm: u32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let current_year = {
+            let days = now / 86400;
+            let mut y = 1970i64;
+            let mut rem = days as i64;
+            loop {
+                let dy = if is_leap_year(y) { 366 } else { 365 };
+                if rem < dy { break; }
+                rem -= dy;
+                y += 1;
+            }
+            y as u32
+        };
+        Some(format!("{:04}-{:02}-{:02} {:02}:{:02}:00", current_year, month_num, day, hh, mm))
+    } else {
+        // Older file: "YYYY" — time is 00:00:00
+        let year: u32 = time_or_year.parse().unwrap_or(1970);
+        Some(format!("{:04}-{:02}-{:02} 00:00:00", year, month_num, day))
+    }
+}
+
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
 }
 
 // =============================================================================
