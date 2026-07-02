@@ -595,6 +595,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             <input
               placeholder={t('filePanel.toolbar.filter')}
               className="h-full w-24 text-[10px] bg-transparent outline-none placeholder:text-muted-foreground/50"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />

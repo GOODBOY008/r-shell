@@ -541,6 +541,10 @@ export function SyncDialog({
             <input
               className="flex-1 h-7 text-xs bg-muted/50 rounded px-2 outline-none placeholder:text-muted-foreground/50"
               placeholder={t('syncDialog.excludePlaceholder')}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               value={excludeInput}
               onChange={(e) => setExcludeInput(e.target.value)}
               disabled={isBusy}

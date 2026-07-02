@@ -1418,6 +1418,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 ref={pathInputRef}
                 autoFocus
                 className="h-full w-full bg-transparent font-mono text-[11px] outline-none"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
                 value={editPathValue}
                 onChange={(e) => setEditPathValue(e.target.value)}
                 onKeyDown={(e) => {
