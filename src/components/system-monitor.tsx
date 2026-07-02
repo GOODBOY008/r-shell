@@ -676,15 +676,15 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
 
   return (
     <ScrollArea className="h-full">
-      <div className="space-y-2.5">
+      <div className="space-y-2">
         {/* System Overview */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Activity className="w-3 h-3 shrink-0" />
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.systemOverview')}</h3>
           </div>
           <Card>
-            <CardContent className="p-2 space-y-1.5">
+            <CardContent className="p-2 space-y-1">
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
                   <span className="text-xs font-medium">{t('systemMonitor.cpu')}</span>
@@ -733,7 +733,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
 
         {/* GPU Monitor */}
         {gpuDetectionDone && (
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <div className="flex items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5">
                 <Cpu className="w-3 h-3 shrink-0" />
@@ -744,15 +744,15 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                   value={selectedGpuIndex.toString()} 
                   onValueChange={(value) => setSelectedGpuIndex(value === 'all' ? 'all' : parseInt(value))}
                 >
-                  <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[120px] text-[9px] px-1.5 py-0">
+                  <SelectTrigger className="h-[18px] w-auto min-w-[56px] max-w-[100px] text-[9px] px-1 py-0 gap-0.5">
                     <SelectValue placeholder={t('systemMonitor.selectGpu')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all" className="text-[10px]">
+                    <SelectItem value="all" className="text-[9px] h-6">
                       {t('systemMonitor.allGpus')}
                     </SelectItem>
                     {gpuDetection.gpus.map(gpu => (
-                      <SelectItem key={gpu.index} value={gpu.index.toString()} className="text-[10px]">
+                      <SelectItem key={gpu.index} value={gpu.index.toString()} className="text-[9px] h-6">
                         GPU {gpu.index}
                       </SelectItem>
                     ))}
@@ -958,21 +958,18 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             </div>
                           </div>
 
-                          {/* Temperature, Power, Fan in grid */}
-                          <div className="grid grid-cols-3 gap-1.5 text-[10px]">
-                            {/* Temperature */}
+                          {/* Temperature, Power, Fan, Encoder, Decoder in single row */}
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
                             {currentGpu.temperature != null && (
-                              <div className="flex flex-col gap-0.5">
+                              <div className="flex items-baseline gap-1">
                                 <span className="text-muted-foreground">{t('systemMonitor.temp')}</span>
                                 <span className={`font-semibold ${getGpuTempColor(currentGpu.temperature)}`}>
                                   {currentGpu.temperature.toFixed(0)}°C
                                 </span>
                               </div>
                             )}
-                            
-                            {/* Power */}
                             {currentGpu.power_draw != null && (
-                              <div className="flex flex-col gap-0.5">
+                              <div className="flex items-baseline gap-1">
                                 <span className="text-muted-foreground">{t('systemMonitor.power')}</span>
                                 <span className="font-semibold">
                                   {currentGpu.power_draw.toFixed(0)}W
@@ -982,37 +979,29 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                 </span>
                               </div>
                             )}
-                            
-                            {/* Fan */}
                             {currentGpu.fan_speed != null && (
-                              <div className="flex flex-col gap-0.5">
+                              <div className="flex items-baseline gap-1">
                                 <span className="text-muted-foreground">{t('systemMonitor.fan')}</span>
                                 <span className="font-semibold">{currentGpu.fan_speed.toFixed(0)}%</span>
                               </div>
                             )}
+                            {currentGpu.encoder_util != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.encoder')}</span>
+                                <span className={`font-semibold ${getUsageColor(currentGpu.encoder_util)}`}>
+                                  {currentGpu.encoder_util.toFixed(0)}%
+                                </span>
+                              </div>
+                            )}
+                            {currentGpu.decoder_util != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.decoder')}</span>
+                                <span className={`font-semibold ${getUsageColor(currentGpu.decoder_util)}`}>
+                                  {currentGpu.decoder_util.toFixed(0)}%
+                                </span>
+                              </div>
+                            )}
                           </div>
-
-                          {/* Encoder/Decoder for NVIDIA */}
-                          {(currentGpu.encoder_util != null || currentGpu.decoder_util != null) && (
-                            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                              {currentGpu.encoder_util != null && (
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-muted-foreground">{t('systemMonitor.encoder')}</span>
-                                  <span className={`font-semibold ${getUsageColor(currentGpu.encoder_util)}`}>
-                                    {currentGpu.encoder_util.toFixed(0)}%
-                                  </span>
-                                </div>
-                              )}
-                              {currentGpu.decoder_util != null && (
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-muted-foreground">{t('systemMonitor.decoder')}</span>
-                                  <span className={`font-semibold ${getUsageColor(currentGpu.decoder_util)}`}>
-                                    {currentGpu.decoder_util.toFixed(0)}%
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          )}
 
                           {/* GPU Usage History Chart */}
                           {gpuHistory.get(currentGpu.index)?.length ? (
@@ -1157,20 +1146,20 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         )}
 
         {/* Running Processes */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Terminal className="w-3 h-3 shrink-0" />
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.runningProcesses')}</h3>
           </div>
-          <Card>
+          <Card className="overflow-hidden">
             <CardContent className="p-0">
-              <div className="rounded-md border h-40 overflow-auto">
+              <div className="max-h-40 overflow-auto">
                 <table className="w-full caption-bottom text-sm">
                   <thead className="[&_tr]:border-b">
                     <tr className="border-b transition-colors">
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs">{t('systemMonitor.pid')}</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px]">{t('systemMonitor.pid')}</th>
                       <th 
-                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs cursor-pointer hover:bg-muted/50 select-none"
+                        className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] cursor-pointer hover:bg-muted/50 select-none"
                         onClick={() => setProcessSortBy('cpu')}
                       >
                         <div className="flex items-center gap-0.5">
@@ -1179,7 +1168,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                       </div>
                     </th>
                     <th 
-                      className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs cursor-pointer hover:bg-muted/50 select-none"
+                      className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] cursor-pointer hover:bg-muted/50 select-none"
                       onClick={() => setProcessSortBy('mem')}
                     >
                       <div className="flex items-center gap-0.5">
@@ -1187,8 +1176,8 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           {processSortBy === 'mem' && <ArrowDown className="w-2.5 h-2.5" />}
                         </div>
                       </th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs">{t('systemMonitor.command')}</th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs w-8"></th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px]">{t('systemMonitor.command')}</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] w-8"></th>
                     </tr>
                   </thead>
                   <tbody className="[&_tr:last-child]:border-0">
@@ -1225,25 +1214,25 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         </div>
 
         {/* Disk Usage */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <HardDrive className="w-3 h-3 shrink-0" />
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.diskUsage')}</h3>
           </div>
-          <Card>
+          <Card className="overflow-hidden">
             <CardContent className="p-0">
               {disks.length === 0 ? (
                 <div className="p-2 text-[10px] text-muted-foreground">
                   {t('systemMonitor.noDiskInfo')}
                 </div>
               ) : (
-                <div className="rounded-md border h-40 overflow-auto">
+                <div className="max-h-40 overflow-auto">
                   <table className="w-full caption-bottom text-sm">
                     <thead className="[&_tr]:border-b">
                       <tr className="border-b transition-colors">
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium text-xs">{t('systemMonitor.path')}</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-xs">{t('systemMonitor.size')}</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-xs">{t('systemMonitor.usage')}</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium text-[11px]">{t('systemMonitor.path')}</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.size')}</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.usage')}</th>
                       </tr>
                     </thead>
                     <tbody className="[&_tr:last-child]:border-0">
@@ -1271,7 +1260,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         </div>
 
         {/* Network Usage */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center justify-between gap-1.5">
             <div className="flex items-center gap-1.5">
               <ArrowDownUp className="w-3 h-3 shrink-0" />
@@ -1283,15 +1272,15 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                 // Clear history when switching interfaces
                 setNetworkHistory([]);
               }}>
-                <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[100px] text-[9px] px-1.5 py-0">
+                <SelectTrigger className="h-[18px] w-auto min-w-[56px] max-w-[88px] text-[9px] px-1 py-0 gap-0.5">
                   <SelectValue placeholder={t('systemMonitor.selectInterface')} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all" className="text-[10px]">
+                  <SelectItem value="all" className="text-[9px] h-6">
                     {t('systemMonitor.allInterfaces')}
                   </SelectItem>
                   {networkInterfaces.map(iface => (
-                    <SelectItem key={iface} value={iface} className="text-[10px]">
+                    <SelectItem key={iface} value={iface} className="text-[9px] h-6">
                       {iface}
                     </SelectItem>
                   ))}
@@ -1369,7 +1358,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           }
                           return `${absValue.toFixed(0)} KB/s`;
                         }}
-                        width={50}
+                        width={30}
                         tickLine={false}
                       />
                       <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeWidth={1.5} />
@@ -1416,7 +1405,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         </div>
 
         {/* Network Latency */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Gauge className="w-3 h-3 shrink-0" />
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.networkLatency')}</h3>
