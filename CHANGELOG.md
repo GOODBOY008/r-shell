@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.1] - 2026-07-16
+
+### 🔧 R-Shell 2.5.1 — Input Hardening & UI Polish
+
+This patch release disables browser autofill and spell-check on input fields for cleaner terminal-style input, simplifies date formatting in the integrated file browser, and refines spacing and UI consistency across the system monitor components.
+
+### Added
+
+- 🔒 **Disable Autofill & Spell-Check on Inputs**: Turned off browser autofill and spell-check for input fields to prevent unwanted suggestions and keep input behavior consistent with a terminal client
+
+### Changed
+
+- 📅 **Simplified File-Browser Date Formatting**: Simplified the date-formatting logic in the integrated file browser for improved readability and maintainability
+- 🎨 **System Monitor UI Refinements**: Refined spacing and improved UI consistency across system monitor components for a more polished look
+
 ## [2.5.0] - 2026-07-01
 
 ### 🛠️ R-Shell 2.5 — Settings, Editor & File Browser Polish
