@@ -106,6 +106,11 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string) => (command === 'get_websocket_port' ? 9001 : undefined)),
 }));
 
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: vi.fn().mockResolvedValue(''),
+  writeText: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../lib/terminal-config', () => ({
   defaultTerminalTheme: {
     background: '#000000',
@@ -128,6 +133,9 @@ vi.mock('../lib/terminal-config', () => ({
     fontSize: 14,
     scrollback: 10000,
     theme: {},
+  })),
+  getThemeAwareTerminalTheme: vi.fn(() => ({
+    background: '#000000',
   })),
 }));
 
@@ -285,16 +293,12 @@ describe('PtyTerminal activation', () => {
   });
 
   it('lets xterm handle Ctrl+V paste without duplicate custom send', async () => {
-    const readText = vi.fn().mockResolvedValue('pasted text');
+    const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
+    const readTextMock = vi.mocked(readText);
+    readTextMock.mockClear();
     Object.defineProperty(navigator, 'platform', {
       configurable: true,
       value: 'Win32',
-    });
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: {
-        readText,
-      },
     });
     renderTerminal(true);
     await act(async () => {
@@ -313,20 +317,16 @@ describe('PtyTerminal activation', () => {
 
     expect(handled).toBe(true);
     expect(preventDefault).not.toHaveBeenCalled();
-    expect(readText).not.toHaveBeenCalled();
+    expect(readTextMock).not.toHaveBeenCalled();
   });
 
   it('lets xterm handle Command+V paste without duplicate custom send on macOS', async () => {
-    const readText = vi.fn().mockResolvedValue('mac paste');
+    const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
+    const readTextMock = vi.mocked(readText);
+    readTextMock.mockClear();
     Object.defineProperty(navigator, 'platform', {
       configurable: true,
       value: 'MacIntel',
-    });
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: {
-        readText,
-      },
     });
     renderTerminal(true);
     await act(async () => {
@@ -345,6 +345,6 @@ describe('PtyTerminal activation', () => {
 
     expect(handled).toBe(true);
     expect(preventDefault).not.toHaveBeenCalled();
-    expect(readText).not.toHaveBeenCalled();
+    expect(readTextMock).not.toHaveBeenCalled();
   });
 });

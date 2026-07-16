@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { toast } from 'sonner';
 import { DesktopToolbar } from './desktop-toolbar';
 import { computeFitScale, translateCoordinates } from '@/lib/desktop-utils';
@@ -90,7 +91,7 @@ export function DesktopViewer({
             setIsLoading(false);
           } else if (msg.type === 'ClipboardUpdate' && msg.connection_id === connectionId) {
             // Write incoming remote clipboard text to local clipboard
-            navigator.clipboard.writeText(msg.text).catch(() => {
+            writeClipboardText(msg.text).catch(() => {
               // Clipboard write denied — silently ignore
             });
           }
@@ -156,7 +157,7 @@ export function DesktopViewer({
     // Intercept Ctrl+V for clipboard paste: read local clipboard and send to remote
     if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
       e.preventDefault();
-      navigator.clipboard.readText().then((text) => {
+      readClipboardText().then((text) => {
         if (text) {
           invoke('desktop_set_clipboard', { connectionId, text }).catch(() => {});
         }

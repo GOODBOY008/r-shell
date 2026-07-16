@@ -99,6 +99,11 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string) => (command === 'get_websocket_port' ? 9001 : undefined)),
 }));
 
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: vi.fn().mockResolvedValue(''),
+  writeText: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../lib/terminal-config', () => ({
   defaultTerminalTheme: {
     background: '#000000',
@@ -121,6 +126,9 @@ vi.mock('../lib/terminal-config', () => ({
     fontSize: 14,
     scrollback: 10000,
     theme: {},
+  })),
+  getThemeAwareTerminalTheme: vi.fn(() => ({
+    background: '#000000',
   })),
 }));
 

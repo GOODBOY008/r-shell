@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { withRetry, CancelledError } from '@/lib/async-retry';
 import { Button } from './ui/button';
@@ -1112,7 +1113,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   const handleCopyPath = (file: FileItem) => {
     const fullPath = `${currentPath}/${file.name}`;
-    void navigator.clipboard.writeText(fullPath);
+    void writeClipboardText(fullPath);
     toast.success(t('fileBrowser.toast.pathCopied'));
   };
 

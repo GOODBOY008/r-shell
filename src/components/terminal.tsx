@@ -6,6 +6,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { invoke } from '@tauri-apps/api/core';
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { X, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -213,7 +214,7 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
         const selection = term.getSelection();
         if (selection) {
           e.preventDefault();
-          navigator.clipboard.writeText(selection).then(() => {
+          writeClipboardText(selection).then(() => {
             // Visual feedback
             console.log('Copied to clipboard');
           }).catch(err => {
@@ -225,9 +226,9 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
       // Paste: Ctrl+Shift+V or Cmd+V
       else if ((e.ctrlKey && e.shiftKey && e.key === 'V') || (e.metaKey && e.key === 'v')) {
         e.preventDefault();
-        navigator.clipboard.readText().then(text => {
+        readClipboardText().then(text => {
           // Paste the text into the terminal
-          term.paste(text);
+          if (text) term.paste(text);
         }).catch(err => {
           console.error('Failed to paste:', err);
         });

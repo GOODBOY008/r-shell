@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import { useTranslation } from 'react-i18next';
 import { toast } from "sonner";
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import {
@@ -394,7 +395,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     };
 
     const handleCopyPath = (name: string) => {
-      navigator.clipboard.writeText(pathJoin(currentPath, name));
+      writeClipboardText(pathJoin(currentPath, name));
       toast.success(t('filePanel.toast.pathCopied'));
     };
 

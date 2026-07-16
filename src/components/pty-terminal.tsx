@@ -7,6 +7,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { invoke } from '@tauri-apps/api/core';
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar } from './terminal/terminal-search-bar';
@@ -117,7 +118,7 @@ export function PtyTerminal({
 
   const pasteClipboardIntoPty = React.useCallback(async () => {
     try {
-      const text = await navigator.clipboard.readText();
+      const text = await readClipboardText();
       if (!text) return;
       const term = xtermRef.current;
       if (!term) {
@@ -258,7 +259,7 @@ export function PtyTerminal({
       if (modKey && key === 'c' && term.hasSelection()) {
         // Allow copy to happen
         const selection = term.getSelection();
-        navigator.clipboard.writeText(selection).catch(() => {
+        writeClipboardText(selection).catch(() => {
           console.error('Failed to copy');
         });
         return false;
@@ -870,7 +871,7 @@ export function PtyTerminal({
     const term = xtermRef.current;
     if (term?.hasSelection()) {
       const selection = term.getSelection();
-      navigator.clipboard.writeText(selection).then(() => {
+      writeClipboardText(selection).then(() => {
         toast.success(t('ptyTerminal.copiedToClipboard'));
       }).catch(() => {
         toast.error(t('ptyTerminal.failedToCopyClipboard'));
