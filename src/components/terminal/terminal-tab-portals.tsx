@@ -54,6 +54,12 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
 
+  const handleActivateGroup = useCallback(() => {
+    if (groupId && state.activeGroupId !== groupId) {
+      dispatch({ type: 'ACTIVATE_GROUP', groupId });
+    }
+  }, [dispatch, groupId, state.activeGroupId]);
+
   const handleReconnect = useCallback(() => {
     if (onReconnectTab) {
       void onReconnectTab(tab.id);
@@ -72,8 +78,10 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
     [dispatch],
   );
 
+  let content: React.ReactNode;
+
   if (tab.tabType === 'desktop') {
-    return (
+    content = (
       <DesktopViewer
         connectionId={tab.id}
         connectionName={tab.name}
@@ -83,10 +91,8 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         onReconnect={handleReconnect}
       />
     );
-  }
-
-  if (tab.tabType === 'file-browser') {
-    return (
+  } else if (tab.tabType === 'file-browser') {
+    content = (
       <FileBrowserView
         connectionId={tab.id}
         connectionName={tab.name}
@@ -96,10 +102,8 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         onReconnect={handleReconnect}
       />
     );
-  }
-
-  if (tab.tabType === 'editor' && tab.editorFilePath && tab.editorConnectionId) {
-    return (
+  } else if (tab.tabType === 'editor' && tab.editorFilePath && tab.editorConnectionId) {
+    content = (
       <FileEditorView
         connectionId={tab.editorConnectionId}
         filePath={tab.editorFilePath}
@@ -107,29 +111,40 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         isConnected={tab.connectionStatus === 'connected'}
       />
     );
-  }
-
-  if (tab.connectionStatus === 'pending') {
-    return (
+  } else if (tab.connectionStatus === 'pending') {
+    content = (
       <div className="h-full w-full flex items-center justify-center bg-muted/30">
         <div className="text-center text-muted-foreground">
           <div className="animate-pulse">Waiting for connection...</div>
         </div>
       </div>
     );
+  } else {
+    content = (
+      <PtyTerminal
+        key={`${tab.id}-${tab.reconnectCount}`}
+        connectionId={tab.id}
+        connectionName={tab.name}
+        host={tab.host}
+        username={tab.username}
+        themeKey={themeKey}
+        isActive={isActive}
+        onConnectionStatusChange={handleConnectionStatusChange}
+      />
+    );
   }
 
+  // Portal events follow the React owner tree rather than the host's DOM ancestry.
+  // Activate the owning group here so clicking/focusing portal content retains the
+  // same behaviour that TerminalGroupView previously provided.
   return (
-    <PtyTerminal
-      key={`${tab.id}-${tab.reconnectCount}`}
-      connectionId={tab.id}
-      connectionName={tab.name}
-      host={tab.host}
-      username={tab.username}
-      themeKey={themeKey}
-      isActive={isActive}
-      onConnectionStatusChange={handleConnectionStatusChange}
-    />
+    <div
+      className="h-full w-full"
+      onMouseDownCapture={handleActivateGroup}
+      onFocusCapture={handleActivateGroup}
+    >
+      {content}
+    </div>
   );
 }
 
