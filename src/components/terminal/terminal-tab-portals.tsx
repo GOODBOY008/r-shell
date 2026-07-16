@@ -157,7 +157,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
  */
 export function TerminalTabPortalProvider({ children }: { children: React.ReactNode }) {
   const { state } = useTerminalGroups();
-  const portalNodesRef = useRef(new Map<string, HTMLDivElement>());
+  const [portalNodes] = useState(() => new Map<string, HTMLDivElement>());
   const themeKey = useThemeKey();
 
   const allTabs = useMemo(
@@ -166,25 +166,25 @@ export function TerminalTabPortalProvider({ children }: { children: React.ReactN
   );
 
   const getPortalNode = useCallback((tabId: string): HTMLDivElement => {
-    const existing = portalNodesRef.current.get(tabId);
+    const existing = portalNodes.get(tabId);
     if (existing) return existing;
 
     const node = document.createElement('div');
     node.className = 'h-full w-full';
     node.dataset.terminalTabPortal = tabId;
-    portalNodesRef.current.set(tabId, node);
+    portalNodes.set(tabId, node);
     return node;
-  }, []);
+  }, [portalNodes]);
 
   useEffect(() => {
     const liveTabIds = new Set(allTabs.map((tab) => tab.id));
-    for (const [tabId, node] of portalNodesRef.current) {
+    for (const [tabId, node] of portalNodes) {
       if (!liveTabIds.has(tabId)) {
         node.remove();
-        portalNodesRef.current.delete(tabId);
+        portalNodes.delete(tabId);
       }
     }
-  }, [allTabs]);
+  }, [allTabs, portalNodes]);
 
   const contextValue = useMemo(() => ({ getPortalNode }), [getPortalNode]);
 
