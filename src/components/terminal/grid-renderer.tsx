@@ -3,6 +3,7 @@ import type { GridNode } from '../../lib/terminal-group-types';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '../ui/resizable';
 import { TerminalGroupView } from './terminal-group-view';
+import { TerminalTabPortalProvider } from './terminal-tab-portals';
 
 interface GridRendererProps {
   node: GridNode;
@@ -11,14 +12,10 @@ interface GridRendererProps {
 
 /** Derive a stable React key from a GridNode.
  *
- *  The key must survive tree restructuring so that React can reconcile
- *  existing components instead of unmounting/remounting them (which
- *  would tear down live WebSocket + PTY connections).
- *
- *  Strategy: use the smallest (i.e. oldest) leaf groupId in the subtree.
- *  When a leaf is split into a branch, the original group (which always
- *  has a smaller numeric id than the newly created group) stays in the
- *  subtree, so the key remains the same regardless of split direction.
+ * The key keeps existing panel instances and their resize state stable while the
+ * tree is restructured. Live tab content is kept mounted separately by
+ * TerminalTabPortalProvider, because React keys cannot preserve a component that
+ * moves across different parents in the recursive layout tree.
  */
 function getStableKey(node: GridNode): string {
   return `grid-${minLeafGroupId(node)}`;
@@ -36,7 +33,15 @@ function minLeafGroupId(node: GridNode): string {
   return min;
 }
 
-export function GridRenderer({ node, path }: GridRendererProps) {
+export function GridRenderer(props: GridRendererProps) {
+  return (
+    <TerminalTabPortalProvider>
+      <GridRendererNode {...props} />
+    </TerminalTabPortalProvider>
+  );
+}
+
+function GridRendererNode({ node, path }: GridRendererProps) {
   const { dispatch } = useTerminalGroups();
 
   const handleLayout = useCallback(
@@ -96,7 +101,7 @@ function GridRendererChild({ child, index, path, defaultSize, isLast, onHandleDo
   return (
     <>
       <ResizablePanel id={panelId} order={index} defaultSize={defaultSize} minSize={10}>
-        <GridRenderer node={child} path={childPath} />
+        <GridRendererNode node={child} path={childPath} />
       </ResizablePanel>
       {!isLast && <ResizableHandle onDoubleClick={onHandleDoubleClick} />}
     </>
