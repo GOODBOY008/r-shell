@@ -108,26 +108,18 @@ function splitGroupState(): TerminalGroupState {
   };
 }
 
-function SingleGroupHosts() {
+function PortalHosts({ split }: { split: boolean }) {
   return (
     <TerminalTabPortalProvider>
       <div data-testid="group-1">
-        <TerminalTabPortalHost tabId={tabA.id} isActive />
-        <TerminalTabPortalHost tabId={tabB.id} isActive={false} />
+        {!split && <TerminalTabPortalHost tabId={tabA.id} isActive />}
+        <TerminalTabPortalHost tabId={tabB.id} isActive={split} />
       </div>
-    </TerminalTabPortalProvider>
-  );
-}
-
-function SplitGroupHosts() {
-  return (
-    <TerminalTabPortalProvider>
-      <div data-testid="group-1">
-        <TerminalTabPortalHost tabId={tabB.id} isActive />
-      </div>
-      <div data-testid="group-2">
-        <TerminalTabPortalHost tabId={tabA.id} isActive />
-      </div>
+      {split && (
+        <div data-testid="group-2">
+          <TerminalTabPortalHost tabId={tabA.id} isActive />
+        </div>
+      )}
     </TerminalTabPortalProvider>
   );
 }
@@ -143,7 +135,7 @@ describe('TerminalTabPortalProvider', () => {
   afterEach(() => cleanup());
 
   it('keeps live terminal components mounted when a tab moves to a new group', () => {
-    const view = render(<SingleGroupHosts />);
+    const view = render(<PortalHosts split={false} />);
 
     expect(screen.getByTestId('pty-tab-a')).toBeTruthy();
     expect(screen.getByTestId('pty-tab-b')).toBeTruthy();
@@ -151,7 +143,7 @@ describe('TerminalTabPortalProvider', () => {
     expect(lifecycle.unmounted).not.toHaveBeenCalled();
 
     mockState = splitGroupState();
-    view.rerender(<SplitGroupHosts />);
+    view.rerender(<PortalHosts split />);
 
     expect(screen.getByTestId('pty-tab-a')).toBeTruthy();
     expect(screen.getByTestId('pty-tab-b')).toBeTruthy();
