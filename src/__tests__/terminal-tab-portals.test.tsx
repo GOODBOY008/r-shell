@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
 import {
   TerminalTabPortalHost,
@@ -11,6 +11,7 @@ const lifecycle = vi.hoisted(() => ({
   mounted: vi.fn(),
   unmounted: vi.fn(),
   dispatch: vi.fn(),
+  reconnect: vi.fn(),
 }));
 
 let mockState: TerminalGroupState;
@@ -23,7 +24,7 @@ vi.mock('../lib/terminal-group-context', () => ({
 }));
 
 vi.mock('../lib/terminal-callbacks-context', () => ({
-  useTerminalCallbacks: () => ({}),
+  useTerminalCallbacks: () => ({ onReconnectTab: lifecycle.reconnect }),
 }));
 
 vi.mock('../components/pty-terminal', async () => {
@@ -129,6 +130,7 @@ describe('TerminalTabPortalProvider', () => {
     lifecycle.mounted.mockClear();
     lifecycle.unmounted.mockClear();
     lifecycle.dispatch.mockClear();
+    lifecycle.reconnect.mockClear();
     mockState = singleGroupState();
   });
 
@@ -155,5 +157,37 @@ describe('TerminalTabPortalProvider', () => {
     expect(lifecycle.unmounted).toHaveBeenCalledTimes(2);
     expect(lifecycle.unmounted).toHaveBeenCalledWith(tabA.id);
     expect(lifecycle.unmounted).toHaveBeenCalledWith(tabB.id);
+  });
+
+  it('reconnects only the active disconnected terminal on an unmodified R key', () => {
+    const view = render(<PortalHosts split={false} />);
+
+    expect(fireEvent.keyDown(screen.getByTestId('pty-tab-a'), { key: 'r' })).toBe(true);
+    expect(lifecycle.reconnect).not.toHaveBeenCalled();
+
+    mockState = {
+      ...singleGroupState(),
+      groups: {
+        '1': {
+          id: '1',
+          tabs: [
+            { ...tabA, connectionStatus: 'disconnected' },
+            { ...tabB, connectionStatus: 'disconnected' },
+          ],
+          activeTabId: tabA.id,
+        },
+      },
+    };
+    view.rerender(<PortalHosts split={false} />);
+
+    fireEvent.keyDown(screen.getByTestId('pty-tab-b'), { key: 'r' });
+    fireEvent.keyDown(screen.getByTestId('pty-tab-a'), { key: 'r', ctrlKey: true });
+    expect(lifecycle.reconnect).not.toHaveBeenCalled();
+
+    expect(
+      fireEvent.keyDown(screen.getByTestId('pty-tab-a'), { key: 'R', shiftKey: true }),
+    ).toBe(false);
+    expect(lifecycle.reconnect).toHaveBeenCalledOnce();
+    expect(lifecycle.reconnect).toHaveBeenCalledWith(tabA.id);
   });
 });

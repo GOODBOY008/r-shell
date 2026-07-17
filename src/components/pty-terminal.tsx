@@ -17,6 +17,7 @@ import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
 import { registerTerminalWorkingDirectoryHandler } from '../lib/terminal-working-directory';
 import { TERMINAL_COMMAND_EVENT, type TerminalCommandDetail } from '../lib/terminal-commands';
 import { registerDetachHandler } from '../lib/terminal-detach-registry';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -94,6 +95,17 @@ function claimSshDeadEscalation(connectionId: string): boolean {
  * switching free while long-hidden panes still let go of the GPU.
  */
 const HIDDEN_WEBGL_RELEASE_MS = 60_000;
+
+function isAutoReconnectEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return true;
+    const settings = JSON.parse(raw) as { autoReconnect?: unknown };
+    return settings.autoReconnect !== false;
+  } catch {
+    return true;
+  }
+}
 
 export function PtyTerminal({
   connectionId,
@@ -1012,6 +1024,15 @@ export function PtyTerminal({
           return;
         }
         if (isRunning) {
+          if (!isAutoReconnectEnabled()) {
+            term.write(`\r\n\x1b[31m[${i18n.t('ptyTerminal.connectionClosedManualReconnect')}]\x1b[0m\r\n`);
+            if (connectionStatusRef.current !== 'disconnected') {
+              connectionStatusRef.current = 'disconnected';
+              onConnectionStatusChange?.(connectionId, 'disconnected');
+            }
+            return;
+          }
+
           // If a session was successfully established, a WS drop means the
           // remote shell is gone (e.g. sleep/wake cycle, server timeout).
           // Auto-reconnect with exponential backoff so the user doesn't have
