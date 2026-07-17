@@ -968,6 +968,9 @@
     "copiedToClipboard": "Copied to clipboard",
     "failedToCopyClipboard": "Failed to copy to clipboard",
     "reconnectingTerminal": "Reconnecting terminal…",
+    "connectionClosedManualReconnect": "Connection closed. Press R to reconnect, or use right-click → Reconnect.",
+    "autoReconnectFailed": "Connection lost. Auto-reconnect failed after {{count}} attempts. Press R to reconnect, or use right-click → Reconnect.",
+    "connectionFailedPermanently": "Connection failed permanently. Press R to reconnect, or use right-click → Reconnect.",
     "outputSaved": "Terminal output saved",
     "failedToSaveOutput": "Failed to save output"
   },

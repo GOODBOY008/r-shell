@@ -14,6 +14,8 @@ import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
 import { signalReady } from '../lib/restoration-manager';
 import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
+import i18n from '../lib/i18n';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -42,6 +44,17 @@ interface PtyTerminalProps {
  *  prevent V8 heap fragmentation and WebGL texture-cache bloat during
  *  sustained high-throughput output (e.g. `yes`). */
 const SESSION_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
+
+function isAutoReconnectEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return true;
+    const settings = JSON.parse(raw) as { autoReconnect?: unknown };
+    return settings.autoReconnect !== false;
+  } catch {
+    return true;
+  }
+}
 
 export function PtyTerminal({
   connectionId,
@@ -603,6 +616,15 @@ export function PtyTerminal({
       ws.onclose = () => {
         console.log('[PTY Terminal] WebSocket closed');
         if (isRunning) {
+          if (!isAutoReconnectEnabled()) {
+            term.write(`\r\n\x1b[31m[${i18n.t('ptyTerminal.connectionClosedManualReconnect')}]\x1b[0m\r\n`);
+            if (connectionStatusRef.current !== 'disconnected') {
+              connectionStatusRef.current = 'disconnected';
+              onConnectionStatusChange?.(connectionId, 'disconnected');
+            }
+            return;
+          }
+
           // If a session was successfully established, a WS drop means the
           // remote shell is gone (e.g. sleep/wake cycle, server timeout).
           // Auto-reconnect with exponential backoff so the user doesn't have
@@ -611,7 +633,7 @@ export function PtyTerminal({
             const dropAttempt = autoReconnectAfterDropRef.current;
             if (dropAttempt >= MAX_AUTO_RECONNECT_AFTER_DROP) {
               // Exhausted auto-reconnect attempts — ask user to act manually.
-              term.write('\r\n\x1b[31m[Connection lost. Auto-reconnect failed after ' + MAX_AUTO_RECONNECT_AFTER_DROP + ' attempts. Use right-click → Reconnect.]\x1b[0m\r\n');
+              term.write(`\r\n\x1b[31m[${i18n.t('ptyTerminal.autoReconnectFailed', { count: MAX_AUTO_RECONNECT_AFTER_DROP })}]\x1b[0m\r\n`);
               if (connectionStatusRef.current !== 'disconnected') {
                 connectionStatusRef.current = 'disconnected';
                 onConnectionStatusChange?.(connectionId, 'disconnected');
@@ -646,7 +668,7 @@ export function PtyTerminal({
           const attempts = reconnectAttemptsRef.current;
           
           if (attempts >= MAX_RECONNECT_ATTEMPTS) {
-            term.write('\r\n\x1b[31m[Connection failed permanently. Use right-click → Reconnect to retry.]\x1b[0m\r\n');
+            term.write(`\r\n\x1b[31m[${i18n.t('ptyTerminal.connectionFailedPermanently')}]\x1b[0m\r\n`);
             if (connectionStatusRef.current !== 'disconnected') {
               connectionStatusRef.current = 'disconnected';
               onConnectionStatusChange?.(connectionId, 'disconnected');

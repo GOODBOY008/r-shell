@@ -68,6 +68,31 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
     dispatch({ type: 'RECONNECT_TAB', tabId: tab.id });
   }, [dispatch, onReconnectTab, tab.id]);
 
+  const handleReconnectKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const isTerminalTab = tab.tabType === undefined || tab.tabType === 'terminal';
+      if (
+        !isTerminalTab ||
+        !isActive ||
+        tab.connectionStatus !== 'disconnected' ||
+        event.repeat ||
+        event.nativeEvent.isComposing ||
+        event.keyCode === 229 ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.key.toLowerCase() !== 'r'
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      handleReconnect();
+    },
+    [handleReconnect, isActive, tab.connectionStatus, tab.tabType],
+  );
+
   const handleConnectionStatusChange = useCallback(
     (
       connectionId: string,
@@ -142,6 +167,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
       className="h-full w-full"
       onMouseDownCapture={handleActivateGroup}
       onFocusCapture={handleActivateGroup}
+      onKeyDown={handleReconnectKeyDown}
     >
       {content}
     </div>

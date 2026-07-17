@@ -968,6 +968,9 @@
     "copiedToClipboard": "已复制到剪贴板",
     "failedToCopyClipboard": "复制到剪贴板失败",
     "reconnectingTerminal": "正在重新连接终端…",
+    "connectionClosedManualReconnect": "连接已关闭。按 R 重连，或右键选择“重新连接”。",
+    "autoReconnectFailed": "连接已断开，自动重连 {{count}} 次后仍然失败。按 R 重连，或右键选择“重新连接”。",
+    "connectionFailedPermanently": "连接永久失败。按 R 重连，或右键选择“重新连接”。",
     "outputSaved": "终端输出已保存",
     "failedToSaveOutput": "保存输出失败"
   },
