@@ -6,7 +6,9 @@ import React, {
   useImperativeHandle,
   forwardRef,
 } from "react";
+import { useTranslation } from 'react-i18next';
 import { toast } from "sonner";
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import {
@@ -46,6 +48,7 @@ import {
   localParentPath,
   localBreadcrumbSegments,
 } from "@/lib/file-entry-types";
+import { useWebviewFileDrop } from "@/lib/use-webview-file-drop";
 
 // ---------- Types ----------
 
@@ -76,6 +79,10 @@ export interface FilePanelProps {
 
   // Disabled state (e.g., remote when not connected)
   disabled?: boolean;
+
+  // OS-native drag-and-drop from Finder / Explorer / Nautilus.
+  // Only meaningful for the remote panel (local has no remote to upload to).
+  onOsFilesDropped?: (paths: string[]) => void | Promise<void>;
 }
 
 export interface FilePanelRef {
@@ -109,12 +116,16 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       onPathChange,
       showPermissions = false,
       disabled = false,
+      onOsFilesDropped,
     },
     ref,
   ) {
+    const { t } = useTranslation();
     const [currentPath, setCurrentPath] = useState(initialPath ?? "/");
     const [entries, setEntries] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(false);
+    const [showOverlay, setShowOverlay] = useState(false);
+    const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [filter, setFilter] = useState("");
     const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
     const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(
@@ -131,6 +142,19 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       permissions: 85,
     });
     const containerRef = useRef<HTMLDivElement>(null);
+
+    // OS-native file drop — enabled only on the remote panel when the parent
+    // supplied a handler and the panel isn't disabled. Hit-test uses the
+    // container's bounding rect via the singleton Tauri `onDragDropEvent`
+    // subscription in `useWebviewFileDrop`.
+    const { isDragOver: isOsDragOver } = useWebviewFileDrop({
+      enabled: mode === "remote" && !disabled && !!onOsFilesDropped,
+      targetRef: containerRef,
+      onDrop: (paths) => {
+        if (onOsFilesDropped) void Promise.resolve(onOsFilesDropped(paths));
+      },
+      priority: 1,
+    });
 
     // Use the appropriate path helpers based on mode
     const getParentPath = mode === "local" ? localParentPath : parentPath;
@@ -162,6 +186,9 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       async (path: string) => {
         if (disabled) return;
         setLoading(true);
+        // Show overlay immediately and keep it visible for at least 300ms
+        if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
+        setShowOverlay(true);
         try {
           const result = await onLoadDirectory(path);
           setEntries(result);
@@ -170,11 +197,12 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           setSelectedNames(new Set());
           setLastSelectedIndex(null);
         } catch (err) {
-          toast.error(`Failed to load directory`, {
+          toast.error(t('filePanel.toast.loadFailed'), {
             description: err instanceof Error ? err.message : String(err),
           });
         } finally {
           setLoading(false);
+          overlayTimerRef.current = setTimeout(() => setShowOverlay(false), 300);
         }
       },
       [onLoadDirectory, disabled, onPathChange],
@@ -324,10 +352,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       const fullPath = pathJoin(currentPath, name);
       try {
         await onDelete(fullPath, isDirectory);
-        toast.success("Deleted", { description: name });
+        toast.success(t('filePanel.toast.deleted'), { description: name });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error("Delete failed", {
+        toast.error(t('filePanel.toast.deleteFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -335,17 +363,17 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     const handleRename = async (oldName: string) => {
       if (!onRename) return;
-      const newName = prompt("New name:", oldName);
+      const newName = prompt(t('filePanel.prompt.rename'), oldName);
       if (!newName || newName === oldName) return;
       try {
         await onRename(
           pathJoin(currentPath, oldName),
           pathJoin(currentPath, newName),
         );
-        toast.success("Renamed", { description: `${oldName} → ${newName}` });
+        toast.success(t('filePanel.toast.renamed'), { description: `${oldName} → ${newName}` });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error("Rename failed", {
+        toast.error(t('filePanel.toast.renameFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -353,22 +381,22 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     const handleCreateDir = async () => {
       if (!onCreateDirectory) return;
-      const name = prompt("Directory name:");
+      const name = prompt(t('filePanel.prompt.directoryName'));
       if (!name) return;
       try {
         await onCreateDirectory(pathJoin(currentPath, name));
-        toast.success("Directory created", { description: name });
+        toast.success(t('filePanel.toast.directoryCreated'), { description: name });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error("Create directory failed", {
+        toast.error(t('filePanel.toast.createDirectoryFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
     };
 
     const handleCopyPath = (name: string) => {
-      navigator.clipboard.writeText(pathJoin(currentPath, name));
-      toast.success("Path copied");
+      writeClipboardText(pathJoin(currentPath, name));
+      toast.success(t('filePanel.toast.pathCopied'));
     };
 
     const handleTransfer = () => {
@@ -399,10 +427,13 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     };
 
     const handleDragOver = (e: React.DragEvent) => {
-      // Only accept drops from the other panel
+      // Always prevent default so the browser shows a "copy" cursor and,
+      // critically, allows Tauri's native drop signal to fire on
+      // Linux/WebKit2GTK (which rejects the drop when preventDefault is
+      // missing). This covers both cross-panel drags and OS file drops.
+      e.preventDefault();
+      e.stopPropagation();
       if (e.dataTransfer.types.includes(DRAG_MIME)) {
-        e.preventDefault();
-        e.stopPropagation();
         setIsDragOver(true);
       }
     };
@@ -477,10 +508,14 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         ? "bg-blue-500/20 dark:bg-blue-400/20"
         : "bg-emerald-500/20 dark:bg-emerald-400/20";
 
+    // Show the ring overlay for either cross-panel drag or OS drop;
+    // the inner banner picks the right copy below.
+    const showDropOverlay = isDragOver || isOsDragOver;
+
     return (
       <div
         ref={containerRef}
-        className={`h-full flex flex-col relative bg-background text-foreground ${borderClass} rounded-sm overflow-hidden ${isDragOver ? "ring-2 ring-primary ring-inset bg-primary/5" : ""}`}
+        className={`h-full flex flex-col relative bg-background text-foreground ${borderClass} rounded-sm overflow-hidden ${showDropOverlay ? "ring-2 ring-primary ring-inset bg-primary/5" : ""}`}
         onClick={onFocus}
         onKeyDown={handleKeyDown}
         onDragOver={handleDragOver}
@@ -495,7 +530,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant={mode === "local" ? "outline" : "secondary"}
             className="text-[10px] px-1.5 py-0 h-5"
           >
-            {mode === "local" ? "Local" : "Remote"}
+            {t(mode === "local" ? 'filePanel.panel.local' : 'filePanel.panel.remote')}
           </Badge>
           <span className="text-[10px] text-muted-foreground truncate flex-1">
             {label}
@@ -508,7 +543,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="Go up"
+            title={t('filePanel.toolbar.goUp')}
             disabled={disabled || currentPath === "/"}
             onClick={() => loadDirectory(getParentPath(currentPath))}
           >
@@ -518,7 +553,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="Home"
+            title={t('filePanel.toolbar.home')}
             disabled={disabled}
             onClick={() => loadDirectory(initialPath ?? "/")}
           >
@@ -528,7 +563,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="Refresh"
+            title={t('filePanel.toolbar.refresh')}
             disabled={disabled}
             onClick={() => loadDirectory(currentPath)}
           >
@@ -559,8 +594,12 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <div className="flex items-center shrink-0 h-6 rounded bg-muted/50 px-1.5 gap-1">
             <Search className="h-3 w-3 text-muted-foreground/60 shrink-0" />
             <input
-              placeholder="Filter…"
+              placeholder={t('filePanel.toolbar.filter')}
               className="h-full w-24 text-[10px] bg-transparent outline-none placeholder:text-muted-foreground/50"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
@@ -570,7 +609,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             variant="ghost"
             size="icon"
             className="h-6 w-6"
-            title="New folder"
+            title={t('filePanel.toolbar.newFolder')}
             disabled={disabled}
             onClick={handleCreateDir}
           >
@@ -581,14 +620,15 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* File list */}
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className={`flex-1 min-h-0 overflow-y-auto transition-opacity duration-150 ${showOverlay && entries.length > 0 ? "opacity-40" : ""}`}>
               {loading && entries.length === 0 ? (
-                <div className="flex items-center justify-center h-32">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                <div className="flex flex-col items-center justify-center h-40 gap-2">
+                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+                  <span className="text-[11px] text-muted-foreground/60">{t('filePanel.loading')}</span>
                 </div>
               ) : filteredEntries.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-xs text-muted-foreground">
-                  {filter ? "No matches" : "Empty directory"}
+                  {filter ? t('filePanel.empty.noMatches') : t('filePanel.empty.emptyDirectory')}
                 </div>
               ) : (
                 <table className="w-full text-[11px]" style={{ tableLayout: "fixed" }}>
@@ -607,7 +647,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         onClick={() => handleSortClick("name")}
                       >
                         <span className="inline-flex items-center">
-                          Name
+                          {t('filePanel.column.name')}
                           <SortIndicator column="name" />
                         </span>
                         <div
@@ -623,7 +663,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         onClick={() => handleSortClick("size")}
                       >
                         <span className="inline-flex items-center justify-end w-full">
-                          Size
+                          {t('filePanel.column.size')}
                           <SortIndicator column="size" />
                         </span>
                         <div
@@ -639,7 +679,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         onClick={() => handleSortClick("modified")}
                       >
                         <span className="inline-flex items-center">
-                          Modified
+                          {t('filePanel.column.modified')}
                           <SortIndicator column="modified" />
                         </span>
                         {showPermissions && (
@@ -654,7 +694,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                       </th>
                       {showPermissions && (
                         <th className="text-left px-2 py-0.5 font-medium relative">
-                          Perms
+                          {t('filePanel.column.permissions')}
                         </th>
                       )}
                     </tr>
@@ -702,8 +742,8 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                   <Download className="h-3.5 w-3.5 mr-2" />
                                 )}
                                 {mode === "local"
-                                  ? "Upload to remote"
-                                  : "Download to local"}
+                                  ? t('filePanel.contextMenu.uploadToRemote')
+                                  : t('filePanel.contextMenu.downloadToLocal')}
                               </ContextMenuItem>
                             )}
                             {entry.file_type === "Directory" &&
@@ -722,8 +762,8 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                     <FolderDown className="h-3.5 w-3.5 mr-2" />
                                   )}
                                   {mode === "local"
-                                    ? "Upload directory to remote"
-                                    : "Download directory to local"}
+                                    ? t('filePanel.contextMenu.uploadDirToRemote')
+                                    : t('filePanel.contextMenu.downloadDirToLocal')}
                                 </ContextMenuItem>
                               )}
                             {mode === "local" && onOpenInOS && (
@@ -735,20 +775,20 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                 }
                               >
                                 <ExternalLink className="h-3.5 w-3.5 mr-2" />
-                                Open in OS
+                                {t('filePanel.contextMenu.openInOS')}
                               </ContextMenuItem>
                             )}
                             <ContextMenuItem
                               onClick={() => handleRename(entry.name)}
                             >
                               <Pencil className="h-3.5 w-3.5 mr-2" />
-                              Rename
+                              {t('filePanel.contextMenu.rename')}
                             </ContextMenuItem>
                             <ContextMenuItem
                               onClick={() => handleCopyPath(entry.name)}
                             >
                               <Copy className="h-3.5 w-3.5 mr-2" />
-                              Copy path
+                              {t('filePanel.contextMenu.copyPath')}
                             </ContextMenuItem>
                             <ContextMenuSeparator />
                             <ContextMenuItem
@@ -761,7 +801,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                               }
                             >
                               <Trash2 className="h-3.5 w-3.5 mr-2" />
-                              Delete
+                              {t('filePanel.contextMenu.delete')}
                             </ContextMenuItem>
                           </ContextMenuContent>
                         </ContextMenu>
@@ -776,21 +816,36 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <ContextMenuContent>
             <ContextMenuItem onClick={handleCreateDir}>
               <FolderPlus className="h-3.5 w-3.5 mr-2" />
-              Create directory
+              {t('filePanel.contextMenu.createDirectory')}
             </ContextMenuItem>
             <ContextMenuSeparator />
             <ContextMenuItem onClick={() => loadDirectory(currentPath)}>
               <RefreshCw className="h-3.5 w-3.5 mr-2" />
-              Refresh
+              {t('filePanel.contextMenu.refresh')}
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
 
-        {/* Drop overlay */}
-        {isDragOver && (
+        {/* Loading overlay — at panel root to avoid ContextMenu stacking issues */}
+        {showOverlay && entries.length > 0 && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
+            <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-sm border border-border/50">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground">{t('filePanel.loading')}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Drop overlay — cross-panel drag shows "Drop to upload/download";
+            OS-native drop on remote shows "Drop files or folders to upload". */}
+        {showDropOverlay && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary rounded-sm pointer-events-none">
             <div className="text-sm font-medium text-primary">
-              {mode === "local" ? "Drop to download" : "Drop to upload"}
+              {isOsDragOver
+                ? t('filePanel.dropOverlay.osDrop')
+                : mode === "local"
+                  ? t('filePanel.dropOverlay.downloadHere')
+                  : t('filePanel.dropOverlay.uploadHere')}
             </div>
           </div>
         )}
@@ -798,11 +853,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* Status bar */}
         <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t bg-muted/30 shrink-0">
           <span>
-            {filteredEntries.length} item
-            {filteredEntries.length !== 1 ? "s" : ""}
+            {t('filePanel.statusBar.items', { count: filteredEntries.length })}
             {selectedNames.size > 0 && (
               <>
-                {` · ${selectedNames.size} selected`}
+                {` · ${t('filePanel.statusBar.selected', { count: selectedNames.size })}`}
                 {(() => {
                   const totalSize = entries
                     .filter(

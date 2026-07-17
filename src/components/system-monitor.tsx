@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation, Trans } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { withRetry, CancelledError } from '@/lib/async-retry';
 import { Activity, Terminal, HardDrive, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
@@ -153,6 +154,7 @@ const getProgressColor = (usage: number): string => {
 };
 
 export function SystemMonitor({ connectionId }: SystemMonitorProps) {
+  const { t } = useTranslation();
   const [stats, setStats] = useState<SystemStats>({
     cpu: 0,
     memory: 0,
@@ -260,15 +262,15 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       });
       
       if (result.success) {
-        toast.success(`Process ${process.pid} terminated successfully`);
+        toast.success(t('systemMonitor.processTerminated', { pid: process.pid }));
         // Fire-and-forget refresh — failure here is non-critical
         void fetchProcesses().catch(e => console.error('Failed to refresh processes:', e));
       } else {
-        toast.error(`Failed to kill process: ${result.error || 'Unknown error'}`);
+        toast.error(t('systemMonitor.failedToKillProcessWithError', { error: result.error || t('systemMonitor.unknownError') }));
       }
     } catch (error) {
       console.error('Failed to kill process:', error);
-      toast.error(`Failed to kill process: ${error}`);
+      toast.error(t('systemMonitor.failedToKillProcess', { error: String(error) }));
     }
     
     setProcessToKill(null);
@@ -598,7 +600,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           setNetworkHistory(prev => {
             const updated = [...prev, newHistoryPoint];
             // Keep only last 300 data points (5 minutes of data)
-            return updated.slice(-300);
+            return updated.slice(-60);
           });
         }
     };
@@ -650,7 +652,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           latency: Math.round(result.latency_ms * 10) / 10,
           timestamp: now.getTime(),
         };
-        setLatencyData(prev => [...prev, newDataPoint].slice(-100));
+        setLatencyData(prev => [...prev, newDataPoint].slice(-60));
       }
     };
 
@@ -674,18 +676,18 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
 
   return (
     <ScrollArea className="h-full">
-      <div className="space-y-2.5">
+      <div className="space-y-2">
         {/* System Overview */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Activity className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">System Overview</h3>
+            <h3 className="text-xs font-medium truncate">{t('systemMonitor.systemOverview')}</h3>
           </div>
           <Card>
-            <CardContent className="p-2 space-y-1.5">
+            <CardContent className="p-2 space-y-1">
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
-                  <span className="text-xs font-medium">CPU</span>
+                  <span className="text-xs font-medium">{t('systemMonitor.cpu')}</span>
                   <span className={`text-xs font-semibold ${getUsageColor(stats.cpu)}`}>
                     {stats.cpu.toFixed(1)}%
                   </span>
@@ -695,7 +697,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
-                  <span className="text-xs font-medium">Memory</span>
+                  <span className="text-xs font-medium">{t('systemMonitor.memory')}</span>
                   <span className={`text-xs font-semibold ${getUsageColor(stats.memory)} truncate`} title={stats.memoryUsed && stats.memoryTotal ? `${stats.memoryUsed}MB / ${stats.memoryTotal}MB` : ''}>
                     {stats.memory.toFixed(1)}%
                   </span>
@@ -712,7 +714,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               {stats.swapTotal !== undefined && stats.swapTotal > 0 && (
                 <div className="space-y-1">
                   <div className="flex justify-between items-center gap-1">
-                    <span className="text-xs font-medium">Swap</span>
+                    <span className="text-xs font-medium">{t('systemMonitor.swap')}</span>
                     <span className={`text-xs font-semibold ${getUsageColor(stats.swap || 0)} truncate`} title={stats.swapUsed !== undefined && stats.swapTotal ? `${stats.swapUsed}MB / ${stats.swapTotal}MB` : ''}>
                       {(stats.swap || 0).toFixed(1)}%
                     </span>
@@ -731,26 +733,26 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
 
         {/* GPU Monitor */}
         {gpuDetectionDone && (
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <div className="flex items-center justify-between gap-1.5">
               <div className="flex items-center gap-1.5">
                 <Cpu className="w-3 h-3 shrink-0" />
-                <h3 className="text-xs font-medium truncate">GPU Monitor</h3>
+                <h3 className="text-xs font-medium truncate">{t('systemMonitor.gpuMonitor')}</h3>
               </div>
               {gpuDetection?.available && gpuDetection.gpus.length > 1 && (
                 <Select 
                   value={selectedGpuIndex.toString()} 
                   onValueChange={(value) => setSelectedGpuIndex(value === 'all' ? 'all' : parseInt(value))}
                 >
-                  <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[120px] text-[9px] px-1.5 py-0">
-                    <SelectValue placeholder="GPU" />
+                  <SelectTrigger className="h-[18px] w-auto min-w-[56px] max-w-[100px] text-[9px] px-1 py-0 gap-0.5">
+                    <SelectValue placeholder={t('systemMonitor.selectGpu')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all" className="text-[10px]">
-                      All
+                    <SelectItem value="all" className="text-[9px] h-6">
+                      {t('systemMonitor.allGpus')}
                     </SelectItem>
                     {gpuDetection.gpus.map(gpu => (
-                      <SelectItem key={gpu.index} value={gpu.index.toString()} className="text-[10px]">
+                      <SelectItem key={gpu.index} value={gpu.index.toString()} className="text-[9px] h-6">
                         GPU {gpu.index}
                       </SelectItem>
                     ))}
@@ -762,8 +764,8 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               <CardContent className="p-2">
                 {!gpuDetection?.available ? (
                   <div className="text-[10px] text-muted-foreground space-y-1">
-                    <p>No GPU detected or drivers not installed.</p>
-                    <p className="text-[9px]">Supported: NVIDIA (nvidia-smi), AMD (rocm-smi/sysfs)</p>
+                    <p>{t('systemMonitor.noGpuDetected')}</p>
+                    <p className="text-[9px]">{t('systemMonitor.supportedGpus')}</p>
                   </div>
                 ) : selectedGpuIndex === 'all' ? (
                   /* "All" GPU View - Compact Summary Cards */
@@ -787,7 +789,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           <div className="grid grid-cols-2 gap-2">
                             <div className="space-y-0.5">
                               <div className="flex justify-between text-[9px]">
-                                <span className="text-muted-foreground">GPU</span>
+                                <span className="text-muted-foreground">{t('systemMonitor.gpuLabel')}</span>
                                 <span className={`font-semibold ${getUsageColor(gpu.utilization ?? 0)}`}>
                                   {(gpu.utilization ?? 0).toFixed(0)}%
                                 </span>
@@ -796,7 +798,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             </div>
                             <div className="space-y-0.5">
                               <div className="flex justify-between text-[9px]">
-                                <span className="text-muted-foreground">VRAM</span>
+                                <span className="text-muted-foreground">{t('systemMonitor.vram')}</span>
                                 <span className={`font-semibold ${getUsageColor(gpu.memory_percent ?? 0)}`}>
                                   {(gpu.memory_percent ?? 0).toFixed(0)}%
                                 </span>
@@ -832,7 +834,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                     {/* Combined Usage History Chart for All GPUs */}
                     {gpuStats.length > 0 && gpuHistory.size > 0 && (
                       <div>
-                        <div className="text-[9px] text-muted-foreground mb-1">Combined Usage History</div>
+                        <div className="text-[9px] text-muted-foreground mb-1">{t('systemMonitor.combinedUsageHistory')}</div>
                         <div className="h-24 text-foreground">
                           <ResponsiveContainer width="100%" height="100%">
                             <LineChart margin={{ top: 5, right: 2, left: 0, bottom: 5 }}>
@@ -862,7 +864,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                   borderRadius: '6px',
                                   fontSize: '11px'
                                 }}
-                                formatter={(value: any, name: string) => [`${Number(value).toFixed(1)}%`, name]}
+                                formatter={(value: any, name: string) => [`${Number(value).toFixed(1)}%`, name === 'utilization' ? t('systemMonitor.gpuLabel') : name]}
                               />
                               {gpuStats.map((gpu, idx) => {
                                 const history = gpuHistory.get(gpu.index) || [];
@@ -876,6 +878,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                     stroke={GPU_COLORS[idx % GPU_COLORS.length]}
                                     strokeWidth={2}
                                     dot={false}
+                                    isAnimationActive={false}
                                   />
                                 );
                               })}
@@ -889,7 +892,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                 className="w-2 h-2 rounded-full" 
                                 style={{ backgroundColor: GPU_COLORS[idx % GPU_COLORS.length] }}
                               />
-                              <span className="text-[8px] text-muted-foreground">GPU {gpu.index}</span>
+                              <span className="text-[8px] text-muted-foreground">{t('systemMonitor.gpuIndex', { index: gpu.index })}</span>
                             </div>
                           ))}
                         </div>
@@ -905,7 +908,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                       const gpuInfo = gpuDetection.gpus.find(g => g.index === selectedGpuIndex) || gpuDetection.gpus[0];
                       
                       if (!currentGpu) {
-                        return <div className="text-[10px] text-muted-foreground">Loading GPU stats...</div>;
+                        return <div className="text-[10px] text-muted-foreground">{t('systemMonitor.loadingGpuStats')}</div>;
                       }
                       
                       return (
@@ -933,7 +936,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           {/* GPU Utilization */}
                           <div className="space-y-1">
                             <div className="flex justify-between items-center gap-1">
-                              <span className="text-xs font-medium">GPU</span>
+                              <span className="text-xs font-medium">{t('systemMonitor.gpuUtilization')}</span>
                               <span className={`text-xs font-semibold ${getUsageColor(currentGpu.utilization ?? 0)}`}>
                                 {(currentGpu.utilization ?? 0).toFixed(1)}%
                               </span>
@@ -944,7 +947,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           {/* VRAM */}
                           <div className="space-y-1">
                             <div className="flex justify-between items-center gap-1">
-                              <span className="text-xs font-medium">VRAM</span>
+                              <span className="text-xs font-medium">{t('systemMonitor.vram')}</span>
                               <span className={`text-xs font-semibold ${getUsageColor(currentGpu.memory_percent ?? 0)}`}>
                                 {(currentGpu.memory_percent ?? 0).toFixed(1)}%
                               </span>
@@ -955,22 +958,19 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             </div>
                           </div>
 
-                          {/* Temperature, Power, Fan in grid */}
-                          <div className="grid grid-cols-3 gap-1.5 text-[10px]">
-                            {/* Temperature */}
+                          {/* Temperature, Power, Fan, Encoder, Decoder in single row */}
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px]">
                             {currentGpu.temperature != null && (
-                              <div className="flex flex-col gap-0.5">
-                                <span className="text-muted-foreground">Temp</span>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.temp')}</span>
                                 <span className={`font-semibold ${getGpuTempColor(currentGpu.temperature)}`}>
                                   {currentGpu.temperature.toFixed(0)}°C
                                 </span>
                               </div>
                             )}
-                            
-                            {/* Power */}
                             {currentGpu.power_draw != null && (
-                              <div className="flex flex-col gap-0.5">
-                                <span className="text-muted-foreground">Power</span>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.power')}</span>
                                 <span className="font-semibold">
                                   {currentGpu.power_draw.toFixed(0)}W
                                   {currentGpu.power_limit != null && (
@@ -979,42 +979,34 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                 </span>
                               </div>
                             )}
-                            
-                            {/* Fan */}
                             {currentGpu.fan_speed != null && (
-                              <div className="flex flex-col gap-0.5">
-                                <span className="text-muted-foreground">Fan</span>
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.fan')}</span>
                                 <span className="font-semibold">{currentGpu.fan_speed.toFixed(0)}%</span>
+                              </div>
+                            )}
+                            {currentGpu.encoder_util != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.encoder')}</span>
+                                <span className={`font-semibold ${getUsageColor(currentGpu.encoder_util)}`}>
+                                  {currentGpu.encoder_util.toFixed(0)}%
+                                </span>
+                              </div>
+                            )}
+                            {currentGpu.decoder_util != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.decoder')}</span>
+                                <span className={`font-semibold ${getUsageColor(currentGpu.decoder_util)}`}>
+                                  {currentGpu.decoder_util.toFixed(0)}%
+                                </span>
                               </div>
                             )}
                           </div>
 
-                          {/* Encoder/Decoder for NVIDIA */}
-                          {(currentGpu.encoder_util != null || currentGpu.decoder_util != null) && (
-                            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                              {currentGpu.encoder_util != null && (
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-muted-foreground">Encoder</span>
-                                  <span className={`font-semibold ${getUsageColor(currentGpu.encoder_util)}`}>
-                                    {currentGpu.encoder_util.toFixed(0)}%
-                                  </span>
-                                </div>
-                              )}
-                              {currentGpu.decoder_util != null && (
-                                <div className="flex flex-col gap-0.5">
-                                  <span className="text-muted-foreground">Decoder</span>
-                                  <span className={`font-semibold ${getUsageColor(currentGpu.decoder_util)}`}>
-                                    {currentGpu.decoder_util.toFixed(0)}%
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
                           {/* GPU Usage History Chart */}
                           {gpuHistory.get(currentGpu.index)?.length ? (
                             <div>
-                              <div className="text-[9px] text-muted-foreground mb-1">Usage History</div>
+                              <div className="text-[9px] text-muted-foreground mb-1">{t('systemMonitor.usageHistory')}</div>
                               <div className="h-20 text-foreground">
                                 <ResponsiveContainer width="100%" height="100%">
                                   <AreaChart 
@@ -1057,7 +1049,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       }}
                                       formatter={(value: any, name: string) => [
                                         `${Number(value).toFixed(1)}%`,
-                                        name === 'utilization' ? 'GPU' : 'VRAM'
+                                        name === 'utilization' ? t('systemMonitor.gpuLabel') : t('systemMonitor.vram')
                                       ]}
                                     />
                                     <Area
@@ -1067,6 +1059,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       strokeWidth={2}
                                       fill="url(#gpuUtilGradient)"
                                       dot={false}
+                                      isAnimationActive={false}
                                     />
                                     <Area
                                       type="monotone"
@@ -1075,6 +1068,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       strokeWidth={2}
                                       fill="url(#gpuMemGradient)"
                                       dot={false}
+                                      isAnimationActive={false}
                                     />
                                   </AreaChart>
                                 </ResponsiveContainer>
@@ -1082,11 +1076,11 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                               <div className="flex gap-3 justify-center mt-1">
                                 <div className="flex items-center gap-1">
                                   <div className="w-2 h-2 rounded-full bg-[#8b5cf6]" />
-                                  <span className="text-[8px] text-muted-foreground">GPU</span>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  <div className="w-2 h-2 rounded-full bg-[#06b6d4]" />
-                                  <span className="text-[8px] text-muted-foreground">VRAM</span>
+                              <span className="text-[8px] text-muted-foreground">{t('systemMonitor.gpuLabel')}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <div className="w-2 h-2 rounded-full bg-[#06b6d4]" />
+                              <span className="text-[8px] text-muted-foreground">{t('systemMonitor.vram')}</span>
                                 </div>
                               </div>
                             </div>
@@ -1095,7 +1089,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           {/* Temperature History Chart */}
                           {gpuHistory.get(currentGpu.index)?.some(h => h.temperature !== undefined) && (
                             <div>
-                              <div className="text-[9px] text-muted-foreground mb-1">Temperature History</div>
+                              <div className="text-[9px] text-muted-foreground mb-1">{t('systemMonitor.temperatureHistory')}</div>
                               <div className="h-16 text-foreground">
                                 <ResponsiveContainer width="100%" height="100%">
                                   <LineChart 
@@ -1126,7 +1120,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                         borderRadius: '6px',
                                         fontSize: '11px'
                                       }}
-                                      formatter={(value: any) => [`${Number(value).toFixed(0)}°C`, 'Temp']}
+                                      formatter={(value: any) => [`${Number(value).toFixed(0)}°C`, t('systemMonitor.temp')]}
                                     />
                                     <Line
                                       type="monotone"
@@ -1134,6 +1128,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       stroke="#f97316"
                                       strokeWidth={2}
                                       dot={false}
+                                      isAnimationActive={false}
                                     />
                                   </LineChart>
                                 </ResponsiveContainer>
@@ -1151,38 +1146,38 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         )}
 
         {/* Running Processes */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Terminal className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">Running Processes</h3>
+            <h3 className="text-xs font-medium truncate">{t('systemMonitor.runningProcesses')}</h3>
           </div>
-          <Card>
+          <Card className="overflow-hidden">
             <CardContent className="p-0">
-              <div className="rounded-md border h-40 overflow-auto">
+              <div className="max-h-40 overflow-auto">
                 <table className="w-full caption-bottom text-sm">
                   <thead className="[&_tr]:border-b">
                     <tr className="border-b transition-colors">
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs">PID</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px]">{t('systemMonitor.pid')}</th>
                       <th 
-                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs cursor-pointer hover:bg-muted/50 select-none"
+                        className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] cursor-pointer hover:bg-muted/50 select-none"
                         onClick={() => setProcessSortBy('cpu')}
                       >
                         <div className="flex items-center gap-0.5">
-                          CPU
-                          {processSortBy === 'cpu' && <ArrowDown className="w-2.5 h-2.5" />}
-                        </div>
-                      </th>
-                      <th 
-                        className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs cursor-pointer hover:bg-muted/50 select-none"
-                        onClick={() => setProcessSortBy('mem')}
-                      >
-                        <div className="flex items-center gap-0.5">
-                          Mem
+                        {t('systemMonitor.cpu')}
+                        {processSortBy === 'cpu' && <ArrowDown className="w-2.5 h-2.5" />}
+                      </div>
+                    </th>
+                    <th 
+                      className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] cursor-pointer hover:bg-muted/50 select-none"
+                      onClick={() => setProcessSortBy('mem')}
+                    >
+                      <div className="flex items-center gap-0.5">
+                        {t('systemMonitor.mem')}
                           {processSortBy === 'mem' && <ArrowDown className="w-2.5 h-2.5" />}
                         </div>
                       </th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs">Command</th>
-                      <th className="sticky top-0 z-10 bg-background text-foreground h-8 px-1 text-left align-middle font-medium whitespace-nowrap text-xs w-8"></th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px]">{t('systemMonitor.command')}</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] w-8"></th>
                     </tr>
                   </thead>
                   <tbody className="[&_tr:last-child]:border-0">
@@ -1204,7 +1199,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                             size="icon"
                             className="h-4 w-4"
                             onClick={() => setProcessToKill(process)}
-                            title="Kill process"
+                            title={t('systemMonitor.killProcess')}
                           >
                             <X className="h-2.5 w-2.5" />
                           </Button>
@@ -1219,25 +1214,25 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         </div>
 
         {/* Disk Usage */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <HardDrive className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">Disk Usage</h3>
+            <h3 className="text-xs font-medium truncate">{t('systemMonitor.diskUsage')}</h3>
           </div>
-          <Card>
+          <Card className="overflow-hidden">
             <CardContent className="p-0">
               {disks.length === 0 ? (
                 <div className="p-2 text-[10px] text-muted-foreground">
-                  No disk information available
+                  {t('systemMonitor.noDiskInfo')}
                 </div>
               ) : (
-                <div className="rounded-md border h-40 overflow-auto">
+                <div className="max-h-40 overflow-auto">
                   <table className="w-full caption-bottom text-sm">
                     <thead className="[&_tr]:border-b">
                       <tr className="border-b transition-colors">
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium text-xs">Path</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-xs">Size</th>
-                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-xs">Usage</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium text-[11px]">{t('systemMonitor.path')}</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.size')}</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.usage')}</th>
                       </tr>
                     </thead>
                     <tbody className="[&_tr:last-child]:border-0">
@@ -1265,11 +1260,11 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         </div>
 
         {/* Network Usage */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center justify-between gap-1.5">
             <div className="flex items-center gap-1.5">
               <ArrowDownUp className="w-3 h-3 shrink-0" />
-              <h3 className="text-xs font-medium truncate">Network Usage</h3>
+              <h3 className="text-xs font-medium truncate">{t('systemMonitor.networkUsage')}</h3>
             </div>
             {networkInterfaces.length > 0 && (
               <Select value={selectedInterface} onValueChange={(value) => {
@@ -1277,15 +1272,15 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                 // Clear history when switching interfaces
                 setNetworkHistory([]);
               }}>
-                <SelectTrigger className="h-5 w-auto min-w-[70px] max-w-[100px] text-[9px] px-1.5 py-0">
-                  <SelectValue placeholder="Interface" />
+                <SelectTrigger className="h-[18px] w-auto min-w-[56px] max-w-[88px] text-[9px] px-1 py-0 gap-0.5">
+                  <SelectValue placeholder={t('systemMonitor.selectInterface')} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all" className="text-[10px]">
-                    All
+                  <SelectItem value="all" className="text-[9px] h-6">
+                    {t('systemMonitor.allInterfaces')}
                   </SelectItem>
                   {networkInterfaces.map(iface => (
-                    <SelectItem key={iface} value={iface} className="text-[10px]">
+                    <SelectItem key={iface} value={iface} className="text-[9px] h-6">
                       {iface}
                     </SelectItem>
                   ))}
@@ -1300,7 +1295,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                 <div className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-1">
                     <div className="w-1.5 h-1.5 rounded-full bg-[#3b82f6] shrink-0" />
-                    <div className="text-[9px] text-muted-foreground">Down</div>
+                    <div className="text-[9px] text-muted-foreground">{t('systemMonitor.down')}</div>
                   </div>
                   <div className="font-medium text-[10px] truncate" title={networkUsage.downloadFormatted}>
                     {networkUsage.downloadFormatted}
@@ -1309,7 +1304,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                 <div className="flex flex-col gap-0.5">
                   <div className="flex items-center gap-1">
                     <div className="w-1.5 h-1.5 rounded-full bg-[#ef4444] shrink-0" />
-                    <div className="text-[9px] text-muted-foreground">Up</div>
+                    <div className="text-[9px] text-muted-foreground">{t('systemMonitor.up')}</div>
                   </div>
                   <div className="font-medium text-[10px] truncate" title={networkUsage.uploadFormatted}>
                     {networkUsage.uploadFormatted}
@@ -1319,7 +1314,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               
               {/* Usage History Chart */}
               <div>
-                <div className="text-[9px] text-muted-foreground mb-1">History</div>
+                <div className="text-[9px] text-muted-foreground mb-1">{t('systemMonitor.history')}</div>
                 <div className="h-24 text-foreground">
                   <ResponsiveContainer width="100%" height="100%">
                     <AreaChart 
@@ -1363,7 +1358,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           }
                           return `${absValue.toFixed(0)} KB/s`;
                         }}
-                        width={50}
+                        width={30}
                         tickLine={false}
                       />
                       <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeWidth={1.5} />
@@ -1377,7 +1372,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         formatter={(value: any, name: string) => {
                           const kbps = Math.abs(Number(value));
                           const formatted = kbps >= 1024 ? `${(kbps / 1024).toFixed(1)} MB/s` : `${kbps.toFixed(0)} KB/s`;
-                          return [formatted, name === 'uploadPositive' ? 'Upload' : 'Download'];
+                          return [formatted, name === 'uploadPositive' ? t('systemMonitor.upload') : t('systemMonitor.download')];
                         }}
                         labelFormatter={(label) => `${label}`}
                       />
@@ -1389,6 +1384,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         fill="url(#uploadGradient)"
                         dot={false}
                         activeDot={{ r: 3, fill: '#ef4444', stroke: '#ef4444' }}
+                        isAnimationActive={false}
                       />
                       <Area
                         type="monotone"
@@ -1398,6 +1394,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         fill="url(#downloadGradient)"
                         dot={false}
                         activeDot={{ r: 3, fill: '#3b82f6', stroke: '#3b82f6' }}
+                        isAnimationActive={false}
                       />
                     </AreaChart>
                   </ResponsiveContainer>
@@ -1408,10 +1405,10 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
         </div>
 
         {/* Network Latency */}
-        <div className="space-y-1.5">
+        <div className="space-y-1">
           <div className="flex items-center gap-1.5">
             <Gauge className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-medium truncate">Network Latency</h3>
+            <h3 className="text-xs font-medium truncate">{t('systemMonitor.networkLatency')}</h3>
           </div>
           <Card>
             <CardContent className="p-2">
@@ -1444,8 +1441,8 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         borderRadius: '6px',
                         fontSize: '12px'
                       }}
-                      formatter={(value: any) => [`${value}ms`, 'Latency']}
-                      labelFormatter={(label) => `Time: ${label}`}
+                      formatter={(value: any) => [`${value}ms`, t('systemMonitor.latency')]}
+                      labelFormatter={(label) => `${t('systemMonitor.time')}: ${label}`}
                     />
                     <Area
                       type="monotone"
@@ -1461,7 +1458,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         strokeWidth: 2,
                         filter: 'drop-shadow(0 2px 4px rgba(59, 130, 246, 0.4))'
                       }}
-                      animationDuration={300}
+                      isAnimationActive={false}
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -1475,24 +1472,24 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       <AlertDialog open={!!processToKill} onOpenChange={(open) => !open && setProcessToKill(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Terminate Process?</AlertDialogTitle>
+            <AlertDialogTitle>{t('systemMonitor.terminateProcessTitle')}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to terminate process <strong>{processToKill?.pid}</strong>?
+              <Trans i18nKey="systemMonitor.terminateProcessDesc" values={{ pid: processToKill?.pid }} components={{ strong: <strong /> }} />
               <br />
               <span className="text-xs font-mono mt-2 block">
                 {processToKill?.command}
               </span>
               <br />
-              This will send SIGTERM (signal 15) to the process.
+              {t('systemMonitor.terminateProcessDetail')}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => processToKill && handleKillProcess(processToKill)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Terminate
+              {t('systemMonitor.terminate')}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

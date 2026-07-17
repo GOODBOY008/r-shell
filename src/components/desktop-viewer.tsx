@@ -1,5 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { toast } from 'sonner';
 import { DesktopToolbar } from './desktop-toolbar';
 import { computeFitScale, translateCoordinates } from '@/lib/desktop-utils';
@@ -23,6 +25,7 @@ export function DesktopViewer({
   isConnected,
   onReconnect,
 }: DesktopViewerProps) {
+  const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pressedKeysRef = useRef(new Set<number>());
@@ -88,7 +91,7 @@ export function DesktopViewer({
             setIsLoading(false);
           } else if (msg.type === 'ClipboardUpdate' && msg.connection_id === connectionId) {
             // Write incoming remote clipboard text to local clipboard
-            navigator.clipboard.writeText(msg.text).catch(() => {
+            writeClipboardText(msg.text).catch(() => {
               // Clipboard write denied — silently ignore
             });
           }
@@ -154,13 +157,13 @@ export function DesktopViewer({
     // Intercept Ctrl+V for clipboard paste: read local clipboard and send to remote
     if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
       e.preventDefault();
-      navigator.clipboard.readText().then((text) => {
+      readClipboardText().then((text) => {
         if (text) {
           invoke('desktop_set_clipboard', { connectionId, text }).catch(() => {});
         }
       }).catch(() => {
-        toast.info('Clipboard access denied', {
-          description: 'Allow clipboard permissions to paste into the remote desktop.',
+        toast.info(t('desktopViewer.clipboardAccessDenied'), {
+          description: t('desktopViewer.clipboardAccessDeniedDesc'),
         });
       });
       return;
@@ -280,7 +283,7 @@ export function DesktopViewer({
 
     if (!isFullScreen) {
       container.requestFullscreen?.().catch(() => {
-        toast.error('Failed to enter full screen');
+        toast.error(t('desktopViewer.failedToEnterFullScreen'));
       });
     } else {
       document.exitFullscreen?.().catch(() => {});
@@ -297,7 +300,7 @@ export function DesktopViewer({
 
   const handleDisconnect = useCallback(() => {
     invoke('desktop_disconnect', { connectionId }).catch((err) => {
-      toast.error('Failed to disconnect', {
+      toast.error(t('desktopViewer.failedToDisconnect'), {
         description: String(err),
       });
     });
@@ -311,7 +314,7 @@ export function DesktopViewer({
           <Monitor className="h-12 w-12 mx-auto text-muted-foreground/50" />
           <div>
             <p className="text-lg font-medium text-muted-foreground">
-              Desktop Disconnected
+              {t('desktopViewer.desktopDisconnected')}
             </p>
             <p className="text-sm text-muted-foreground/70">
               {connectionName} ({host})
@@ -320,7 +323,7 @@ export function DesktopViewer({
           {onReconnect && (
             <Button variant="outline" onClick={onReconnect}>
               <RefreshCw className="h-4 w-4 mr-2" />
-              Reconnect
+              {t('desktopViewer.reconnect')}
             </Button>
           )}
         </div>
@@ -353,7 +356,7 @@ export function DesktopViewer({
           <div className="text-center space-y-3">
             <Monitor className="h-10 w-10 mx-auto text-primary animate-pulse" />
             <div>
-              <p className="text-sm font-medium">Connecting to {connectionName}...</p>
+              <p className="text-sm font-medium">{t('desktopViewer.connectingTo', { name: connectionName })}</p>
               <p className="text-xs text-muted-foreground">{protocol} • {host}</p>
             </div>
           </div>

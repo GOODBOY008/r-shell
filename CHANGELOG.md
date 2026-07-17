@@ -5,7 +5,150 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.5.1] - 2026-07-16
+
+### 🔧 R-Shell 2.5.1 — Input Hardening & UI Polish
+
+This patch release disables browser autofill and spell-check on input fields for cleaner terminal-style input, simplifies date formatting in the integrated file browser, and refines spacing and UI consistency across the system monitor components.
+
+### Added
+
+- 🔒 **Disable Autofill & Spell-Check on Inputs**: Turned off browser autofill and spell-check for input fields to prevent unwanted suggestions and keep input behavior consistent with a terminal client
+
+### Changed
+
+- 📅 **Simplified File-Browser Date Formatting**: Simplified the date-formatting logic in the integrated file browser for improved readability and maintainability
+- 🎨 **System Monitor UI Refinements**: Refined spacing and improved UI consistency across system monitor components for a more polished look
+
+## [2.5.0] - 2026-07-01
+
+### 🛠️ R-Shell 2.5 — Settings, Editor & File Browser Polish
+
+This release adds a configuration export/import backup feature, user-configurable settings for the embedded code editor, a scrollable tab bar with navigation buttons in the settings modal, and improved loading overlays and styling for the file browser panels, plus a fix for theme-aware terminal background coloring.
+
+### Added
+
+- 💾 **Config Export/Import Backup**: Added an export/import feature in settings that lets users back up and restore their R-Shell configuration
+- 📝 **Embedded Editor Settings**: Added user-configurable settings for the embedded code editor, so editor preferences can be customized from within the app
+- 🧭 **Scrollable Settings Tab Bar**: Added a scrollable tab bar with navigation buttons in the settings modal for easier navigation when many options are present
+- ⏳ **File Browser Loading Overlays**: Improved loading overlays for the file browser panels for clearer feedback during file operations
+
+### Changed
+
+- 🎨 **File Panel UI Styles**: Updated UI styles for file panels to refresh their look and feel
+- 🧪 **Update-Checker Tests**: Removed Tauri runtime tests and checks from the update-checker test suite
+
+### Fixed
+
+- 🐛 **Terminal Background Color**: Resolved theme-aware background color handling for the terminal container so it correctly follows the active theme
+
+## [2.4.0] - 2026-06-26
+
+### 🌍 R-Shell 2.4 — Internationalization & Auto-Update
+
+This release introduces full app internationalization via `react-i18next` (with English and Simplified Chinese, plus system-locale auto-detection), adds a manual update checker that reads `latest.json` from the release feed, refreshes the dark-mode scrollbar styling, and modernizes the CI runner versions.
+
+> 🙏 **Special thanks to [@htazq](https://github.com/htazq)** for thoroughly testing the i18n feature and drafting the initial PR that kicked off this internationalization work!
+
+### Added
+
+- 🌍 **App Internationalization (i18n)**: Integrated `react-i18next` to support multiple languages throughout the UI, with `en` (English) as the source locale and `zh-CN` (Simplified Chinese) translations
+- 🌐 **System Locale Language Preference**: Added an `AUTO` language option that detects and follows the OS locale on startup, so R-Shell launches in the user's system language by default
+- 🔄 **Manual Update Check**: Added a manual update checker that reads `latest.json` published with each release, letting users check for newer versions from within the app
+
+### Changed
+
+- 🛠️ **CI Runner Upgrades**: Upgraded the GitHub Actions used in CI workflows to their latest versions for reliability and security
+- 🔍 **i18n Key-Parity Check**: Added a lightweight CI workflow that verifies translation key parity between `en.json` and `zh-CN.json` to prevent missing translations
+- 🎨 **Dark Mode Scrollbar Styling**: Improved the dark-mode scrollbar styling selectors for a more consistent native look
+
+### Fixed
+
+- 🐛 **AUTO Language Preference Handling**: Fixed initialization and handling of the `AUTO` language preference so the detected locale is applied reliably on first launch
+
+## [2.3.0] - 2026-06-14
+
+### 🖥️ R-Shell 2.3 — Tab Drag Reorder & Terminal Reliability
+
+This release adds drag-and-drop tab reordering in the terminal bar, fixes a directory-tree ref synchronization bug, normalizes terminal scrollback across sessions, and bumps key dependencies.
+
+### Added
+
+- 🖱️ **Terminal Tab Drag-and-Drop Reordering**: Tabs in the terminal tab bar can now be rearranged by dragging with the pointer for a more flexible workspace layout
+
+### Fixed
+
+- 🗂️ **Directory Tree Ref Synchronization**: Fixed a bug where directory-tree refs could fall out of sync with component state on initial load, causing stale or missing expansion data
+- 📜 **Terminal Scrollback Normalization**: Restored the default scrollback buffer to 10,000 lines and added normalization so all sessions start with a consistent scrollback limit (#34)
+
+### Changed
+
+- 📦 **Dependency Updates**: Bumped `openssh` and other dependencies for improved security and stability (#38)
+- 📖 **README & Test Fixes**: Updated README content and resolved a unit-test issue
+
+## [2.2.0] - 2026-06-10
+
+### 📂 R-Shell 2.2 — OS-Native File Drag & Drop
+
+This release adds OS-native drag-and-drop support for mixed files and folders, with reliable coordinate event fallback handling.
+
+### Added
+
+- 📂 **OS-Native File & Folder Drag-and-Drop**: Terminal now supports mixed file and folder drag-and-drop from the OS, with improved coordinate event fallback for cross-platform reliability
+
+### Fixed
+
+- 🖥️ **File Drop Coordinate Handling**: Resolved unreliable drag event coordinate extraction by implementing a multi-level `clientX`/`clientY` fallback chain across `dragOver`, `dragEnter`, and `drop` events
+
+### Changed
+
+- 🎨 **Right Sidebar Tab Styling**: Adjusted tabs padding and overflow styles for a cleaner sidebar appearance
+
+## [2.1.1] - 2026-06-09
+
+### 🖥️ R-Shell 2.1.1 — Terminal & File Browser Fixes
+
+### Fixed
+
+- 🖥️ **Duplicate Paste Prevention**: Terminal paste operations no longer insert duplicate content when using keyboard or middle-click paste
+- 🖥️ **Terminal Background & Layout Styling**: Enhanced PTY terminal background rendering and layout for improved visual clarity
+- 📁 **File Browser Layout Responsiveness**: Improved file list panel layout and resize behavior for a more consistent browsing experience
+
+## [2.1.0] - 2026-06-04
+
+### 🗂️ R-Shell 2.1 — Directory Tree & Terminal Stability
+
+This release adds caching for the remote directory tree to preserve expand/collapse state and scroll position across tab switches, optimizes PTY terminal memory and flow control to prevent unbounded buffer growth, resolves keyboard shortcut conflicts, and fixes Windows SFTP upload compatibility.
+
+### Added
+
+- 🗂️ **Directory Tree Caching**: Remote directory tree expand/collapse state and scroll position are now cached and restored when switching between file browser tabs
+
+### Fixed
+
+- 🖥️ **PtyTerminal Performance & Flow Control**: Optimized terminal memory usage, implemented credit-based flow control, and added session output limits for more stable terminal behavior during heavy I/O
+- ⌨️ **Keyboard Shortcut Handling**: Resolved conflicts between terminal and application-level shortcuts; editable shortcut handling is now preserved correctly across component re-renders
+- 🪟 **Windows SFTP Upload**: File upload now works correctly for paths containing Windows-style basenames and folders (#24)
+
+
+## [2.0.0] - 2026-05-30
+
+### 🚀 R-Shell 2.0 — File Viewer & Performance
+
+This major release introduces a dedicated popup window for viewing SSH files, improves OS-detection performance with concurrent-safe caching, and fixes terminal focus and scrollbar reliability.
+
+### Added
+
+- 🗂️ **SSH File Popup Viewer**: Remote files can now be opened in a dedicated popup window directly from the file browser, keeping the main panel uncluttered
+
+### Changed
+
+- ⚡ **OS Info Caching**: Remote OS detection now uses `OnceCell` for lock-free concurrent access, eliminating redundant SSH round-trips when multiple panels query system info simultaneously
+
+### Fixed
+
+- 🖥️ **Terminal Focus on Tab Switch**: Switching between terminal tabs now correctly restores keyboard focus to the active terminal (fix contributed via PR #13)
+- 📜 **Terminal Scrollbar Visibility**: PTY terminal scrollbar is now always rendered and its visibility logic corrected so it appears reliably when content overflows
 
 
 ## [1.8.0] - 2026-05-21

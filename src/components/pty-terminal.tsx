@@ -1,11 +1,14 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
+import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { invoke } from '@tauri-apps/api/core';
-import { loadAppearanceSettings, getThemeAwareTerminalOptions } from '../lib/terminal-config';
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
+import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
@@ -33,7 +36,15 @@ interface PtyTerminalProps {
  * 
  * Communication is done via WebSocket for low-latency bidirectional streaming.
  */
-export function PtyTerminal({ 
+
+/** Per-session output cap. When cumulative bytes written to xterm exceed this
+ *  value the scrollback is cleared automatically so V8 heap stays bounded.
+ *  2 MB of decoded text ≈ ~25k typical 80-char terminal lines. Kept low to
+ *  prevent V8 heap fragmentation and WebGL texture-cache bloat during
+ *  sustained high-throughput output (e.g. `yes`). */
+const SESSION_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
+
+export function PtyTerminal({
   connectionId,
   connectionName,
   host = 'localhost', 
@@ -44,12 +55,15 @@ export function PtyTerminal({
   onConnectionStatusChange,
   onOutput,
 }: PtyTerminalProps) {
+  const { t } = useTranslation();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
   const searchRef = React.useRef<SearchAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
+  const webglAddonRef = React.useRef<WebglAddon | null>(null);
+  const clipboardAddonRef = React.useRef<ClipboardAddon | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const initialIsActiveRef = React.useRef(isActive);
   const wasActiveRef = React.useRef(isActive);
@@ -59,6 +73,13 @@ export function PtyTerminal({
   const [searchVisible, setSearchVisible] = React.useState(false);
   const [searchFocusTrigger, setSearchFocusTrigger] = React.useState(0);
   const [hasSelection, setHasSelection] = React.useState(false);
+
+  // Scrollbar visibility — only show when buffer overflows the visible rows
+  const [hasScrollableContent, setHasScrollableContent] = React.useState(false);
+
+  // Unique CSS scoping class for this instance — prevents dynamic scrollbar rules
+  // injected via <style> from bleeding across multiple mounted terminals on the page.
+  const scopeId = React.useId().replace(/:/g, '');
   
   // Track whether terminal was created with background image (determines renderer choice)
   const hadBackgroundImageRef = React.useRef<boolean | null>(null);
@@ -82,15 +103,42 @@ export function PtyTerminal({
   // Auto-reconnect tracking after a successful session drops (e.g. sleep/wake, server timeout)
   const autoReconnectAfterDropRef = React.useRef(0);
   const MAX_AUTO_RECONNECT_AFTER_DROP = 5;
-  
-  // Flow control - inspired by ttyd
-  const flowControlRef = React.useRef({
-    written: 0,
-    pending: 0,
-    limit: 10000,
-    highWater: 5,
-    lowWater: 2,
-  });
+
+  // Cumulative bytes written to xterm this session — reset on clear.
+  const sessionOutputRef = React.useRef(0);
+  const inputEncoderRef = React.useRef(new TextEncoder());
+
+  const sendInputToPty = React.useCallback((data: string): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    const dataBytes = Array.from(inputEncoderRef.current.encode(data));
+    ws.send(JSON.stringify({
+      type: 'Input',
+      connection_id: connectionId,
+      data: dataBytes,
+    }));
+    return true;
+  }, [connectionId]);
+
+  const pasteClipboardIntoPty = React.useCallback(async () => {
+    try {
+      const text = await readClipboardText();
+      if (!text) return;
+      const term = xtermRef.current;
+      if (!term) {
+        toast.error(t('ptyTerminal.terminalNotConnected'));
+        return;
+      }
+      // term.paste() routes through xterm's onData handler,
+      // which calls sendInputToPty with proper bracketed paste wrapping
+      term.paste(text);
+    } catch (_error) {
+      toast.error(t('ptyTerminal.failedToReadClipboard'));
+    }
+  }, []);
 
   // Get appearance settings - reloads when appearanceKey changes
   const appearance = React.useMemo(() => loadAppearanceSettings(), [appearanceKey]);
@@ -124,6 +172,9 @@ export function PtyTerminal({
     term.loadAddon(fitAddon);
     term.loadAddon(webLinks);
     term.loadAddon(searchAddon);
+    const clipboardAddon = new ClipboardAddon();
+    term.loadAddon(clipboardAddon);
+    clipboardAddonRef.current = clipboardAddon;
     
     term.open(terminalRef.current);
     
@@ -132,7 +183,15 @@ export function PtyTerminal({
     if (!appearance.backgroundImage) {
       try {
         const webglAddon = new WebglAddon();
+        // Dispose listener — xterm calls this when the addon is disposed
+        webglAddon.onContextLoss(() => {
+          webglAddon.dispose();
+          webglAddonRef.current = null;
+          rendererRef.current = 'canvas';
+          console.warn('[PTY Terminal] WebGL context lost, falling back to canvas');
+        });
         term.loadAddon(webglAddon);
+        webglAddonRef.current = webglAddon;
         rendererRef.current = 'webgl';
         console.log('[PTY Terminal] WebGL renderer loaded');
       } catch (e) {
@@ -151,6 +210,12 @@ export function PtyTerminal({
     fitRef.current = fitAddon;
     searchRef.current = searchAddon;
 
+    // Scrollbar visibility: show only when content overflows the viewport.
+    const checkScrollability = () => {
+      setHasScrollableContent(term.buffer.active.length > term.rows);
+    };
+    const lineFeedDisposable = term.onLineFeed(checkScrollability);
+
     // Focus terminal to enable keyboard input when this tab is mounted active.
     if (initialIsActiveRef.current) {
       term.focus();
@@ -160,7 +225,14 @@ export function PtyTerminal({
     term.onSelectionChange(() => {
       setHasSelection(term.hasSelection());
     });
-    
+
+    // NOTE: No custom paste event listener needed — xterm.js registers its own
+    // paste handler on the textarea that reads clipboard data, applies bracketed
+    // paste mode wrapping (ESC[200~/ESC[201~), and fires onData → sendInputToPty.
+    // Adding a second listener here caused double-paste on Ctrl+V.
+    // The context menu paste path (handlePaste → pasteClipboardIntoPty → term.paste())
+    // remains intact for right-click paste.
+
     // Custom key event handler to allow certain shortcuts to pass through to the app
     term.attachCustomKeyEventHandler((event) => {
       // During IME composition (Chinese/Japanese/Korean input methods, or any
@@ -178,6 +250,14 @@ export function PtyTerminal({
         return true;
       }
 
+      // xterm.js invokes this handler for keydown, keypress, AND keyup events.
+      // Without this guard, clipboard shortcuts (Ctrl+C copy, Ctrl+V paste, etc.)
+      // fire once per event type — causing 2-3× duplicate operations.
+      // Only process keydown; let xterm handle keypress/keyup normally.
+      if (event.type !== 'keydown') {
+        return true;
+      }
+
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modKey = isMac ? event.metaKey : event.ctrlKey;
       const key = event.key.toLowerCase();
@@ -186,19 +266,12 @@ export function PtyTerminal({
       if (modKey && key === 'c' && term.hasSelection()) {
         // Allow copy to happen
         const selection = term.getSelection();
-        navigator.clipboard.writeText(selection).catch(() => {
+        writeClipboardText(selection).catch(() => {
           console.error('Failed to copy');
         });
         return false;
       }
-      
-      // Handle paste shortcut - return true to let the browser handle the native paste event,
-      // which xterm will pick up via onData. We must NOT manually send clipboard content here
-      // because onData already sends it, which would cause a double paste.
-      if (modKey && key === 'v') {
-        return true;
-      }
-      
+
       // Handle search shortcut
       if (modKey && key === 'f') {
         event.preventDefault();
@@ -250,6 +323,12 @@ export function PtyTerminal({
     // Set when a drop triggers auto-reconnect, so the Success message can
     // warn the user that a fresh shell was started.
     let isReconnectAfterDrop = false;
+
+    // RAF write batching state — lifted to effect scope so cleanup can cancel.
+    let writeBuffer = '';
+    let watermark = 0;
+    let rafId: number | null = null;
+    let creditsGranted = 0;
     
     // CRITICAL: Wait for terminal to have proper dimensions before connecting
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
@@ -307,6 +386,13 @@ export function PtyTerminal({
       
       console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
       const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+      // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of
+      // encoding Vec<u8> as integer arrays.  The backend sends binary output
+      // frames with the format: [0x01][id_len: u16 BE][connection_id][payload]
+      ws.binaryType = 'arraybuffer';
+      // One streaming TextDecoder per WebSocket connection: preserves UTF-8
+      // multi-byte sequences that may be split across successive output frames.
+      const outputDecoder = new TextDecoder('utf-8');
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -324,7 +410,111 @@ export function PtyTerminal({
         ws.send(JSON.stringify(startMsg));
       };
 
+      // =========================================================================
+      // RAF-Based Write Batching + Watermark Flow Control
+      //
+      // Based on xterm.js best practices:
+      // - http://xtermjs.org/docs/guides/flowcontrol/
+      // - https://github.com/github/copilot-cli/issues/1805 (4-layer solution)
+      //
+      // Problem: calling term.write() for every WebSocket frame creates hundreds
+      // of write operations per second, each with its own callback. This
+      // overwhelms xterm's internal write buffer (hardcoded 50 MB limit) and
+      // creates massive GC pressure from per-chunk closures.
+      //
+      // Solution:
+      // 1. Accumulate all incoming frames in a string buffer.
+      // 2. Flush once per requestAnimationFrame (~60 writes/s instead of 100+).
+      // 3. Use watermark-based flow control: send Resume credits only when the
+      //    pending byte count drops below LOW_WATER, avoiding per-frame ACKs.
+      // =========================================================================
+
+      /** High watermark (bytes): above this, the buffer is considered "full" and
+       *  we stop granting credits until xterm drains below LOW_WATER.  128 KB
+       *  keeps the emulator snappy for keystrokes under fast input (xterm guide
+       *  recommends ≤ 500 KB for responsiveness). */
+      const HIGH_WATER = 128 * 1024;
+      /** Low watermark (bytes): below this, we grant a batch of credits to the
+       *  backend so it can send more data. */
+      const LOW_WATER = 16 * 1024;
+      /** How many credits to grant each time watermark drops below LOW_WATER.
+       *  Keeps the pipeline flowing without flooding the WS receive queue. */
+      const CREDIT_BATCH = 4;
+
+      const grantCredits = (count: number) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          // Send a single Resume per credit (backend Semaphore.add_permits(1))
+          const msg = JSON.stringify({ type: 'Resume', connection_id: connectionId });
+          for (let i = 0; i < count; i++) {
+            ws.send(msg);
+          }
+          creditsGranted += count;
+        }
+      };
+
+      const flushWriteBuffer = () => {
+        rafId = null;
+        if (!writeBuffer) return;
+
+        const data = writeBuffer;
+        writeBuffer = '';
+
+        // Enforce per-session memory cap so xterm's scrollback buffer can't
+        // grow without bound on sustained high-throughput output (e.g. `yes`).
+        sessionOutputRef.current += data.length;
+        if (sessionOutputRef.current >= SESSION_OUTPUT_LIMIT_BYTES) {
+          term.reset();
+          term.clear();
+          sessionOutputRef.current = 0;
+          term.writeln('\x1b[33m[Output limit reached \u2014 scrollback cleared to free memory]\x1b[0m');
+        }
+
+        // Single write per animation frame — the key optimisation.
+        // Reduces term.write() calls from hundreds/s to ~60/s.
+        term.write(data, () => {
+          // xterm finished processing this batch — update watermark
+          watermark = Math.max(watermark - data.length, 0);
+
+          // Watermark-based flow control: grant credits only when the
+          // pending buffer has drained below LOW_WATER.  Skip granting
+          // if watermark is still above HIGH_WATER (buffer still full).
+          if (watermark < LOW_WATER && watermark < HIGH_WATER && creditsGranted < CREDIT_BATCH * 2) {
+            grantCredits(CREDIT_BATCH);
+            creditsGranted = 0; // reset counter after granting
+          }
+        });
+
+        // If more data arrived during the write, schedule another flush
+        if (writeBuffer) {
+          rafId = requestAnimationFrame(flushWriteBuffer);
+        }
+      };
+
+      const enqueueOutput = (text: string) => {
+        writeBuffer += text;
+        watermark += text.length;
+        if (rafId === null) {
+          rafId = requestAnimationFrame(flushWriteBuffer);
+        }
+      };
+
       ws.onmessage = (event) => {
+        // Binary frames carry raw PTY output.
+        // Format: [0x01][id_len: u16 BE][connection_id bytes][payload bytes]
+        if (event.data instanceof ArrayBuffer) {
+          const data = new Uint8Array(event.data);
+          if (data.length < 3 || data[0] !== 0x01) return;
+          const idLen = (data[1] << 8) | data[2];
+          const payloadOffset = 3 + idLen;
+          if (data.length < payloadOffset) return;
+          const frameConnectionId = new TextDecoder().decode(data.subarray(3, payloadOffset));
+          if (frameConnectionId !== connectionId) return;
+          const payload = data.subarray(payloadOffset);
+          if (payload.length === 0) return;
+          enqueueOutput(outputDecoder.decode(payload, { stream: true }));
+          return;
+        }
+
         try {
           const msg = JSON.parse(event.data);
           
@@ -356,52 +546,20 @@ export function PtyTerminal({
                 ptyGenerationRef.current = msg.generation;
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
                 signalReady(connectionId);
+                // Credit-based flow control: seed the pipeline with initial
+                // credits so the PTY reader can start sending immediately.
+                // Ongoing credits are managed by the watermark-based flow
+                // control in the flush callback above.
+                const INITIAL_WINDOW = 2;
+                grantCredits(INITIAL_WINDOW);
               }
               break;
             }
               
             case 'Output':
-              // Terminal output from PTY
-              // Implement flow control like ttyd
               if (msg.data && msg.data.length > 0) {
                 onOutputRef.current?.(connectionId);
-                const text = new TextDecoder().decode(new Uint8Array(msg.data));
-                const flowControl = flowControlRef.current;
-                
-                flowControl.written += text.length;
-                
-                // Use callback-based write for flow control
-                if (flowControl.written > flowControl.limit) {
-                  term.write(text, () => {
-                    flowControl.pending = Math.max(flowControl.pending - 1, 0);
-                    
-                    // Send RESUME when pending drops below lowWater
-                    if (flowControl.pending < flowControl.lowWater) {
-                      if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({
-                          type: 'Resume',
-                          connection_id: connectionId,
-                        }));
-                      }
-                    }
-                  });
-                  
-                  flowControl.pending++;
-                  flowControl.written = 0;
-                  
-                  // Send PAUSE when pending exceeds highWater
-                  if (flowControl.pending > flowControl.highWater) {
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                      ws.send(JSON.stringify({
-                        type: 'Pause',
-                        connection_id: connectionId,
-                      }));
-                    }
-                  }
-                } else {
-                  // Fast path: write immediately without callback
-                  term.write(text);
-                }
+                enqueueOutput(new TextDecoder().decode(new Uint8Array(msg.data)));
               }
               break;
               
@@ -523,24 +681,9 @@ export function PtyTerminal({
 
     connectWebSocket();
 
-    // Reuse a single TextEncoder across all input events to avoid
-    // per-keystroke allocation overhead.
-    const inputEncoder = new TextEncoder();
-
     // Handle user input
     const inputDisposable = term.onData((data: string) => {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      
-      // Convert string to bytes for binary data
-      const dataBytes = Array.from(inputEncoder.encode(data));
-      
-      // Send as JSON message (matches server's Input message type)
-      ws.send(JSON.stringify({
-        type: 'Input',
-        connection_id: connectionId,
-        data: dataBytes,
-      }));
+      sendInputToPty(data);
     });
 
     // Handle terminal resize — deduplicate to avoid flooding the PTY with
@@ -553,6 +696,7 @@ export function PtyTerminal({
       if (cols === lastSentCols && rows === lastSentRows) return;
       lastSentCols = cols;
       lastSentRows = rows;
+      checkScrollability(); // row count changed — re-evaluate scrollability
 
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -621,6 +765,15 @@ export function PtyTerminal({
       console.log(`[PTY Terminal] [${connectionId}] Cleaning up`);
       isRunning = false;
 
+      // Cancel any pending RAF write batch and discard queued data so no
+      // stale writes reach a terminal that is about to be disposed.
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      writeBuffer = '';
+      watermark = 0;
+
       // Close PTY connection via WebSocket — include generation so the
       // backend can ignore this close if a newer session already exists.
       const ws = wsRef.current;
@@ -636,16 +789,40 @@ export function PtyTerminal({
         ws.close();
       }
       ptyGenerationRef.current = null;
+
+      // CRITICAL: Null out WebSocket handlers to break closure reference chains.
+      // The onmessage/onclose/onerror handlers capture `term`, `outputDecoder`,
+      // and `enqueueOutput` via closures. Without nulling them out, V8 cannot GC
+      // these objects even after term.dispose(), causing ~1 GB of retained heap.
+      if (ws) {
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.onopen = null;
+      }
+      wsRef.current = null;
       
       inputDisposable.dispose();
       resizeDisposable.dispose();
+      lineFeedDisposable.dispose();
       window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
       if (fitTimer) clearTimeout(fitTimer);
       
+      // Dispose WebGL addon FIRST so GPU textures are released before the
+      // terminal canvas is removed from the DOM.
+      if (webglAddonRef.current) {
+        try { webglAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
+        webglAddonRef.current = null;
+      }
+      if (clipboardAddonRef.current) {
+        try { clipboardAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
+        clipboardAddonRef.current = null;
+      }
+      term.reset(); // clear scrollback + viewport so GC can reclaim xterm buffers sooner
       term.dispose();
     };
-  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey]);
+  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey, sendInputToPty]);
   // NOTE: themeKey and appearanceKey are intentionally NOT in the deps above.
   // Including them would tear down the WebSocket + PTY session on every theme
   // change (e.g. macOS auto Dark/Light switch), killing any running remote
@@ -663,6 +840,7 @@ export function PtyTerminal({
     term.options.fontFamily = opts.fontFamily;
     term.options.cursorStyle = opts.cursorStyle;
     term.options.cursorBlink = opts.cursorBlink;
+    term.options.scrollback = opts.scrollback;
     // Refit so any font-size change propagates as a PTY resize.
     fitRef.current?.fit();
   }, [themeKey, appearanceKey]);
@@ -701,43 +879,21 @@ export function PtyTerminal({
     const term = xtermRef.current;
     if (term?.hasSelection()) {
       const selection = term.getSelection();
-      navigator.clipboard.writeText(selection).then(() => {
-        toast.success('Copied to clipboard');
+      writeClipboardText(selection).then(() => {
+        toast.success(t('ptyTerminal.copiedToClipboard'));
       }).catch(() => {
-        toast.error('Failed to copy to clipboard');
+        toast.error(t('ptyTerminal.failedToCopyClipboard'));
       });
     }
   }, []);
 
   const handlePaste = React.useCallback(async () => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      toast.error('Terminal not connected');
-      return;
-    }
-    
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        // Convert string to bytes for binary data
-        const encoder = new TextEncoder();
-        const dataBytes = Array.from(encoder.encode(text));
-        
-        const inputMsg = {
-          type: 'Input',
-          connection_id: connectionId,
-          data: dataBytes,
-        };
-        
-        ws.send(JSON.stringify(inputMsg));
-      }
-    } catch (_error) {
-      toast.error('Failed to read from clipboard');
-    }
-  }, [connectionId]);
+    await pasteClipboardIntoPty();
+  }, [pasteClipboardIntoPty]);
 
   const handleClear = React.useCallback(() => {
     xtermRef.current?.clear();
+    setHasScrollableContent(false);
   }, []);
 
   const handleClearScrollback = React.useCallback(() => {
@@ -746,6 +902,7 @@ export function PtyTerminal({
       term.clear();
       // Note: clearScrollback method doesn't exist in newer xterm versions
       // clear() already clears both viewport and scrollback
+      setHasScrollableContent(false);
     }
   }, []);
 
@@ -782,7 +939,7 @@ export function PtyTerminal({
       void onReconnectTab(connectionId);
     } else {
       // Fallback: reconnect only the WebSocket/PTY loop (no SSH re-auth).
-      toast.info('Reconnecting terminal…');
+      toast.info(t('ptyTerminal.reconnectingTerminal'));
       reconnectAttemptsRef.current = 0;
       connectionStatusRef.current = 'connecting';
       onConnectionStatusChange?.(connectionId, 'connecting');
@@ -817,9 +974,9 @@ export function PtyTerminal({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       
-      toast.success('Terminal output saved');
+      toast.success(t('ptyTerminal.outputSaved'));
     } catch (error) {
-      toast.error('Failed to save output');
+      toast.error(t('ptyTerminal.failedToSaveOutput'));
       console.error('Save error:', error);
     }
   }, []);
@@ -841,7 +998,7 @@ export function PtyTerminal({
     >
     <div 
       ref={containerRef}
-      className="relative h-full w-full terminal-no-scrollbar overflow-hidden"
+      className={`relative h-full w-full pty-terminal-container pty-term-${scopeId} overflow-hidden`}
       onClick={(e) => {
         // Don't refocus terminal if clicking on search bar or other interactive elements
         const target = e.target as HTMLElement;
@@ -852,6 +1009,11 @@ export function PtyTerminal({
       }}
       style={{
         opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1,
+        // Use the theme-aware resolved background so the container matches the
+        // xterm theme exactly. The raw terminalThemes[appearance.theme] lookup
+        // skips light-mode auto-switching, which left a mismatched dark strip at
+        // the bottom of a light terminal (and vice versa).
+        backgroundColor: getThemeAwareTerminalTheme(appearance).background || (terminalThemes[appearance.theme] || defaultTerminalTheme).background || '#1e1e1e',
       }}
     >
       {/* Background image layer */}
@@ -880,43 +1042,63 @@ export function PtyTerminal({
         />
       )}
       
-      {/* Terminal padding wrapper — uses inset to shrink the area so FitAddon
-           measures the correct available height (padding on the terminal element
-           itself causes FitAddon to over-count rows by ~2). */}
-      <div className="absolute inset-4 z-10">
+      {/* Terminal wrapper — inset-0 fills the entire container so the terminal
+           occupies all available space. The container background matches the
+           terminal theme so any partial-row gap at the bottom is invisible. */}
+      <div className="absolute inset-0 z-10">
         <div ref={terminalRef} className="h-full w-full" />
       </div>
       <style>{`
-        .terminal-no-scrollbar .xterm-viewport::-webkit-scrollbar {
-          display: none;
+        /* Scrollbar appearance — scoped to this terminal instance */
+        .pty-term-${scopeId} .xterm-viewport {
+          scrollbar-color: rgba(148, 163, 184, 0.55) transparent;
+          scrollbar-width: ${hasScrollableContent ? 'thin' : 'none'};
+          scrollbar-gutter: ${hasScrollableContent ? 'stable' : 'auto'};
+          overflow-y: ${hasScrollableContent ? 'auto' : 'hidden'};
         }
-        .terminal-no-scrollbar .xterm-viewport {
-          -ms-overflow-style: none;
-          scrollbar-width: none;
+        ${hasScrollableContent ? `
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
         }
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar-thumb {
+          background-color: rgba(148, 163, 184, 0.55);
+          border: 2px solid transparent;
+          border-radius: 999px;
+          background-clip: content-box;
+          min-height: 40px;
+        }
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar-thumb:hover {
+          background-color: rgba(148, 163, 184, 0.75);
+        }
+        .pty-term-${scopeId} .xterm-viewport::-webkit-scrollbar-track {
+          background: transparent;
+          border-radius: 999px;
+          margin: 4px 0;
+        }` : ''}
         /* Make xterm background transparent when background image is set */
         ${appearance.backgroundImage ? `
-        .terminal-no-scrollbar .xterm {
+        .pty-term-${scopeId} .xterm {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-viewport {
+        .pty-term-${scopeId} .xterm-viewport {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-screen {
+        .pty-term-${scopeId} .xterm-screen {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-rows {
+        .pty-term-${scopeId} .xterm-rows {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar canvas {
+        .pty-term-${scopeId} canvas {
           background-color: transparent !important;
           background: transparent !important;
         }
-        .terminal-no-scrollbar .xterm-helper-textarea {
+        .pty-term-${scopeId} .xterm-helper-textarea {
           background-color: transparent !important;
         }
         ` : ''}

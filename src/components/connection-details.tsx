@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
@@ -16,14 +17,15 @@ interface ConnectionDetailsProps {
 }
 
 export function ConnectionDetails({ session }: ConnectionDetailsProps) {
+  const { t } = useTranslation();
   if (!session) {
     return (
       <Card className="w-80">
         <CardHeader>
-          <CardTitle className="text-sm">Connection Details</CardTitle>
+          <CardTitle className="text-sm">{t('connectionDetails.title')}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">No session selected</p>
+          <p className="text-sm text-muted-foreground">{t('connectionDetails.noSession')}</p>
         </CardContent>
       </Card>
     );
@@ -42,25 +44,25 @@ export function ConnectionDetails({ session }: ConnectionDetailsProps) {
   return (
     <Card className="w-80">
       <CardHeader>
-        <CardTitle className="text-sm">Connection Details</CardTitle>
+        <CardTitle className="text-sm">{t('connectionDetails.title')}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Name</span>
+            <span className="text-sm font-medium">{t('connectionDetails.name')}</span>
             <span className="text-sm">{session.name}</span>
           </div>
           
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Type</span>
+            <span className="text-sm font-medium">{t('connectionDetails.type')}</span>
             <Badge variant="outline">{session.protocol}</Badge>
           </div>
           
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Status</span>
+            <span className="text-sm font-medium">{t('connectionDetails.status')}</span>
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${getStatusColor(session.status)}`} />
-              <span className="text-sm capitalize">{session.status}</span>
+              <span className="text-sm capitalize">{t(`connectionDetails.${session.status}`)}</span>
             </div>
           </div>
         </div>
@@ -70,19 +72,19 @@ export function ConnectionDetails({ session }: ConnectionDetailsProps) {
             <Separator />
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Host</span>
+                <span className="text-sm font-medium">{t('connectionDetails.host')}</span>
                 <span className="text-sm">{session.host}</span>
               </div>
               
               {session.username && (
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Username</span>
+                  <span className="text-sm font-medium">{t('connectionDetails.username')}</span>
                   <span className="text-sm">{session.username}</span>
                 </div>
               )}
               
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Port</span>
+                <span className="text-sm font-medium">{t('connectionDetails.port')}</span>
                 <span className="text-sm">{session.port || (session.protocol === 'SSH' ? 22 : 23)}</span>
               </div>
             </div>
@@ -93,17 +95,17 @@ export function ConnectionDetails({ session }: ConnectionDetailsProps) {
         
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Sub items</span>
+            <span className="text-sm font-medium">{t('connectionDetails.subItems')}</span>
             <span className="text-sm">2</span>
           </div>
           
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Protocol</span>
+            <span className="text-sm font-medium">{t('connectionDetails.protocol')}</span>
             <span className="text-sm">{session.protocol}</span>
           </div>
           
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Description</span>
+            <span className="text-sm font-medium">{t('connectionDetails.description')}</span>
             <span className="text-sm text-muted-foreground">-</span>
           </div>
         </div>

@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from 'react-i18next';
 import { Button } from "./ui/button";
 import { ArrowRight, ArrowLeft } from "lucide-react";
 
@@ -19,13 +20,14 @@ export function TransferControls({
   disabled = false,
   children,
 }: TransferControlsProps) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center justify-center gap-2 w-10 shrink-0 bg-muted/20">
       <Button
         variant="ghost"
         size="icon"
         className="h-8 w-8"
-        title={`Upload ${localSelectionCount} file(s) to remote`}
+        title={t('transferControls.uploadSelected', { count: localSelectionCount })}
         disabled={disabled || localSelectionCount === 0}
         onClick={onUpload}
       >
@@ -35,7 +37,7 @@ export function TransferControls({
         variant="ghost"
         size="icon"
         className="h-8 w-8"
-        title={`Download ${remoteSelectionCount} file(s) to local`}
+        title={t('transferControls.downloadSelected', { count: remoteSelectionCount })}
         disabled={disabled || remoteSelectionCount === 0}
         onClick={onDownload}
       >

@@ -7,6 +7,16 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
     <input
       type={type}
       data-slot="input"
+      // Disable all forms of autofill / auto-correction / spell-check. On macOS
+      // (and the Tauri WKWebView) the absence of these attributes lets the OS
+      // suggest saved passwords, auto-correct typed words, and pre-fill from
+      // form history. The non-standard `autocomplete="off"` values below are
+      // honored by WebKit beyond the standard "off" to suppress password/keychain
+      // suggestions. Callers may override any of these via `...props`.
+      autoComplete="off"
+      autoCorrect="off"
+      autoCapitalize="off"
+      spellCheck={false}
       className={cn(
         "file:text-foreground placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-base bg-input-background transition-[color,box-shadow] outline-none file:inline-flex file:h-7 file:border-0 file:bg-transparent file:text-sm file:font-medium disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
         "focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px]",

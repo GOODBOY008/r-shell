@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     writeln = vi.fn();
     write = vi.fn((_data: string, callback?: () => void) => callback?.());
     onSelectionChange = vi.fn(() => ({ dispose: vi.fn() }));
+    onLineFeed = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
     onData = vi.fn(() => ({ dispose: vi.fn() }));
     onResize = vi.fn(() => ({ dispose: vi.fn() }));
@@ -33,6 +34,7 @@ const mocks = vi.hoisted(() => {
     getSelection = vi.fn(() => '');
     selectAll = vi.fn();
     clear = vi.fn();
+    reset = vi.fn();
     dispose = vi.fn();
   }
 
@@ -87,7 +89,7 @@ vi.mock('@xterm/addon-web-links', () => ({
 
 vi.mock('@xterm/addon-webgl', () => ({
   WebglAddon: vi.fn(function WebglAddon() {
-    return { dispose: vi.fn() };
+    return { dispose: vi.fn(), onContextLoss: vi.fn() };
   }),
 }));
 
@@ -104,18 +106,36 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string) => (command === 'get_websocket_port' ? 9001 : undefined)),
 }));
 
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: vi.fn().mockResolvedValue(''),
+  writeText: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock('../lib/terminal-config', () => ({
+  defaultTerminalTheme: {
+    background: '#000000',
+  },
+  terminalThemes: {
+    'vs-code-dark': {
+      background: '#000000',
+    },
+  },
   loadAppearanceSettings: vi.fn(() => ({
     allowTransparency: false,
     backgroundImage: '',
     opacity: 100,
+    theme: 'vs-code-dark',
   })),
   getThemeAwareTerminalOptions: vi.fn(() => ({
     cursorBlink: true,
     cursorStyle: 'block',
     fontFamily: 'monospace',
     fontSize: 14,
+    scrollback: 10000,
     theme: {},
+  })),
+  getThemeAwareTerminalTheme: vi.fn(() => ({
+    background: '#000000',
   })),
 }));
 
@@ -162,6 +182,19 @@ function renderTerminal(
 async function flushTimers() {
   await act(async () => {
     await vi.runOnlyPendingTimersAsync();
+  });
+}
+
+function getCustomKeyHandler() {
+  const handler = mocks.terminals[0].attachCustomKeyEventHandler.mock.calls[0]?.[0];
+  expect(handler).toBeDefined();
+  return handler as (event: KeyboardEvent) => boolean;
+}
+
+async function flushPromises() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
@@ -277,5 +310,61 @@ describe('PtyTerminal activation', () => {
     } as MessageEvent);
 
     expect(onOutput).toHaveBeenCalledWith('connection-1');
+  });
+
+  it('lets xterm handle Ctrl+V paste without duplicate custom send', async () => {
+    const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
+    const readTextMock = vi.mocked(readText);
+    readTextMock.mockClear();
+    Object.defineProperty(navigator, 'platform', {
+      configurable: true,
+      value: 'Win32',
+    });
+    renderTerminal(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+
+    const preventDefault = vi.fn();
+    const handled = getCustomKeyHandler()({
+      type: 'keydown',
+      key: 'v',
+      ctrlKey: true,
+      metaKey: false,
+      preventDefault,
+    } as unknown as KeyboardEvent);
+    await flushPromises();
+
+    expect(handled).toBe(true);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(readTextMock).not.toHaveBeenCalled();
+  });
+
+  it('lets xterm handle Command+V paste without duplicate custom send on macOS', async () => {
+    const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
+    const readTextMock = vi.mocked(readText);
+    readTextMock.mockClear();
+    Object.defineProperty(navigator, 'platform', {
+      configurable: true,
+      value: 'MacIntel',
+    });
+    renderTerminal(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+
+    const preventDefault = vi.fn();
+    const handled = getCustomKeyHandler()({
+      type: 'keydown',
+      key: 'v',
+      ctrlKey: false,
+      metaKey: true,
+      preventDefault,
+    } as unknown as KeyboardEvent);
+    await flushPromises();
+
+    expect(handled).toBe(true);
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(readTextMock).not.toHaveBeenCalled();
   });
 });

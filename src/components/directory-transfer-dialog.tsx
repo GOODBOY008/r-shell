@@ -10,6 +10,7 @@
  * 3. Transfer all files one by one with progress
  */
 import React, { useState, useCallback, useRef, useEffect } from "react";
+import { useTranslation } from 'react-i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import {
@@ -86,6 +87,7 @@ export function DirectoryTransferDialog({
   destPath,
   onComplete,
 }: DirectoryTransferDialogProps) {
+  const { t } = useTranslation();
   const [progress, setProgress] = useState<TransferProgress>({
     ...initialProgress,
   });
@@ -308,11 +310,11 @@ export function DirectoryTransferDialog({
 
       if (errorCount === 0) {
         toast.success(
-          `${direction === "upload" ? "Upload" : "Download"} complete: ${processedFiles} file(s), ${processedDirs} dir(s)`,
+          t('directoryTransferDialog.toast.complete', { context: direction, processedFiles, processedDirs }),
         );
       } else {
         toast.warning(
-          `Transfer finished with ${errorCount} error(s)`,
+          t('directoryTransferDialog.toast.failed', { errorCount }),
         );
       }
 
@@ -326,7 +328,7 @@ export function DirectoryTransferDialog({
           err instanceof Error ? err.message : String(err),
         ],
       }));
-      toast.error("Directory transfer failed", {
+      toast.error(t('directoryTransferDialog.toast.error'), {
         description: err instanceof Error ? err.message : String(err),
       });
     }
@@ -353,18 +355,18 @@ export function DirectoryTransferDialog({
               <FolderDown className="h-5 w-5 text-green-500" />
             )}
             {direction === "upload"
-              ? "Upload Directory"
-              : "Download Directory"}
+              ? t('directoryTransferDialog.title.upload')
+              : t('directoryTransferDialog.title.download')}
           </DialogTitle>
         </DialogHeader>
 
         {/* Path info */}
         <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs shrink-0">
-          <span className="text-muted-foreground">Source:</span>
+          <span className="text-muted-foreground">{t('directoryTransferDialog.label.source')}</span>
           <span className="font-mono truncate" title={sourcePath}>
             {sourcePath}
           </span>
-          <span className="text-muted-foreground">Dest:</span>
+          <span className="text-muted-foreground">{t('directoryTransferDialog.label.dest')}</span>
           <span className="font-mono truncate" title={destPath}>
             {destPath}
           </span>
@@ -378,7 +380,7 @@ export function DirectoryTransferDialog({
               <>
                 <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">
-                  Enumerating files…
+                  {t('directoryTransferDialog.status.enumerating')}
                 </span>
               </>
             )}
@@ -390,7 +392,7 @@ export function DirectoryTransferDialog({
                   <Download className="h-4 w-4 text-green-500" />
                 )}
                 <span className="text-sm">
-                  {progress.currentItem ?? "Preparing…"}
+                  {progress.currentItem ?? t('directoryTransferDialog.status.preparing')}
                 </span>
               </>
             )}
@@ -398,7 +400,7 @@ export function DirectoryTransferDialog({
               <>
                 <CheckCircle2 className="h-4 w-4 text-green-500" />
                 <span className="text-sm text-green-600 dark:text-green-400">
-                  Transfer complete
+                  {t('directoryTransferDialog.status.complete')}
                 </span>
               </>
             )}
@@ -406,7 +408,7 @@ export function DirectoryTransferDialog({
               <>
                 <X className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">
-                  Cancelled
+                  {t('directoryTransferDialog.status.cancelled')}
                 </span>
               </>
             )}
@@ -414,7 +416,7 @@ export function DirectoryTransferDialog({
               <>
                 <AlertCircle className="h-4 w-4 text-destructive" />
                 <span className="text-sm text-destructive">
-                  Transfer failed
+                  {t('directoryTransferDialog.status.failed')}
                 </span>
               </>
             )}
@@ -426,8 +428,12 @@ export function DirectoryTransferDialog({
               <Progress value={progressPercent} className="h-1.5" />
               <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                 <span>
-                  {progress.processedFiles}/{progress.totalFiles} files,{" "}
-                  {progress.processedDirs}/{progress.totalDirs} dirs
+                  {t('directoryTransferDialog.progress.counts', {
+                    files: progress.processedFiles,
+                    totalFiles: progress.totalFiles,
+                    dirs: progress.processedDirs,
+                    totalDirs: progress.totalDirs,
+                  })}
                 </span>
                 <span>
                   {formatSize(progress.bytesTransferred)} /{" "}
@@ -441,10 +447,10 @@ export function DirectoryTransferDialog({
           {isDone && (
             <div className="flex items-center gap-2 flex-wrap">
               <Badge variant="secondary" className="text-[10px] gap-1 h-5">
-                {progress.processedFiles} file(s)
+                {t('directoryTransferDialog.badge.files', { count: progress.processedFiles })}
               </Badge>
               <Badge variant="secondary" className="text-[10px] gap-1 h-5">
-                {progress.processedDirs} dir(s)
+                {t('directoryTransferDialog.badge.dirs', { count: progress.processedDirs })}
               </Badge>
               <Badge variant="secondary" className="text-[10px] gap-1 h-5">
                 {formatSize(progress.bytesTransferred)}
@@ -454,7 +460,7 @@ export function DirectoryTransferDialog({
                   variant="outline"
                   className="text-[10px] gap-1 h-5 border-destructive text-destructive"
                 >
-                  {progress.errors.length} error(s)
+                  {t('directoryTransferDialog.badge.errors', { count: progress.errors.length })}
                 </Badge>
               )}
             </div>
@@ -483,7 +489,7 @@ export function DirectoryTransferDialog({
               }}
             >
               <X className="h-4 w-4 mr-1" />
-              Cancel
+              {t('common.cancel')}
             </Button>
           )}
           {isDone && (
@@ -492,7 +498,7 @@ export function DirectoryTransferDialog({
               size="sm"
               onClick={() => onOpenChange(false)}
             >
-              Close
+              {t('common.close')}
             </Button>
           )}
         </DialogFooter>

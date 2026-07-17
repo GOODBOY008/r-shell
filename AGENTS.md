@@ -260,3 +260,21 @@ VS Code-like resizable panel layout with presets:
 - **Backend**: Terminal logs via `tracing` (initialized in `lib.rs`)
 - **WebSocket**: Monitor in browser Network tab — filter for `ws://127.0.0.1:9001`
 - **Rust errors**: Vite `clearScreen: false` prevents obscuring Rust compile errors
+
+---
+
+### Internationalization (i18n)
+
+R-Shell supports multiple languages via `react-i18next`. All user-facing strings must go through the translation system.
+
+- **Translation files**: `src/locales/en.json` (English, source of truth) and `src/locales/zh-CN.json` (Chinese)
+- **i18n config**: `src/lib/i18n.ts` — initialization, language detection, `changeLanguage()` helper
+- **Hook**: Use `const { t } = useTranslation()` from `react-i18next` in every component with user-facing strings
+- **Key naming**: `{component}.{category}.{name}` — e.g. `connectionDialog.title.new`, `common.cancel`
+- **Never hardcode user-facing strings** in JSX, toast messages, placeholders, tooltips, or dialog titles — always use `t('key')`
+- **Interpolation**: Use `t('key', { variable })` for dynamic values, not template literals
+- **Pluralization**: Use `_one` / `_other` suffixes with `count` param — never `(s)` hacks
+- **HTML in strings**: Use `<Trans>` component from `react-i18next` for strings containing markup
+- **Do NOT translate**: protocol values (`"SSH"`), keyboard symbols (`⌘N`), font names, Rust error messages in toast descriptions, layout preset internal names
+- **Select option values**: Only translate display text, never the `value` attribute passed to backend
+- **After adding new strings**: Add keys to both `en.json` and `zh-CN.json`, then run `pnpm i18n:check` to verify parity

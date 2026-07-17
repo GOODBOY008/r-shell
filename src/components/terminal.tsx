@@ -1,10 +1,12 @@
 import React from 'react';
-import { Terminal as XTerm } from 'xterm';
+import { useTranslation } from 'react-i18next';
+import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { invoke } from '@tauri-apps/api/core';
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { X, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -20,6 +22,7 @@ interface TerminalProps {
 }
 
 export function Terminal({ connectionId, connectionName, host = 'localhost', username = 'user', appearanceKey = 0 }: TerminalProps) {
+  const { t } = useTranslation();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -211,7 +214,7 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
         const selection = term.getSelection();
         if (selection) {
           e.preventDefault();
-          navigator.clipboard.writeText(selection).then(() => {
+          writeClipboardText(selection).then(() => {
             // Visual feedback
             console.log('Copied to clipboard');
           }).catch(err => {
@@ -223,9 +226,9 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
       // Paste: Ctrl+Shift+V or Cmd+V
       else if ((e.ctrlKey && e.shiftKey && e.key === 'V') || (e.metaKey && e.key === 'v')) {
         e.preventDefault();
-        navigator.clipboard.readText().then(text => {
+        readClipboardText().then(text => {
           // Paste the text into the terminal
-          term.paste(text);
+          if (text) term.paste(text);
         }).catch(err => {
           console.error('Failed to paste:', err);
         });
@@ -312,7 +315,7 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
         <div className="absolute top-2 right-2 bg-background border rounded-md shadow-lg p-2 flex items-center gap-2 z-10">
           <Input
             type="text"
-            placeholder="Search..."
+            placeholder={t('terminal.search')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             onKeyDown={(e) => {

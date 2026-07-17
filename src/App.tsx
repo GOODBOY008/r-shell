@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { applyLanguageFromPreference } from './lib/i18n';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
@@ -15,7 +17,14 @@ import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connec
 import { isDesktopProtocol } from './lib/protocol-config';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { useLayout, LayoutProvider } from './lib/layout-context';
-import { useKeyboardShortcuts, createLayoutShortcuts, createSplitViewShortcuts } from './lib/keyboard-shortcuts';
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  createLayoutShortcuts,
+  createSplitViewShortcuts,
+  loadKeyboardShortcutSettings,
+  useKeyboardShortcuts,
+} from './lib/keyboard-shortcuts';
+import type { SplitViewShortcutBindings } from './lib/keyboard-shortcuts';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
@@ -43,6 +52,7 @@ interface ConnectionNode {
 }
 
 function AppContent() {
+  const { t } = useTranslation();
   const [selectedConnection, setSelectedConnection] = useState<ConnectionNode | null>(null);
 
   // Terminal group state from context
@@ -53,6 +63,9 @@ function AppContent() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
+  const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
+    () => loadKeyboardShortcutSettings(),
+  );
 
   // Right sidebar tab & log monitor integration
   const [rightSidebarTab, setRightSidebarTab] = useState("monitor");
@@ -82,46 +95,67 @@ function AppContent() {
     return Object.values(state.groups).flatMap(g => g.tabs);
   }, [state.groups]);
 
+  // Apply stored language preference (follows OS locale when set to "auto")
+  useEffect(() => {
+    void applyLanguageFromPreference();
+  }, []);
+
+  useEffect(() => {
+    const refreshKeyboardShortcutSettings = () => {
+      setKeyboardShortcutSettings(loadKeyboardShortcutSettings());
+    };
+
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, refreshKeyboardShortcutSettings);
+    window.addEventListener('storage', refreshKeyboardShortcutSettings);
+    return () => {
+      window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, refreshKeyboardShortcutSettings);
+      window.removeEventListener('storage', refreshKeyboardShortcutSettings);
+    };
+  }, []);
+
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
     const groupIds = Object.keys(state.groups);
-    return createSplitViewShortcuts({
-      splitRight: () => {
-        if (state.activeGroupId) {
-          dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'right' });
-        }
+    return createSplitViewShortcuts(
+      {
+        splitRight: () => {
+          if (state.activeGroupId) {
+            dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'right' });
+          }
+        },
+        splitDown: () => {
+          if (state.activeGroupId) {
+            dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'down' });
+          }
+        },
+        focusGroup: (index: number) => {
+          if (index < groupIds.length) {
+            dispatch({ type: 'ACTIVATE_GROUP', groupId: groupIds[index] });
+          }
+        },
+        closeTab: () => {
+          if (activeGroup && activeGroup.activeTabId) {
+            dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
+          }
+        },
+        nextTab: () => {
+          if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
+            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            const nextIndex = (currentIndex + 1) % activeGroup.tabs.length;
+            dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[nextIndex].id });
+          }
+        },
+        prevTab: () => {
+          if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
+            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
+            const prevIndex = (currentIndex - 1 + activeGroup.tabs.length) % activeGroup.tabs.length;
+            dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
+          }
+        },
       },
-      splitDown: () => {
-        if (state.activeGroupId) {
-          dispatch({ type: 'SPLIT_GROUP', groupId: state.activeGroupId, direction: 'down' });
-        }
-      },
-      focusGroup: (index: number) => {
-        if (index < groupIds.length) {
-          dispatch({ type: 'ACTIVATE_GROUP', groupId: groupIds[index] });
-        }
-      },
-      closeTab: () => {
-        if (activeGroup && activeGroup.activeTabId) {
-          dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
-        }
-      },
-      nextTab: () => {
-        if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
-          const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-          const nextIndex = (currentIndex + 1) % activeGroup.tabs.length;
-          dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[nextIndex].id });
-        }
-      },
-      prevTab: () => {
-        if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
-          const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-          const prevIndex = (currentIndex - 1 + activeGroup.tabs.length) % activeGroup.tabs.length;
-          dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
-        }
-      },
-    });
-  }, [state.activeGroupId, state.groups, activeGroup, dispatch]);
+      keyboardShortcutSettings,
+    );
+  }, [state.activeGroupId, state.groups, activeGroup, dispatch, keyboardShortcutSettings]);
 
   const layoutShortcuts = useMemo(() => createLayoutShortcuts({
     toggleLeftSidebar,
@@ -401,15 +435,15 @@ function AppContent() {
       }
 
       if (restoredCount > 0) {
-        toast.success('Connections Restored', {
+        toast.success(t('app.connectionsRestored'), {
           description: failedCount > 0
-            ? `${restoredCount} connection(s) restored, ${failedCount} failed`
-            : `Successfully restored ${restoredCount} connection(s)`,
+            ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
+            : t('app.connectionsRestoredAllDesc', { restoredCount }),
         });
       } else if (failedCount > 0) {
         ActiveConnectionsManager.clearActiveConnections();
-        toast.error('Connection Restore Failed', {
-          description: 'Unable to restore previous connections. Please reconnect manually.',
+        toast.error(t('app.restoreFailed'), {
+          description: t('app.restoreFailedDesc'),
         });
       }
 
@@ -421,8 +455,8 @@ function AppContent() {
 
     withTimeout(restoreConnections(), OVERALL_RESTORE_TIMEOUT_MS, 'Session restore').catch((err) => {
       console.error('Session restore timed out:', err);
-      toast.error('Restore Timed Out', {
-        description: 'Some connections could not be restored in time. Please reconnect manually.',
+      toast.error(t('app.restoreTimedOut'), {
+        description: t('app.restoreTimedOutDesc'),
       });
       setCurrentRestoreTarget(null);
       setIsRestoring(false);
@@ -528,7 +562,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -568,7 +602,7 @@ function AppContent() {
             dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
           } else {
             console.error('SSH connection failed:', result.error);
-            toast.error('Connection Failed', {
+            toast.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
             setEditingConnection({
@@ -584,8 +618,8 @@ function AppContent() {
           }
         } catch (error) {
           console.error('Error connecting to SSH:', error);
-          toast.error('Connection Error', {
-            description: error instanceof Error ? error.message : 'An unexpected error occurred while connecting.',
+          toast.error(t('app.connectionError'), {
+            description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
           });
           setEditingConnection({
             id: connection.id,
@@ -648,8 +682,8 @@ function AppContent() {
     const originalConnectionId = tabToDuplicate.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
-      toast.error('Cannot Duplicate Tab', {
-        description: 'Connection data not found. Please create a new connection.',
+      toast.error(t('app.cannotDuplicate'), {
+        description: t('app.cannotDuplicateDesc'),
       });
       return;
     }
@@ -665,8 +699,8 @@ function AppContent() {
         : !!connectionData.privateKeyPath);
 
     if (!hasCredentials) {
-      toast.error('Cannot Duplicate Tab', {
-        description: 'No saved credentials found. Please connect manually.',
+      toast.error(t('app.cannotDuplicate'), {
+        description: t('app.noCredentialsDesc'),
       });
       return;
     }
@@ -717,12 +751,12 @@ function AppContent() {
             });
           }
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'connected' });
-          toast.success('Tab Duplicated', {
-            description: `Successfully duplicated ${tabToDuplicate.name}`,
+          toast.success(t('app.tabDuplicated'), {
+            description: t('app.tabDuplicatedDesc', { name: tabToDuplicate.name }),
           });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'disconnected' });
-          toast.error('Duplication Failed', {
+          toast.error(t('app.duplicationFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -758,22 +792,22 @@ function AppContent() {
 
           dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: duplicatedTab });
 
-          toast.success('Tab Duplicated', {
-            description: `Successfully duplicated ${tabToDuplicate.name}`,
+          toast.success(t('app.tabDuplicated'), {
+            description: t('app.tabDuplicatedDesc', { name: tabToDuplicate.name }),
           });
         } else {
-          toast.error('Duplication Failed', {
+          toast.error(t('app.duplicationFailed'), {
             description: result.error || 'Unable to establish connection for the duplicated tab.',
           });
         }
       }
     } catch (error) {
       console.error('Error duplicating tab:', error);
-      toast.error('Duplication Error', {
-        description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+      toast.error(t('app.duplicationError'), {
+        description: error instanceof Error ? error.message : t('app.duplicationErrorDesc'),
       });
     }
-  }, [allTabs, state.activeGroupId, dispatch]);
+  }, [allTabs, state.activeGroupId, dispatch, t]);
 
   const handleReconnect = useCallback(async (tabId: string) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
@@ -782,8 +816,8 @@ function AppContent() {
     const originalConnectionId = tabToReconnect.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
-      toast.error('Cannot Reconnect', {
-        description: 'Connection data not found. Please create a new connection.',
+      toast.error(t('app.cannotReconnect'), {
+        description: t('app.cannotReconnectDesc'),
       });
       return;
     }
@@ -799,8 +833,8 @@ function AppContent() {
         : !!connectionData.privateKeyPath);
 
     if (!hasCredentials) {
-      toast.error('Cannot Reconnect', {
-        description: 'No saved credentials found. Please connect manually.',
+      toast.error(t('app.cannotReconnect'), {
+        description: t('app.noCredentialsDesc'),
       });
       setEditingConnection({
         id: originalConnectionId,
@@ -862,8 +896,8 @@ function AppContent() {
           ConnectionStorageManager.updateLastConnected(originalConnectionId);
         }
         dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
-        toast.success('Reconnected', {
-          description: `Successfully reconnected to ${tabToReconnect.name}`,
+        toast.success(t('app.reconnected'), {
+          description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
         });
       } else {
         // SSH reconnect (existing behavior)
@@ -896,24 +930,24 @@ function AppContent() {
           // Remount PtyTerminal so it opens a fresh WebSocket/PTY on the
           // newly re-established SSH connection.
           dispatch({ type: 'RECONNECT_TAB', tabId });
-          toast.success('Reconnected', {
-            description: `Successfully reconnected to ${tabToReconnect.name}`,
+          toast.success(t('app.reconnected'), {
+            description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
           });
         } else {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Reconnection Failed', {
-            description: result.error || 'Unable to reconnect. Please try again.',
+          toast.error(t('app.reconnectionFailed'), {
+            description: result.error || t('app.reconnectionFailedDesc'),
           });
         }
       }
     } catch (error) {
       console.error('Error reconnecting:', error);
       dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-      toast.error('Reconnection Error', {
-        description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+      toast.error(t('app.reconnectionError'), {
+        description: error instanceof Error ? error.message : t('app.reconnectionErrorDesc'),
       });
     }
-  }, [allTabs, dispatch]);
+  }, [allTabs, dispatch, t]);
 
   // Handler: open a remote file in the Log Monitor panel
   const handleOpenInLogMonitor = useCallback((filePath: string) => {
@@ -924,8 +958,8 @@ function AppContent() {
     if (!layout.rightSidebarVisible) {
       toggleRightSidebar();
     }
-    toast.success(`Opening ${filePath.split("/").pop()} in Log Monitor`);
-  }, [layout.rightSidebarVisible, toggleRightSidebar]);
+    toast.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
+  }, [layout.rightSidebarVisible, toggleRightSidebar, t]);
 
   // Handler: open a remote file in a new Tauri window.
   // The window is centered on whichever monitor the parent window currently
@@ -976,12 +1010,12 @@ function AppContent() {
         decorations: true,
       });
       win.once('tauri://error', (e) => {
-        toast.error('Failed to open file window', { description: String(e.payload) });
+        toast.error(t('app.failedToOpenWindow'), { description: String(e.payload) });
       });
     }).catch((err: unknown) => {
-      toast.error('Could not open file window', { description: String(err) });
+      toast.error(t('app.couldNotOpenWindow'), { description: String(err) });
     });
-  }, [activeConnection]);
+  }, [activeConnection, t]);
 
   const handleConnectionDialogConnect = useCallback(async (config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
@@ -1036,7 +1070,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1059,7 +1093,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1097,7 +1131,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1146,7 +1180,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error('Connection Failed', {
+          toast.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1164,7 +1198,7 @@ function AppContent() {
         dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
       }
     }
-  }, [allTabs, state.groups, state.activeGroupId, dispatch]);
+  }, [allTabs, state.groups, state.activeGroupId, dispatch, t]);
 
   const handleOpenSettings = useCallback(() => {
     setSettingsModalOpen(true);
@@ -1312,8 +1346,8 @@ function AppContent() {
         ftpsEnabled: connectionData.ftpsEnabled,
       };
       await handleConnectionDialogConnect(config);
-      toast.success('Quick Connected', {
-        description: `Connected to ${connectionData.name}`,
+      toast.success(t('app.quickConnected'), {
+        description: t('app.quickConnectedDesc', { name: connectionData.name }),
       });
     } else {
       // SSH quick connect (existing behavior)
@@ -1352,12 +1386,12 @@ function AppContent() {
 
           handleConnectionDialogConnect(config);
 
-          toast.success('Quick Connected', {
-            description: `Connected to ${connectionData.name}`,
+          toast.success(t('app.quickConnected'), {
+            description: t('app.quickConnectedDesc', { name: connectionData.name }),
           });
         } else {
           console.error('Quick connect failed:', result.error);
-          toast.error('Connection Failed', {
+          toast.error(t('app.connectionFailed'), {
             description: result.error || 'Unable to connect. Please try again.',
           });
           setEditingConnection({
@@ -1373,12 +1407,12 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Quick connect error:', error);
-        toast.error('Connection Error', {
-          description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+        toast.error(t('app.connectionError'), {
+          description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
         });
       }
     }
-  }, [allTabs, handleTabSelect, handleConnectionDialogConnect]);
+  }, [allTabs, handleTabSelect, handleConnectionDialogConnect, t]);
 
   // Derive active connection info for StatusBar (compatible format)
   const statusBarConnection = activeConnection ? {
@@ -1388,12 +1422,9 @@ function AppContent() {
     status: activeConnection.status,
   } : undefined;
 
-  const restoringPercent = useMemo(() => {
-    if (!restoringProgress.total) {
-      return 0;
-    }
-    return Math.min(100, Math.round((restoringProgress.current / restoringProgress.total) * 100));
-  }, [restoringProgress]);
+  const restoringPercent = !restoringProgress.total
+    ? 0
+    : Math.min(100, Math.round((restoringProgress.current / restoringProgress.total) * 100));
 
   const restoreHighlights = useMemo(() => (
     [
@@ -1516,6 +1547,7 @@ function AppContent() {
         }}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
+        closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
         hasActiveConnection={!!activeTab}
         canPaste={true}
         onToggleLeftSidebar={toggleLeftSidebar}
@@ -1627,16 +1659,16 @@ function AppContent() {
                 onResize={(size) => setRightSidebarSize(size)}
               >
                 <Tabs value={rightSidebarTab} onValueChange={setRightSidebarTab} className="h-full flex flex-col">
-                  <TabsList className="inline-flex w-auto mx-2 mt-2">
-                    <TabsTrigger value="monitor" className="text-xs px-2">Monitor</TabsTrigger>
-                    <TabsTrigger value="logs" className="text-xs px-2">Logs</TabsTrigger>
+                  <TabsList className="inline-flex w-auto mx-1 mt-2">
+                    <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
+                    <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
                     <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <div className="h-full overflow-auto p-2">
+                      <div className="h-full overflow-hidden px-1 py-2">
                         {activeConnection ? (
-                          <ErrorBoundary label="System Monitor">
+                          <ErrorBoundary label={t('app.systemMonitor')}>
                             <SystemMonitor connectionId={activeConnection.connectionId} />
                           </ErrorBoundary>
                         ) : null}
@@ -1645,7 +1677,7 @@ function AppContent() {
 
                     <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       {activeConnection ? (
-                        <ErrorBoundary label="Log Monitor">
+                        <ErrorBoundary label={t('app.logMonitor')}>
                           <LogMonitor
                             connectionId={activeConnection.connectionId}
                             externalLogPath={externalLogPath}
@@ -1679,6 +1711,7 @@ function AppContent() {
           // Appearance changes are handled by individual PtyTerminal instances
           // via their own settings listeners in TerminalGroupView
         }}
+        onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />
 
       <Toaster richColors position="top-right" />

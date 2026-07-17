@@ -7,6 +7,8 @@
  * Flow: Configure → Compare → Review → Sync
  */
 import React, { useState, useCallback, useRef } from "react";
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import {
@@ -96,20 +98,20 @@ function actionIcon(action: SyncEntry["action"]) {
   }
 }
 
-function actionLabel(action: SyncEntry["action"]): string {
+function actionLabel(action: SyncEntry["action"], t: TFunction<"translation", undefined>): string {
   switch (action) {
     case "upload":
-      return "Upload";
+      return t('syncDialog.actionUpload');
     case "download":
-      return "Download";
+      return t('syncDialog.actionDownload');
     case "create-dir":
-      return "Create Dir";
+      return t('syncDialog.actionCreateDir');
     case "delete-remote":
-      return "Delete";
+      return t('syncDialog.actionDelete');
     case "skip":
-      return "Identical";
+      return t('syncDialog.actionIdentical');
     case "conflict":
-      return "Conflict";
+      return t('syncDialog.actionConflict');
   }
 }
 
@@ -127,6 +129,7 @@ export function SyncDialog({
   onDeleteRemoteItem,
   onSyncComplete,
 }: SyncDialogProps) {
+  const { t } = useTranslation();
   // Config
   const [config, setConfig] = useState<SyncConfig>({ ...DEFAULT_SYNC_CONFIG });
   const [excludeInput, setExcludeInput] = useState(
@@ -227,7 +230,7 @@ export function SyncDialog({
       setCompared(true);
       setProgress((p) => ({ ...p, phase: "completed" }));
     } catch (err) {
-      toast.error("Comparison failed", {
+      toast.error(t('syncDialog.comparisonFailed'), {
         description: err instanceof Error ? err.message : String(err),
       });
       setProgress((p) => ({
@@ -250,7 +253,7 @@ export function SyncDialog({
   const handleSync = useCallback(async () => {
     const checkedEntries = entries.filter((e) => e.checked);
     if (checkedEntries.length === 0) {
-      toast.info("No items selected for sync");
+      toast.info(t('syncDialog.noItemsSelected'));
       return;
     }
 
@@ -286,7 +289,7 @@ export function SyncDialog({
     for (const entry of sorted) {
       if (cancelRef.current) {
         setProgress((p) => ({ ...p, phase: "cancelled" }));
-        toast.info("Sync cancelled");
+        toast.info(t('syncDialog.syncCancelled'));
         return;
       }
 
@@ -447,7 +450,7 @@ export function SyncDialog({
           <div className="flex items-center gap-4 flex-wrap">
             {/* Direction */}
             <div className="flex items-center gap-2">
-              <Label className="text-xs whitespace-nowrap">Direction</Label>
+              <Label className="text-xs whitespace-nowrap">{t('syncDialog.direction')}</Label>
               <Select
                 value={config.direction}
                 onValueChange={(v) =>
@@ -537,7 +540,11 @@ export function SyncDialog({
             <Label className="text-xs whitespace-nowrap">Exclude</Label>
             <input
               className="flex-1 h-7 text-xs bg-muted/50 rounded px-2 outline-none placeholder:text-muted-foreground/50"
-              placeholder=".git, node_modules, *.log"
+              placeholder={t('syncDialog.excludePlaceholder')}
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               value={excludeInput}
               onChange={(e) => setExcludeInput(e.target.value)}
               disabled={isBusy}
@@ -717,7 +724,7 @@ export function SyncDialog({
                           <div className="flex items-center justify-center gap-1">
                             {actionIcon(entry.action)}
                             <span className="text-[10px]">
-                              {actionLabel(entry.action)}
+                              {actionLabel(entry.action, t)}
                             </span>
                           </div>
                         </td>

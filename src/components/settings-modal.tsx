@@ -1,4 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
+import { changeLanguage, getLanguagePreference, AUTO } from '@/lib/i18n';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -19,25 +22,59 @@ import {
   Monitor,
   Image,
   Upload,
-  X
+  Download,
+  X,
+  RefreshCw,
+  Code2,
+  ChevronLeft,
+  ChevronRight,
+  AlertTriangle
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
   defaultAppearanceSettings, 
   loadAppearanceSettings,
   saveAppearanceSettings,
-  terminalThemes 
+  terminalThemes,
+  MIN_TERMINAL_SCROLLBACK,
+  MAX_TERMINAL_SCROLLBACK,
 } from '../lib/terminal-config';
+import {
+  APP_SETTINGS_CHANGED_EVENT,
+  APP_SETTINGS_STORAGE_KEY,
+  DEFAULT_APP_KEYBOARD_SHORTCUTS,
+  loadKeyboardShortcutSettings,
+} from '../lib/keyboard-shortcuts';
 import { applyTheme, ThemeMode } from '../lib/utils';
+import {
+  loadEditorConfig,
+  saveEditorConfig,
+  dispatchEditorConfigChanged,
+  DEFAULT_EDITOR_CONFIG,
+  EDITOR_THEMES,
+  type EditorConfig,
+} from '@/lib/editor-config';
+import {
+  exportAllConfig,
+  importAllConfig,
+} from '@/lib/config-export-import';
+import { Checkbox } from './ui/checkbox';
 
 interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAppearanceChange?: (settings: TerminalAppearanceSettings) => void;
+  onCheckForUpdates?: () => void;
 }
 
-export function SettingsModal({ open, onOpenChange, onAppearanceChange }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckForUpdates }: SettingsModalProps) {
+  const { t } = useTranslation();
+  const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
+  const [editorConfig, setEditorConfig] = useState<EditorConfig>(DEFAULT_EDITOR_CONFIG);
+  const [importMerge, setImportMerge] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   
   const [settings, setSettings] = useState({
     // Terminal settings
@@ -66,10 +103,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     enableNotifications: true,
     
     // Keyboard shortcuts
-    newSession: 'Ctrl+N',
-    closeSession: 'Ctrl+W',
-    nextTab: 'Ctrl+Tab',
-    previousTab: 'Ctrl+Shift+Tab',
+    newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+    closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
+    nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
+    previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
     
     // Advanced settings
     logLevel: 'info',
@@ -83,19 +120,75 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     if (open) {
       const appearance = loadAppearanceSettings();
       setTerminalAppearance(appearance);
+      setEditorConfig(loadEditorConfig());
       
       // Load other settings from localStorage
       try {
-        const savedSettings = localStorage.getItem('sshClientSettings');
+        const savedSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
         if (savedSettings) {
           const parsed = JSON.parse(savedSettings);
-          setSettings(prev => ({ ...prev, ...parsed }));
+          const keyboardShortcuts = loadKeyboardShortcutSettings();
+          setSettings(prev => ({
+            ...prev,
+            ...parsed,
+            closeSession: keyboardShortcuts.closeTab,
+            nextTab: keyboardShortcuts.nextTab,
+            previousTab: keyboardShortcuts.prevTab,
+          }));
         }
       } catch {
         // Ignore parsing errors
       }
     }
   }, [open]);
+
+  const handleExportConfig = async () => {
+    setIsExporting(true);
+    try {
+      const saved = await exportAllConfig();
+      if (saved) {
+        toast.success(t('settings.advanced.exportSuccess'));
+      } else {
+        toast.info(t('settings.advanced.exportCancelled'));
+      }
+    } catch (error) {
+      console.error('[export-config]', error);
+      toast.error(t('settings.advanced.exportFailed'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportConfig = async () => {
+    setIsImporting(true);
+    try {
+      const result = await importAllConfig(importMerge);
+      if (result) {
+        toast.success(t('settings.advanced.importSuccess'), {
+          description: t('settings.advanced.importSuccessDesc', {
+            connections: result.connections,
+            profiles: result.profiles,
+          }),
+        });
+        // Reload settings that may have changed
+        const appearance = loadAppearanceSettings();
+        setTerminalAppearance(appearance);
+        setEditorConfig(loadEditorConfig());
+        if (onAppearanceChange) onAppearanceChange(appearance);
+      } else {
+        toast.info(t('settings.advanced.importCancelled'));
+      }
+    } catch (error) {
+      console.error('[import-config]', error);
+      toast.error(t('settings.advanced.importFailed'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   const updateTerminalAppearance = <K extends keyof TerminalAppearanceSettings>(
     key: K, 
@@ -117,18 +210,24 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
       onAppearanceChange(terminalAppearance);
     }
     
+    // Save editor config and notify live editors
+    saveEditorConfig(editorConfig);
+    dispatchEditorConfigChanged();
+    
     // Apply the theme immediately
     applyTheme(settings.theme as ThemeMode);
     
     // Save other settings to localStorage
-    localStorage.setItem('sshClientSettings', JSON.stringify(settings));
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     onOpenChange(false);
   };
 
   const handleReset = () => {
-    if (confirm('Are you sure you want to reset all settings to defaults?')) {
+    if (confirm(t('settings.resetConfirm'))) {
       // Reset terminal appearance
       setTerminalAppearance(defaultAppearanceSettings);
+      setEditorConfig(DEFAULT_EDITOR_CONFIG);
       
       // Reset other settings to default values
       setSettings({
@@ -149,10 +248,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
         showSystemMonitor: true,
         showStatusBar: true,
         enableNotifications: true,
-        newSession: 'Ctrl+N',
-        closeSession: 'Ctrl+W',
-        nextTab: 'Ctrl+Tab',
-        previousTab: 'Ctrl+Shift+Tab',
+        newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+        closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
+        nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
+        previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
         logLevel: 'info',
         maxLogSize: 100,
         checkUpdates: true,
@@ -164,6 +263,62 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
     }
   };
 
+  // --- Scrollable tab bar logic ---
+  const tabListRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+  const [activeTab, setActiveTab] = useState('terminal');
+
+  const checkScroll = useCallback(() => {
+    const el = tabListRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 1);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const el = tabListRef.current;
+    if (!el) return;
+    checkScroll();
+    const observer = new ResizeObserver(checkScroll);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [open, checkScroll]);
+
+  // Auto-scroll to center the active tab
+  const scrollToActiveTab = useCallback(() => {
+    const el = tabListRef.current;
+    if (!el) return;
+    const activeTrigger = el.querySelector('[data-state="active"]') as HTMLElement | null;
+    if (!activeTrigger) return;
+    activeTrigger.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    // Slight delay so DOM has the active trigger rendered
+    const raf = requestAnimationFrame(scrollToActiveTab);
+    return () => cancelAnimationFrame(raf);
+  }, [activeTab, open, scrollToActiveTab]);
+
+  const scrollTabs = (dir: 'left' | 'right') => {
+    const el = tabListRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir === 'left' ? -150 : 150, behavior: 'smooth' });
+  };
+
+  // Tab definitions
+  const tabItems = [
+    { value: 'terminal', icon: TerminalIcon, labelKey: 'settings.tab.terminal' },
+    { value: 'editor', icon: Code2, labelKey: 'settings.tab.editor' },
+    { value: 'connection', icon: Network, labelKey: 'settings.tab.connection' },
+    { value: 'security', icon: Shield, labelKey: 'settings.tab.security' },
+    { value: 'interface', icon: Palette, labelKey: 'settings.tab.interface' },
+    { value: 'keyboard', icon: Keyboard, labelKey: 'settings.tab.keyboard' },
+    { value: 'advanced', icon: Monitor, labelKey: 'settings.tab.advanced' },
+  ] as const;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
@@ -173,75 +328,80 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
               <Settings className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <div>Settings & Preferences</div>
+              <div>{t('settings.title')}</div>
               <DialogDescription className="mt-1">
-                Customize your SSH client experience and preferences
+                {t('settings.description')}
               </DialogDescription>
             </div>
           </DialogTitle>
         </DialogHeader>
 
-        <Tabs defaultValue="terminal" className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="w-full justify-start rounded-none border-b bg-transparent h-auto p-0 px-4 gap-1 overflow-x-auto">
-            <TabsTrigger 
-              value="terminal" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
+          {/* Scrollable tab bar with fade edges and scroll arrows */}
+          <div className="relative border-b">
+            {/* Left scroll button */}
+            {canScrollLeft && (
+              <div className="absolute left-0 top-0 bottom-0 z-10 flex items-center pl-1 pr-6 bg-gradient-to-r from-background via-background/95 to-transparent pointer-events-none">
+                <button
+                  type="button"
+                  onClick={() => scrollTabs('left')}
+                  className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
+                  tabIndex={-1}
+                  aria-label="Scroll left"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5 text-foreground" />
+                </button>
+              </div>
+            )}
+
+            {/* Right scroll button */}
+            {canScrollRight && (
+              <div className="absolute right-0 top-0 bottom-0 z-10 flex items-center justify-end pr-1 pl-6 bg-gradient-to-l from-background via-background/95 to-transparent pointer-events-none">
+                <button
+                  type="button"
+                  onClick={() => scrollTabs('right')}
+                  className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
+                  tabIndex={-1}
+                  aria-label="Scroll right"
+                >
+                  <ChevronRight className="h-3.5 w-3.5 text-foreground" />
+                </button>
+              </div>
+            )}
+
+            <TabsList
+              ref={tabListRef}
+              className="w-full justify-start rounded-none bg-transparent h-auto p-0 px-4 gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden scroll-smooth"
+              onScroll={checkScroll}
             >
-              <TerminalIcon className="h-3.5 w-3.5" />
-              <span>Terminal</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="connection" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Network className="h-3.5 w-3.5" />
-              <span>Connection</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="security" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Shield className="h-3.5 w-3.5" />
-              <span>Security</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="interface" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Palette className="h-3.5 w-3.5" />
-              <span>Interface</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="keyboard" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Keyboard className="h-3.5 w-3.5" />
-              <span>Keyboard</span>
-            </TabsTrigger>
-            <TabsTrigger 
-              value="advanced" 
-              className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-            >
-              <Monitor className="h-3.5 w-3.5" />
-              <span>Advanced</span>
-            </TabsTrigger>
-          </TabsList>
+              {tabItems.map(({ value, icon: Icon, labelKey }) => (
+                <TabsTrigger
+                  key={value}
+                  value={value}
+                  className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  <span>{t(labelKey)}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
 
           <TabsContent value="terminal" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <TerminalIcon className="h-4 w-4" />
-                  Terminal Appearance
+                  {t('settings.terminal.appearance')}
                 </CardTitle>
                 <CardDescription>
-                  Configure how the terminal looks and behaves.
+                  {t('settings.terminal.appearanceDesc')}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Font Family</Label>
+                    <Label>{t('settings.terminal.fontFamily')}</Label>
                     <Select 
                       value={terminalAppearance.fontFamily} 
                       onValueChange={(value) => updateTerminalAppearance('fontFamily', value)}
@@ -261,7 +421,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Font Size: {terminalAppearance.fontSize}px</Label>
+                    <Label>{t('settings.terminal.fontSize', { size: terminalAppearance.fontSize })}</Label>
                     <Slider
                       value={[terminalAppearance.fontSize]}
                       onValueChange={([value]) => updateTerminalAppearance('fontSize', value)}
@@ -274,7 +434,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Line Height: {terminalAppearance.lineHeight}</Label>
+                    <Label>{t('settings.terminal.lineHeight', { height: terminalAppearance.lineHeight })}</Label>
                     <Slider
                       value={[terminalAppearance.lineHeight]}
                       onValueChange={([value]) => updateTerminalAppearance('lineHeight', value)}
@@ -284,7 +444,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Letter Spacing: {terminalAppearance.letterSpacing}px</Label>
+                    <Label>{t('settings.terminal.letterSpacing', { spacing: terminalAppearance.letterSpacing })}</Label>
                     <Slider
                       value={[terminalAppearance.letterSpacing]}
                       onValueChange={([value]) => updateTerminalAppearance('letterSpacing', value)}
@@ -297,7 +457,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Color Theme</Label>
+                    <Label>{t('settings.terminal.colorTheme')}</Label>
                     <Select 
                       value={terminalAppearance.theme} 
                       onValueChange={(value) => updateTerminalAppearance('theme', value)}
@@ -320,7 +480,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Cursor Style</Label>
+                    <Label>{t('settings.terminal.cursorStyle')}</Label>
                     <Select 
                       value={terminalAppearance.cursorStyle} 
                       onValueChange={(value: 'block' | 'underline' | 'bar') => updateTerminalAppearance('cursorStyle', value)}
@@ -329,32 +489,32 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="block">Block</SelectItem>
-                        <SelectItem value="underline">Underline</SelectItem>
-                        <SelectItem value="bar">Bar</SelectItem>
+                        <SelectItem value="block">{t('settings.cursor.block')}</SelectItem>
+                        <SelectItem value="underline">{t('settings.cursor.underline')}</SelectItem>
+                        <SelectItem value="bar">{t('settings.cursor.bar')}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Scrollback Lines: {terminalAppearance.scrollback.toLocaleString()}</Label>
+                  <Label>{t('settings.terminal.scrollbackLines', { count: terminalAppearance.scrollback.toLocaleString() })}</Label>
                   <Slider
                     value={[terminalAppearance.scrollback]}
                     onValueChange={([value]) => updateTerminalAppearance('scrollback', value)}
-                    min={1000}
-                    max={100000}
+                    min={MIN_TERMINAL_SCROLLBACK}
+                    max={MAX_TERMINAL_SCROLLBACK}
                     step={1000}
                   />
                 </div>
 
                 <Separator />
 
-                <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Cursor Blink</Label>
+                    <Label>{t('settings.terminal.cursorBlink')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Enable cursor blinking animation
+                      {t('settings.terminal.cursorBlinkDesc')}
                     </p>
                   </div>
                   <Switch
@@ -365,9 +525,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Allow Transparency</Label>
+                    <Label>{t('settings.terminal.allowTransparency')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Enable transparent terminal background
+                      {t('settings.terminal.allowTransparencyDesc')}
                     </p>
                   </div>
                   <Switch
@@ -378,7 +538,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 {terminalAppearance.allowTransparency && (
                   <div className="space-y-2">
-                    <Label>Opacity: {terminalAppearance.opacity}%</Label>
+                    <Label>{t('settings.terminal.opacity', { opacity: terminalAppearance.opacity })}</Label>
                     <Slider
                       value={[terminalAppearance.opacity]}
                       onValueChange={([value]) => updateTerminalAppearance('opacity', value)}
@@ -395,7 +555,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                 <div className="space-y-4">
                   <div className="flex items-center gap-2">
                     <Image className="h-4 w-4" />
-                    <Label className="text-base font-medium">Background Image</Label>
+                    <Label className="text-base font-medium">{t('settings.terminal.backgroundImage')}</Label>
                   </div>
                   
                   <div className="flex items-center gap-3">
@@ -409,7 +569,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                         if (file) {
                           // Check file size (max 5MB)
                           if (file.size > 5 * 1024 * 1024) {
-                            alert('Image must be less than 5MB');
+                            alert(t('settings.terminal.imageSizeWarning'));
                             return;
                           }
                           const reader = new FileReader();
@@ -428,7 +588,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                       className="gap-2"
                     >
                       <Upload className="h-4 w-4" />
-                      {terminalAppearance.backgroundImage ? 'Change Image' : 'Upload Image'}
+                      {terminalAppearance.backgroundImage ? t('settings.terminal.changeImage') : t('settings.terminal.uploadImage')}
                     </Button>
                     {terminalAppearance.backgroundImage && (
                       <Button
@@ -438,7 +598,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                         className="gap-2 text-destructive hover:text-destructive"
                       >
                         <X className="h-4 w-4" />
-                        Remove
+                        {t('settings.terminal.remove')}
                       </Button>
                     )}
                   </div>
@@ -454,13 +614,12 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                           />
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          Background image will be displayed behind the terminal text.
-                          Adjust opacity and blur for better readability.
+                          {t('settings.terminal.imagePreviewDesc')}
                         </p>
                       </div>
 
                       <div className="space-y-2">
-                        <Label>Image Opacity: {terminalAppearance.backgroundImageOpacity}%</Label>
+                        <Label>{t('settings.terminal.imageOpacity', { opacity: terminalAppearance.backgroundImageOpacity })}</Label>
                         <Slider
                           value={[terminalAppearance.backgroundImageOpacity]}
                           onValueChange={([value]) => updateTerminalAppearance('backgroundImageOpacity', value)}
@@ -471,7 +630,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                       </div>
 
                       <div className="space-y-2">
-                        <Label>Image Blur: {terminalAppearance.backgroundImageBlur}px</Label>
+                        <Label>{t('settings.terminal.imageBlur', { blur: terminalAppearance.backgroundImageBlur })}</Label>
                         <Slider
                           value={[terminalAppearance.backgroundImageBlur]}
                           onValueChange={([value]) => updateTerminalAppearance('backgroundImageBlur', value)}
@@ -482,7 +641,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                       </div>
 
                       <div className="space-y-2">
-                        <Label>Image Position</Label>
+                        <Label>{t('settings.terminal.imagePosition')}</Label>
                         <Select 
                           value={terminalAppearance.backgroundImagePosition} 
                           onValueChange={(value: 'cover' | 'contain' | 'center' | 'tile') => updateTerminalAppearance('backgroundImagePosition', value)}
@@ -491,10 +650,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="cover">Cover (fill & crop)</SelectItem>
-                            <SelectItem value="contain">Contain (fit inside)</SelectItem>
-                            <SelectItem value="center">Center (original size)</SelectItem>
-                            <SelectItem value="tile">Tile (repeat)</SelectItem>
+                            <SelectItem value="cover">{t('settings.imagePosition.cover')}</SelectItem>
+                            <SelectItem value="contain">{t('settings.imagePosition.contain')}</SelectItem>
+                            <SelectItem value="center">{t('settings.imagePosition.center')}</SelectItem>
+                            <SelectItem value="tile">{t('settings.imagePosition.tile')}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -543,21 +702,163 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
             </Card>
           </TabsContent>
 
-          <TabsContent value="connection" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+          <TabsContent value="editor" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Network className="h-4 w-4" />
-                  Connection Settings
+                  <Code2 className="h-4 w-4" />
+                  {t('settings.editor.title')}
                 </CardTitle>
                 <CardDescription>
-                  Configure default connection behavior and timeouts.
+                  {t('settings.editor.desc')}
                 </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Theme & Font */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.theme')}</Label>
+                    <Select
+                      value={editorConfig.theme}
+                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, theme: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {EDITOR_THEMES.map(theme => (
+                          <SelectItem key={theme.id} value={theme.id}>{theme.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.fontFamily')}</Label>
+                    <Select
+                      value={editorConfig.fontFamily}
+                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, fontFamily: value }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="'JetBrains Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace">JetBrains Mono</SelectItem>
+                        <SelectItem value="'Fira Code', Menlo, Monaco, 'Courier New', monospace">Fira Code</SelectItem>
+                        <SelectItem value="'Source Code Pro', Menlo, Monaco, 'Courier New', monospace">Source Code Pro</SelectItem>
+                        <SelectItem value="Menlo, Monaco, 'Courier New', monospace">Menlo</SelectItem>
+                        <SelectItem value="Consolas, monospace">Consolas</SelectItem>
+                        <SelectItem value="Monaco, monospace">Monaco</SelectItem>
+                        <SelectItem value="'Courier New', monospace">Courier New</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.fontSize', { size: editorConfig.fontSize })}</Label>
+                    <Slider
+                      value={[editorConfig.fontSize]}
+                      onValueChange={([value]) => setEditorConfig(prev => ({ ...prev, fontSize: value }))}
+                      min={10}
+                      max={28}
+                      step={1}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t('settings.editor.tabSize', { size: editorConfig.tabSize })}</Label>
+                    <Select
+                      value={String(editorConfig.tabSize)}
+                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, tabSize: Number(value) }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="2">2 spaces</SelectItem>
+                        <SelectItem value="4">4 spaces</SelectItem>
+                        <SelectItem value="8">8 spaces</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Toggle options */}
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.lineNumbers')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.lineNumbersDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.lineNumbers}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, lineNumbers: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.wordWrap')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.wordWrapDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.wordWrap}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, wordWrap: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.highlightActiveLine')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.highlightActiveLineDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.highlightActiveLine}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, highlightActiveLine: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.foldGutter')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.foldGutterDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.foldGutter}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, foldGutter: checked }))}
+                  />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.editor.bracketMatching')}</Label>
+                    <p className="text-sm text-muted-foreground">{t('settings.editor.bracketMatchingDesc')}</p>
+                  </div>
+                  <Switch
+                    checked={editorConfig.bracketMatching}
+                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, bracketMatching: checked }))}
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="connection" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+            <Card>
+              <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Network className="h-4 w-4" />
+                    {t('settings.connection.title')}
+                  </CardTitle>
+                  <CardDescription>
+                    {t('settings.connection.desc')}
+                  </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Default Protocol</Label>
+                    <Label>{t('settings.connection.defaultProtocol')}</Label>
                     <Select value={settings.defaultProtocol} onValueChange={(value) => updateSetting('defaultProtocol', value)}>
                       <SelectTrigger>
                         <SelectValue />
@@ -570,7 +871,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Connection Timeout: {settings.connectionTimeout}s</Label>
+                    <Label>{t('settings.connection.connectionTimeout', { timeout: settings.connectionTimeout })}</Label>
                     <Slider
                       value={[settings.connectionTimeout]}
                       onValueChange={([value]) => updateSetting('connectionTimeout', value)}
@@ -582,7 +883,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Keep Alive Interval: {settings.keepAliveInterval}s</Label>
+                  <Label>{t('settings.connection.keepAliveInterval', { interval: settings.keepAliveInterval })}</Label>
                   <Slider
                     value={[settings.keepAliveInterval]}
                     onValueChange={([value]) => updateSetting('keepAliveInterval', value)}
@@ -594,9 +895,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Auto Reconnect</Label>
+                    <Label>{t('settings.connection.autoReconnect')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Automatically reconnect when connection is lost
+                      {t('settings.connection.autoReconnectDesc')}
                     </p>
                   </div>
                   <Switch
@@ -611,20 +912,20 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
           <TabsContent value="security" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Shield className="h-4 w-4" />
-                  Security Settings
-                </CardTitle>
-                <CardDescription>
-                  Configure security options and authentication settings.
-                </CardDescription>
+                  <CardTitle className="flex items-center gap-2">
+                    <Shield className="h-4 w-4" />
+                    {t('settings.security.title')}
+                  </CardTitle>
+                  <CardDescription>
+                    {t('settings.security.desc')}
+                  </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Host Key Verification</Label>
+                    <Label>{t('settings.security.hostKeyVerification')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Verify SSH host keys for enhanced security
+                      {t('settings.security.hostKeyVerificationDesc')}
                     </p>
                   </div>
                   <Switch
@@ -637,9 +938,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Save Passwords</Label>
+                    <Label>{t('settings.security.savePasswords')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Store passwords locally (encrypted)
+                      {t('settings.security.savePasswordsDesc')}
                     </p>
                   </div>
                   <Switch
@@ -649,7 +950,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Auto Lock Timeout: {settings.autoLockTimeout} minutes</Label>
+                  <Label>{t('settings.security.autoLockTimeout', { timeout: settings.autoLockTimeout })}</Label>
                   <Slider
                     value={[settings.autoLockTimeout]}
                     onValueChange={([value]) => updateSetting('autoLockTimeout', value)}
@@ -658,7 +959,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     step={5}
                   />
                   <p className="text-sm text-muted-foreground">
-                    Automatically lock the application after this period of inactivity
+                    {t('settings.security.autoLockTimeoutDesc')}
                   </p>
                 </div>
               </CardContent>
@@ -668,17 +969,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
           <TabsContent value="interface" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Palette className="h-4 w-4" />
-                  Interface Settings
-                </CardTitle>
-                <CardDescription>
-                  Customize the application interface and panels.
-                </CardDescription>
+                  <CardTitle className="flex items-center gap-2">
+                    <Palette className="h-4 w-4" />
+                    {t('settings.interface.title')}
+                  </CardTitle>
+                  <CardDescription>
+                    {t('settings.interface.desc')}
+                  </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Application Theme</Label>
+                  <Label>{t('settings.interface.appTheme')}</Label>
                   <Select 
                     value={settings.theme} 
                     onValueChange={(value) => {
@@ -691,20 +992,40 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="dark">Dark</SelectItem>
-                      <SelectItem value="light">Light</SelectItem>
-                      <SelectItem value="auto">Auto (System)</SelectItem>
+                      <SelectItem value="dark">{t('settings.theme.dark')}</SelectItem>
+                      <SelectItem value="light">{t('settings.theme.light')}</SelectItem>
+                      <SelectItem value="auto">{t('settings.theme.auto')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
 
                 <Separator />
+                <div className="space-y-2">
+                  <Label>{t('settings.language.label')}</Label>
+                  <Select
+                    value={languagePref}
+                    onValueChange={(value) => {
+                      setLanguagePref(value);
+                      void changeLanguage(value);
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={AUTO}>{t('settings.language.auto')}</SelectItem>
+                      <SelectItem value="en">{t('settings.language.en')}</SelectItem>
+                      <SelectItem value="zh-CN">{t('settings.language.zhCN')}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Separator />
 
                 <div className="space-y-4">
-                  <Label>Panel Visibility</Label>
+                  <Label>{t('settings.interface.panelVisibility')}</Label>
                   
                   <div className="flex items-center justify-between">
-                    <span>Connection Manager</span>
+                    <span>{t('settings.interface.connectionManager')}</span>
                     <Switch
                       checked={settings.showConnectionManager}
                       onCheckedChange={(checked) => updateSetting('showConnectionManager', checked)}
@@ -712,7 +1033,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                   </div>
                   
                   <div className="flex items-center justify-between">
-                    <span>System Monitor</span>
+                    <span>{t('settings.interface.systemMonitor')}</span>
                     <Switch
                       checked={settings.showSystemMonitor}
                       onCheckedChange={(checked) => updateSetting('showSystemMonitor', checked)}
@@ -720,7 +1041,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                   </div>
                   
                   <div className="flex items-center justify-between">
-                    <span>Status Bar</span>
+                    <span>{t('settings.interface.statusBar')}</span>
                     <Switch
                       checked={settings.showStatusBar}
                       onCheckedChange={(checked) => updateSetting('showStatusBar', checked)}
@@ -732,9 +1053,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Enable Notifications</Label>
+                    <Label>{t('settings.interface.enableNotifications')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Show system notifications for important events
+                      {t('settings.interface.enableNotificationsDesc')}
                     </p>
                   </div>
                   <Switch
@@ -749,18 +1070,18 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
           <TabsContent value="keyboard" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Keyboard className="h-4 w-4" />
-                  Keyboard Shortcuts
-                </CardTitle>
-                <CardDescription>
-                  Customize keyboard shortcuts for common actions.
-                </CardDescription>
+                  <CardTitle className="flex items-center gap-2">
+                    <Keyboard className="h-4 w-4" />
+                    {t('settings.keyboard.title')}
+                  </CardTitle>
+                  <CardDescription>
+                    {t('settings.keyboard.desc')}
+                  </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>New Session</Label>
+                    <Label>{t('settings.keyboard.newSession')}</Label>
                     <Input
                       value={settings.newSession}
                       onChange={(e) => updateSetting('newSession', e.target.value)}
@@ -768,18 +1089,18 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Close Session</Label>
+                    <Label>{t('settings.keyboard.closeSession')}</Label>
                     <Input
                       value={settings.closeSession}
                       onChange={(e) => updateSetting('closeSession', e.target.value)}
-                      placeholder="Ctrl+W"
+                      placeholder={DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession}
                     />
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Next Tab</Label>
+                    <Label>{t('settings.keyboard.nextTab')}</Label>
                     <Input
                       value={settings.nextTab}
                       onChange={(e) => updateSetting('nextTab', e.target.value)}
@@ -787,7 +1108,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label>Previous Tab</Label>
+                    <Label>{t('settings.keyboard.previousTab')}</Label>
                     <Input
                       value={settings.previousTab}
                       onChange={(e) => updateSetting('previousTab', e.target.value)}
@@ -798,7 +1119,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="p-4 bg-muted rounded-lg">
                   <p className="text-sm text-muted-foreground">
-                    <strong>Note:</strong> Changes to keyboard shortcuts will take effect after restarting the application.
+                    {t('settings.keyboard.note')}
                   </p>
                 </div>
               </CardContent>
@@ -808,32 +1129,32 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
           <TabsContent value="advanced" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Monitor className="h-4 w-4" />
-                  Advanced Settings
-                </CardTitle>
-                <CardDescription>
-                  Configure advanced options and diagnostic settings.
-                </CardDescription>
+                  <CardTitle className="flex items-center gap-2">
+                    <Monitor className="h-4 w-4" />
+                    {t('settings.advanced.title')}
+                  </CardTitle>
+                  <CardDescription>
+                    {t('settings.advanced.desc')}
+                  </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Log Level</Label>
+                    <Label>{t('settings.advanced.logLevel')}</Label>
                     <Select value={settings.logLevel} onValueChange={(value) => updateSetting('logLevel', value)}>
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="error">Error</SelectItem>
-                        <SelectItem value="warn">Warning</SelectItem>
-                        <SelectItem value="info">Info</SelectItem>
-                        <SelectItem value="debug">Debug</SelectItem>
+                        <SelectItem value="error">{t('settings.logLevel.error')}</SelectItem>
+                        <SelectItem value="warn">{t('settings.logLevel.warn')}</SelectItem>
+                        <SelectItem value="info">{t('settings.logLevel.info')}</SelectItem>
+                        <SelectItem value="debug">{t('settings.logLevel.debug')}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
                   <div className="space-y-2">
-                    <Label>Max Log Size: {settings.maxLogSize}MB</Label>
+                    <Label>{t('settings.advanced.maxLogSize', { size: settings.maxLogSize })}</Label>
                     <Slider
                       value={[settings.maxLogSize]}
                       onValueChange={([value]) => updateSetting('maxLogSize', value)}
@@ -848,28 +1169,119 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Check for Updates</Label>
+                    <Label>{t('settings.advanced.checkUpdates')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Automatically check for application updates
+                      {t('settings.advanced.checkUpdatesDesc')}
                     </p>
                   </div>
-                  <Switch
-                    checked={settings.checkUpdates}
-                    onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
-                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        onCheckForUpdates?.();
+                        // Close the modal so the update dialog / toast is not obscured.
+                        onOpenChange(false);
+                      }}
+                      className="gap-1.5"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      {t('settings.advanced.checkNow')}
+                    </Button>
+                    <Switch
+                      checked={settings.checkUpdates}
+                      onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
+                    />
+                  </div>
                 </div>
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>Enable Telemetry</Label>
+                    <Label>{t('settings.advanced.enableTelemetry')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      Help improve the application by sending anonymous usage data
+                      {t('settings.advanced.enableTelemetryDesc')}
                     </p>
                   </div>
                   <Switch
                     checked={settings.telemetry}
                     onCheckedChange={(checked) => updateSetting('telemetry', checked)}
                   />
+                </div>
+
+                <Separator />
+
+                {/* Config Backup Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Monitor className="h-4 w-4" />
+                    <Label className="text-base font-medium">{t('settings.advanced.configBackup')}</Label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {t('settings.advanced.configBackupDesc')}
+                  </p>
+
+                  {/* Warning about passwords */}
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                    <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                      {t('settings.advanced.passwordWarning')}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {t('settings.advanced.exportConfigDesc')}
+                        </p>
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleExportConfig}
+                        disabled={isExporting || isImporting}
+                        className="gap-1.5 flex-shrink-0"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        {t('settings.advanced.exportConfig')}
+                      </Button>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                      <div className="space-y-0.5">
+                        <p className="text-sm font-medium">{t('settings.advanced.importConfig')}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {t('settings.advanced.importConfigDesc')}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            id="import-merge"
+                            checked={importMerge}
+                            onCheckedChange={(checked) => setImportMerge(checked === true)}
+                          />
+                          <label
+                            htmlFor="import-merge"
+                            className="text-xs text-muted-foreground cursor-pointer select-none"
+                          >
+                            {t('settings.advanced.mergeOption')}
+                          </label>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleImportConfig}
+                          disabled={isExporting || isImporting}
+                          className="gap-1.5"
+                        >
+                          <Upload className="h-3.5 w-3.5" />
+                          {t('settings.advanced.importConfig')}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -878,14 +1290,14 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange }: Settin
 
         <div className="flex justify-between px-6 py-4 border-t bg-muted/30">
           <Button variant="ghost" onClick={handleReset}>
-            Reset to Defaults
+            {t('settings.button.resetToDefaults')}
           </Button>
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button onClick={handleSave} className="min-w-[120px]">
-              Save Settings
+              {t('settings.button.save')}
             </Button>
           </div>
         </div>

@@ -1,39 +1,12 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, type KeyboardEvent } from 'react';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import { GroupTabBar } from './group-tab-bar';
-import { PtyTerminal } from '../pty-terminal';
-import { FileBrowserView } from '../file-browser-view';
-import { DesktopViewer } from '../desktop-viewer';
-import { FileEditorView } from '../file-editor-view';
+import { TerminalTabPortalHost } from './terminal-tab-portals';
 import { WelcomeScreen } from '../welcome-screen';
 
 interface TerminalGroupViewProps {
   groupId: string;
-}
-
-function useThemeKey(): number {
-  const [themeKey, setThemeKey] = useState(0);
-
-  useEffect(() => {
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        if (mutation.attributeName === 'class') {
-          setThemeKey((k) => k + 1);
-          break;
-        }
-      }
-    });
-
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class'],
-    });
-
-    return () => observer.disconnect();
-  }, []);
-
-  return themeKey;
 }
 
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
@@ -41,7 +14,6 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const { onDuplicateTab, onNewTab, onReconnectTab } = useTerminalCallbacks();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
-  const themeKey = useThemeKey();
 
   const handleMouseDown = useCallback(() => {
     if (!isActive) {
@@ -63,22 +35,8 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
     [dispatch, onReconnectTab],
   );
 
-  const handleConnectionStatusChange = useCallback(
-    (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => {
-      dispatch({ type: 'UPDATE_TAB_STATUS', tabId: connectionId, status });
-    },
-    [dispatch],
-  );
-
-  const handleTerminalOutput = useCallback(
-    (connectionId: string) => {
-      dispatch({ type: 'MARK_TAB_UNREAD_OUTPUT', tabId: connectionId });
-    },
-    [dispatch],
-  );
-
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: KeyboardEvent) => {
       // Don't intercept keys that originate from within the terminal.
       // xterm.js uses a hidden <textarea> for keyboard input; calling
       // preventDefault() here would block the character from reaching
@@ -95,7 +53,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         handleMouseDown();
       }
     },
-    [handleMouseDown]
+    [handleMouseDown],
   );
 
   if (!group) return null;
@@ -129,56 +87,11 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
           <WelcomeScreen onNewConnection={() => {}} onOpenSettings={() => {}} />
         ) : (
           group.tabs.map((tab) => (
-            <div
+            <TerminalTabPortalHost
               key={tab.id}
-              className="absolute inset-0"
-              style={{ display: tab.id === group.activeTabId ? 'block' : 'none' }}
-            >
-              {tab.tabType === 'desktop' ? (
-                <DesktopViewer
-                  connectionId={tab.id}
-                  connectionName={tab.name}
-                  host={tab.host}
-                  protocol={tab.protocol}
-                  isConnected={tab.connectionStatus === 'connected'}
-                  onReconnect={() => handleReconnect(tab.id)}
-                />
-              ) : tab.tabType === 'file-browser' ? (
-                <FileBrowserView
-                  connectionId={tab.id}
-                  connectionName={tab.name}
-                  host={tab.host}
-                  protocol={tab.protocol}
-                  isConnected={tab.connectionStatus === 'connected'}
-                  onReconnect={() => handleReconnect(tab.id)}
-                />
-              ) : tab.tabType === 'editor' && tab.editorFilePath && tab.editorConnectionId ? (
-                <FileEditorView
-                  connectionId={tab.editorConnectionId}
-                  filePath={tab.editorFilePath}
-                  fileName={tab.name}
-                  isConnected={tab.connectionStatus === 'connected'}
-                />
-              ) : tab.connectionStatus !== 'pending' ? (
-                <PtyTerminal
-                  key={`${tab.id}-${tab.reconnectCount}`}
-                  connectionId={tab.id}
-                  connectionName={tab.name}
-                  host={tab.host}
-                  username={tab.username}
-                  themeKey={themeKey}
-                  isActive={isActive && tab.id === group.activeTabId}
-                  onConnectionStatusChange={handleConnectionStatusChange}
-                  onOutput={tab.id === group.activeTabId ? undefined : handleTerminalOutput}
-                />
-              ) : (
-                <div className="h-full w-full flex items-center justify-center bg-muted/30">
-                  <div className="text-center text-muted-foreground">
-                    <div className="animate-pulse">Waiting for connection...</div>
-                  </div>
-                </div>
-              )}
-            </div>
+              tabId={tab.id}
+              isActive={tab.id === group.activeTabId}
+            />
           ))
         )}
       </div>

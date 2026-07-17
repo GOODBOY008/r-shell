@@ -3,6 +3,7 @@ use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
 use crate::ssh::{AuthMethod, SshConfig};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -457,6 +458,14 @@ pub async fn sftp_upload_file(
 }
 
 // File operation commands
+
+/// Escape a path for use inside a POSIX single-quoted shell argument.
+/// Single quotes cannot appear inside a single-quoted string, so we end the
+/// quote, emit the escaped quote, and reopen the quote: `'` → `'\''`.
+fn shell_escape_single_quoted(path: &str) -> String {
+    path.replace('\'', "'\\''")
+}
+
 #[tauri::command]
 pub async fn create_directory(
     connection_id: String,
@@ -469,7 +478,7 @@ pub async fn create_directory(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("mkdir -p '{}'", path);
+    let command = format!("mkdir -p '{}'", shell_escape_single_quoted(&path));
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -491,9 +500,9 @@ pub async fn delete_file(
 
     let client = connection.read().await;
     let command = if is_directory {
-        format!("rm -rf '{}'", path)
+        format!("rm -rf '{}'", shell_escape_single_quoted(&path))
     } else {
-        format!("rm -f '{}'", path)
+        format!("rm -f '{}'", shell_escape_single_quoted(&path))
     };
 
     match client.execute_command(&command).await {
@@ -515,7 +524,7 @@ pub async fn rename_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("mv '{}' '{}'", old_path, new_path);
+    let command = format!("mv '{}' '{}'", shell_escape_single_quoted(&old_path), shell_escape_single_quoted(&new_path));
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -565,6 +574,83 @@ pub async fn read_file_content(
         Ok(output) => Ok(output),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Response for `read_remote_file_base64`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Base64FileResponse {
+    pub data: String,
+    pub size: u64,
+    pub mime_type: String,
+}
+
+/// Read a remote file and return its content as base64 with an inferred MIME type.
+/// Used for image previews in the embedded file viewer. Refuses files > 20 MB.
+#[tauri::command]
+pub async fn read_remote_file_base64(
+    connection_id: String,
+    path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<Base64FileResponse, String> {
+    let connection = state
+        .get_connection(&connection_id)
+        .await
+        .ok_or("Connection not found")?;
+
+    let client = connection.read().await;
+
+    // Refuse very large files to avoid memory / performance issues
+    let size_cmd = format!("stat -c '%s' '{}' 2>/dev/null || stat -f '%z' '{}'", path, path);
+    let size_str = client
+        .execute_command(&size_cmd)
+        .await
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let file_size: u64 = size_str.parse().unwrap_or(0);
+    if file_size > 20 * 1024 * 1024 {
+        return Err(format!(
+            "File too large for preview ({} MB). Download it first to open with your local application.",
+            file_size / (1024 * 1024)
+        ));
+    }
+
+    // Read raw bytes via `cat` then base64-encode on the remote side.
+    // `base64 -w0` (GNU) disables line wrapping; on macOS `base64` wraps by default,
+    // so we pipe through `tr -d '\n'` as a portable fallback.
+    let b64_cmd = format!(
+        "base64 -w0 '{}' 2>/dev/null || base64 '{}' | tr -d '\\n'",
+        path, path
+    );
+    let b64_data = client
+        .execute_command(&b64_cmd)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Infer MIME type from extension
+    let ext = path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "tiff" | "tif" => "image/tiff",
+        "avif" => "image/avif",
+        _ => "application/octet-stream",
+    };
+
+    Ok(Base64FileResponse {
+        data: b64_data.trim().to_string(),
+        size: file_size,
+        mime_type: mime.to_string(),
+    })
 }
 
 #[tauri::command]
@@ -2642,6 +2728,55 @@ pub async fn open_in_os(path: String) -> Result<(), String> {
     open::that(&path).map_err(|e| format!("Failed to open '{}': {}", path, e))
 }
 
+/// Metadata for a local path. Returned by `stat_local_path` so the frontend can
+/// cheaply decide (without recursing) whether a dropped filesystem entry is a
+/// file or a directory before building an upload plan.
+///
+/// `is_symlink` is true iff the path itself is a symlink (we read the link's own
+/// metadata). `is_directory` / `size` follow the link's target; if the target is
+/// missing (broken link or network share down) we fall back to the link's own
+/// metadata so `exists` stays true and the path is treated as a file (size 0).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalPathStat {
+    pub exists: bool,
+    pub is_directory: bool,
+    pub is_symlink: bool,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub async fn stat_local_path(path: String) -> Result<LocalPathStat, String> {
+    use std::fs;
+    let p = std::path::Path::new(&path);
+    // `symlink_metadata` never follows the link — works on Windows without the
+    // SE_CREATE_SYMBOLIC_LINK privilege.
+    let sym = match fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(_) => {
+            return Ok(LocalPathStat {
+                exists: false,
+                is_directory: false,
+                is_symlink: false,
+                size: 0,
+            })
+        }
+    };
+    let is_symlink = sym.file_type().is_symlink();
+    // Follow the link; if the target is missing (broken link, unmounted share,
+    // etc.) fall back to the link's own metadata so `exists` stays true and we
+    // still surface the entry as a (zero-byte) file to the upload pipeline.
+    let md = match fs::metadata(p) {
+        Ok(m) => m,
+        Err(_) => sym,
+    };
+    Ok(LocalPathStat {
+        exists: true,
+        is_directory: md.is_dir(),
+        is_symlink,
+        size: if md.is_file() { md.len() } else { 0 },
+    })
+}
+
 // ========== Directory Synchronization ==========
 
 /// A file entry with a relative path (used for recursive listing comparisons).
@@ -2661,6 +2796,14 @@ pub async fn list_local_files_recursive(
     exclude_patterns: Vec<String>,
 ) -> Result<Vec<SyncFileEntry>, String> {
     use std::fs;
+
+    fn relative_path_to_string(path: &std::path::Path) -> String {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .filter(|component| !component.is_empty())
+            .collect::<Vec<_>>()
+            .join("/")
+    }
 
     fn walk_dir(
         base: &std::path::Path,
@@ -2692,8 +2835,8 @@ pub async fn list_local_files_recursive(
                 .path()
                 .strip_prefix(base)
                 .unwrap_or(item.path().as_path())
-                .to_string_lossy()
-                .to_string();
+                .to_path_buf();
+            let rel_path = relative_path_to_string(&rel_path);
 
             let file_type = if metadata.is_dir() {
                 FileEntryType::Directory
@@ -3013,6 +3156,40 @@ pub async fn desktop_resize(
     c.resize(width, height).await.map_err(|e| e.to_string())
 }
 
+// ========== Native Menu i18n ==========
+
+/// Rebuild the native macOS menu bar with translated labels from the frontend.
+/// On non-macOS platforms this is a no-op.
+#[tauri::command]
+pub async fn update_menu_language(
+    app: tauri::AppHandle,
+    translations: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let menu = crate::build_app_menu(&app, move |key: &str| {
+            translations
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| crate::default_menu_text(key))
+        })
+        .map_err(|e| e.to_string())?;
+        app.set_menu(menu).map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, translations);
+    }
+    Ok(())
+}
+
+/// Return the OS-level locale string (e.g. "en-US", "zh-CN").
+/// Used on first run to match the app language to the user's system preference.
+#[tauri::command]
+pub fn get_system_locale() -> Result<String, String> {
+    sys_locale::get_locale().ok_or_else(|| "Failed to detect system locale".to_string())
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]
@@ -3101,6 +3278,26 @@ mod local_fs_tests {
         let result = create_local_directory(new_dir.clone()).await;
         assert!(result.is_ok());
         assert!(std::path::Path::new(&new_dir).is_dir());
+    }
+
+    #[tokio::test]
+    async fn test_list_local_files_recursive_returns_portable_relative_paths() {
+        let dir = create_test_dir();
+        let path = dir.path().to_string_lossy().to_string();
+        let entries = list_local_files_recursive(path, vec![]).await.unwrap();
+        let relative_paths: Vec<&str> = entries
+            .iter()
+            .map(|entry| entry.relative_path.as_str())
+            .collect();
+
+        assert!(relative_paths.contains(&"subdir/nested.txt"));
+        assert!(
+            relative_paths
+                .iter()
+                .all(|relative_path| !relative_path.contains('\\')),
+            "relative paths should use forward slashes: {:?}",
+            relative_paths
+        );
     }
 
     #[test]

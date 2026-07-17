@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -83,6 +84,7 @@ export function ConnectionManager({
   recentConnections = [],
   onQuickConnect,
 }: ConnectionManagerProps) {
+  const { t } = useTranslation();
   // Load connections from storage
   const loadConnections = (): ConnectionNode[] => {
     const tree = ConnectionStorageManager.buildConnectionTree(activeConnections);
@@ -113,12 +115,12 @@ export function ConnectionManager({
   const handleDelete = (connectionId: string) => {
     if (ConnectionStorageManager.deleteConnection(connectionId)) {
       setConnections(loadConnections());
-      toast.success('Connection deleted');
+      toast.success(t('connectionManager.connectionDeleted'));
       if (onDeleteConnection) {
         onDeleteConnection(connectionId);
       }
     } else {
-      toast.error('Failed to delete connection');
+      toast.error(t('connectionManager.failedToDeleteConnection'));
     }
   };
 
@@ -142,7 +144,7 @@ export function ConnectionManager({
           passphrase: connectionData.passphrase,
         });
         setConnections(loadConnections());
-        toast.success(`Duplicated: ${duplicated.name}`);
+        toast.success(t('connectionManager.duplicated', { name: duplicated.name }));
         if (onDuplicateConnection) {
           onDuplicateConnection(node);
         }
@@ -153,19 +155,19 @@ export function ConnectionManager({
   // Handle creating new folder
   const handleCreateFolder = () => {
     if (!newFolderName.trim()) {
-      toast.error('Folder name cannot be empty');
+      toast.error(t('connectionManager.folderNameEmpty'));
       return;
     }
 
     try {
       ConnectionStorageManager.createFolder(newFolderName.trim(), newFolderParentPath);
       setConnections(loadConnections());
-      toast.success(`Folder "${newFolderName}" created`);
+      toast.success(t('connectionManager.folderCreated', { name: newFolderName }));
       setNewFolderDialogOpen(false);
       setNewFolderName('');
       setNewFolderParentPath(undefined);
     } catch (_error) {
-      toast.error('Failed to create folder');
+      toast.error(t('connectionManager.failedToCreateFolder'));
     }
   };
 
@@ -175,11 +177,11 @@ export function ConnectionManager({
 
     if (ConnectionStorageManager.deleteFolder(folderToDelete.path, true)) {
       setConnections(loadConnections());
-      toast.success(`Folder "${folderToDelete.name}" deleted`);
+      toast.success(t('connectionManager.folderDeleted', { name: folderToDelete.name }));
       setDeleteFolderDialogOpen(false);
       setFolderToDelete(null);
     } else {
-      toast.error('Failed to delete folder');
+      toast.error(t('connectionManager.failedToDeleteFolder'));
     }
   };
 
@@ -192,7 +194,7 @@ export function ConnectionManager({
   // Handle renaming folder
   const handleRenameFolder = () => {
     if (!folderToRename || !renameFolderNewName.trim()) {
-      toast.error('Folder name cannot be empty');
+      toast.error(t('connectionManager.folderNameEmpty'));
       return;
     }
 
@@ -243,13 +245,12 @@ export function ConnectionManager({
       ConnectionStorageManager.deleteFolder(oldPath, true);
 
       setConnections(loadConnections());
-      toast.success(`Folder renamed to "${newName}"`);
+      toast.success(t('connectionManager.folderRenamed', { name: newName }));
       setRenameFolderDialogOpen(false);
       setFolderToRename(null);
       setRenameFolderNewName('');
     } catch (error) {
-      console.error('Rename folder error:', error);
-      toast.error('Failed to Rename Folder', {
+      toast.error(t('connectionManager.failedToRenameFolder'), {
         description: error instanceof Error ? error.message : 'Unable to rename folder.',
       });
     }
@@ -293,7 +294,7 @@ export function ConnectionManager({
 
     // Don't drop folder into its own child
     if (draggedItem.type === 'folder' && targetNode.path?.startsWith(draggedItem.node.path + '/')) {
-      toast.error('Cannot move folder into its own subfolder');
+      toast.error(t('connectionManager.cannotMoveIntoOwn'));
       return;
     }
 
@@ -301,9 +302,9 @@ export function ConnectionManager({
       // Move connection to target folder
       if (ConnectionStorageManager.moveConnection(draggedItem.node.id, targetNode.path!)) {
         setConnections(loadConnections());
-        toast.success(`Moved "${draggedItem.node.name}" to "${targetNode.name}"`);
+        toast.success(t('connectionManager.movedConnection', { source: draggedItem.node.name, target: targetNode.name }));
       } else {
-        toast.error('Failed to move connection');
+        toast.error(t('connectionManager.failedToMoveConnection'));
       }
     } else if (draggedItem.type === 'folder') {
       // Move folder by renaming its path
@@ -323,10 +324,10 @@ export function ConnectionManager({
         ConnectionStorageManager.deleteFolder(draggedItem.node.path!, false);
 
         setConnections(loadConnections());
-        toast.success(`Moved folder "${draggedItem.node.name}" to "${targetNode.name}"`);
+        toast.success(t('connectionManager.movedFolder', { source: draggedItem.node.name, target: targetNode.name }));
       } catch (error) {
-        toast.error('Failed to Move Folder', {
-          description: error instanceof Error ? error.message : 'Unable to move folder to new location.',
+        toast.error(t('connectionManager.failedToMoveFolder'), {
+          description: error instanceof Error ? error.message : t('connectionManager.unableToMoveFolder'),
         });
       }
     }
@@ -470,21 +471,21 @@ export function ConnectionManager({
                   }
                 }}
               >
-                {isConnected ? 'Switch to Connection' : 'Connect'}
+                {isConnected ? t('connectionManager.switchToConnection') : t('connectionManager.connect')}
               </ContextMenuItem>
               {onEditConnection && (
                 <ContextMenuItem
                   onClick={() => onEditConnection(node)}
                 >
                   <Pencil className="w-4 h-4 mr-2" />
-                  Edit
+                  {t('connectionManager.edit')}
                 </ContextMenuItem>
               )}
               <ContextMenuItem
                 onClick={() => handleDuplicate(node)}
               >
                 <Copy className="w-4 h-4 mr-2" />
-                Duplicate
+                {t('connectionManager.duplicate')}
               </ContextMenuItem>
               <ContextMenuSeparator />
               <ContextMenuItem
@@ -492,7 +493,7 @@ export function ConnectionManager({
                 className="text-destructive"
               >
                 <Trash2 className="w-4 h-4 mr-2" />
-                Delete
+                {t('connectionManager.delete')}
               </ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
@@ -511,7 +512,7 @@ export function ConnectionManager({
                 onClick={() => openNewFolderDialog(node.path)}
               >
                 <FolderPlus className="w-4 h-4 mr-2" />
-                New Subfolder
+                {t('connectionManager.newSubfolder')}
               </ContextMenuItem>
               {node.path !== 'All Connections' && (
                 <>
@@ -523,7 +524,7 @@ export function ConnectionManager({
                     }}
                   >
                     <FolderEdit className="w-4 h-4 mr-2" />
-                    Rename Folder
+                    {t('connectionManager.folder.renameFolder')}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                   <ContextMenuItem
@@ -531,7 +532,7 @@ export function ConnectionManager({
                     className="text-destructive"
                   >
                     <Trash2 className="w-4 h-4 mr-2" />
-                    Delete Folder
+                    {t('connectionManager.folder.deleteFolder')}
                   </ContextMenuItem>
                 </>
               )}
@@ -556,7 +557,7 @@ export function ConnectionManager({
       {/* Connection Browser */}
       <div className="flex-1 min-h-0 flex flex-col">
         <div className="px-3 py-1.5 border-b border-border flex items-center gap-1">
-          <h3 className="font-medium text-sm flex-1">Connections</h3>
+          <h3 className="font-medium text-sm flex-1">{t('connectionManager.connectionsHeader')}</h3>
           <TooltipProvider>
             {/* Quick Connect */}
             <DropdownMenu>
@@ -568,12 +569,12 @@ export function ConnectionManager({
                     </Button>
                   </DropdownMenuTrigger>
                 </TooltipTrigger>
-                <TooltipContent>Quick Connect</TooltipContent>
+                <TooltipContent>{t('toolbar.quickConnect')}</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end" className="w-64">
                 <DropdownMenuLabel className="flex items-center gap-2 text-xs">
                   <Clock className="w-3.5 h-3.5" />
-                  Recent Connections
+                  {t('toolbar.recentConnections')}
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {recentConnections.length > 0 ? (
@@ -594,7 +595,7 @@ export function ConnectionManager({
                   ))
                 ) : (
                   <div className="px-2 py-3 text-center text-xs text-muted-foreground">
-                    No recent connections
+                    {t('toolbar.noRecentConnections')}
                   </div>
                 )}
               </DropdownMenuContent>
@@ -612,7 +613,7 @@ export function ConnectionManager({
                   <FolderPlus className="w-3.5 h-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>New Folder</TooltipContent>
+              <TooltipContent>{t('connectionManager.newFolder')}</TooltipContent>
             </Tooltip>
 
             {/* New Connection */}
@@ -627,18 +628,18 @@ export function ConnectionManager({
                   <Plus className="w-3.5 h-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>New Connection</TooltipContent>
+              <TooltipContent>{t('connectionManager.newConnection')}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
         <div className="flex-1 overflow-auto">
           {connections.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full p-4 text-center">
-              <p className="text-sm text-muted-foreground mb-4">No connections yet</p>
+              <p className="text-sm text-muted-foreground mb-4">{t('connectionManager.noConnectionsYet')}</p>
               {onNewConnection && (
                 <Button onClick={onNewConnection} size="sm" variant="outline">
                   <Plus className="w-4 h-4 mr-2" />
-                  New Connection
+                  {t('connectionManager.newConnection')}
                 </Button>
               )}
             </div>
@@ -651,36 +652,36 @@ export function ConnectionManager({
       {/* Connection Details */}
       <div className="border-t border-border">
         <div className="p-3">
-          <h3 className="font-medium text-sm mb-3">Connection Details</h3>
+          <h3 className="font-medium text-sm mb-3">{t('connectionManager.connectionDetails')}</h3>
 
           {!selectedConnection || selectedConnection.type === 'folder' ? (
-            <p className="text-sm text-muted-foreground">No connection selected</p>
+            <p className="text-sm text-muted-foreground">{t('connectionManager.noConnectionSelected')}</p>
           ) : (
             <div className="space-y-3">
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">Name</span>
+                  <span className="text-xs font-medium">{t('connectionDetails.name')}</span>
                   <span className="text-xs">{selectedConnection.name}</span>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">Type</span>
+                  <span className="text-xs font-medium">{t('connectionDetails.type')}</span>
                   <Badge variant="outline" className="text-xs py-0 px-1 h-5">
                     {selectedConnection.protocol}
                   </Badge>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">Status</span>
+                  <span className="text-xs font-medium">{t('connectionDetails.status')}</span>
                   <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${selectedConnection.isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
-                    <span className="text-xs">{selectedConnection.isConnected ? 'Connected' : 'Disconnected'}</span>
+                    <span className="text-xs">{selectedConnection.isConnected ? t('connectionDetails.connected') : t('connectionDetails.disconnected')}</span>
                   </div>
                 </div>
 
                 {selectedConnection.lastConnected && (
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-medium">Last Connected</span>
+                    <span className="text-xs font-medium">{t('connectionDetails.lastConnected')}</span>
                     <span className="text-xs">
                       {new Date(selectedConnection.lastConnected).toLocaleString()}
                     </span>
@@ -693,19 +694,19 @@ export function ConnectionManager({
                   <Separator />
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium">Host</span>
+                      <span className="text-xs font-medium">{t('connectionManager.host')}</span>
                       <span className="text-xs">{selectedConnection.host}</span>
                     </div>
 
                     {selectedConnection.username && (
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-medium">Username</span>
+                        <span className="text-xs font-medium">{t('connectionManager.username')}</span>
                         <span className="text-xs">{selectedConnection.username}</span>
                       </div>
                     )}
 
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-medium">Port</span>
+                      <span className="text-xs font-medium">{t('connectionManager.port')}</span>
                       <span className="text-xs">
                         {selectedConnection.port || (selectedConnection.protocol === 'SSH' ? 22 : 23)}
                       </span>
@@ -718,12 +719,12 @@ export function ConnectionManager({
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">Protocol</span>
+                  <span className="text-xs font-medium">{t('connectionManager.protocol')}</span>
                   <span className="text-xs">{selectedConnection.protocol}</span>
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">Description</span>
+                  <span className="text-xs font-medium">{t('connectionManager.description')}</span>
                   <span className="text-xs text-muted-foreground">-</span>
                 </div>
               </div>
@@ -737,18 +738,18 @@ export function ConnectionManager({
     <Dialog open={newFolderDialogOpen} onOpenChange={setNewFolderDialogOpen}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create New Folder</DialogTitle>
+          <DialogTitle>{t('connectionManager.createNewFolder')}</DialogTitle>
           <DialogDescription>
-            Create a new folder to organize your connections.
-            {newFolderParentPath && ` Parent: ${newFolderParentPath}`}
+            {t('connectionManager.createFolderDesc')}
+            {newFolderParentPath && ` ${t('connectionManager.parent')}: ${newFolderParentPath}`}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label htmlFor="folder-name">Folder Name</Label>
+            <Label htmlFor="folder-name">{t('connectionManager.folderName')}</Label>
             <Input
               id="folder-name"
-              placeholder="Enter folder name"
+              placeholder={t('connectionManager.enterFolderName')}
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
               onKeyDown={(e) => {
@@ -761,9 +762,9 @@ export function ConnectionManager({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setNewFolderDialogOpen(false)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
-          <Button onClick={handleCreateFolder}>Create</Button>
+          <Button onClick={handleCreateFolder}>{t('connectionManager.create')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -772,17 +773,15 @@ export function ConnectionManager({
     <AlertDialog open={deleteFolderDialogOpen} onOpenChange={setDeleteFolderDialogOpen}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete Folder?</AlertDialogTitle>
+          <AlertDialogTitle>{t('connectionManager.deleteFolderTitle')}</AlertDialogTitle>
           <AlertDialogDescription>
-            Are you sure you want to delete the folder "{folderToDelete?.name}"? 
-            This will also delete all connections and subfolders within it.
-            This action cannot be undone.
+            {t('connectionManager.deleteFolderDesc', { name: folderToDelete?.name })}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
           <AlertDialogAction onClick={handleDeleteFolder} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-            Delete
+            {t('connectionManager.delete')}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -792,17 +791,17 @@ export function ConnectionManager({
     <Dialog open={renameFolderDialogOpen} onOpenChange={setRenameFolderDialogOpen}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename Folder</DialogTitle>
+          <DialogTitle>{t('connectionManager.renameFolder')}</DialogTitle>
           <DialogDescription>
-            Rename the folder "{folderToRename?.name}".
+            {t('connectionManager.renameFolderDesc', { name: folderToRename?.name })}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label htmlFor="rename-folder-name">Folder Name</Label>
+            <Label htmlFor="rename-folder-name">{t('connectionManager.folderName')}</Label>
             <Input
               id="rename-folder-name"
-              placeholder="Enter new folder name"
+              placeholder={t('connectionManager.enterNewFolderName')}
               value={renameFolderNewName}
               onChange={(e) => setRenameFolderNewName(e.target.value)}
               onKeyDown={(e) => {
@@ -815,9 +814,9 @@ export function ConnectionManager({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => setRenameFolderDialogOpen(false)}>
-            Cancel
+            {t('common.cancel')}
           </Button>
-          <Button onClick={handleRenameFolder}>Rename</Button>
+          <Button onClick={handleRenameFolder}>{t('connectionManager.rename')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

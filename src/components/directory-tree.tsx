@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { ChevronRight, Folder, Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -14,6 +15,22 @@ interface DirectoryTreeProps {
   currentPath: string;
   onNavigate: (path: string) => void;
   disabled?: boolean;
+  /**
+   * Cached expanded paths to restore on loadDirectory change (connection switch).
+   * When provided, the tree uses these instead of resetting to just "/".
+   */
+  initialExpanded?: Set<string>;
+  /**
+   * Cached loaded directory nodes to restore on loadDirectory change.
+   * When provided, the tree uses these instead of resetting to an empty map.
+   */
+  initialNodes?: Map<string, TreeNode[]>;
+  /** Called (debounced ~300ms) whenever the expanded set or loaded nodes change. */
+  onSaveState?: (expanded: Set<string>, nodes: Map<string, TreeNode[]>) => void;
+  /** Called (debounced ~200ms) after the user scrolls the tree container. */
+  onSaveScroll?: (scrollTop: number) => void;
+  /** Cached scroll top position to restore on connection switch. */
+  initialScrollTop?: number;
 }
 
 interface TreeNode {
@@ -62,12 +79,19 @@ export function DirectoryTree({
   currentPath,
   onNavigate,
   disabled = false,
+  initialExpanded,
+  initialNodes,
+  onSaveState,
+  onSaveScroll,
+  initialScrollTop,
 }: DirectoryTreeProps) {
+  const { t } = useTranslation();
   const [nodes, setNodes] = useState<Map<string, TreeNode[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set(["/"]));
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [focusPath, setFocusPath] = useState<string>(normalizePath(currentPath));
   const rowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const nodesRef = useRef(nodes);
   const loadingRef = useRef(loading);
@@ -111,7 +135,7 @@ export function DirectoryTree({
           return next;
         });
       } catch (err) {
-        toast.error("Failed to load directories", {
+        toast.error(t('directoryTree.loadFailed'), {
           description: `${normalizedPath}: ${err instanceof Error ? err.message : String(err)}`,
         });
       } finally {
@@ -125,11 +149,33 @@ export function DirectoryTree({
     [loadDirectory, disabled],
   );
 
+  // Reset or restore tree state when the data source changes (connection switch).
+  // If the parent supplies cached state (initialExpanded / initialNodes) we
+  // restore those — preserving which directories were expanded and already loaded.
+  // Without cached state (fresh connection), fall back to clean defaults.
+  //
+  // IMPORTANT: nodesRef and loadingRef are updated synchronously here (not just
+  // via their own useEffect) so that loadChildren — which runs later in the same
+  // effect cycle — sees the reset/restored values instead of stale data from the
+  // previous connection.  Without this, loadChildren's guard
+  // `nodesRef.current.has(path)` would return true for the old connection's
+  // loaded paths and skip the fresh load, leaving the tree showing only "/".
   useEffect(() => {
-    setNodes(new Map());
-    setExpanded(new Set(["/"]));
+    const newNodes = initialNodes ? new Map(initialNodes) : new Map();
+    setNodes(newNodes);
+    nodesRef.current = newNodes;
+
+    setExpanded(initialExpanded ? new Set(initialExpanded) : new Set(["/"]));
     setLoading(new Set());
-  }, [loadDirectory]);
+    loadingRef.current = new Set();
+
+    // Restore cached scroll position after the reset render.
+    // The currentPath effect below will scroll to the active row afterwards,
+    // which is fine — the active-row scroll takes visual precedence.
+    if (typeof initialScrollTop === "number" && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop = initialScrollTop;
+    }
+  }, [loadDirectory, initialExpanded, initialNodes, initialScrollTop]);
 
   useEffect(() => {
     const normalized = normalizePath(currentPath);
@@ -180,6 +226,36 @@ export function DirectoryTree({
       activeRow.scrollIntoView({ block: "center", inline: "nearest" });
     }
   }, [currentPath, visibleRows]);
+
+  // Persist expanded + nodes state to the parent cache (debounced).
+  // This allows restoring the exact tree state when the user switches back
+  // to this connection later.
+  useEffect(() => {
+    if (!onSaveState) return;
+    const timer = setTimeout(() => {
+      onSaveState(expanded, nodes);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [expanded, nodes, onSaveState]);
+
+  // Persist scroll position to the parent cache (debounced).
+  useEffect(() => {
+    if (!onSaveScroll) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const handleScroll = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        onSaveScroll(container.scrollTop);
+      }, 200);
+    };
+    container.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      container.removeEventListener("scroll", handleScroll);
+      if (timer) clearTimeout(timer);
+    };
+  }, [onSaveScroll]);
 
   const toggleNode = useCallback(
     (path: string) => {
@@ -258,9 +334,10 @@ export function DirectoryTree({
   return (
     <div className="h-full w-full flex flex-col overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-sm">
       <div className="px-2 py-1 flex items-center border-b bg-muted/30 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
-        Directories
+        {t('directoryTree.directories')}
       </div>
       <div
+        ref={scrollContainerRef}
         className="flex-1 min-h-0 overflow-auto p-1.5 outline-none [scrollbar-gutter:stable]"
         role="tree"
         tabIndex={0}
@@ -302,8 +379,8 @@ export function DirectoryTree({
                       toggleNode(row.path);
                     }
                   }}
-                  title={isExpanded ? `Collapse ${row.name}` : `Expand ${row.name}`}
-                  aria-label={isExpanded ? `Collapse ${row.name}` : `Expand ${row.name}`}
+                  title={isExpanded ? t('directoryTree.collapse', { name: row.name }) : t('directoryTree.expand', { name: row.name })}
+                  aria-label={isExpanded ? t('directoryTree.collapse', { name: row.name }) : t('directoryTree.expand', { name: row.name })}
                   disabled={!canExpand || disabled}
                 >
                   <ChevronRight
@@ -318,7 +395,7 @@ export function DirectoryTree({
                     setFocusPath(row.path);
                     onNavigate(row.path);
                   }}
-                  aria-label={`Navigate to ${row.path}`}
+                  aria-label={t('directoryTree.navigateTo', { path: row.path })}
                   disabled={disabled}
                 >
                   <Folder className="h-4 w-4 text-blue-500 shrink-0" />

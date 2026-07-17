@@ -1,10 +1,11 @@
-import React, { useRef, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback, useState } from "react";
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, crosshairCursor, highlightSpecialChars, dropCursor } from "@codemirror/view";
 import { EditorState, type Extension } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter, foldKeymap } from "@codemirror/language";
 import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { loadEditorConfig, EDITOR_CONFIG_CHANGED_EVENT, type EditorConfig } from "@/lib/editor-config";
 
 // Language imports
 import { javascript } from "@codemirror/lang-javascript";
@@ -107,7 +108,7 @@ interface CodeEditorProps {
   filename?: string;
   /** Read-only mode */
   readOnly?: boolean;
-  /** Use dark theme (defaults to true) */
+  /** Use dark theme (defaults to true). Ignored when the user has chosen a theme via editor settings. */
   dark?: boolean;
   /** Additional CSS class for the wrapper */
   className?: string;
@@ -124,6 +125,14 @@ export function CodeEditor({
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
+  const [editorConfig, setEditorConfig] = useState<EditorConfig>(() => loadEditorConfig());
+
+  // Reload config whenever it changes in settings
+  useEffect(() => {
+    const handler = () => setEditorConfig(loadEditorConfig());
+    window.addEventListener(EDITOR_CONFIG_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(EDITOR_CONFIG_CHANGED_EVENT, handler);
+  }, []);
 
   // Keep callback ref fresh without recreating the editor
   useEffect(() => {
@@ -132,19 +141,14 @@ export function CodeEditor({
 
   const buildExtensions = useCallback((): Extension[] => {
     const exts: Extension[] = [
-      lineNumbers(),
-      highlightActiveLineGutter(),
       highlightSpecialChars(),
       history(),
-      foldGutter(),
       drawSelection(),
       dropCursor(),
       indentOnInput(),
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      bracketMatching(),
       rectangularSelection(),
       crosshairCursor(),
-      highlightActiveLine(),
       highlightSelectionMatches(),
       keymap.of([
         ...defaultKeymap,
@@ -153,16 +157,41 @@ export function CodeEditor({
         ...searchKeymap,
         indentWithTab,
       ]),
-      EditorView.lineWrapping,
       // Dispatch listener for onChange
       EditorView.updateListener.of((update) => {
         if (update.docChanged && onChangeRef.current) {
           onChangeRef.current(update.state.doc.toString());
         }
       }),
+      // Tab size from config
+      EditorState.tabSize.of(editorConfig.tabSize),
     ];
 
-    if (dark) {
+    // Conditional extensions based on user config
+    if (editorConfig.lineNumbers) {
+      exts.push(lineNumbers());
+      exts.push(highlightActiveLineGutter());
+    }
+    if (editorConfig.highlightActiveLine) {
+      exts.push(highlightActiveLine());
+    }
+    if (editorConfig.foldGutter) {
+      exts.push(foldGutter());
+    }
+    if (editorConfig.bracketMatching || editorConfig.matchBrackets) {
+      exts.push(bracketMatching());
+    }
+    if (editorConfig.wordWrap) {
+      exts.push(EditorView.lineWrapping);
+    }
+
+    // Theme: user-configured theme takes precedence over the `dark` prop
+    const themeId = editorConfig.theme;
+    if (themeId === "oneDark") {
+      exts.push(oneDark);
+    } else if (themeId === "light") {
+      // No extra extension needed — CodeMirror's base chrome is light
+    } else if (dark) {
       exts.push(oneDark);
     }
 
@@ -176,7 +205,7 @@ export function CodeEditor({
     }
 
     return exts;
-  }, [filename, readOnly, dark]);
+  }, [filename, readOnly, dark, editorConfig]);
 
   // Create editor on mount
   useEffect(() => {
@@ -218,7 +247,11 @@ export function CodeEditor({
     <div
       ref={containerRef}
       className={`overflow-auto border rounded-md ${className}`}
-      style={{ height: "100%" }}
+      style={{
+        height: "100%",
+        fontSize: `${editorConfig.fontSize}px`,
+        fontFamily: editorConfig.fontFamily,
+      }}
     />
   );
 }

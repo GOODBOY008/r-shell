@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { FileText, RefreshCw, Download, Search, X, Lock, Unlock } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
@@ -19,6 +20,7 @@ interface LogFile {
 }
 
 export function LogViewer({ connectionId }: LogViewerProps) {
+  const { t } = useTranslation();
   const [logFiles, setLogFiles] = useState<LogFile[]>([]);
   const [selectedLogPath, setSelectedLogPath] = useState<string>('');
   const [logContent, setLogContent] = useState<string>('');
@@ -53,8 +55,8 @@ export function LogViewer({ connectionId }: LogViewerProps) {
       }
     } catch (error) {
       console.error('Failed to fetch log files:', error);
-      toast.error('Failed to Load Log Files', {
-        description: error instanceof Error ? error.message : 'Unable to fetch log file list from server.',
+      toast.error(t('logViewer.failedToLoadLogFiles'), {
+        description: error instanceof Error ? error.message : t('logViewer.unableToFetchList'),
       });
     }
   };
@@ -95,18 +97,18 @@ export function LogViewer({ connectionId }: LogViewerProps) {
           }, 10);
         }
       } else {
-        setLogContent(`Error: ${result.error || 'Failed to fetch log'}`);
+        setLogContent(`${t('logViewer.error')}: ${result.error || t('logViewer.failedToFetchLog')}`);
         if (!isAutoRefresh) {
-          toast.error('Failed to Load Log Content', {
-            description: result.error || 'Unable to fetch log content from server.',
+          toast.error(t('logViewer.failedToLoadLogContent'), {
+            description: result.error || t('logViewer.unableToFetchContent'),
           });
         }
       }
     } catch (error) {
-      setLogContent(`Error: ${error}`);
+      setLogContent(`${t('logViewer.error')}: ${error}`);
       if (!isAutoRefresh) {
-        toast.error('Failed to Load Log Content', {
-          description: error instanceof Error ? error.message : 'An unexpected error occurred.',
+        toast.error(t('logViewer.failedToLoadLogContent'), {
+          description: error instanceof Error ? error.message : t('logViewer.unexpectedError'),
         });
       }
     } finally {
@@ -188,10 +190,10 @@ export function LogViewer({ connectionId }: LogViewerProps) {
     <div className="h-full flex flex-col p-3 space-y-3">
       <div className="flex items-center gap-2">
         <FileText className="w-4 h-4" />
-        <h2 className="text-sm font-medium">Log Viewer</h2>
+        <h2 className="text-sm font-medium">{t('logViewer.title')}</h2>
         {selectedLogPath && autoRefresh && (
           <Badge variant="secondary" className="text-xs">
-            Auto-refresh
+            {t('logViewer.autoRefresh')}
           </Badge>
         )}
       </div>
@@ -199,13 +201,13 @@ export function LogViewer({ connectionId }: LogViewerProps) {
       {/* Log file selector */}
       <Card>
         <CardHeader className="p-3">
-          <CardTitle className="text-xs">Select Log File</CardTitle>
+          <CardTitle className="text-xs">{t('logViewer.selectLogFile')}</CardTitle>
         </CardHeader>
         <CardContent className="p-3 pt-0 space-y-2">
           <div className="flex gap-2">
             <Select value={selectedLogPath} onValueChange={setSelectedLogPath}>
               <SelectTrigger className="flex-1">
-                <SelectValue placeholder="Choose a log file..." />
+                <SelectValue placeholder={t('logViewer.chooseLogFile')} />
               </SelectTrigger>
               <SelectContent>
                 {logFiles.map(file => (
@@ -229,13 +231,13 @@ export function LogViewer({ connectionId }: LogViewerProps) {
               min={10}
               max={1000}
             />
-            <span className="text-xs text-muted-foreground">lines</span>
+            <span className="text-xs text-muted-foreground">{t('logViewer.lines')}</span>
             <Button
               size="sm"
               onClick={() => fetchLogContent()}
               disabled={!selectedLogPath || isLoading}
             >
-              Load
+              {t('logViewer.load')}
             </Button>
             <Button
               size="sm"
@@ -243,14 +245,14 @@ export function LogViewer({ connectionId }: LogViewerProps) {
               onClick={() => setAutoRefresh(!autoRefresh)}
               disabled={!selectedLogPath}
             >
-              Auto-refresh
+              {t('logViewer.autoRefresh')}
             </Button>
             <Button
               size="sm"
               variant={scrollLocked ? 'default' : 'outline'}
               onClick={() => setScrollLocked(!scrollLocked)}
               disabled={!selectedLogPath}
-              title={scrollLocked ? 'Click to unlock scroll (stay at current position)' : 'Click to lock scroll (auto-scroll to bottom)'}
+              title={scrollLocked ? t('logViewer.unlockScroll') : t('logViewer.lockScroll')}
             >
               {scrollLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
             </Button>
@@ -266,7 +268,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
               <div className="relative flex-1">
                 <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
                 <Input
-                  placeholder="Search logs..."
+                  placeholder={t('logViewer.searchLogs')}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-8 h-8 text-xs"
@@ -284,7 +286,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
               </div>
               <Button size="sm" variant="outline" onClick={downloadLogs} disabled={!logContent}>
                 <Download className="w-3 h-3 mr-1" />
-                Download
+                {t('logViewer.download')}
               </Button>
             </div>
           </CardContent>
@@ -302,11 +304,11 @@ export function LogViewer({ connectionId }: LogViewerProps) {
             >
               {!selectedLogPath ? (
                 <div className="text-center text-sm text-muted-foreground py-8">
-                  Select a log file to view
+                  {t('logViewer.selectLogFileToView')}
                 </div>
               ) : isLoading ? (
                 <div className="text-center text-sm text-muted-foreground py-8">
-                  Loading logs...
+                  {t('logViewer.loadingLogs')}
                 </div>
               ) : filteredLogLines.length > 0 ? (
                 <pre className="text-xs font-mono whitespace-pre-wrap break-all">
@@ -318,11 +320,11 @@ export function LogViewer({ connectionId }: LogViewerProps) {
                 </pre>
               ) : logContent ? (
                 <div className="text-center text-sm text-muted-foreground py-8">
-                  No matching log lines
+                  {t('logViewer.noMatchingLines')}
                 </div>
               ) : (
                 <div className="text-center text-sm text-muted-foreground py-8">
-                  No log content
+                  {t('logViewer.noLogContent')}
                 </div>
               )}
             </div>
