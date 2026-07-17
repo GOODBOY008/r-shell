@@ -58,6 +58,7 @@ import {
   exportAllConfig,
   importAllConfig,
 } from '@/lib/config-export-import';
+import { normalizeUpdateProxy } from '@/lib/update-proxy';
 import { Checkbox } from './ui/checkbox';
 
 interface SettingsModalProps {
@@ -112,6 +113,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     logLevel: 'info',
     maxLogSize: 100,
     checkUpdates: true,
+    updateProxy: '',
     telemetry: false
   });
 
@@ -202,6 +204,14 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   };
 
   const handleSave = () => {
+    let updateProxy: string | undefined;
+    try {
+      updateProxy = normalizeUpdateProxy(settings.updateProxy);
+    } catch {
+      toast.error(t('settings.advanced.updateProxyInvalid'));
+      return false;
+    }
+
     // Save terminal appearance settings
     saveAppearanceSettings(terminalAppearance);
     
@@ -218,9 +228,13 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     applyTheme(settings.theme as ThemeMode);
     
     // Save other settings to localStorage
-    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
+      ...settings,
+      updateProxy: updateProxy ?? '',
+    }));
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     onOpenChange(false);
+    return true;
   };
 
   const handleReset = () => {
@@ -255,6 +269,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         logLevel: 'info',
         maxLogSize: 100,
         checkUpdates: true,
+        updateProxy: '',
         telemetry: false
       });
       
@@ -1179,9 +1194,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       variant="outline"
                       size="sm"
                       onClick={() => {
-                        onCheckForUpdates?.();
-                        // Close the modal so the update dialog / toast is not obscured.
-                        onOpenChange(false);
+                        if (handleSave()) {
+                          onCheckForUpdates?.();
+                        }
                       }}
                       className="gap-1.5"
                     >
@@ -1193,6 +1208,20 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
                     />
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="update-proxy">{t('settings.advanced.updateProxy')}</Label>
+                  <Input
+                    id="update-proxy"
+                    type="url"
+                    placeholder={t('settings.advanced.updateProxyPlaceholder')}
+                    value={settings.updateProxy}
+                    onChange={(event) => updateSetting('updateProxy', event.target.value)}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    {t('settings.advanced.updateProxyDesc')}
+                  </p>
                 </div>
 
                 <div className="flex items-center justify-between">

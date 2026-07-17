@@ -92,6 +92,19 @@ describe('UpdateChecker', () => {
       await waitFor(() => expect(mockCheck).toHaveBeenCalledTimes(1));
     });
 
+    it('uses the saved proxy when checking for updates', async () => {
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
+        checkUpdates: true,
+        updateProxy: '  http://127.0.0.1:7890  ',
+      }));
+
+      render(<UpdateChecker />);
+
+      await waitFor(() => {
+        expect(mockCheck).toHaveBeenCalledWith({ proxy: 'http://127.0.0.1:7890' });
+      });
+    });
+
     it('skips check() when checkUpdates is false in localStorage', async () => {
       localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ checkUpdates: false }));
       render(<UpdateChecker />);
@@ -128,6 +141,36 @@ describe('UpdateChecker', () => {
       // Increment signal → manual check
       rerender(<UpdateChecker checkSignal={1} />);
       await waitFor(() => expect(mockCheck).toHaveBeenCalledTimes(1));
+    });
+
+    it('uses the saved proxy for a manual check', async () => {
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
+        checkUpdates: false,
+        updateProxy: 'http://127.0.0.1:7890',
+      }));
+      const { rerender } = render(<UpdateChecker checkSignal={0} />);
+
+      rerender(<UpdateChecker checkSignal={1} />);
+
+      await waitFor(() => {
+        expect(mockCheck).toHaveBeenCalledWith({ proxy: 'http://127.0.0.1:7890' });
+      });
+    });
+
+    it('rejects an invalid saved proxy before calling the updater', async () => {
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
+        checkUpdates: false,
+        updateProxy: 'socks5://127.0.0.1:1080',
+      }));
+      const { rerender } = render(<UpdateChecker checkSignal={0} />);
+
+      rerender(<UpdateChecker checkSignal={1} />);
+
+      await waitFor(() => expect(mockToast.error).toHaveBeenCalled());
+      expect(mockCheck).not.toHaveBeenCalled();
+      expect(mockToast.error.mock.calls[0][1].description).toBe(
+        'Enter a valid HTTP or HTTPS proxy URL.',
+      );
     });
 
     it('shows loading toast during manual check', async () => {

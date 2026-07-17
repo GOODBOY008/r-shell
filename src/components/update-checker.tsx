@@ -15,6 +15,7 @@ import {
 import { Progress } from './ui/progress';
 import { Button } from './ui/button';
 import { APP_SETTINGS_STORAGE_KEY } from '@/lib/keyboard-shortcuts';
+import { normalizeUpdateProxy } from '@/lib/update-proxy';
 
 interface UpdateCheckerProps {
   checkSignal?: number;
@@ -34,6 +35,21 @@ const isAutoCheckEnabled = () => {
   } catch {
     return true;
   }
+};
+
+const getUpdateProxy = () => {
+  let parsed: unknown;
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch {
+    return undefined;
+  }
+
+  const updateProxy = parsed && typeof parsed === 'object' && 'updateProxy' in parsed
+    ? (parsed as { updateProxy?: unknown }).updateProxy
+    : undefined;
+  return normalizeUpdateProxy(updateProxy);
 };
 
 export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
@@ -74,7 +90,8 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
     }
 
     try {
-      const update = await check();
+      const proxy = getUpdateProxy();
+      const update = await check(proxy ? { proxy } : undefined);
 
       if (manual) {
         toast.dismiss('update-check');
@@ -100,7 +117,9 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       // data. Map the common Rust error substrings to friendlier messages.
       const lower = raw.toLowerCase();
       const message =
-        lower.includes('404') || lower.includes('not found')
+        raw === 'Invalid update proxy URL'
+          ? t('settings.advanced.updateProxyInvalid')
+          : lower.includes('404') || lower.includes('not found')
           ? 'Update server is not configured for this version.'
           : lower.includes('network') ||
               lower.includes('dns') ||
@@ -120,7 +139,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
         toast.error('Update check failed', { description: message });
       }
     }
-  }, []);
+  }, [t]);
 
   const handleDownload = useCallback(async () => {
     if (!updateInfo) {
