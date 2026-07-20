@@ -24,3 +24,4 @@ target
 *.njsproj
 *.sln
 *.sw?
+test-results/
