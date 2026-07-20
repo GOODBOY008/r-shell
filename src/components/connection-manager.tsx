@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock } from 'lucide-react';
 import { Button } from './ui/button';
@@ -106,6 +106,8 @@ export function ConnectionManager({
   // Drag and drop state
   const [draggedItem, setDraggedItem] = useState<{ node: ConnectionNode; type: 'connection' | 'folder' } | null>(null);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
+  // useRef for synchronous access across drag events (avoid React state batching delay)
+  const draggedItemRef = useRef<{ node: ConnectionNode; type: 'connection' | 'folder' } | null>(null);
 
   // Reload connections when active connections change
   useEffect(() => {
@@ -272,7 +274,9 @@ export function ConnectionManager({
 
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent, node: ConnectionNode) => {
-    setDraggedItem({ node, type: node.type });
+    const item = { node, type: node.type };
+    setDraggedItem(item);
+    draggedItemRef.current = item; // Sync to ref for immediate access in handleDrop
     e.dataTransfer.effectAllowed = 'move';
   };
 
@@ -295,34 +299,36 @@ export function ConnectionManager({
     e.stopPropagation();
     setDragOverFolderId(null);
 
-    if (!draggedItem) return;
+    // Use ref for synchronous access (React state may not have flushed yet)
+    const item = draggedItemRef.current;
+    if (!item) return;
 
     // Can only drop into folders
     if (targetNode.type !== 'folder') return;
 
     // Don't drop into itself
-    if (draggedItem.node.id === targetNode.id) return;
+    if (item.node.id === targetNode.id) return;
 
     // Don't drop folder into its own child
-    if (draggedItem.type === 'folder' && targetNode.path?.startsWith(draggedItem.node.path + '/')) {
+    if (item.type === 'folder' && targetNode.path?.startsWith(item.node.path + '/')) {
       toast.error(t('connectionManager.cannotMoveIntoOwn'));
       return;
     }
 
-    if (draggedItem.type === 'connection') {
+    if (item.type === 'connection') {
       // Move connection to target folder
-      if (ConnectionStorageManager.moveConnection(draggedItem.node.id, targetNode.path!)) {
+      if (ConnectionStorageManager.moveConnection(item.node.id, targetNode.path!)) {
         setConnections(loadConnections());
-        toast.success(t('connectionManager.movedConnection', { source: draggedItem.node.name, target: targetNode.name }));
+        toast.success(t('connectionManager.movedConnection', { source: item.node.name, target: targetNode.name }));
       } else {
         toast.error(t('connectionManager.failedToMoveConnection'));
       }
-    } else if (draggedItem.type === 'folder') {
+    } else if (item.type === 'folder') {
       // Use moveFolder to recursively move folder and all its contents
       try {
-        if (ConnectionStorageManager.moveFolder(draggedItem.node.path!, targetNode.path!)) {
+        if (ConnectionStorageManager.moveFolder(item.node.path!, targetNode.path!)) {
           setConnections(loadConnections());
-          toast.success(t('connectionManager.movedFolder', { source: draggedItem.node.name, target: targetNode.name }));
+          toast.success(t('connectionManager.movedFolder', { source: item.node.name, target: targetNode.name }));
         } else {
           toast.error(t('connectionManager.failedToMoveFolder'));
         }
@@ -334,11 +340,13 @@ export function ConnectionManager({
     }
 
     setDraggedItem(null);
+    draggedItemRef.current = null;
   };
 
   const handleDragEnd = () => {
     setDraggedItem(null);
     setDragOverFolderId(null);
+    draggedItemRef.current = null;
   };
 
   // Find the selected connection details
