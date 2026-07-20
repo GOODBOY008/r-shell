@@ -340,6 +340,7 @@ export const defaultTerminalOptions: ITerminalOptions = {
   tabStopWidth: 8,
   allowTransparency: false,
   scrollSensitivity: 1,
+  rightClickSelectsWord: false,
 };
 
 export function getTerminalOptions(appearance: TerminalAppearanceSettings): ITerminalOptions {
