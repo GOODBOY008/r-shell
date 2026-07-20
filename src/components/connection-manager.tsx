@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock } from 'lucide-react';
 import { Button } from './ui/button';
@@ -106,9 +106,6 @@ export function ConnectionManager({
   // Drag and drop state
   const [draggedItem, setDraggedItem] = useState<{ node: ConnectionNode; type: 'connection' | 'folder' } | null>(null);
   const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
-  // useRef for synchronous access across drag events (avoid React state batching delay)
-  const draggedItemRef = useRef<{ node: ConnectionNode; type: 'connection' | 'folder' } | null>(null);
-
   // Reload connections when active connections change
   useEffect(() => {
     setConnections(loadConnections());
@@ -274,9 +271,17 @@ export function ConnectionManager({
 
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent, node: ConnectionNode) => {
-    const item = { node, type: node.type };
-    setDraggedItem(item);
-    draggedItemRef.current = item; // Sync to ref for immediate access in handleDrop
+    setDraggedItem({ node, type: node.type });
+    // Store drag data in DataTransfer — the standard HTML5 DnD mechanism
+    // This ensures handleDrop can always access it regardless of React state timing
+    e.dataTransfer.setData('application/x-r-shell-item', JSON.stringify({
+      id: node.id,
+      name: node.name,
+      path: node.path,
+      type: node.type,
+      protocol: node.protocol,
+      host: node.host,
+    }));
     e.dataTransfer.effectAllowed = 'move';
   };
 
@@ -299,36 +304,40 @@ export function ConnectionManager({
     e.stopPropagation();
     setDragOverFolderId(null);
 
-    // Use ref for synchronous access (React state may not have flushed yet)
-    const item = draggedItemRef.current;
-    if (!item) return;
+    // Read drag data from DataTransfer (the standard HTML5 DnD mechanism)
+    const rawData = e.dataTransfer.getData('application/x-r-shell-item');
+    if (!rawData) return;
+    const item = JSON.parse(rawData) as {
+      id: string; name: string; path?: string;
+      type: 'connection' | 'folder'; protocol?: string; host?: string;
+    };
 
     // Can only drop into folders
     if (targetNode.type !== 'folder') return;
 
     // Don't drop into itself
-    if (item.node.id === targetNode.id) return;
+    if (item.id === targetNode.id) return;
 
     // Don't drop folder into its own child
-    if (item.type === 'folder' && targetNode.path?.startsWith(item.node.path + '/')) {
+    if (item.type === 'folder' && targetNode.path?.startsWith(item.path + '/')) {
       toast.error(t('connectionManager.cannotMoveIntoOwn'));
       return;
     }
 
     if (item.type === 'connection') {
       // Move connection to target folder
-      if (ConnectionStorageManager.moveConnection(item.node.id, targetNode.path!)) {
+      if (ConnectionStorageManager.moveConnection(item.id, targetNode.path!)) {
         setConnections(loadConnections());
-        toast.success(t('connectionManager.movedConnection', { source: item.node.name, target: targetNode.name }));
+        toast.success(t('connectionManager.movedConnection', { source: item.name, target: targetNode.name }));
       } else {
         toast.error(t('connectionManager.failedToMoveConnection'));
       }
     } else if (item.type === 'folder') {
       // Use moveFolder to recursively move folder and all its contents
       try {
-        if (ConnectionStorageManager.moveFolder(item.node.path!, targetNode.path!)) {
+        if (ConnectionStorageManager.moveFolder(item.path!, targetNode.path!)) {
           setConnections(loadConnections());
-          toast.success(t('connectionManager.movedFolder', { source: item.node.name, target: targetNode.name }));
+          toast.success(t('connectionManager.movedFolder', { source: item.name, target: targetNode.name }));
         } else {
           toast.error(t('connectionManager.failedToMoveFolder'));
         }
@@ -340,13 +349,11 @@ export function ConnectionManager({
     }
 
     setDraggedItem(null);
-    draggedItemRef.current = null;
   };
 
   const handleDragEnd = () => {
     setDraggedItem(null);
     setDragOverFolderId(null);
-    draggedItemRef.current = null;
   };
 
   // Find the selected connection details
