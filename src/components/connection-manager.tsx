@@ -42,6 +42,7 @@ import {
   ContextMenuTrigger,
 } from './ui/context-menu';
 import { toast } from 'sonner';
+import { applyConnectionDragData } from '@/lib/connection-drag';
 
 interface ConnectionNode {
   id: string;
@@ -272,7 +273,7 @@ export function ConnectionManager({
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent, node: ConnectionNode) => {
     setDraggedItem({ node, type: node.type });
-    e.dataTransfer.effectAllowed = 'move';
+    applyConnectionDragData(e.dataTransfer, node);
   };
 
   const handleDragOver = (e: React.DragEvent) => {
