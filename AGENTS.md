@@ -192,6 +192,16 @@ Terminal sessions use a reducer-based architecture:
 
 On startup, `App.tsx` reads active sessions from `ConnectionStorageManager` and reconnects sequentially with progress tracking. Failed reconnections show toasts but don't block others.
 
+### Sidebar Connection Organization
+
+The left sidebar (`ConnectionManager` component) manages connections and folders in a hierarchical tree:
+
+- **Data model** (`src/lib/connection-storage.ts`): `ConnectionData` has a `folder` field storing full path strings (e.g. `"All Connections/Work/Production"`). `ConnectionFolder` records store folder metadata (path, parentPath). `buildConnectionTree()` assembles the flat data into nested `ConnectionTreeNode[]` for rendering.
+- **CRUD**: `ConnectionStorageManager` static class handles all save/delete/move operations via localStorage. Folders support create, rename (path rewrite), delete (recursive), and move (subtree relocation via `moveFolder()`).
+- **Drag and drop**: DnD handlers (`handleDragStart`/`handleDragOver`/`handleDrop`/`handleDragEnd`) are bound to the outer wrapper `<div>` (outside `ContextMenuTrigger`) to avoid Radix UI event interception. Visual feedback via `dragOverFolderId` state adds `bg-accent/50 ring-1 ring-primary` styling on hover.
+- **Folder context menu**: Right-clicking a folder shows "New Connection" (opens dialog with folder pre-selected), "New Subfolder", "Rename Folder" (non-root only), and "Delete Folder" (non-root only, recursive).
+- **New Connection flow**: Toolbar "+" button passes the currently selected folder's path to `App.tsx`, which forwards it as `initialFolder` to `ConnectionDialog`, pre-selecting the folder in the dialog's folder selector.
+
 ---
 
 ## Layout System

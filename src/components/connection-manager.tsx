@@ -64,7 +64,7 @@ interface ConnectionManagerProps {
   onConnectionConnect?: (connection: ConnectionNode) => void;
   selectedConnectionId: string | null;
   activeConnections?: Set<string>;
-  onNewConnection?: () => void;
+  onNewConnection?: (folderPath?: string) => void;
   onEditConnection?: (connection: ConnectionNode) => void;
   onDeleteConnection?: (connectionId: string) => void;
   onDuplicateConnection?: (connection: ConnectionNode) => void;
@@ -105,6 +105,7 @@ export function ConnectionManager({
 
   // Drag and drop state
   const [draggedItem, setDraggedItem] = useState<{ node: ConnectionNode; type: 'connection' | 'folder' } | null>(null);
+  const [dragOverFolderId, setDragOverFolderId] = useState<string | null>(null);
 
   // Reload connections when active connections change
   useEffect(() => {
@@ -275,14 +276,24 @@ export function ConnectionManager({
     e.dataTransfer.effectAllowed = 'move';
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
+  const handleDragOver = (e: React.DragEvent, targetNode: ConnectionNode) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    if (targetNode.type === 'folder') {
+      setDragOverFolderId(targetNode.id);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent, targetNode: ConnectionNode) => {
+    if (targetNode.type === 'folder') {
+      setDragOverFolderId(null);
+    }
   };
 
   const handleDrop = (e: React.DragEvent, targetNode: ConnectionNode) => {
     e.preventDefault();
     e.stopPropagation();
+    setDragOverFolderId(null);
 
     if (!draggedItem) return;
 
@@ -307,24 +318,14 @@ export function ConnectionManager({
         toast.error(t('connectionManager.failedToMoveConnection'));
       }
     } else if (draggedItem.type === 'folder') {
-      // Move folder by renaming its path
+      // Use moveFolder to recursively move folder and all its contents
       try {
-        const connections = ConnectionStorageManager.getConnectionsByFolder(draggedItem.node.path!);
-        const newPath = `${targetNode.path}/${draggedItem.node.name}`;
-
-        // Create new folder
-        ConnectionStorageManager.createFolder(draggedItem.node.name, targetNode.path);
-
-        // Move all connections
-        connections.forEach(connection => {
-          ConnectionStorageManager.moveConnection(connection.id, newPath);
-        });
-
-        // Delete old folder
-        ConnectionStorageManager.deleteFolder(draggedItem.node.path!, false);
-
-        setConnections(loadConnections());
-        toast.success(t('connectionManager.movedFolder', { source: draggedItem.node.name, target: targetNode.name }));
+        if (ConnectionStorageManager.moveFolder(draggedItem.node.path!, targetNode.path!)) {
+          setConnections(loadConnections());
+          toast.success(t('connectionManager.movedFolder', { source: draggedItem.node.name, target: targetNode.name }));
+        } else {
+          toast.error(t('connectionManager.failedToMoveFolder'));
+        }
       } catch (error) {
         toast.error(t('connectionManager.failedToMoveFolder'), {
           description: error instanceof Error ? error.message : t('connectionManager.unableToMoveFolder'),
@@ -337,6 +338,7 @@ export function ConnectionManager({
 
   const handleDragEnd = () => {
     setDraggedItem(null);
+    setDragOverFolderId(null);
   };
 
   // Find the selected connection details
@@ -419,15 +421,12 @@ export function ConnectionManager({
       <div
         className={`flex items-center gap-2 px-2 py-1 hover:bg-accent cursor-pointer ${
           isSelected ? 'bg-accent' : ''
-        } ${isDragging ? 'opacity-50' : ''}`}
+        } ${isDragging ? 'opacity-50' : ''} ${
+          dragOverFolderId === node.id && node.type === 'folder' ? 'bg-accent/50 ring-1 ring-primary' : ''
+        }`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
         onClick={handleNodeClick}
         onDoubleClick={handleNodeDoubleClick}
-        draggable={node.path !== 'All Connections'}
-        onDragStart={(e) => handleDragStart(e, node)}
-        onDragOver={node.type === 'folder' ? handleDragOver : undefined}
-        onDrop={node.type === 'folder' ? (e) => handleDrop(e, node) : undefined}
-        onDragEnd={handleDragEnd}
       >
         {node.type === 'folder' && (
           <Button variant="ghost" size="sm" className="p-0 h-4 w-4">
@@ -450,7 +449,15 @@ export function ConnectionManager({
     );
 
     return (
-      <div key={node.id}>
+      <div
+        key={node.id}
+        draggable={node.path !== 'All Connections'}
+        onDragStart={(e) => handleDragStart(e, node)}
+        onDragOver={node.type === 'folder' ? (e) => handleDragOver(e, node) : undefined}
+        onDrop={node.type === 'folder' ? (e) => handleDrop(e, node) : undefined}
+        onDragLeave={node.type === 'folder' ? (e) => handleDragLeave(e, node) : undefined}
+        onDragEnd={handleDragEnd}
+      >
         {node.type === 'connection' ? (
           <ContextMenu onOpenChange={(open) => {
             if (open) {
@@ -508,6 +515,13 @@ export function ConnectionManager({
               {nodeContent}
             </ContextMenuTrigger>
             <ContextMenuContent>
+              <ContextMenuItem
+                onClick={() => onNewConnection?.(node.path)}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                {t('connectionManager.newConnection')}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
               <ContextMenuItem
                 onClick={() => openNewFolderDialog(node.path)}
               >
@@ -622,7 +636,9 @@ export function ConnectionManager({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={onNewConnection}
+                  onClick={() => onNewConnection?.(
+                    selectedConnection?.type === 'folder' ? selectedConnection.path : undefined
+                  )}
                   className="h-6 w-6 p-0"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -637,7 +653,7 @@ export function ConnectionManager({
             <div className="flex flex-col items-center justify-center h-full p-4 text-center">
               <p className="text-sm text-muted-foreground mb-4">{t('connectionManager.noConnectionsYet')}</p>
               {onNewConnection && (
-                <Button onClick={onNewConnection} size="sm" variant="outline">
+                <Button onClick={() => onNewConnection()} size="sm" variant="outline">
                   <Plus className="w-4 h-4 mr-2" />
                   {t('connectionManager.newConnection')}
                 </Button>
