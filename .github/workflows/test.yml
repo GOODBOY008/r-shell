@@ -57,6 +57,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      - name: Run frontend tests
+        run: pnpm test
+
       - name: Build frontend
         run: pnpm build
 
