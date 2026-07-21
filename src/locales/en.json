@@ -765,7 +765,9 @@
     "unableToMoveFolder": "Unable to move folder to new location.",
     "noConnectionsYet": "No connections yet",
     "connectionDetails": "Connection Details",
-    "noConnectionSelected": "No connection selected"
+    "noConnectionSelected": "No connection selected",
+    "movedToRoot": "Moved \"{{name}}\" to All Connections",
+    "failedToReorder": "Failed to reorder items"
   },
   "filePanel": {
     "selectDirectory": "Select a directory to view its contents",

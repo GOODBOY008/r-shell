@@ -765,7 +765,9 @@
     "unableToMoveFolder": "无法将文件夹移动到新位置。",
     "noConnectionsYet": "暂无连接",
     "connectionDetails": "连接详情",
-    "noConnectionSelected": "未选择连接"
+    "noConnectionSelected": "未选择连接",
+    "movedToRoot": "已将\"{{name}}\"移动到所有连接",
+    "failedToReorder": "重新排序失败"
   },
   "filePanel": {
     "selectDirectory": "选择目录以查看其内容",

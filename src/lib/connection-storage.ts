@@ -31,6 +31,8 @@ export interface ConnectionData {
   // VNC-specific
   vncColorDepth?: string;
   vncPassword?: string;
+  // Ordering
+  sortOrder?: number;
 }
 
 export interface ConnectionFolder {
@@ -39,6 +41,7 @@ export interface ConnectionFolder {
   path: string; // Full path (e.g., 'All Connections/Work/Production')
   parentPath?: string; // Parent folder path
   createdAt: string;
+  sortOrder?: number;
 }
 
 const CONNECTIONS_STORAGE_KEY = 'r-shell-connections';
@@ -256,6 +259,142 @@ export class ConnectionStorageManager {
   }
 
   /**
+   * Reorder an item (folder or connection) to a specific position among same-type
+   * siblings in the target parent. Also handles moving between parents.
+   * The tree renders folders first, then connections — each group ordered by sortOrder.
+   * @param itemId - ID of the folder or connection
+   * @param itemType - 'folder' or 'connection'
+   * @param targetParentPath - Parent folder path for the new position (undefined = root level)
+   * @param newIndex - Position among same-type siblings in the target parent
+   */
+  static reorderItem(
+    itemId: string,
+    itemType: 'folder' | 'connection',
+    targetParentPath: string | undefined,
+    newIndex: number
+  ): boolean {
+    const folders = this.getFolders();
+    const connections = this.getConnections();
+
+    // Find the dragged item
+    const folderIndex = itemType === 'folder' ? folders.findIndex(f => f.id === itemId) : -1;
+    const connectionIndex = itemType === 'connection' ? connections.findIndex(c => c.id === itemId) : -1;
+
+    if (folderIndex === -1 && connectionIndex === -1) return false;
+
+    // Determine current parent path
+    const currentParentPath = itemType === 'folder'
+      ? folders[folderIndex].parentPath
+      : connections[connectionIndex].folder || 'All Connections';
+
+    const sameParent = currentParentPath === targetParentPath;
+
+    // Get same-type siblings at a parent, sorted by sortOrder, optionally excluding an item
+    const getTypeSiblings = (parentPath: string | undefined, type: 'folder' | 'connection', excludeId?: string) => {
+      if (type === 'folder') {
+        return folders
+          .filter(f => f.parentPath === parentPath && f.id !== excludeId)
+          .sort((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+      }
+      return connections
+        .filter(c => (c.folder || 'All Connections') === (parentPath ?? 'All Connections') && c.id !== excludeId)
+        .sort((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+    };
+
+    // Re-assign sortOrder 0..n for a list of items
+    const reindex = (items: { id: string }[], type: 'folder' | 'connection') => {
+      items.forEach((entry, index) => {
+        if (type === 'folder') {
+          const f = folders.find(fo => fo.id === entry.id);
+          if (f) f.sortOrder = index;
+        } else {
+          const c = connections.find(co => co.id === entry.id);
+          if (c) c.sortOrder = index;
+        }
+      });
+    };
+
+    // Build target sibling list (excluding dragged item if same parent) and insert
+    const siblings = getTypeSiblings(targetParentPath, itemType, sameParent ? itemId : undefined);
+    const clampedIndex = Math.max(0, Math.min(newIndex, siblings.length));
+    const ordered: { id: string }[] = [...siblings];
+    ordered.splice(clampedIndex, 0, { id: itemId });
+    reindex(ordered, itemType);
+
+    // Update the dragged item's parent reference
+    if (itemType === 'folder') {
+      const folderName = folders[folderIndex].name;
+      folders[folderIndex].parentPath = targetParentPath;
+      folders[folderIndex].path = targetParentPath ? `${targetParentPath}/${folderName}` : folderName;
+    } else {
+      connections[connectionIndex].folder = targetParentPath ?? 'All Connections';
+    }
+
+    // If moved between parents, re-index the source parent's same-type group
+    if (!sameParent) {
+      const sourceSiblings = getTypeSiblings(currentParentPath, itemType, itemId);
+      reindex(sourceSiblings, itemType);
+    }
+
+    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    return true;
+  }
+
+  /**
+   * Move a folder (with all subfolders and nested connections) to a new parent.
+   * @param folderPath - Current full path of the folder to move
+   * @param newParentPath - New parent folder path (undefined = root level)
+   * @returns true if the move succeeded
+   */
+  static moveFolderRecursive(folderPath: string, newParentPath: string | undefined): boolean {
+    // Cannot move root folder
+    if (folderPath === 'All Connections') return false;
+
+    // Cannot move into itself or own subtree
+    if (newParentPath === folderPath || newParentPath?.startsWith(folderPath + '/')) return false;
+
+    const folders = this.getFolders();
+    const connections = this.getConnections();
+
+    const folder = folders.find(f => f.path === folderPath);
+    if (!folder) return false;
+
+    const newPath = newParentPath ? `${newParentPath}/${folder.name}` : folder.name;
+
+    // No-op if already in the target parent
+    if (folder.parentPath === newParentPath) return true;
+
+    // Rewrite paths for all subfolders
+    for (const f of folders) {
+      if (f.path === folderPath) {
+        f.path = newPath;
+        f.parentPath = newParentPath;
+      } else if (f.path.startsWith(folderPath + '/')) {
+        f.path = newPath + f.path.substring(folderPath.length);
+        if (f.parentPath === folderPath) {
+          f.parentPath = newPath;
+        } else if (f.parentPath?.startsWith(folderPath + '/')) {
+          f.parentPath = newPath + f.parentPath.substring(folderPath.length);
+        }
+      }
+    }
+
+    // Rewrite folder references for all nested connections
+    for (const c of connections) {
+      if (c.folder === folderPath) {
+        c.folder = newPath;
+      } else if (c.folder?.startsWith(folderPath + '/')) {
+        c.folder = newPath + c.folder.substring(folderPath.length);
+      }
+    }
+
+    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    return true;
+  }
+
+  /**
    * Get all folders
    */
   static getFolders(): ConnectionFolder[] {
@@ -364,12 +503,15 @@ export class ConnectionStorageManager {
     const folders = this.getFolders();
     const connections = this.getConnections();
 
+    const bySortOrder = <T extends { sortOrder?: number }>(items: T[]): T[] =>
+      [...items].sort((a, b) => (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity));
+
     // Build folder hierarchy
     const buildFolderTree = (parentPath?: string): ConnectionTreeNode[] => {
       const result: ConnectionTreeNode[] = [];
 
-      // Get direct subfolders
-      const subfolders = folders.filter(f => f.parentPath === parentPath);
+      // Get direct subfolders sorted by sortOrder (stable)
+      const subfolders = bySortOrder(folders.filter(f => f.parentPath === parentPath));
 
       for (const folder of subfolders) {
         const folderNode: ConnectionTreeNode = {
@@ -380,8 +522,7 @@ export class ConnectionStorageManager {
           isExpanded: true,
           children: [
             ...buildFolderTree(folder.path),
-            ...connections
-              .filter(c => c.folder === folder.path)
+            ...bySortOrder(connections.filter(c => c.folder === folder.path))
               .map(c => ({
                 id: c.id,
                 name: c.name,
