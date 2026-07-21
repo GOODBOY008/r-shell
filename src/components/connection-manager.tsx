@@ -43,6 +43,10 @@ import {
 } from './ui/context-menu';
 import { toast } from 'sonner';
 
+// Module-level variable for DnD — survives across all React renders and event cycles
+// Using module scope avoids React state timing and DataTransfer compatibility issues
+let _dragPayload: { id: string; name: string; path?: string; type: 'connection' | 'folder' } | null = null;
+
 interface ConnectionNode {
   id: string;
   name: string;
@@ -271,22 +275,16 @@ export function ConnectionManager({
 
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent, node: ConnectionNode) => {
+    e.stopPropagation(); // Prevent bubbling to ancestor wrappers that would overwrite _dragPayload
     setDraggedItem({ node, type: node.type });
-    // Store drag data in DataTransfer — the standard HTML5 DnD mechanism
-    // This ensures handleDrop can always access it regardless of React state timing
-    e.dataTransfer.setData('application/x-r-shell-item', JSON.stringify({
-      id: node.id,
-      name: node.name,
-      path: node.path,
-      type: node.type,
-      protocol: node.protocol,
-      host: node.host,
-    }));
+    _dragPayload = { id: node.id, name: node.name, path: node.path, type: node.type };
     e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', node.id); } catch { /* ignore */ }
   };
 
   const handleDragOver = (e: React.DragEvent, targetNode: ConnectionNode) => {
     e.preventDefault();
+    e.stopPropagation(); // Prevent ancestor folders from overwriting dragOverFolderId
     e.dataTransfer.dropEffect = 'move';
     if (targetNode.type === 'folder') {
       setDragOverFolderId(targetNode.id);
@@ -304,13 +302,8 @@ export function ConnectionManager({
     e.stopPropagation();
     setDragOverFolderId(null);
 
-    // Read drag data from DataTransfer (the standard HTML5 DnD mechanism)
-    const rawData = e.dataTransfer.getData('application/x-r-shell-item');
-    if (!rawData) return;
-    const item = JSON.parse(rawData) as {
-      id: string; name: string; path?: string;
-      type: 'connection' | 'folder'; protocol?: string; host?: string;
-    };
+    const item = _dragPayload;
+    if (!item) return;
 
     // Can only drop into folders
     if (targetNode.type !== 'folder') return;
@@ -325,7 +318,6 @@ export function ConnectionManager({
     }
 
     if (item.type === 'connection') {
-      // Move connection to target folder
       if (ConnectionStorageManager.moveConnection(item.id, targetNode.path!)) {
         setConnections(loadConnections());
         toast.success(t('connectionManager.movedConnection', { source: item.name, target: targetNode.name }));
@@ -333,7 +325,6 @@ export function ConnectionManager({
         toast.error(t('connectionManager.failedToMoveConnection'));
       }
     } else if (item.type === 'folder') {
-      // Use moveFolder to recursively move folder and all its contents
       try {
         if (ConnectionStorageManager.moveFolder(item.path!, targetNode.path!)) {
           setConnections(loadConnections());
@@ -349,11 +340,13 @@ export function ConnectionManager({
     }
 
     setDraggedItem(null);
+    _dragPayload = null;
   };
 
   const handleDragEnd = () => {
     setDraggedItem(null);
     setDragOverFolderId(null);
+    _dragPayload = null;
   };
 
   // Find the selected connection details
@@ -468,8 +461,19 @@ export function ConnectionManager({
         key={node.id}
         draggable={node.path !== 'All Connections'}
         onDragStart={(e) => handleDragStart(e, node)}
-        onDragOver={node.type === 'folder' ? (e) => handleDragOver(e, node) : undefined}
-        onDrop={node.type === 'folder' ? (e) => handleDrop(e, node) : undefined}
+        onDragOver={(e) => {
+          // React event delegation requires preventDefault() on the handler
+          // closest to the DOM target. Bind to ALL nodes but only call
+          // preventDefault() on folders to mark them as valid drop targets.
+          if (node.type === 'folder') {
+            handleDragOver(e, node);
+          }
+        }}
+        onDrop={(e) => {
+          if (node.type === 'folder') {
+            handleDrop(e, node);
+          }
+        }}
         onDragLeave={node.type === 'folder' ? (e) => handleDragLeave(e, node) : undefined}
         onDragEnd={handleDragEnd}
       >
