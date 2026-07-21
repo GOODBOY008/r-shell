@@ -30,6 +30,7 @@ interface ConnectionDialogProps {
   onOpenChange: (open: boolean) => void;
   onConnect: (config: ConnectionConfig) => void;
   editingConnection?: ConnectionConfig | null;
+  initialFolder?: string;
 }
 
 export interface ConnectionConfig {
@@ -72,7 +73,8 @@ export function ConnectionDialog({
   open,
   onOpenChange,
   onConnect,
-  editingConnection
+  editingConnection,
+  initialFolder
 }: ConnectionDialogProps) {
   const defaultConfig: ConnectionConfig = {
     name: '',
@@ -120,6 +122,11 @@ export function ConnectionDialog({
       const folders = ConnectionStorageManager.getValidFolders();
       const folderPaths = folders.map(f => f.path).sort();
       setAvailableFolders(folderPaths);
+
+      // Set the initial folder if provided (e.g., from folder context menu)
+      if (initialFolder && !editingConnection) {
+        setConnectionFolder(initialFolder);
+      }
 
       // Load editing connection data into config when dialog opens
       if (editingConnection) {

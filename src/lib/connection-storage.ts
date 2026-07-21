@@ -296,6 +296,76 @@ export class ConnectionStorageManager {
   }
 
   /**
+   * Move a folder and its entire subtree (all connections and subfolders) to a new parent
+   * @param folderPath - The full path of the folder to move (e.g. 'All Connections/Work')
+   * @param newParentPath - The target parent path (e.g. 'All Connections/Personal')
+   * @returns true if the folder was successfully moved, false otherwise
+   */
+  static moveFolder(folderPath: string, newParentPath: string): boolean {
+    // Validate: cannot move the root folder
+    if (folderPath === 'All Connections') return false;
+
+    // Validate: cannot move a folder into itself or its own subtree
+    if (newParentPath === folderPath || newParentPath.startsWith(folderPath + '/')) return false;
+
+    const folders = this.getFolders();
+    const connections = this.getConnections();
+    const folder = folders.find(f => f.path === folderPath);
+    if (!folder) return false;
+
+    // Compute the new path for the moved folder
+    const folderName = folder.name;
+    const newPath = `${newParentPath}/${folderName}`;
+
+    // Check if target path already exists
+    const existing = folders.find(f => f.path === newPath);
+    if (existing && existing.path !== folderPath) return false;
+
+    try {
+      // Collect all subfolders and connections that need to be updated
+      const subfolders = folders.filter(f => f.path.startsWith(folderPath + '/'));
+
+      // Build path mapping: old subfolder path → new subfolder path
+      const pathMap = new Map<string, string>();
+      for (const sub of subfolders) {
+        const relativePath = sub.path.slice(folderPath.length); // e.g. '/SubFolder/Deep'
+        pathMap.set(sub.path, `${newPath}${relativePath}`);
+      }
+
+      // Update subfolder paths
+      const updatedFolders = folders.map(f => {
+        const newSubPath = pathMap.get(f.path);
+        if (newSubPath) {
+          return { ...f, path: newSubPath, parentPath: f.parentPath === folderPath ? newPath : `${newPath}${f.path.slice(folderPath.length, f.path.lastIndexOf('/'))}` };
+        }
+        if (f.path === folderPath) {
+          return { ...f, path: newPath, parentPath: newParentPath };
+        }
+        return f;
+      });
+
+      // Update connection folder paths
+      const updatedConnections = connections.map(c => {
+        if (c.folder === folderPath) {
+          return { ...c, folder: newPath };
+        }
+        if (c.folder?.startsWith(folderPath + '/')) {
+          return { ...c, folder: `${newPath}${c.folder.slice(folderPath.length)}` };
+        }
+        return c;
+      });
+
+      localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(updatedFolders));
+      localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(updatedConnections));
+
+      return true;
+    } catch (error) {
+      console.error('Failed to move folder:', error);
+      return false;
+    }
+  }
+
+  /**
    * Delete a folder and all its connections
    */
   static deleteFolder(path: string, deleteSubfolders: boolean = false): boolean {
