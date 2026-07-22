@@ -50,6 +50,9 @@ interface MenuBarProps {
   onPaste?: () => void;
   onSelectAll?: () => void;
   onFind?: () => void;
+  onFindNext?: () => void;
+  onFindPrevious?: () => void;
+  onClearScreen?: () => void;
   onToggleConnectionManager?: () => void;
   onToggleSystemMonitor?: () => void;
   onToggleFullscreen?: () => void;
@@ -63,6 +66,7 @@ interface MenuBarProps {
   closeConnectionShortcutLabel?: string;
   onRecentConnectionSelect?: (connection: ConnectionData) => void;
   hasActiveConnection?: boolean;
+  hasActiveTerminal?: boolean;
   canPaste?: boolean;
   // Layout controls (VS Code-style, right-aligned)
   onToggleLeftSidebar?: () => void;
@@ -85,6 +89,9 @@ export function MenuBar({
   onPaste,
   onSelectAll,
   onFind,
+  onFindNext,
+  onFindPrevious,
+  onClearScreen,
   onToggleConnectionManager: _onToggleConnectionManager,
   onToggleSystemMonitor: _onToggleSystemMonitor,
   onToggleFullscreen: _onToggleFullscreen,
@@ -98,6 +105,7 @@ export function MenuBar({
   closeConnectionShortcutLabel,
   onRecentConnectionSelect,
   hasActiveConnection = false,
+  hasActiveTerminal,
   canPaste = true,
   onToggleLeftSidebar,
   onToggleRightSidebar,
@@ -112,6 +120,7 @@ export function MenuBar({
   const { t } = useTranslation();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const cmdOrCtrl = isMac ? '⌘' : 'Ctrl';
+  const terminalActionsAvailable = hasActiveTerminal ?? hasActiveConnection;
 
   // Load recent connections
   const [recentConnections, setRecentConnections] = useState<ConnectionData[]>([]);
@@ -222,44 +231,44 @@ export function MenuBar({
           <Button variant="ghost" size="sm">{t('menuBar.edit')}</Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
-          <DropdownMenuItem onClick={onCopy} disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onCopy} disabled={!terminalActionsAvailable || !onCopy}>
             <Copy className="mr-2 h-4 w-4" />
             {t('menuBar.copy')}
             <DropdownMenuShortcut>{cmdOrCtrl}+C</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onPaste} disabled={!hasActiveConnection || !canPaste}>
+          <DropdownMenuItem onClick={onPaste} disabled={!terminalActionsAvailable || !canPaste || !onPaste}>
             <Clipboard className="mr-2 h-4 w-4" />
             {t('menuBar.paste')}
             <DropdownMenuShortcut>{cmdOrCtrl}+V</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveConnection}>
+          <DropdownMenuItem disabled>
             <Scissors className="mr-2 h-4 w-4" />
             {t('menuBar.cut')}
             <DropdownMenuShortcut>{cmdOrCtrl}+X</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onSelectAll} disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onSelectAll} disabled={!terminalActionsAvailable || !onSelectAll}>
             {t('menuBar.selectAll')}
             <DropdownMenuShortcut>{cmdOrCtrl}+A</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onFind} disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onFind} disabled={!terminalActionsAvailable || !onFind}>
             <Search className="mr-2 h-4 w-4" />
             {t('menuBar.find')}
             <DropdownMenuShortcut>{cmdOrCtrl}+F</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onFindNext} disabled={!terminalActionsAvailable || !onFindNext}>
             <Search className="mr-2 h-4 w-4" />
             {t('menuBar.findNext')}
             <DropdownMenuShortcut>F3</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onFindPrevious} disabled={!terminalActionsAvailable || !onFindPrevious}>
             <Search className="mr-2 h-4 w-4" />
             {t('menuBar.findPrevious')}
             <DropdownMenuShortcut>Shift+F3</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onClearScreen} disabled={!terminalActionsAvailable || !onClearScreen}>
             <RefreshCw className="mr-2 h-4 w-4" />
             {t('menuBar.clearScreen')}
             <DropdownMenuShortcut>{cmdOrCtrl}+L</DropdownMenuShortcut>

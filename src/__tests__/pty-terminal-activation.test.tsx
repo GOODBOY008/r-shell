@@ -1,11 +1,14 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { PtyTerminal } from '../components/pty-terminal';
+import { MenuBar } from '../components/menu-bar';
+import { dispatchTerminalCommand } from '../lib/terminal-commands';
 
 const mocks = vi.hoisted(() => {
   const terminals: Array<any> = [];
   const fitAddons: Array<any> = [];
+  const searchAddons: Array<any> = [];
   const webSockets: Array<any> = [];
 
   class MockTerminal {
@@ -70,7 +73,7 @@ const mocks = vi.hoisted(() => {
     return terminal;
   });
 
-  return { terminals, fitAddons, webSockets, Terminal, MockFitAddon, MockWebSocket };
+  return { terminals, fitAddons, searchAddons, webSockets, Terminal, MockFitAddon, MockWebSocket };
 });
 
 vi.mock('@xterm/xterm', () => ({
@@ -95,10 +98,12 @@ vi.mock('@xterm/addon-webgl', () => ({
 
 vi.mock('@xterm/addon-search', () => ({
   SearchAddon: vi.fn(function SearchAddon() {
-    return {
+    const addon = {
       findNext: vi.fn(),
       findPrevious: vi.fn(),
     };
+    mocks.searchAddons.push(addon);
+    return addon;
   }),
 }));
 
@@ -136,7 +141,20 @@ vi.mock('../components/terminal/terminal-context-menu', () => ({
 }));
 
 vi.mock('../components/terminal/terminal-search-bar', () => ({
-  TerminalSearchBar: () => null,
+  TerminalSearchBar: ({
+    visible,
+    onSearchStateChange,
+  }: {
+    visible: boolean;
+    onSearchStateChange?: (state: { query: string; caseSensitive: boolean; regex: boolean }) => void;
+  }) => {
+    React.useEffect(() => {
+      if (visible) {
+        onSearchStateChange?.({ query: 'needle', caseSensitive: true, regex: false });
+      }
+    }, [onSearchStateChange, visible]);
+    return visible ? <div data-testid="terminal-search-bar" /> : null;
+  },
 }));
 
 vi.mock('../lib/restoration-manager', () => ({
@@ -192,6 +210,7 @@ describe('PtyTerminal activation', () => {
     vi.clearAllMocks();
     mocks.terminals.length = 0;
     mocks.fitAddons.length = 0;
+    mocks.searchAddons.length = 0;
     mocks.webSockets.length = 0;
 
     Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
@@ -282,6 +301,47 @@ describe('PtyTerminal activation', () => {
     expect(mocks.terminals).toHaveLength(terminalCount);
     expect(mocks.webSockets).toHaveLength(webSocketCount);
     expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
+  });
+
+  it('routes Edit menu commands only to the addressed active terminal', () => {
+    render(
+      <>
+        <div data-testid="terminal-one">
+          <PtyTerminal connectionId="connection-1" connectionName="Server 1" isActive={false} />
+        </div>
+        <div data-testid="terminal-two">
+          <PtyTerminal connectionId="connection-2" connectionName="Server 2" isActive />
+        </div>
+        <MenuBar
+          hasActiveConnection
+          hasActiveTerminal
+          onSelectAll={() => dispatchTerminalCommand('connection-2', 'select-all')}
+          onFind={() => dispatchTerminalCommand('connection-2', 'find')}
+          onFindNext={() => dispatchTerminalCommand('connection-2', 'find-next')}
+        />
+      </>,
+    );
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Edit' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Select All/ }));
+
+    expect(mocks.terminals[0].selectAll).not.toHaveBeenCalled();
+    expect(mocks.terminals[1].selectAll).toHaveBeenCalledOnce();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Edit' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Find\.\.\./ }));
+
+    expect(within(screen.getByTestId('terminal-one')).queryByTestId('terminal-search-bar')).toBeNull();
+    expect(within(screen.getByTestId('terminal-two')).getByTestId('terminal-search-bar')).toBeTruthy();
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Edit' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Find Next/ }));
+
+    expect(mocks.searchAddons[0].findNext).not.toHaveBeenCalled();
+    expect(mocks.searchAddons[1].findNext).toHaveBeenCalledWith('needle', {
+      caseSensitive: true,
+      regex: false,
+    });
   });
 
   it('lets xterm handle Ctrl+V paste without duplicate custom send', async () => {
