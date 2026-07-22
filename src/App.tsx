@@ -34,6 +34,7 @@ import { ErrorBoundary } from './components/error-boundary';
 import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
+import { dispatchTerminalCommand, type TerminalCommand } from './lib/terminal-commands';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
@@ -123,6 +124,18 @@ function AppContent() {
     () => new Set(allTabs.map(tab => tab.id)),
     [allTabs],
   );
+
+  const activeTerminalId = activeTab
+    && (activeTab.tabType === undefined || activeTab.tabType === 'terminal')
+    && activeTab.connectionStatus !== 'pending'
+    ? activeTab.id
+    : null;
+
+  const runActiveTerminalCommand = useCallback((command: TerminalCommand) => {
+    if (activeTerminalId) {
+      dispatchTerminalCommand(activeTerminalId, command);
+    }
+  }, [activeTerminalId]);
 
   // Apply stored language preference (follows OS locale when set to "auto")
   useEffect(() => {
@@ -1202,6 +1215,12 @@ function AppContent() {
         case 'clone_tab':
           if (activeTab) { handleDuplicateTab(activeTab.id); }
           break;
+        case 'find':
+          runActiveTerminalCommand('find');
+          break;
+        case 'clear_screen':
+          runActiveTerminalCommand('clear-screen');
+          break;
         case 'next_tab':
           if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
             const idx = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
@@ -1227,7 +1246,7 @@ function AppContent() {
       }
     });
     return () => { unlistenPromise.then(fn => fn()); };
-  }, [activeGroup, activeTab, handleNewTab, handleOpenSettings, handleDuplicateTab, handleCloseActiveTab, dispatch]);
+  }, [activeGroup, activeTab, handleNewTab, handleOpenSettings, handleDuplicateTab, handleCloseActiveTab, runActiveTerminalCommand, dispatch]);
 
   const handleEditConnection = useCallback((connection: ConnectionNode) => {
     if (connection.type === 'connection') {
@@ -1633,13 +1652,21 @@ function AppContent() {
             void handleDuplicateTab(activeTab.id);
           }
         }}
+        onCopy={() => runActiveTerminalCommand('copy')}
+        onPaste={() => runActiveTerminalCommand('paste')}
+        onSelectAll={() => runActiveTerminalCommand('select-all')}
+        onFind={() => runActiveTerminalCommand('find')}
+        onFindNext={() => runActiveTerminalCommand('find-next')}
+        onFindPrevious={() => runActiveTerminalCommand('find-previous')}
+        onClearScreen={() => runActiveTerminalCommand('clear-screen')}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
         closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
         nextTabShortcutLabel={keyboardShortcutSettings.nextTab}
         previousTabShortcutLabel={keyboardShortcutSettings.prevTab}
         hasActiveConnection={!!activeTab}
-        canPaste={true}
+        hasActiveTerminal={activeTerminalId !== null}
+        canPaste={activeTab?.connectionStatus === 'connected'}
         onToggleLeftSidebar={toggleLeftSidebar}
         onToggleRightSidebar={toggleRightSidebar}
         onToggleBottomPanel={toggleBottomPanel}

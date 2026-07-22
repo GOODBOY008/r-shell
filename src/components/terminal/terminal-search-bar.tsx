@@ -11,9 +11,16 @@ interface TerminalSearchBarProps {
   visible: boolean;
   focusTrigger: number;
   onClose: () => void;
+  onSearchStateChange?: (state: TerminalSearchState) => void;
 }
 
-export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose }: TerminalSearchBarProps) {
+export interface TerminalSearchState {
+  query: string;
+  caseSensitive: boolean;
+  regex: boolean;
+}
+
+export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose, onSearchStateChange }: TerminalSearchBarProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
@@ -21,6 +28,10 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose 
   const [_currentIndex, _setCurrentIndex] = useState(0);
   const [_totalMatches, _setTotalMatches] = useState(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    onSearchStateChange?.({ query, caseSensitive, regex: useRegex });
+  }, [caseSensitive, onSearchStateChange, query, useRegex]);
 
   // Focus input when search bar becomes visible or when focus trigger changes
   useEffect(() => {
