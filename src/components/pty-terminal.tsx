@@ -10,10 +10,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
-import { TerminalSearchBar } from './terminal/terminal-search-bar';
+import { TerminalSearchBar, type TerminalSearchState } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
 import { signalReady } from '../lib/restoration-manager';
 import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
+import { TERMINAL_COMMAND_EVENT, type TerminalCommandDetail } from '../lib/terminal-commands';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -69,6 +70,7 @@ export function PtyTerminal({
   // Search bar state
   const [searchVisible, setSearchVisible] = React.useState(false);
   const [searchFocusTrigger, setSearchFocusTrigger] = React.useState(0);
+  const searchStateRef = React.useRef<TerminalSearchState>({ query: '', caseSensitive: false, regex: false });
   const [hasSelection, setHasSelection] = React.useState(false);
 
   // Scrollbar visibility — only show when buffer overflows the visible rows
@@ -284,12 +286,16 @@ export function PtyTerminal({
       if (event.key === 'F3') {
         event.preventDefault();
         const search = searchRef.current;
-        if (search) {
+        const { query, caseSensitive, regex } = searchStateRef.current;
+        if (search && query) {
           if (event.shiftKey) {
-            search.findPrevious('', { caseSensitive: false, regex: false });
+            search.findPrevious(query, { caseSensitive, regex });
           } else {
-            search.findNext('', { caseSensitive: false, regex: false });
+            search.findNext(query, { caseSensitive, regex });
           }
+        } else {
+          setSearchVisible(true);
+          setSearchFocusTrigger(prev => prev + 1);
         }
         return false;
       }
@@ -959,22 +965,51 @@ export function PtyTerminal({
 
   const handleFindNext = React.useCallback(() => {
     const search = searchRef.current;
-    if (search) {
-      // Search addon will use the last search query
-      search.findNext('', { caseSensitive: false, regex: false });
+    const { query, caseSensitive, regex } = searchStateRef.current;
+    if (search && query) {
+      search.findNext(query, { caseSensitive, regex });
+    } else {
+      handleSearch();
     }
-  }, []);
+  }, [handleSearch]);
 
   const handleFindPrevious = React.useCallback(() => {
     const search = searchRef.current;
-    if (search) {
-      search.findPrevious('', { caseSensitive: false, regex: false });
+    const { query, caseSensitive, regex } = searchStateRef.current;
+    if (search && query) {
+      search.findPrevious(query, { caseSensitive, regex });
+    } else {
+      handleSearch();
     }
-  }, []);
+  }, [handleSearch]);
 
   const handleSelectAll = React.useCallback(() => {
     xtermRef.current?.selectAll();
   }, []);
+
+  const handleSearchStateChange = React.useCallback((state: TerminalSearchState) => {
+    searchStateRef.current = state;
+  }, []);
+
+  React.useEffect(() => {
+    const handleTerminalCommand = (event: Event) => {
+      const { tabId, command } = (event as CustomEvent<TerminalCommandDetail>).detail;
+      if (tabId !== connectionId) return;
+
+      switch (command) {
+        case 'copy': handleCopy(); break;
+        case 'paste': void handlePaste(); break;
+        case 'select-all': handleSelectAll(); break;
+        case 'find': handleSearch(); break;
+        case 'find-next': handleFindNext(); break;
+        case 'find-previous': handleFindPrevious(); break;
+        case 'clear-screen': handleClear(); break;
+      }
+    };
+
+    window.addEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
+    return () => window.removeEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
+  }, [connectionId, handleClear, handleCopy, handleFindNext, handleFindPrevious, handlePaste, handleSearch, handleSelectAll]);
 
   const { onReconnectTab } = useTerminalCallbacks();
 
@@ -1085,6 +1120,7 @@ export function PtyTerminal({
           visible={searchVisible}
           focusTrigger={searchFocusTrigger}
           onClose={() => setSearchVisible(false)}
+          onSearchStateChange={handleSearchStateChange}
         />
       )}
       
