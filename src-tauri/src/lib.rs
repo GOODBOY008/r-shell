@@ -13,7 +13,7 @@ mod x11;
 use connection_manager::ConnectionManager;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use websocket_server::WebSocketServer;
 
 // Global atomic to store the WebSocket port (shared between backend and frontend)
@@ -211,9 +211,6 @@ pub fn run() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Create connection manager
-    let connection_manager = Arc::new(ConnectionManager::new());
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -221,38 +218,42 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .setup({
-            let connection_manager_clone = connection_manager.clone();
-            move |app| {
-                // Register native macOS menu and forward item events to the frontend
-                #[cfg(target_os = "macos")]
-                {
-                    match build_app_menu(&app.handle(), default_menu_text) {
-                        Ok(menu) => {
-                            if let Err(e) = app.set_menu(menu) {
-                                tracing::warn!("Failed to set native menu: {}", e);
-                            }
-                        }
-                        Err(e) => tracing::warn!("Failed to build native menu: {}", e),
-                    }
-                }
+        .setup(move |app| {
+            // Construct the connection manager here (not before the builder) so
+            // it can hold the AppHandle, which the X11 dispatcher uses to emit
+            // macOS failure events to the frontend.
+            let connection_manager = Arc::new(
+                ConnectionManager::new().with_app_handle(app.handle().clone()),
+            );
+            app.manage(connection_manager.clone());
 
-                // Start WebSocket server for terminal I/O
-                // Try ports 9001-9010 to avoid conflicts with other instances
-                let ws_server = Arc::new(WebSocketServer::new(connection_manager_clone));
-                tauri::async_runtime::spawn(async move {
-                    if let Err(e) = ws_server.start().await {
-                        tracing::error!("WebSocket server error: {}", e);
+            // Register native macOS menu and forward item events to the frontend
+            #[cfg(target_os = "macos")]
+            {
+                match build_app_menu(&app.handle(), default_menu_text) {
+                    Ok(menu) => {
+                        if let Err(e) = app.set_menu(menu) {
+                            tracing::warn!("Failed to set native menu: {}", e);
+                        }
                     }
-                });
-                Ok(())
+                    Err(e) => tracing::warn!("Failed to build native menu: {}", e),
+                }
             }
+
+            // Start WebSocket server for terminal I/O
+            // Try ports 9001-9010 to avoid conflicts with other instances
+            let ws_server = Arc::new(WebSocketServer::new(connection_manager));
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = ws_server.start().await {
+                    tracing::error!("WebSocket server error: {}", e);
+                }
+            });
+            Ok(())
         })
         .on_menu_event(|app, event| {
             // Forward custom menu item IDs to the frontend so React can handle them
             let _ = app.emit("menu-action", event.id().0.as_str());
         })
-        .manage(connection_manager)
         .invoke_handler(tauri::generate_handler![
             commands::ssh_connect,
             commands::ssh_cancel_connect,

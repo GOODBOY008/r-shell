@@ -983,7 +983,9 @@
     "failedToCopyClipboard": "Failed to copy to clipboard",
     "reconnectingTerminal": "Reconnecting terminal…",
     "outputSaved": "Terminal output saved",
-    "failedToSaveOutput": "Failed to save output"
+    "failedToSaveOutput": "Failed to save output",
+    "x11LocalServerUnreachable": "X11 forwarding enabled but no local X server was found",
+    "x11LocalServerUnreachableDesc": "Remote graphical apps won't display. Install XQuartz (https://www.xquartz.org) or set $DISPLAY."
   },
   "systemMonitor": {
     "systemOverview": "System Overview",

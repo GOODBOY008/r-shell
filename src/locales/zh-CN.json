@@ -983,7 +983,9 @@
     "failedToCopyClipboard": "复制到剪贴板失败",
     "reconnectingTerminal": "正在重新连接终端…",
     "outputSaved": "终端输出已保存",
-    "failedToSaveOutput": "保存输出失败"
+    "failedToSaveOutput": "保存输出失败",
+    "x11LocalServerUnreachable": "已启用 X11 转发，但未找到本地 X 服务器",
+    "x11LocalServerUnreachableDesc": "远程图形应用将无法显示。请安装 XQuartz（https://www.xquartz.org）或设置 $DISPLAY。"
   },
   "systemMonitor": {
     "systemOverview": "系统概览",

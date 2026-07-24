@@ -65,6 +65,11 @@ pub struct SshClient {
     x11_config: Option<crate::x11::X11Config>,
     /// Connection id, used to key the dispatcher registry.
     connection_id: Option<String>,
+    /// Tauri app handle, used to emit X11 failure events to the frontend
+    /// (e.g. the macOS "install XQuartz" toast). Cloned into the dispatcher
+    /// task so it can emit asynchronously when a local X server is unreachable.
+    /// `None` in unit tests (the emit is then simply skipped).
+    app_handle: Option<tauri::AppHandle>,
 }
 
 // PTY session handle for interactive shell
@@ -137,7 +142,16 @@ impl SshClient {
             x11_registry: Arc::new(crate::x11::X11DispatcherRegistry::new()),
             x11_config: None,
             connection_id: None,
+            app_handle: None,
         }
+    }
+
+    /// Attach a Tauri app handle so the X11 dispatcher can emit failure events
+    /// (e.g. the macOS "install XQuartz" toast). Called by ConnectionManager
+    /// in production; omitted in unit tests.
+    pub fn with_app_handle(mut self, app_handle: tauri::AppHandle) -> Self {
+        self.app_handle = Some(app_handle);
+        self
     }
 
     pub async fn connect(&mut self, connection_id: String, config: &SshConfig) -> Result<()> {
@@ -411,7 +425,12 @@ impl SshClient {
                                 // than re-parsing per channel inside the loop.
                                 let registry = self.x11_registry.clone();
                                 let cid = connection_id.to_string();
+                                let app_handle = self.app_handle.clone();
                                 tokio::spawn(async move {
+                                    // Emit the macOS XQuartz hint at most once per
+                                    // session: a flapping remote X app must not
+                                    // spam toasts on every inbound channel.
+                                    let mut hinted = false;
                                     while let Some(inbound) = x11_rx.recv().await {
                                         let crate::x11::InboundX11Channel {
                                             channel,
@@ -431,6 +450,24 @@ impl SshClient {
                                             }
                                             Err(e) => {
                                                 tracing::warn!("[X11] could not connect to local X server: {}. Remote app will fail to display.", e);
+                                                // macOS UX (spec §4.5): the most
+                                                // common cause is a missing XQuartz.
+                                                // Surface a single toast guiding
+                                                // the user to install it. Other
+                                                // platforms keep the warn-only log
+                                                // (the terminal still works). The
+                                                // handle is None in unit tests.
+                                                #[cfg(target_os = "macos")]
+                                                if !hinted {
+                                                    hinted = true;
+                                                    if let Some(handle) = app_handle.as_ref() {
+                                                        use tauri::Emitter;
+                                                        let _ = handle.emit(
+                                                            "x11-local-server-unreachable",
+                                                            &cid,
+                                                        );
+                                                    }
+                                                }
                                                 let _ = channel.close().await;
                                             }
                                         }

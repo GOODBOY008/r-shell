@@ -7,6 +7,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
@@ -890,6 +891,37 @@ export function PtyTerminal({
     // Refit so any font-size change propagates as a PTY resize.
     fitRef.current?.fit();
   }, [themeKey, appearanceKey]);
+
+  // X11 failure UX (spec §4.5): when the Rust dispatcher cannot reach the local
+  // X server while X11 forwarding is enabled, it emits this event (macOS only).
+  // Surface a single actionable toast guiding the user to install XQuartz.
+  // The terminal itself keeps working — X11 is best-effort.
+  React.useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let active = true;
+    listen<string>('x11-local-server-unreachable', (event) => {
+      if (!active) return;
+      // The payload is the connection_id the failure pertains to.
+      if (event.payload === connectionId) {
+        toast.warning(t('ptyTerminal.x11LocalServerUnreachable'), {
+          description: t('ptyTerminal.x11LocalServerUnreachableDesc'),
+          duration: 10000,
+        });
+      }
+    }).then((fn) => {
+      if (active) {
+        unlisten = fn;
+      } else {
+        fn();
+      }
+    }).catch((e) => {
+      console.warn(`[PTY Terminal] [${connectionId}] Failed to listen for X11 event:`, e);
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [connectionId, t]);
 
   React.useEffect(() => {
     if (!isActive) {
