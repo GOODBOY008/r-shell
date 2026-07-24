@@ -303,7 +303,7 @@ pub async fn connect_local_x_server(parsed: &ParsedDisplay) -> anyhow::Result<Lo
 
 /// Bridge a single inbound X11 SSH channel to a local X-server connection.
 ///
-/// Spawns two cooperating tasks linked by cancellation:
+/// Spawns two cooperating tasks linked by a SYMMETRIC cancellation token:
 ///   - Task A (returned JoinHandle): SSH channel -> local socket write half,
 ///     driven by `channel.wait()` (borrows `&mut Channel`).
 ///   - Task B (inner): local socket read half -> SSH channel, using an owned
@@ -311,6 +311,13 @@ pub async fn connect_local_x_server(parsed: &ParsedDisplay) -> anyhow::Result<Lo
 /// Splitting the socket via `tokio::io::split` lets each task own a half
 /// without conflicting borrows, and keeps both directions streaming
 /// independently so X11 traffic doesn't stall when one side is momentarily idle.
+///
+/// Symmetric link: both tasks select on the same `link` child token, and EACH
+/// task fires `link.cancel()` on every exit path. So when either side closes
+/// (SSH peer EOF/close, socket EOF/error, or caller cancellation), the other
+/// task stops promptly — no hung/leaked tasks. Writers are explicitly shut
+/// down on exit (russh's `ChannelTx` has no `Drop` impl, so a bare `drop()`
+/// would NOT send SSH EOF).
 pub fn bridge_x11_channel(
     mut channel: Channel<Msg>,
     socket: LocalXConnection,
@@ -322,10 +329,14 @@ pub fn bridge_x11_channel(
     let (mut sock_read, mut sock_write) = tokio::io::split(socket);
     let channel_writer = channel.make_writer(); // owned AsyncWrite to the SSH channel
 
-    // Link token: when either task exits, cancel the other.
+    // Symmetric link token: a child of the caller's `cancel`. BOTH tasks select
+    // on `link.cancelled()`, and EACH task fires `link.cancel()` on every exit
+    // path. This guarantees that when either side closes (SSH peer EOF/close,
+    // socket EOF/error, or caller cancellation), the other task stops promptly
+    // — no hung/leaked tasks.
     let link = cancel.child_token();
     let link_b = link.clone();
-    let cancel_b = cancel.clone();
+    let link_a = link.clone();
 
     // --- Task B: local socket -> SSH channel ---
     tokio::spawn(async move {
@@ -334,7 +345,7 @@ pub fn bridge_x11_channel(
         loop {
             tokio::select! {
                 biased;
-                _ = cancel_b.cancelled() => break,
+                _ = link.cancelled() => break,
                 n = sock_read.read(&mut buf) => {
                     match n {
                         Ok(0) => { tracing::info!("[X11] {} socket EOF", channel_id); break; }
@@ -353,13 +364,17 @@ pub fn bridge_x11_channel(
                 }
             }
         }
+        // Signal Task A to stop.
         link_b.cancel();
-        // Dropping `writer` (the owned channel writer) sends EOF on the channel.
-        drop(writer);
+        // Explicitly shut down the owned channel writer to send SSH EOF on the
+        // local->remote direction. (russh's ChannelTx has no Drop impl, so a
+        // bare drop() would NOT send EOF — shutdown() does.)
+        let _ = writer.shutdown().await;
     });
 
     // --- Task A: SSH channel -> local socket (returned handle) ---
     tokio::spawn(async move {
+        let link = link_a;
         loop {
             tokio::select! {
                 biased;
@@ -385,6 +400,10 @@ pub fn bridge_x11_channel(
                 }
             }
         }
+        // Signal Task B to stop (symmetric: Task A also fires the link on exit).
+        link.cancel();
+        // Cleanly half-close the local socket write side.
+        let _ = sock_write.shutdown().await;
         let _ = channel.close().await;
         tracing::info!("[X11] bridge {} exited", channel_id);
     })
