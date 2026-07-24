@@ -112,7 +112,7 @@ fn weak_cookie() -> String {
         .unwrap_or(0xdeadbeef);
     seed ^= std::process::id() as u64;
     let mut out = String::with_capacity(32);
-    for _ in 0..4 {
+    for _ in 0..2 {
         // xorshift64
         seed ^= seed << 13;
         seed ^= seed >> 7;
@@ -225,5 +225,12 @@ mod tests {
         let a = generate_fake_cookie();
         let b = generate_fake_cookie();
         assert_ne!(a, b, "two generated cookies must differ");
+    }
+
+    #[test]
+    fn weak_cookie_is_exactly_32_hex_chars() {
+        let c = weak_cookie();
+        assert_eq!(c.len(), 32);
+        assert!(c.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }
