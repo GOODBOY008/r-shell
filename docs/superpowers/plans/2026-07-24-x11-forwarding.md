@@ -526,8 +526,10 @@ pub async fn connect_local_x_server(parsed: &ParsedDisplay) -> anyhow::Result<Lo
                 .map_err(|e| anyhow::anyhow!("failed to connect to X socket {}: {}", path.display(), e))?;
             Ok(LocalXConnection::Unix(s))
         }
-        LocalXServer::Tcp(addr) => {
-            let s = tokio::net::TcpStream::connect(addr)
+        LocalXServer::Tcp { host, port } => {
+            // `host` may be a DNS name (e.g. "myhost") or a literal IP; resolve at connect time.
+            let addr = format!("{}:{}", host, port);
+            let s = tokio::net::TcpStream::connect(&addr)
                 .await
                 .map_err(|e| anyhow::anyhow!("failed to connect to X TCP {}: {}", addr, e))?;
             Ok(LocalXConnection::Tcp(s))
