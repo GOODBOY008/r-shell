@@ -78,6 +78,50 @@ pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
     Ok(ParsedDisplay { server, screen })
 }
 
+/// Generate a fake MIT-MAGIC-COOKIE-1 (16 random bytes, 32 lowercase hex chars).
+///
+/// Uses `/dev/urandom` on Unix for cryptographic randomness without pulling a
+/// new crate. On non-Unix (where X11 forwarding is uncommon), falls back to a
+/// time+pid-seeded RNG and logs a warning.
+pub fn generate_fake_cookie() -> String {
+    #[cfg(unix)]
+    {
+        use std::io::Read;
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            let mut buf = [0u8; 16];
+            if f.read_exact(&mut buf).is_ok() {
+                return buf.iter().map(|b| format!("{:02x}", b)).collect();
+            }
+        }
+        tracing::warn!("/dev/urandom unavailable; using weak fallback for X11 cookie");
+        weak_cookie()
+    }
+    #[cfg(not(unix))]
+    {
+        tracing::warn!("X11 cookie generation on non-Unix uses a weak fallback");
+        weak_cookie()
+    }
+}
+
+#[allow(dead_code)]
+fn weak_cookie() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let mut seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xdeadbeef);
+    seed ^= std::process::id() as u64;
+    let mut out = String::with_capacity(32);
+    for _ in 0..4 {
+        // xorshift64
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        out.push_str(&format!("{:016x}", seed));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +211,19 @@ mod tests {
             _ => panic!("expected Tcp"),
         }
         assert_eq!(p.screen, 2);
+    }
+
+    #[test]
+    fn cookie_is_hex_and_32_chars() {
+        let c = generate_fake_cookie();
+        assert_eq!(c.len(), 32, "MIT-MAGIC-COOKIE-1 is 16 bytes = 32 hex chars");
+        assert!(c.chars().all(|ch| ch.is_ascii_hexdigit()), "must be hex");
+    }
+
+    #[test]
+    fn cookie_is_unique_across_calls() {
+        let a = generate_fake_cookie();
+        let b = generate_fake_cookie();
+        assert_ne!(a, b, "two generated cookies must differ");
     }
 }
