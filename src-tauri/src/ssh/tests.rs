@@ -350,3 +350,221 @@ mod key_loading_tests {
         key_path.to_string()
     }
 }
+
+/// E2E integration tests for X11 forwarding against a real sshd.
+///
+/// These require the Dockerized SSH server from `tests/x11-e2e/`:
+///
+/// ```bash
+/// docker compose -f tests/x11-e2e/docker-compose.yml up -d --build
+/// # wait for healthy: docker inspect --format='{{.State.Health.Status}}' r-shell-sshd-x11
+/// cargo test --features x11-e2e -- --ignored --nocapture x11_e2e
+/// ```
+///
+/// Marked `#[ignore]` (like the other live-server tests above) so they never
+/// run in CI without an explicit `--ignored` flag.
+#[cfg(all(test, feature = "x11-e2e"))]
+mod x11_e2e_tests {
+    use crate::ssh::{AuthMethod, SshClient, SshConfig};
+    use crate::x11::X11Config;
+    use std::time::{Duration, Instant};
+
+    const E2E_HOST: &str = "127.0.0.1";
+    const E2E_PORT: u16 = 2222;
+    const E2E_USER: &str = "testuser";
+    const E2E_PASS: &str = "testpass";
+
+    fn x11_config(enabled: bool, trusted: bool, display: Option<&str>) -> SshConfig {
+        SshConfig {
+            host: E2E_HOST.to_string(),
+            port: E2E_PORT,
+            username: E2E_USER.to_string(),
+            auth_method: AuthMethod::Password {
+                password: E2E_PASS.to_string(),
+            },
+            x11: Some(X11Config {
+                enabled,
+                trusted,
+                display: display.map(str::to_string),
+            }),
+        }
+    }
+
+    /// Read PTY output until `needle` appears or `timeout` elapses.
+    ///
+    /// Returns the concatenated bytes seen, so callers can assert on content.
+    async fn read_until(
+        session: &crate::ssh::PtySession,
+        needle: &str,
+        timeout: Duration,
+    ) -> String {
+        let deadline = Instant::now() + timeout;
+        let mut buf = String::new();
+        let mut rx = session.output_rx.lock().await;
+        loop {
+            let remaining = deadline.checked_duration_since(Instant::now());
+            match remaining {
+                None => break,
+                Some(r) => match tokio::time::timeout(r, rx.recv()).await {
+                    Ok(Some(chunk)) => {
+                        buf.push_str(&String::from_utf8_lossy(&chunk));
+                        if buf.contains(needle) {
+                            break;
+                        }
+                    }
+                    Ok(None) => break, // channel closed
+                    Err(_) => break,   // timed out
+                },
+            }
+        }
+        buf
+    }
+
+    /// Send a command that prints `$DISPLAY` between two sentinels and return
+    /// the expanded value. Robust to the noise an interactive bash PTY emits.
+    ///
+    /// The echoed command line would otherwise also contain the sentinels,
+    /// making string-search ambiguous. The fix: turn off terminal echo
+    /// (`stty -echo`) and bracketed paste *before* the probe, so only the
+    /// command's *output* reaches the buffer. We then read between START and
+    /// END, stripping any residual ANSI/CR.
+    async fn read_remote_display(session: &crate::ssh::PtySession) -> String {
+        // Silence echo + bracketed paste so the buffer holds only command output.
+        session
+            .input_tx
+            .send(b"stty -echo 2>/dev/null; printf '\\0033[?2004l'\n".to_vec())
+            .await
+            .ok();
+        // Let the stty line take effect and be (not) echoed.
+        let _ = read_until(session, "NO_SUCH_MARKER_FLUSH", Duration::from_millis(400)).await;
+
+        session
+            .input_tx
+            .send(b"printf 'X11PROBE_START\\n%s\\nX11PROBE_END\\n' \"$DISPLAY\"\n".to_vec())
+            .await
+            .expect("send input");
+
+        let buf = read_until(session, "X11PROBE_END", Duration::from_secs(10)).await;
+
+        // With echo off, START and END each appear once (in the output). Take
+        // the text strictly between them.
+        let start_tag = "X11PROBE_START";
+        let end_tag = "X11PROBE_END";
+        let between = match (buf.find(start_tag), buf.find(end_tag)) {
+            (Some(s), Some(e)) if s + start_tag.len() <= e => {
+                buf[s + start_tag.len()..e].to_string()
+            }
+            _ => return String::new(),
+        };
+
+        let stripped = strip_ansi(&between);
+        stripped
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// Strip ANSI CSI escape sequences and carriage returns from a PTY buffer.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                // CSI: ESC '[' ... (terminated by 0x40..=0x7e)
+                i += 2;
+                while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                    i += 1;
+                }
+                i += 1; // consume the terminator
+            } else if bytes[i] == b'\r' {
+                i += 1;
+            } else {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// The core X11 E2E assertion: with X11 enabled, `create_pty_session`
+    /// succeeds (so sshd accepted the `request_x11`) AND the remote shell's
+    /// `$DISPLAY` is set by sshd to the forwarded value (`localhost:10.0`
+    /// given `X11DisplayOffset 10`).
+    ///
+    /// Both conditions are meaningful:
+    /// - If `X11Forwarding no`, `create_pty_session` returns an error (the
+    ///   request_x11 Err branch).
+    /// - If X11 is off, `$DISPLAY` is empty in the non-interactive PTY shell.
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
+    async fn x11_forwarding_sets_remote_display() {
+        let mut client = SshClient::new();
+        let config = x11_config(true, false, None);
+
+        client
+            .connect("x11-e2e-1".to_string(), &config)
+            .await
+            .expect("SSH connect should succeed against the test sshd");
+
+        // This is the X11 handshake: registers the dispatcher, calls
+        // request_x11, then request_shell. A server with X11Forwarding off
+        // makes request_x11 return Err, failing here.
+        let session = client
+            .create_pty_session(80, 24, "x11-e2e-1")
+            .await
+            .expect("PTY session (incl. request_x11) should succeed");
+
+        // Drain the MOTD/prompt before issuing the probe.
+        let _ = read_until(&session, "MARKER_UNUSED_DRAIN", Duration::from_millis(600)).await;
+
+        let display = read_remote_display(&session).await;
+
+        // sshd with X11Forwarding yes + X11DisplayOffset 10 sets DISPLAY to a
+        // forwarded value ending in `:10.0`. With X11UseLocalhost yes that is
+        // `localhost:10.0`; with `no` (our container) it is the sshd-side
+        // hostname, e.g. `<container>:10.0`. The essential proof of an
+        // established X11 forwarding is a non-empty value ending in `:10.0`.
+        assert!(
+            display.ends_with(":10.0") && !display.is_empty(),
+            "remote $DISPLAY should be set to a forwarded value ending in ':10.0' by sshd; got display={display:?}"
+        );
+
+        session.cancel.cancel();
+        let _ = client.disconnect().await;
+    }
+
+    /// Negative control: with X11 disabled, the remote `$DISPLAY` is empty
+    /// (no forwarding established). This proves the positive test above is
+    /// actually testing X11 behaviour, not just "sshd sets DISPLAY anyway".
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
+    async fn x11_disabled_leaves_display_empty() {
+        let mut client = SshClient::new();
+        let config = x11_config(false, false, None);
+
+        client
+            .connect("x11-e2e-2".to_string(), &config)
+            .await
+            .expect("SSH connect should succeed");
+
+        let session = client
+            .create_pty_session(80, 24, "x11-e2e-2")
+            .await
+            .expect("PTY session should succeed without X11");
+
+        let _ = read_until(&session, "MARKER_UNUSED_DRAIN", Duration::from_millis(600)).await;
+
+        let display = read_remote_display(&session).await;
+
+        assert!(
+            display.is_empty(),
+            "with X11 disabled, remote $DISPLAY should be empty; got display={display:?}"
+        );
+
+        session.cancel.cancel();
+        let _ = client.disconnect().await;
+    }
+}
