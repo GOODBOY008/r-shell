@@ -3,6 +3,15 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use russh::ChannelMsg;
+use russh::client::Msg;
+use russh::Channel;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
+use tokio::sync::mpsc;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// X11 forwarding configuration, carried inside `SshConfig`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -197,6 +206,188 @@ fn read_field(buf: &[u8], pos: usize) -> anyhow::Result<(Vec<u8>, usize)> {
         return Err(anyhow::anyhow!("truncated Xauthority field"));
     }
     Ok((buf[start..end].to_vec(), end))
+}
+
+/// An inbound X11 channel handed from the russh Handler callback to the
+/// session-owned dispatcher task.
+pub struct InboundX11Channel {
+    pub channel: Channel<Msg>,
+    pub originator_address: String,
+    pub originator_port: u32,
+}
+
+/// Connection-keyed map of dispatcher senders. Shared between the `Client`
+/// handler (producer) and the application (consumer). One SSH session maps to
+/// one R-Shell connection, so in practice exactly one sender is live per
+/// `Client`.
+#[derive(Default)]
+pub struct X11DispatcherRegistry {
+    pub senders: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<InboundX11Channel>>>>,
+}
+
+impl X11DispatcherRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// A connected local X-server socket, abstracted over Unix domain and TCP.
+pub enum LocalXConnection {
+    Unix(tokio::net::UnixStream),
+    Tcp(tokio::net::TcpStream),
+}
+
+impl tokio::io::AsyncRead for LocalXConnection {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match &mut *self {
+            LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+            LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for LocalXConnection {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        match &mut *self {
+            LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+            LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match &mut *self {
+            LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_flush(cx),
+            LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match &mut *self {
+            LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+            LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+/// Open a connection to the local X server described by `parsed`.
+pub async fn connect_local_x_server(parsed: &ParsedDisplay) -> anyhow::Result<LocalXConnection> {
+    match &parsed.server {
+        LocalXServer::Unix(path) => {
+            let s = tokio::net::UnixStream::connect(path)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to connect to X socket {}: {}", path.display(), e))?;
+            Ok(LocalXConnection::Unix(s))
+        }
+        LocalXServer::Tcp { host, port } => {
+            // `host` may be a DNS name (e.g. "myhost") or a literal IP; resolve at connect time.
+            let addr = format!("{}:{}", host, port);
+            let s = tokio::net::TcpStream::connect(&addr)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to connect to X TCP {}: {}", addr, e))?;
+            Ok(LocalXConnection::Tcp(s))
+        }
+    }
+}
+
+/// Bridge a single inbound X11 SSH channel to a local X-server connection.
+///
+/// Spawns two cooperating tasks linked by cancellation:
+///   - Task A (returned JoinHandle): SSH channel -> local socket write half,
+///     driven by `channel.wait()` (borrows `&mut Channel`).
+///   - Task B (inner): local socket read half -> SSH channel, using an owned
+///     `impl AsyncWrite` from `channel.make_writer()` (no `Channel` borrow).
+/// Splitting the socket via `tokio::io::split` lets each task own a half
+/// without conflicting borrows, and keeps both directions streaming
+/// independently so X11 traffic doesn't stall when one side is momentarily idle.
+pub fn bridge_x11_channel(
+    mut channel: Channel<Msg>,
+    socket: LocalXConnection,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    let channel_id = channel.id();
+    tracing::info!("[X11] bridge started for channel {}", channel_id);
+
+    let (mut sock_read, mut sock_write) = tokio::io::split(socket);
+    let channel_writer = channel.make_writer(); // owned AsyncWrite to the SSH channel
+
+    // Link token: when either task exits, cancel the other.
+    let link = cancel.child_token();
+    let link_b = link.clone();
+    let cancel_b = cancel.clone();
+
+    // --- Task B: local socket -> SSH channel ---
+    tokio::spawn(async move {
+        let mut writer = channel_writer;
+        let mut buf = [0u8; 8192];
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancel_b.cancelled() => break,
+                n = sock_read.read(&mut buf) => {
+                    match n {
+                        Ok(0) => { tracing::info!("[X11] {} socket EOF", channel_id); break; }
+                        Ok(n) => {
+                            if let Err(e) = writer.write_all(&buf[..n]).await {
+                                tracing::warn!("[X11] {} channel write failed: {}", channel_id, e);
+                                break;
+                            }
+                            let _ = writer.flush().await;
+                        }
+                        Err(e) => {
+                            tracing::warn!("[X11] {} socket read failed: {}", channel_id, e);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        link_b.cancel();
+        // Dropping `writer` (the owned channel writer) sends EOF on the channel.
+        drop(writer);
+    });
+
+    // --- Task A: SSH channel -> local socket (returned handle) ---
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                biased;
+                _ = link.cancelled() => break,
+                msg = channel.wait() => {
+                    match msg {
+                        Some(ChannelMsg::Data { ref data }) => {
+                            if let Err(e) = sock_write.write_all(data).await {
+                                tracing::warn!("[X11] {} socket write failed: {}", channel_id, e);
+                                break;
+                            }
+                            let _ = sock_write.flush().await;
+                        }
+                        Some(ChannelMsg::ExtendedData { ref data, .. }) => {
+                            let _ = sock_write.write_all(data).await;
+                        }
+                        Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
+                            tracing::info!("[X11] {} channel closed by peer", channel_id);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let _ = channel.close().await;
+        tracing::info!("[X11] bridge {} exited", channel_id);
+    })
 }
 
 #[cfg(test)]
