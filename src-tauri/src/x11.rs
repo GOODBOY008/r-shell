@@ -32,25 +32,24 @@ impl ParsedDisplay {
 pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
     let display = display.trim();
 
-    // Split off the optional screen suffix `.M`.
-    let (base, screen) = match display.rfind('.') {
-        // Only treat a dot as a screen suffix if what follows is all digits AND
-        // the part before also looks like a valid display base (contains ':').
-        Some(idx) if display.contains(':') => {
-            let (b, s) = display.split_at(idx);
-            let s: u32 = s[1..].parse().unwrap_or(0);
-            (b, s)
-        }
-        _ => (display, 0),
-    };
-
-    // Separate `[host]` from `:displaynum`.
-    let (host_part, num_part) = match base.rfind(':') {
-        Some(idx) => (&base[..idx], &base[idx + 1..]),
+    // Separate `[host]` from `:displaynum`. Split on ':' FIRST so that dots
+    // inside a host part (e.g. `127.0.0.1`, `myhost.lab.local`) are not
+    // mistaken for a screen suffix.
+    let (host_part, num_part) = match display.rfind(':') {
+        Some(idx) => (&display[..idx], &display[idx + 1..]),
         None => return Err(anyhow::anyhow!("invalid DISPLAY '{}': no ':' found", display)),
     };
 
-    let num: u32 = num_part
+    // The screen suffix `.M` lives only in the part after `:`.
+    let (num_str, screen) = match num_part.rfind('.') {
+        Some(i) => {
+            let scr: u32 = num_part[i + 1..].parse().unwrap_or(0);
+            (&num_part[..i], scr)
+        }
+        None => (num_part, 0),
+    };
+
+    let num: u32 = num_str
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid DISPLAY '{}': display number not numeric", display))?;
 
@@ -65,10 +64,15 @@ pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
         } else {
             host_part.to_string()
         };
-        LocalXServer::Tcp {
-            host,
-            port: 6000 + num as u16,
-        }
+        // Checked arithmetic: DISPLAY comes from the environment and may be
+        // untrusted. Avoid overflow panics / silent wrap on large `num`.
+        let port = 6000u32
+            .checked_add(num)
+            .and_then(|p| u16::try_from(p).ok())
+            .ok_or_else(|| {
+                anyhow::anyhow!("invalid DISPLAY '{}': display number out of range", display)
+            })?;
+        LocalXServer::Tcp { host, port }
     };
 
     Ok(ParsedDisplay { server, screen })
@@ -115,8 +119,53 @@ mod tests {
     fn parse_display_host_tcp() {
         let p = parse_display("myhost:0").unwrap();
         match p.server {
-            LocalXServer::Tcp { .. } => {}
+            LocalXServer::Tcp { host, port } => {
+                assert_eq!(host, "myhost");
+                assert_eq!(port, 6000);
+            }
             _ => panic!("expected Tcp"),
         }
+    }
+
+    #[test]
+    fn parse_display_missing_colon_is_err() {
+        assert!(parse_display("no_colon_here").is_err());
+    }
+
+    #[test]
+    fn parse_display_non_numeric_displaynum_is_err() {
+        assert!(parse_display(":abc").is_err());
+    }
+
+    #[test]
+    fn parse_display_empty_is_err() {
+        assert!(parse_display("").is_err());
+    }
+
+    #[test]
+    fn parse_display_dotted_ipv4_host() {
+        // Regression: the screen-suffix split must not grab the dot inside an IPv4 host.
+        let p = parse_display("127.0.0.1:0").unwrap();
+        match p.server {
+            LocalXServer::Tcp { host, port } => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, 6000);
+            }
+            _ => panic!("expected Tcp"),
+        }
+        assert_eq!(p.screen, 0);
+    }
+
+    #[test]
+    fn parse_display_dotted_dns_host_with_screen() {
+        let p = parse_display("myhost.lab.local:5.2").unwrap();
+        match p.server {
+            LocalXServer::Tcp { host, port } => {
+                assert_eq!(host, "myhost.lab.local");
+                assert_eq!(port, 6005);
+            }
+            _ => panic!("expected Tcp"),
+        }
+        assert_eq!(p.screen, 2);
     }
 }
