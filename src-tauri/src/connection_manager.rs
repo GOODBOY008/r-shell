@@ -205,7 +205,7 @@ impl ConnectionManager {
             })?;
 
         let connect_result = tokio::select! {
-            res = client.connect(&config) => res,
+            res = client.connect(connection_id.clone(), &config) => res,
             _ = cancel_token.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
         };
 
