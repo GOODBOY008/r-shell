@@ -321,9 +321,6 @@ pub fn run() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Create connection manager
-    let connection_manager = Arc::new(ConnectionManager::new());
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -373,9 +370,19 @@ pub fn run() {
                     if let Err(e) = ws_server.start().await {
                         tracing::error!("WebSocket server error: {}", e);
                     }
-                });
-                Ok(())
+                    Err(e) => tracing::warn!("Failed to build native menu: {}", e),
+                }
             }
+
+            // Start WebSocket server for terminal I/O
+            // Try ports 9001-9010 to avoid conflicts with other instances
+            let ws_server = Arc::new(WebSocketServer::new(connection_manager));
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = ws_server.start().await {
+                    tracing::error!("WebSocket server error: {}", e);
+                }
+            });
+            Ok(())
         })
         .on_menu_event(|app, event| {
             // Quit goes through the dirty-editor guard; everything else is

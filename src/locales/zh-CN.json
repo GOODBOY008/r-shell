@@ -1196,7 +1196,9 @@
     "reconnectingAfterClose": "[连接已关闭。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]",
     "sshSessionLost": "[SSH 会话已丢失。正在重新进行完整认证并重连...]",
     "sessionRestored": "[会话已恢复 — 已重新连接到原 Shell]",
-    "sshSessionDeadPermanent": "[SSH 会话已丢失且已达自动恢复上限，请使用右键 → 重新连接重试。]"
+    "sshSessionDeadPermanent": "[SSH 会话已丢失且已达自动恢复上限，请使用右键 → 重新连接重试。]",
+    "x11LocalServerUnreachable": "已启用 X11 转发，但未找到本地 X 服务器",
+    "x11LocalServerUnreachableDesc": "远程图形应用将无法显示。请安装 XQuartz（https://www.xquartz.org）或设置 $DISPLAY。"
   },
   "systemMonitor": {
     "systemOverview": "系统概览",
