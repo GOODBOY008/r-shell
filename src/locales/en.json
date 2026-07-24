@@ -267,7 +267,15 @@
     "hint": {
       "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it."
     },
-    "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored."
+    "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored.",
+    "x11": {
+      "enable": "Enable X11 forwarding",
+      "enableDesc": "Forward remote X11 apps to your local X server (e.g. XQuartz)",
+      "trusted": "Trusted mode (−Y)",
+      "trustedHint": "Give remote applications full access to the local X server. Untrusted (−X, default) isolates them.",
+      "displayOverride": "DISPLAY override",
+      "displayPlaceholder": "Auto-detected if blank"
+    }
   },
   "settings": {
     "title": "Settings & Preferences",
