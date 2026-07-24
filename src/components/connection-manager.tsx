@@ -64,7 +64,7 @@ interface ConnectionManagerProps {
   onConnectionConnect?: (connection: ConnectionNode) => void;
   selectedConnectionId: string | null;
   activeConnections?: Set<string>;
-  onNewConnection?: () => void;
+  onNewConnection?: (folderPath?: string) => void;
   onEditConnection?: (connection: ConnectionNode) => void;
   onDeleteConnection?: (connectionId: string) => void;
   onDuplicateConnection?: (connection: ConnectionNode) => void;
@@ -734,6 +734,13 @@ export function ConnectionManager({
             </ContextMenuTrigger>
             <ContextMenuContent>
               <ContextMenuItem
+                onClick={() => onNewConnection?.(node.path)}
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                {t('connectionManager.newConnection')}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
                 onClick={() => openNewFolderDialog(node.path)}
               >
                 <FolderPlus className="w-4 h-4 mr-2" />
@@ -847,7 +854,7 @@ export function ConnectionManager({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={onNewConnection}
+                  onClick={() => onNewConnection?.()}
                   className="h-6 w-6 p-0"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -866,7 +873,7 @@ export function ConnectionManager({
             <div className="flex flex-col items-center justify-center h-full p-4 text-center">
               <p className="text-sm text-muted-foreground mb-4">{t('connectionManager.noConnectionsYet')}</p>
               {onNewConnection && (
-                <Button onClick={onNewConnection} size="sm" variant="outline">
+                <Button onClick={() => onNewConnection?.()} size="sm" variant="outline">
                   <Plus className="w-4 h-4 mr-2" />
                   {t('connectionManager.newConnection')}
                 </Button>
