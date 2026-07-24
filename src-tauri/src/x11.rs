@@ -2,6 +2,21 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
+/// X11 forwarding configuration, carried inside `SshConfig`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct X11Config {
+    pub enabled: bool,
+    /// Trusted (-Y): pass the real local xauth cookie. Untrusted (-X, default):
+    /// pass a generated fake cookie.
+    #[serde(default)]
+    pub trusted: bool,
+    /// DISPLAY override; None => auto-detect from `$DISPLAY` or default to `:0`.
+    #[serde(default)]
+    pub display: Option<String>,
+}
+
 /// Parsed `$DISPLAY` value: how to reach the local X server and which screen.
 pub struct ParsedDisplay {
     server: LocalXServer,
@@ -120,6 +135,68 @@ fn weak_cookie() -> String {
         out.push_str(&format!("{:016x}", seed));
     }
     out
+}
+
+/// Read the real MIT-MAGIC-COOKIE-1 for the local display from the Xauthority
+/// file. Used in trusted mode (-Y). Returns an error if the file is missing,
+/// unreadable, or contains no matching entry; the caller falls back to a fake
+/// cookie in that case.
+pub fn read_local_cookie(parsed: &ParsedDisplay) -> anyhow::Result<String> {
+    let _ = parsed; // display-specific matching reserved for future use
+
+    let auth_path = std::env::var("XAUTHORITY")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| {
+            dirs::home_dir()
+                .map(|h| h.join(".Xauthority"))
+                .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
+        })?;
+
+    let bytes = std::fs::read(&auth_path)
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {}", auth_path.display(), e))?;
+
+    // Parse the binary Xauth format (Family + addr + display + name + data).
+    // Each record: family:u16 BE, addr_len:u16, addr, disp_len:u16, disp,
+    //              name_len:u16, name, data_len:u16, data.
+    let mut pos = 0;
+    while pos + 2 <= bytes.len() {
+        let _family = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]);
+        pos += 2;
+        let (addr, next) = read_field(&bytes, pos)?;
+        pos = next;
+        let (disp, next) = read_field(&bytes, pos)?;
+        pos = next;
+        let (name, next) = read_field(&bytes, pos)?;
+        pos = next;
+        let (data, next) = read_field(&bytes, pos)?;
+        pos = next;
+
+        let _ = &addr;
+        let _ = &disp;
+        // Accept the first MIT-MAGIC-COOKIE-1 entry for simplicity — local
+        // single-user X servers almost always have exactly one.
+        if name == b"MIT-MAGIC-COOKIE-1" && data.len() == 16 {
+            return Ok(data.iter().map(|b| format!("{:02x}", b)).collect());
+        }
+    }
+    Err(anyhow::anyhow!(
+        "no MIT-MAGIC-COOKIE-1 entry found in {}",
+        auth_path.display()
+    ))
+}
+
+/// Read a length-prefixed field from the Xauth binary format.
+fn read_field(buf: &[u8], pos: usize) -> anyhow::Result<(Vec<u8>, usize)> {
+    if pos + 2 > buf.len() {
+        return Err(anyhow::anyhow!("truncated Xauthority record"));
+    }
+    let len = u16::from_be_bytes([buf[pos], buf[pos + 1]]) as usize;
+    let start = pos + 2;
+    let end = start + len;
+    if end > buf.len() {
+        return Err(anyhow::anyhow!("truncated Xauthority field"));
+    }
+    Ok((buf[start..end].to_vec(), end))
 }
 
 #[cfg(test)]
