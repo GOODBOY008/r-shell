@@ -208,6 +208,14 @@
       "connectionFailedDesc": "Unable to connect to the server. Please check your credentials and try again.",
       "connectionError": "Connection Error",
       "connectionErrorDesc": "An unexpected error occurred while connecting."
+    },
+    "x11": {
+      "enable": "Enable X11 forwarding",
+      "enableDesc": "Forward remote X11 apps to your local X server (e.g. XQuartz)",
+      "trusted": "Trusted mode (−Y)",
+      "trustedHint": "Give remote applications full access to the local X server. Untrusted (−X, default) isolates them.",
+      "displayOverride": "DISPLAY override",
+      "displayPlaceholder": "Auto-detected if blank"
     }
   },
   "settings": {

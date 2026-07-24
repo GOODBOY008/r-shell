@@ -12,6 +12,7 @@ import { Switch } from './ui/switch';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 
 import { Separator } from './ui/separator';
+import { Checkbox } from './ui/checkbox';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager } from '../lib/connection-storage';
 import { toast } from 'sonner';
@@ -59,6 +60,13 @@ export interface ConnectionConfig {
   keepAlive?: boolean;
   keepAliveInterval?: number;
   serverAliveCountMax?: number;
+
+  // X11 forwarding (SSH specific)
+  x11?: {
+    enabled: boolean;
+    trusted: boolean;
+    display?: string;
+  };
 
   // RDP specific
   domain?: string;
@@ -307,6 +315,7 @@ export function ConnectionDialog({
             password: config.password || '',
             key_path: config.privateKeyPath || null,
             passphrase: config.passphrase || null,
+            x11: config.x11 ?? null,
           }
         }
       );
@@ -932,6 +941,82 @@ export function ConnectionDialog({
                           )}
                         </>
                       )}
+
+                      <Separator />
+
+                      {/* X11 Forwarding */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <Label htmlFor="x11-enable">{t('connectionDialog.x11.enable')}</Label>
+                            <p className="text-sm text-muted-foreground">
+                              {t('connectionDialog.x11.enableDesc')}
+                            </p>
+                          </div>
+                          <Switch
+                            id="x11-enable"
+                            checked={config.x11?.enabled ?? false}
+                            onCheckedChange={(checked) =>
+                              setConfig((c) => ({
+                                ...c,
+                                x11: {
+                                  enabled: checked,
+                                  trusted: c.x11?.trusted ?? false,
+                                  display: c.x11?.display,
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+
+                        {config.x11?.enabled && (
+                          <>
+                            <div className="flex items-start gap-2 ml-4">
+                              <Checkbox
+                                id="x11-trusted"
+                                checked={config.x11.trusted}
+                                onCheckedChange={(checked) =>
+                                  setConfig((c) => ({
+                                    ...c,
+                                    x11: {
+                                      enabled: c.x11?.enabled ?? false,
+                                      trusted: checked === true,
+                                      display: c.x11?.display,
+                                    },
+                                  }))
+                                }
+                              />
+                              <div className="grid gap-1 leading-none">
+                                <Label htmlFor="x11-trusted" className="cursor-pointer">
+                                  {t('connectionDialog.x11.trusted')}
+                                </Label>
+                                <span className="text-xs text-muted-foreground">
+                                  {t('connectionDialog.x11.trustedHint')}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="grid gap-1 ml-4">
+                              <Label htmlFor="x11-display">{t('connectionDialog.x11.displayOverride')}</Label>
+                              <Input
+                                id="x11-display"
+                                placeholder={t('connectionDialog.x11.displayPlaceholder')}
+                                value={config.x11.display ?? ''}
+                                onChange={(e) =>
+                                  setConfig((c) => ({
+                                    ...c,
+                                    x11: {
+                                      enabled: c.x11?.enabled ?? false,
+                                      trusted: c.x11?.trusted ?? false,
+                                      display: e.target.value || undefined,
+                                    },
+                                  }))
+                                }
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

@@ -208,6 +208,14 @@
       "connectionFailedDesc": "无法连接到服务器，请检查您的凭据并重试。",
       "connectionError": "连接错误",
       "connectionErrorDesc": "连接时发生意外错误。"
+    },
+    "x11": {
+      "enable": "启用 X11 转发",
+      "enableDesc": "将远程 X11 应用转发到本地 X 服务器（如 XQuartz）",
+      "trusted": "受信任模式 (−Y)",
+      "trustedHint": "授予远程应用对本地 X 服务器的完全访问权限。不受信任（−X，默认）会隔离它们。",
+      "displayOverride": "DISPLAY 覆盖",
+      "displayPlaceholder": "留空则自动检测"
     }
   },
   "settings": {
