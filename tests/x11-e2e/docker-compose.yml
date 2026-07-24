@@ -1,0 +1,26 @@
+# SSH server with X11 forwarding, for R-Shell X11 E2E testing.
+#
+#   docker compose -f tests/x11-e2e/docker-compose.yml up -d --build
+#   docker compose -f tests/x11-e2e/docker-compose.yml down
+#
+# Bound to 127.0.0.1:2222 so it is reachable from the host test runner but
+# not exposed to the network.
+
+services:
+  sshd-x11:
+    build: .
+    image: r-shell-sshd-x11:latest
+    container_name: r-shell-sshd-x11
+    ports:
+      - "127.0.0.1:2222:22"
+    # A healthcheck confirming sshd is accepting connections on 22. The
+    # test runner waits for this before connecting. Uses nc (installed in
+    # the image via the base packages) to avoid /bin/sh /dev/tcp dialect
+    # differences between bash and dash.
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/127.0.0.1/22' || nc -z 127.0.0.1 22"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    restart: unless-stopped
