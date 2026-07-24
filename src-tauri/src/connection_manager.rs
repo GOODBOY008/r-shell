@@ -51,7 +51,7 @@ impl ConnectionManager {
         let cancel_token = self.register_pending_connection(&connection_id).await;
 
         let connect_result = tokio::select! {
-            res = client.connect(&config) => res,
+            res = client.connect(connection_id.clone(), &config) => res,
             _ = cancel_token.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
         };
 
@@ -143,7 +143,7 @@ impl ConnectionManager {
         }
 
         // Create PTY session
-        let pty = client.create_pty_session(cols, rows).await?;
+        let pty = client.create_pty_session(cols, rows, connection_id).await?;
 
         // Bump generation so any in-flight Close for the old session is ignored
         let mut generations = self.pty_generations.write().await;
