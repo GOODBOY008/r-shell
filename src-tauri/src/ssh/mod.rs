@@ -111,7 +111,10 @@ impl client::Handler for Client {
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
         // One SSH session == one R-Shell connection == one active dispatcher
-        // sender, so routing to the single live sender is unambiguous.
+        // sender. `values().next()` is used because the Handler has no
+        // connection_id context; in practice exactly one sender is live per
+        // Client (session swaps briefly overlap, but the old sender is dropped
+        // on insert, closing the old receiver).
         let senders = self.x11_registry.senders.read().await;
         if let Some(tx) = senders.values().next() {
             let _ = tx.send(crate::x11::InboundX11Channel {
@@ -361,70 +364,90 @@ impl SshClient {
                             crate::x11::generate_fake_cookie()
                         };
 
-                        // Set DISPLAY on the remote side (belt-and-braces; sshd
-                        // usually sets it itself via X11DisplayOffset).
-                        if let Err(e) = channel.set_env(true, "DISPLAY", "localhost:10.0").await {
-                            tracing::warn!("[X11] set_env DISPLAY failed: {}", e);
+                        // C1: do NOT set DISPLAY ourselves. sshd sets the remote
+                        // DISPLAY itself (per its X11DisplayOffset) when it handles
+                        // request_x11; the client overriding it with an assumed
+                        // `localhost:10.0` can break forwarding on servers that use
+                        // a different offset.
+
+                        // Capture the screen number now: it's a Copy u32 needed by
+                        // request_x11, but `parsed` itself will be moved into the
+                        // dispatcher task below (it is not Clone).
+                        let screen = parsed.screen();
+
+                        // C2: register the dispatcher sender BEFORE request_x11.
+                        // request_x11 (want_reply=true) only enqueues the request
+                        // and returns; it does NOT await the server reply. The
+                        // server can therefore open the inbound X11 channel before
+                        // we would otherwise have inserted the sender, and the
+                        // Handler would drop it. We insert first, then deregister
+                        // on request_x11 failure.
+                        let (x11_tx, mut x11_rx) = mpsc::unbounded_channel::<crate::x11::InboundX11Channel>();
+                        {
+                            let mut senders = self.x11_registry.senders.write().await;
+                            senders.insert(connection_id.to_string(), x11_tx);
                         }
 
-                        if let Err(e) = channel.request_x11(
+                        match channel.request_x11(
                             true,                       // want_reply
                             false,                      // single_connection
                             "MIT-MAGIC-COOKIE-1",
                             &cookie,
-                            parsed.screen(),
+                            screen,
                         ).await {
-                            tracing::warn!("[X11] request_x11 rejected by server: {}. Terminal will work without X11.", e);
-                        } else {
-                            tracing::info!("[X11] forwarding requested (trusted={})", cfg.trusted);
+                            Ok(()) => {
+                                tracing::info!("[X11] forwarding requested (trusted={})", cfg.trusted);
 
-                            // Spawn the dispatcher task that bridges each
-                            // inbound X11 channel to the local X server.
-                            let (x11_tx, mut x11_rx) = mpsc::unbounded_channel::<crate::x11::InboundX11Channel>();
-                            // Register this session's sender under the connection id.
-                            {
-                                let mut senders = self.x11_registry.senders.write().await;
-                                senders.insert(connection_id.to_string(), x11_tx);
-                            }
+                                // I2 / Lifetime note: this dispatcher lives until
+                                // the SSH connection's receiver is dropped (on
+                                // disconnect) or the task itself deregisters.
+                                // Replacing the PTY session (start_pty_connection)
+                                // inserts a new sender under the same key, dropping
+                                // the old one and ending this task.
 
-                            let registry = self.x11_registry.clone();
-                            let cid = connection_id.to_string();
-                            tokio::spawn(async move {
-                                while let Some(inbound) = x11_rx.recv().await {
-                                    let crate::x11::InboundX11Channel {
-                                        channel,
-                                        originator_address,
-                                        originator_port,
-                                    } = inbound;
-                                    let _ = (originator_address, originator_port);
-                                    // Connect to the local X server and bridge.
-                                    // A fresh per-bridge cancel token; session
-                                    // teardown (disconnect) deregisters this
-                                    // dispatcher, whose channel closes and ends
-                                    // both bridge tasks.
-                                    match crate::x11::parse_display(&display_str) {
-                                        Ok(parsed) => {
-                                            match crate::x11::connect_local_x_server(&parsed).await {
-                                                Ok(socket) => {
-                                                    let cancel = CancellationToken::new();
-                                                    crate::x11::bridge_x11_channel(channel, socket, cancel);
-                                                }
-                                                Err(e) => {
-                                                    tracing::warn!("[X11] could not connect to local X server: {}. Remote app will fail to display.", e);
-                                                    let _ = channel.close().await;
-                                                }
+                                // N1: parse DISPLAY once and move ParsedDisplay
+                                // into the dispatcher task. The original `parsed`
+                                // is reused here for every inbound channel rather
+                                // than re-parsing per channel inside the loop.
+                                let registry = self.x11_registry.clone();
+                                let cid = connection_id.to_string();
+                                tokio::spawn(async move {
+                                    while let Some(inbound) = x11_rx.recv().await {
+                                        let crate::x11::InboundX11Channel {
+                                            channel,
+                                            originator_address,
+                                            originator_port,
+                                        } = inbound;
+                                        let _ = (originator_address, originator_port);
+                                        // Connect to the local X server and bridge.
+                                        // A fresh per-bridge cancel token; session
+                                        // teardown (disconnect) deregisters this
+                                        // dispatcher, whose channel closes and ends
+                                        // both bridge tasks.
+                                        match crate::x11::connect_local_x_server(&parsed).await {
+                                            Ok(socket) => {
+                                                let cancel = CancellationToken::new();
+                                                crate::x11::bridge_x11_channel(channel, socket, cancel);
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("[X11] could not connect to local X server: {}. Remote app will fail to display.", e);
+                                                let _ = channel.close().await;
                                             }
                                         }
-                                        Err(e) => {
-                                            tracing::warn!("[X11] re-parse DISPLAY failed: {}", e);
-                                            let _ = channel.close().await;
-                                        }
                                     }
-                                }
-                                // Dispatcher shut down (session closing) — deregister.
-                                let mut senders = registry.senders.write().await;
-                                senders.remove(&cid);
-                            });
+                                    // Dispatcher shut down (session closing) — deregister.
+                                    let mut senders = registry.senders.write().await;
+                                    senders.remove(&cid);
+                                });
+                            }
+                            Err(e) => {
+                                // C2: deregister the sender we optimistically
+                                // inserted above so the Handler stops routing
+                                // inbound channels to a session whose X11 setup
+                                // failed.
+                                self.x11_registry.senders.write().await.remove(connection_id);
+                                tracing::warn!("[X11] request_x11 rejected by server: {}. Terminal will work without X11.", e);
+                            }
                         }
                     }
                     Err(e) => {
