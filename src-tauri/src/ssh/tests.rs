@@ -25,6 +25,7 @@ mod tests {
             host_key_policy: crate::ssh::HostKeyPolicy::default(),
             connect_timeout: 3,
             tunnel: None,
+            x11: None,
         }
     }
 
@@ -72,7 +73,7 @@ mod tests {
         let mut client_write = client.write().await;
         let config = create_test_config();
 
-        let result = client_write.connect(&config).await;
+        let result = client_write.connect("test-conn-1".to_string(), &config).await;
 
         assert!(
             result.is_ok(),
@@ -94,7 +95,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect(&config)
+            .connect("test-conn-2".to_string(), &config)
             .await
             .expect("Failed to connect");
 
@@ -133,9 +134,10 @@ mod tests {
             host_key_policy: crate::ssh::HostKeyPolicy::default(),
             connect_timeout: 3,
             tunnel: None,
+            x11: None,
         };
 
-        let result = client_write.connect(&config).await;
+        let result = client_write.connect("test-conn-3".to_string(), &config).await;
 
         assert!(
             result.is_err(),
@@ -152,7 +154,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect(&config)
+            .connect("test-conn".to_string(), &config)
             .await
             .expect("Failed to connect");
 
@@ -181,7 +183,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect(&config)
+            .connect("test-conn".to_string(), &config)
             .await
             .expect("Failed to connect");
 
@@ -1500,10 +1502,11 @@ mod key_loading_tests {
             host_key_policy: crate::ssh::HostKeyPolicy::default(),
             connect_timeout: 3,
             tunnel: None,
+            x11: None,
         };
 
         let mut client = SshClient::new();
-        let err = client.connect(&config).await.unwrap_err();
+        let err = client.connect("test-conn-missing".to_string(), &config).await.unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("not found")
