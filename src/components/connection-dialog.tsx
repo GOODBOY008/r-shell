@@ -16,7 +16,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { Checkbox } from './ui/checkbox';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
-import { ConnectionStorageManager } from '../lib/connection-storage';
+import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
 import { SECRET_FIELDS, sealSecret, openSecret } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
@@ -81,11 +81,7 @@ export interface ConnectionConfig {
   serverAliveCountMax?: number;
 
   // X11 forwarding (SSH specific)
-  x11?: {
-    enabled: boolean;
-    trusted: boolean;
-    display?: string;
-  };
+  x11?: X11Config;
 
   // RDP specific
   domain?: string;
