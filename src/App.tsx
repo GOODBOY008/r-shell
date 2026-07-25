@@ -57,6 +57,25 @@ interface ConnectionNode {
  * previously each of the 7 call sites picked its own subset, which silently
  * dropped advanced options (compression/keepAlive/x11) on edit.
  */
+
+/**
+ * Force trusted=true whenever X11 is enabled. Untrusted mode (fake
+ * MIT-MAGIC-COOKIE-1) is rejected by standard local X servers (XQuartz,
+ * native Linux) — verified end-to-end: the bridge connects then immediately
+ * EOFs, so X apps never appear. There is no real-world setup where untrusted
+ * works but trusted doesn't, so silently upgrading a saved `trusted:false`
+ * avoids a confusing "X11 enabled but apps don't display" failure for
+ * connections saved before the default flipped to true. Applied to BOTH the
+ * edit-dialog load path and every ssh_connect request so no path can send a
+ * fake cookie.
+ */
+function upgradeX11Trusted(x11: ConnectionData['x11']): ConnectionData['x11'] {
+  if (x11 && x11.enabled) {
+    return { ...x11, trusted: true };
+  }
+  return x11;
+}
+
 function connectionDataToConfig(connectionData: ConnectionData, id: string): ConnectionConfig {
   return {
     id,
@@ -79,7 +98,7 @@ function connectionDataToConfig(connectionData: ConnectionData, id: string): Con
     keepAlive: connectionData.keepAlive,
     keepAliveInterval: connectionData.keepAliveInterval,
     serverAliveCountMax: connectionData.serverAliveCountMax,
-    x11: connectionData.x11,
+    x11: upgradeX11Trusted(connectionData.x11),
   };
 }
 
@@ -415,6 +434,9 @@ function AppContent() {
                     password: connectionData.password || '',
                     key_path: connectionData.privateKeyPath || null,
                     passphrase: connectionData.passphrase || null,
+                    // Restore X11 forwarding + SSH advanced options if the saved
+                    // connection had them (otherwise null → X11 disabled).
+                    x11: upgradeX11Trusted(connectionData.x11) ?? null,
                   }
                 }
               ),
@@ -605,6 +627,7 @@ function AppContent() {
                 password: connectionData.password || '',
                 key_path: connectionData.privateKeyPath || null,
                 passphrase: connectionData.passphrase || null,
+                x11: upgradeX11Trusted(connectionData.x11) ?? null,
               }
             }
           );
@@ -782,6 +805,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              x11: upgradeX11Trusted(connectionData.x11) ?? null,
             }
           }
         );
@@ -919,6 +943,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              x11: upgradeX11Trusted(connectionData.x11) ?? null,
             }
           }
         );
@@ -1036,6 +1061,16 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
           break;
         }
+      }
+
+      // For SSH terminal tabs, the connection-dialog has already re-run
+      // ssh_connect (which on the backend tears down the previous session via
+      // create_connection's teardown_existing_connection). The frontend PTY
+      // must now reconnect: dispatching RECONNECT_TAB bumps reconnectCount,
+      // which is part of PtyTerminal's React key (see terminal-tab-portals),
+      // forcing a remount → fresh WebSocket → StartPty on the new session.
+      if (!isFileBrowser && !isDesktop) {
+        dispatch({ type: 'RECONNECT_TAB', tabId });
       }
 
       // For SFTP/FTP reconnect flow
@@ -1342,6 +1377,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              x11: upgradeX11Trusted(connectionData.x11) ?? null,
             }
           }
         );
