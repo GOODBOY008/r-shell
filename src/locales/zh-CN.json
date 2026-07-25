@@ -212,8 +212,8 @@
     "x11": {
       "enable": "启用 X11 转发",
       "enableDesc": "将远程 X11 应用转发到本地 X 服务器（如 XQuartz）",
-      "trusted": "受信任模式 (−Y)",
-      "trustedHint": "授予远程应用对本地 X 服务器的完全访问权限。不受信任（−X，默认）会隔离它们。",
+      "trusted": "受信任模式 (−Y，默认)",
+      "trustedHint": "传递本地真实 X cookie，转发应用才能正常显示。不受信任（−X）使用伪造 cookie，会被大多数 X 服务器拒绝，应用将无法显示。",
       "displayOverride": "DISPLAY 覆盖",
       "displayPlaceholder": "留空则自动检测"
     }

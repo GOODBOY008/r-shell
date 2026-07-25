@@ -535,13 +535,21 @@ mod x11_e2e_tests {
         let display = read_remote_display(&session).await;
 
         // sshd with X11Forwarding yes + X11DisplayOffset 10 sets DISPLAY to a
-        // forwarded value ending in `:10.0`. With X11UseLocalhost yes that is
-        // `localhost:10.0`; with `no` (our container) it is the sshd-side
-        // hostname, e.g. `<container>:10.0`. The essential proof of an
-        // established X11 forwarding is a non-empty value ending in `:10.0`.
+        // forwarded value of the form `<host>:<N>.0`. sshd picks the first free
+        // display number starting at the offset, so across multiple test runs
+        // (each establishes its own X11 forwarding) the number increments
+        // (10, 11, 12, ...). The essential proof is a value matching
+        // `<host>:<N>=10>.0`, i.e. at or above the configured offset.
+        let proof = display
+            .rsplit(':')
+            .next()
+            .and_then(|tail| tail.split('.').next())
+            .and_then(|n| n.parse::<u32>().ok())
+            .map(|n| n >= 10)
+            .unwrap_or(false);
         assert!(
-            display.ends_with(":10.0") && !display.is_empty(),
-            "remote $DISPLAY should be set to a forwarded value ending in ':10.0' by sshd; got display={display:?}"
+            proof && display.ends_with(".0"),
+            "remote $DISPLAY should be set to a forwarded value '<host>:<N>=10>.0' by sshd; got display={display:?}"
         );
 
         session.cancel.cancel();
@@ -624,5 +632,68 @@ mod x11_e2e_tests {
 
         // Clean up.
         mgr.close_connection("reconnect-1").await.expect("close ok");
+    }
+
+    /// Problem #2 diagnostic: drive the FULL R-Shell X11 path end-to-end and
+    /// capture evidence of where it breaks. Connects with X11 enabled, opens a
+    /// PTY (which runs request_x11 + installs the dispatcher), then launches
+    /// an X client inside the container (`xdpyinfo`) — which connects to the
+    /// remote $DISPLAY and forces sshd to open an inbound X11 channel back to
+    /// R-Shell. We then observe, via tracing, whether:
+    ///   - the inbound channel reached the dispatcher,
+    ///   - connect_local_x_server succeeded (local XQuartz reachable),
+    ///   - the bridge streamed bytes.
+    ///
+    /// This is a DIAGNOSTIC (not a strict assertion): it prints what happened
+    /// so the failure point is visible. Run with:
+    ///   cargo test --features x11-e2e -- --nocapture --ignored x11_end_to_end
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/ + a local X server"]
+    async fn x11_end_to_end_dispatcher_receives_channel() {
+        init_tracing();
+        let mut client = SshClient::new();
+        // trusted=true (-Y): pass the real local xauth cookie. Untrusted
+        // (fake cookie) is rejected by the local X server → instant EOF.
+        let config = x11_config(true, true, None);
+
+        client
+            .connect("x11-e2e-3".to_string(), &config)
+            .await
+            .expect("connect");
+        let session = client
+            .create_pty_session(80, 24, "x11-e2e-3")
+            .await
+            .expect("PTY + request_x11");
+
+        // Drain MOTD.
+        let _ = read_until(&session, "NO_SUCH", Duration::from_millis(500)).await;
+
+        // Launch an X client that talks to the remote $DISPLAY. xlogo opens a
+        // window via the SSH-forwarded X11 channel, so it exercises the full
+        // inbound path: sshd -> inbound X11 channel -> R-Shell dispatcher ->
+        // connect_local_x_server -> bridge. Run it backgrounded so the PTY
+        // prompt returns; the window (if forwarding works) appears on the
+        // local XQuartz.
+        session
+            .input_tx
+            .send(b"(xlogo >/tmp/xlogo.out 2>&1 &); sleep 1; echo XLOGO_LAUNCHED_RC=$?\n".to_vec())
+            .await
+            .ok();
+        let _ = read_until(&session, "XLOGO_LAUNCHED_RC=", Duration::from_secs(6)).await;
+
+        // Give sshd + the dispatcher + the local X connect a moment to happen.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+
+        // Read back any error output from xlogo.
+        session
+            .input_tx
+            .send(b"echo XLOGO_OUT_START; cat /tmp/xlogo.out 2>/dev/null; echo; echo XLOGO_OUT_END\n".to_vec())
+            .await
+            .ok();
+        let out = read_until(&session, "XLOGO_OUT_END", Duration::from_secs(5)).await;
+        println!("---- xlogo output ----\n{out}\n---- (watch the [X11] tracing logs above for the dispatcher path) ----");
+
+        session.cancel.cancel();
+        let _ = client.disconnect().await;
     }
 }

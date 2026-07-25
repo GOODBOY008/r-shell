@@ -14,16 +14,39 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// X11 forwarding configuration, carried inside `SshConfig`.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct X11Config {
     pub enabled: bool,
-    /// Trusted (-Y): pass the real local xauth cookie. Untrusted (-X, default):
-    /// pass a generated fake cookie.
-    #[serde(default)]
+    /// Trusted (-Y): pass the real local xauth cookie. This is the DEFAULT
+    /// because the alternative (untrusted / fake cookie) is rejected by a
+    /// standard local X server (XQuartz, native Linux) — it only honours the
+    /// real cookie in the user's .Xauthority, so a fake cookie causes the X
+    /// client's connection to be dropped immediately (instant EOF on the
+    /// bridge). Untrusted mode also requires the sshd + X server to negotiate
+    /// the X11 SECURITY extension, which most setups don't. Users who
+    /// understand the security trade-off and have a compatible server can
+    /// opt into untrusted explicitly.
+    #[serde(default = "default_trusted")]
     pub trusted: bool,
     /// DISPLAY override; None => auto-detect from `$DISPLAY` or default to `:0`.
     #[serde(default)]
     pub display: Option<String>,
+}
+
+/// Serde default for `X11Config::trusted`. Kept as a function so both
+/// `#[serde(default)]` deserialization and the `Default` impl agree.
+fn default_trusted() -> bool {
+    true
+}
+
+impl Default for X11Config {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            trusted: default_trusted(),
+            display: None,
+        }
+    }
 }
 
 /// Parsed `$DISPLAY` value: how to reach the local X server and which screen.
@@ -582,5 +605,28 @@ mod tests {
         let c = weak_cookie();
         assert_eq!(c.len(), 32);
         assert!(c.chars().all(|ch| ch.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn x11_config_default_is_trusted() {
+        // Regression: the default MUST be trusted=true. A fake (untrusted)
+        // cookie is rejected by standard local X servers (XQuartz, native
+        // Linux), so an untrusted-by-default would silently break X11
+        // forwarding for every user — the X client's connection is dropped
+        // immediately (instant EOF on the bridge).
+        let cfg = X11Config::default();
+        assert!(!cfg.enabled, "enabled defaults to false");
+        assert!(cfg.trusted, "trusted MUST default to true");
+        assert!(cfg.display.is_none(), "display defaults to None");
+    }
+
+    #[test]
+    fn x11_config_deserialize_missing_trusted_uses_serde_default_true() {
+        // Deserializing a config that omits `trusted` (e.g. an old saved
+        // connection) must yield trusted=true, not false.
+        let json = r#"{"enabled":true}"#;
+        let cfg: X11Config = serde_json::from_str(json).unwrap();
+        assert!(cfg.enabled);
+        assert!(cfg.trusted, "missing trusted field must default to true");
     }
 }
