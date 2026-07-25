@@ -30,8 +30,12 @@ pub struct X11Config {
 pub struct ParsedDisplay {
     server: LocalXServer,
     screen: u32,
+    /// The display number (`:N`), used for the macOS launchd-socket fallback
+    /// to `/tmp/.X11-unix/X<N>` when the launchd path doesn't accept connections.
+    display_num: u32,
 }
 
+#[derive(Debug)]
 enum LocalXServer {
     /// Unix domain socket, e.g. `/tmp/.X11-unix/X0`.
     Unix(PathBuf),
@@ -53,6 +57,8 @@ impl ParsedDisplay {
 /// - `unix:N` / `unix:N.M` -> same as `:N`
 /// - `localhost:N`        -> TCP `127.0.0.1:{6000+N}`
 /// - `host:N`             -> TCP `host:{6000+N}` (resolved at connect time)
+/// - `/abs/path:N`        -> Unix socket at `/abs/path` (macOS launchd form,
+///                           e.g. `/var/run/com.apple.launchd.<id>/org.xquartz:0`)
 pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
     let display = display.trim();
 
@@ -79,6 +85,13 @@ pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
 
     let server = if host_part.is_empty() || host_part == "unix" {
         LocalXServer::Unix(PathBuf::from(format!("/tmp/.X11-unix/X{}", num)))
+    } else if host_part.starts_with('/') {
+        // macOS launchd form: $DISPLAY is an absolute path to a unix socket,
+        // e.g. `/var/run/com.apple.launchd.<id>/org.xquartz:0`. The display
+        // number is informational (the socket path already encodes it); use
+        // the path verbatim. Treating this as a TCP host would fail DNS
+        // lookup, breaking X11 forwarding on every macOS + XQuartz install.
+        LocalXServer::Unix(PathBuf::from(host_part))
     } else {
         // `localhost` and arbitrary hosts both carry their host string as-is;
         // the canonical loopback IP is used for the `localhost` keyword. The
@@ -99,7 +112,7 @@ pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
         LocalXServer::Tcp { host, port }
     };
 
-    Ok(ParsedDisplay { server, screen })
+    Ok(ParsedDisplay { server, screen, display_num: num })
 }
 
 /// Generate a fake MIT-MAGIC-COOKIE-1 (16 random bytes, 32 lowercase hex chars).
@@ -285,10 +298,28 @@ impl tokio::io::AsyncWrite for LocalXConnection {
 pub async fn connect_local_x_server(parsed: &ParsedDisplay) -> anyhow::Result<LocalXConnection> {
     match &parsed.server {
         LocalXServer::Unix(path) => {
-            let s = tokio::net::UnixStream::connect(path)
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to connect to X socket {}: {}", path.display(), e))?;
-            Ok(LocalXConnection::Unix(s))
+            match tokio::net::UnixStream::connect(path).await {
+                Ok(s) => Ok(LocalXConnection::Unix(s)),
+                Err(e) => {
+                    // macOS fallback: a launchd-style $DISPLAY path (e.g.
+                    // /var/run/com.apple.launchd.<id>/org.xquartz:0) is a
+                    // demand-activated stub. The actual listening socket is
+                    // usually the traditional /tmp/.X11-unix/X<N>. Try it
+                    // before giving up so X11 forwarding works on macOS even
+                    // when the launchd socket refuses the connection.
+                    if path.is_absolute() && !path.starts_with("/tmp/.X11-unix") {
+                        let fallback = PathBuf::from(format!("/tmp/.X11-unix/X{}", parsed.display_num));
+                        if let Ok(s) = tokio::net::UnixStream::connect(&fallback).await {
+                            tracing::info!(
+                                "[X11] launchd socket {} did not accept connection ({}); fell back to {}",
+                                path.display(), e, fallback.display()
+                            );
+                            return Ok(LocalXConnection::Unix(s));
+                        }
+                    }
+                    Err(anyhow::anyhow!("failed to connect to X socket {}: {}", path.display(), e))
+                }
+            }
         }
         LocalXServer::Tcp { host, port } => {
             // `host` may be a DNS name (e.g. "myhost") or a literal IP; resolve at connect time.
@@ -498,6 +529,38 @@ mod tests {
             _ => panic!("expected Tcp"),
         }
         assert_eq!(p.screen, 2);
+    }
+
+    #[test]
+    fn parse_display_macos_launchd_socket() {
+        // macOS sets $DISPLAY to a launchd-managed socket path like
+        // /var/run/com.apple.launchd.<id>/org.xquartz:0 . The host part is an
+        // absolute path, so this must be treated as a unix socket at that
+        // exact path — NOT as a TCP host (which fails DNS lookup).
+        let p = parse_display("/var/run/com.apple.launchd.abc/org.xquartz:0").unwrap();
+        assert!(
+            matches!(
+                p.server,
+                LocalXServer::Unix(ref path) if path == std::path::Path::new("/var/run/com.apple.launchd.abc/org.xquartz")
+            ),
+            "expected Unix socket at the launchd path, got {:?}",
+            p.server
+        );
+        assert_eq!(p.screen, 0);
+    }
+
+    #[test]
+    fn parse_display_macos_launchd_socket_with_screen() {
+        let p = parse_display("/var/run/com.apple.launchd.abc/org.xquartz:0.1").unwrap();
+        assert!(
+            matches!(
+                p.server,
+                LocalXServer::Unix(ref path) if path == std::path::Path::new("/var/run/com.apple.launchd.abc/org.xquartz")
+            ),
+            "expected Unix socket at the launchd path, got {:?}",
+            p.server
+        );
+        assert_eq!(p.screen, 1);
     }
 
     #[test]
