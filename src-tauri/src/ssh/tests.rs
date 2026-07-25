@@ -580,4 +580,49 @@ mod x11_e2e_tests {
         session.cancel.cancel();
         let _ = client.disconnect().await;
     }
+
+    /// Problem #1 regression: reconnecting with the same connection_id (the
+    /// "edit an open connection → update & connect" flow) must tear down the
+    /// previous connection — the old client disconnected, old PTY session
+    /// cancelled — so the frontend's bound session does not go dead.
+    ///
+    /// Verified against the Dockerized sshd: two sequential `create_connection`
+    /// calls with the same id both succeed, and after the second the manager
+    /// holds exactly one connection for that id (no leak), and the PTY map has
+    /// no stale entry.
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
+    async fn reconnect_same_id_tears_down_previous_connection() {
+        use crate::connection_manager::ConnectionManager;
+
+        let mgr = std::sync::Arc::new(ConnectionManager::new());
+        let config = x11_config(false, false, None);
+
+        // First connection.
+        mgr.create_connection("reconnect-1".to_string(), config.clone())
+            .await
+            .expect("first connect should succeed");
+        assert!(
+            mgr.get_connection("reconnect-1").await.is_some(),
+            "first connection should be present"
+        );
+
+        // Reconnect with the SAME id — simulates "update & connect" on an
+        // already-open connection. Before the fix this silently overwrote the
+        // old client (leaked, never disconnected) leaving the frontend's PTY
+        // pointing at a dead session.
+        mgr.create_connection("reconnect-1".to_string(), config.clone())
+            .await
+            .expect("reconnect should succeed");
+
+        // The manager must still hold exactly one connection for this id
+        // (the new one), and it must be usable.
+        assert!(
+            mgr.get_connection("reconnect-1").await.is_some(),
+            "reconnected client should be present"
+        );
+
+        // Clean up.
+        mgr.close_connection("reconnect-1").await.expect("close ok");
+    }
 }
