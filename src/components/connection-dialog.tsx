@@ -1513,7 +1513,11 @@ const handleCancelConnectionAttempt = async () => {
                                 ...c,
                                 x11: {
                                   enabled: checked,
-                                  trusted: c.x11?.trusted ?? false,
+                                  // Default trusted: a fake (untrusted) cookie is
+                                  // rejected by standard local X servers (XQuartz,
+                                  // native Linux) causing instant disconnect; the
+                                  // real cookie is required for forwarding to work.
+                                  trusted: c.x11?.trusted ?? true,
                                   display: c.x11?.display,
                                 },
                               }))
@@ -1559,7 +1563,7 @@ const handleCancelConnectionAttempt = async () => {
                                     ...c,
                                     x11: {
                                       enabled: c.x11?.enabled ?? false,
-                                      trusted: c.x11?.trusted ?? false,
+                                      trusted: c.x11?.trusted ?? true,
                                       display: e.target.value || undefined,
                                     },
                                   }))
