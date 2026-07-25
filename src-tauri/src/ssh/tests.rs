@@ -367,12 +367,23 @@ mod key_loading_tests {
 mod x11_e2e_tests {
     use crate::ssh::{AuthMethod, SshClient, SshConfig};
     use crate::x11::X11Config;
+    use std::sync::Once;
     use std::time::{Duration, Instant};
 
     const E2E_HOST: &str = "127.0.0.1";
     const E2E_PORT: u16 = 2222;
     const E2E_USER: &str = "testuser";
     const E2E_PASS: &str = "testpass";
+
+    // Initialise tracing once per process so `--nocapture` surfaces the X11
+    // handshake logs ([X11] forwarding requested / request_x11 rejected / ...).
+    // Uses the plain fmt subscriber (no env-filter feature required).
+    static TRACING_INIT: Once = Once::new();
+    fn init_tracing() {
+        TRACING_INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        });
+    }
 
     fn x11_config(enabled: bool, trusted: bool, display: Option<&str>) -> SshConfig {
         SshConfig {
@@ -501,6 +512,7 @@ mod x11_e2e_tests {
     #[tokio::test]
     #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
     async fn x11_forwarding_sets_remote_display() {
+        init_tracing();
         let mut client = SshClient::new();
         let config = x11_config(true, false, None);
 
@@ -542,6 +554,7 @@ mod x11_e2e_tests {
     #[tokio::test]
     #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
     async fn x11_disabled_leaves_display_empty() {
+        init_tracing();
         let mut client = SshClient::new();
         let config = x11_config(false, false, None);
 
