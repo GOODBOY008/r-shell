@@ -117,34 +117,22 @@ export function ConnectionManager({
   useEffect(() => {
     const newTree = loadConnections();
     setConnections(prev => {
-      // Build a flat map of id → isExpanded from the previous tree (deep)
-      const expandedMap = new Map<string, boolean>();
-      const collectExpanded = (nodes: ConnectionNode[]) => {
-        for (const node of nodes) {
-          if (node.type === 'folder') {
-            expandedMap.set(node.id, node.isExpanded ?? true);
-          }
-          if (node.children) {
-            collectExpanded(node.children);
-          }
-        }
-      };
-      collectExpanded(prev);
-
-      // Apply preserved expand state to the new tree (deep)
-      const applyExpanded = (nodes: ConnectionNode[]): ConnectionNode[] =>
-        nodes.map(node => {
-          const expanded = expandedMap.get(node.id);
+      // Merge isExpanded from the previous tree to preserve the user's
+      // expand/collapse state across tree rebuilds (the storage backend
+      // always returns isExpanded: true).
+      const mergeExpanded = (newNodes: ConnectionNode[]): ConnectionNode[] =>
+        newNodes.map(newNode => {
+          const prevNode = prev.find(n => n.id === newNode.id);
           const merged: ConnectionNode = {
-            ...node,
-            isExpanded: expanded !== undefined ? expanded : node.isExpanded,
+            ...newNode,
+            isExpanded: prevNode !== undefined ? prevNode.isExpanded : newNode.isExpanded,
           };
-          if (node.children) {
-            merged.children = applyExpanded(node.children);
+          if (newNode.children && prevNode?.children) {
+            merged.children = mergeExpanded(newNode.children);
           }
           return merged;
         });
-      return applyExpanded(newTree);
+      return mergeExpanded(newTree);
     });
   }, [activeConnections]);
 
@@ -645,13 +633,8 @@ export function ConnectionManager({
       // Suppress the synthetic click that follows a completed drag
       if (suppressClickRef.current) return;
 
-      // Always select the node first
+      // Select the node — folder toggle is handled separately by the chevron button
       onConnectionSelect(node);
-
-      // Then toggle folder expansion if it's a folder
-      if (node.type === 'folder') {
-        toggleExpanded(node.id);
-      }
     };
 
     const handleNodeDoubleClick = () => {

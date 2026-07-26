@@ -99,6 +99,39 @@ export function ConnectionDialog({
 
   const [config, setConfig] = useState<ConnectionConfig>(defaultConfig);
 
+  // Track number input display values separately from config to allow
+  // the field to be empty while editing — React controlled inputs need
+  // value="" to render empty, but ConnectionConfig uses strict number types.
+  const initialDisplayValues = {
+    port: 22 as number | '',
+    proxyPort: 8080 as number | '',
+    keepAliveInterval: 60 as number | '',
+    serverAliveCountMax: 3 as number | '',
+  };
+  const [displayValues, setDisplayValues] = useState(initialDisplayValues);
+
+  /** Handle onChange for a controlled number input that must allow empty. */
+  const handleNumberInput = (
+    field: keyof typeof initialDisplayValues,
+    rawValue: string,
+    onValid: (n: number) => void,
+  ) => {
+    if (rawValue === '') {
+      setDisplayValues(prev => ({ ...prev, [field]: '' }));
+      return;
+    }
+    const parsed = parseInt(rawValue, 10);
+    if (!Number.isNaN(parsed)) {
+      setDisplayValues(prev => ({ ...prev, [field]: parsed }));
+      onValid(parsed);
+    }
+  };
+
+  /** Sync display values when the form re-opens with new data. */
+  const syncDisplayValues = (config_: typeof initialDisplayValues) => {
+    setDisplayValues(config_);
+  };
+
   const [isConnecting, setIsConnecting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [_savedProfiles, setSavedProfiles] = useState<ConnectionProfile[]>([]);
@@ -125,21 +158,23 @@ export function ConnectionDialog({
 
       // Load editing connection data into config when dialog opens
       if (editingConnection) {
-        const mergedConfig = {
+        setConfig({
           ...defaultConfig,
-          ...editingConnection,
-        };
-        // If editingConnection omits port, derive it from the protocol
-        if (editingConnection.port === undefined) {
-          mergedConfig.port = getDefaultPort(mergedConfig.protocol);
-        }
-        setConfig(mergedConfig);
+          ...editingConnection
+        });
+        syncDisplayValues({
+          port: editingConnection.port ?? 22,
+          proxyPort: editingConnection.proxyPort ?? 8080,
+          keepAliveInterval: editingConnection.keepAliveInterval ?? 60,
+          serverAliveCountMax: editingConnection.serverAliveCountMax ?? 3,
+        });
         // When editing, don't show "save as connection" since it already exists
         setSaveAsConnection(false);
       } else {
         // Reset to defaults for new connection
         setConfig(defaultConfig);
         setSaveAsConnection(true);
+        syncDisplayValues(initialDisplayValues);
       }
     } else {
       // Reset connection state when dialog closes
@@ -527,12 +562,14 @@ export function ConnectionDialog({
                       onValueChange={(value: ConnectionConfig['protocol']) => {
                         const validAuthMethods = getAuthMethods(value);
                         const currentAuthValid = validAuthMethods.includes(config.authMethod);
+                        const defaultPort = getDefaultPort(value);
                         updateConfig({
                           protocol: value,
-                          port: getDefaultPort(value),
+                          port: defaultPort,
                           ...(!currentAuthValid && { authMethod: validAuthMethods[0] }),
                           ...(value !== 'FTP' && { ftpsEnabled: undefined }),
                         });
+                        setDisplayValues(prev => ({ ...prev, port: defaultPort }));
                       }}
                     >
                       <SelectTrigger>
@@ -567,12 +604,8 @@ export function ConnectionDialog({
                     <Input
                       id="port"
                       type="number"
-                      value={config.port}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        const num = val === '' ? getDefaultPort(config.protocol) : Math.floor(Number(val));
-                        if (!Number.isNaN(num)) updateConfig({ port: num });
-                      }}
+                      value={displayValues.port}
+                      onChange={(e) => handleNumberInput('port', e.target.value, (n) => updateConfig({ port: n }))}
                     />
                   </div>
                 </div>
@@ -826,12 +859,8 @@ export function ConnectionDialog({
                         <Input
                           id="proxy-port"
                           type="number"
-                          value={config.proxyPort}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            const num = val === '' ? 8080 : Math.floor(Number(val));
-                            if (!Number.isNaN(num)) updateConfig({ proxyPort: num });
-                          }}
+                          value={displayValues.proxyPort}
+                          onChange={(e) => handleNumberInput('proxyPort', e.target.value, (n) => updateConfig({ proxyPort: n }))}
                         />
                       </div>
                     </div>
@@ -937,12 +966,8 @@ export function ConnectionDialog({
                                 <Input
                                   id="keep-alive-interval"
                                   type="number"
-                                  value={config.keepAliveInterval}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    const num = val === '' ? 60 : Math.floor(Number(val));
-                                    if (!Number.isNaN(num)) updateConfig({ keepAliveInterval: num });
-                                  }}
+                                  value={displayValues.keepAliveInterval}
+                                  onChange={(e) => handleNumberInput('keepAliveInterval', e.target.value, (n) => updateConfig({ keepAliveInterval: n }))}
                                 />
                               </div>
                               <div className="space-y-2">
@@ -950,12 +975,8 @@ export function ConnectionDialog({
                                 <Input
                                   id="max-count"
                                   type="number"
-                                  value={config.serverAliveCountMax}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    const num = val === '' ? 3 : Math.floor(Number(val));
-                                    if (!Number.isNaN(num)) updateConfig({ serverAliveCountMax: num });
-                                  }}
+                                  value={displayValues.serverAliveCountMax}
+                                  onChange={(e) => handleNumberInput('serverAliveCountMax', e.target.value, (n) => updateConfig({ serverAliveCountMax: n }))}
                                 />
                               </div>
                             </div>
