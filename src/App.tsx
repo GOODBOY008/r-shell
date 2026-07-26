@@ -60,6 +60,7 @@ function AppContent() {
 
   // Modal states
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
+  const [connectionInitialFolder, setConnectionInitialFolder] = useState<string | undefined>();
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
@@ -670,7 +671,8 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
-  const handleNewTab = useCallback(() => {
+  const handleNewTab = useCallback((folderPath?: string) => {
+    setConnectionInitialFolder(folderPath);
     setConnectionDialogOpen(true);
     setEditingConnection(null);
   }, []);
@@ -1699,9 +1701,13 @@ function AppContent() {
       {/* Modals */}
       <ConnectionDialog
         open={connectionDialogOpen}
-        onOpenChange={setConnectionDialogOpen}
+        onOpenChange={(open) => {
+          setConnectionDialogOpen(open);
+          if (!open) setConnectionInitialFolder(undefined);
+        }}
         onConnect={handleConnectionDialogConnect}
         editingConnection={editingConnection}
+        initialFolder={connectionInitialFolder}
       />
 
       <SettingsModal
