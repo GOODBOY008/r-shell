@@ -113,9 +113,39 @@ export function ConnectionManager({
   const suppressClickRef = useRef(false);
   const treeContainerRef = useRef<HTMLDivElement>(null);
 
-  // Reload connections when active connections change
+  // Reload connections when active connections change, preserving expand state
   useEffect(() => {
-    setConnections(loadConnections());
+    const newTree = loadConnections();
+    setConnections(prev => {
+      // Build a flat map of id → isExpanded from the previous tree (deep)
+      const expandedMap = new Map<string, boolean>();
+      const collectExpanded = (nodes: ConnectionNode[]) => {
+        for (const node of nodes) {
+          if (node.type === 'folder') {
+            expandedMap.set(node.id, node.isExpanded ?? true);
+          }
+          if (node.children) {
+            collectExpanded(node.children);
+          }
+        }
+      };
+      collectExpanded(prev);
+
+      // Apply preserved expand state to the new tree (deep)
+      const applyExpanded = (nodes: ConnectionNode[]): ConnectionNode[] =>
+        nodes.map(node => {
+          const expanded = expandedMap.get(node.id);
+          const merged: ConnectionNode = {
+            ...node,
+            isExpanded: expanded !== undefined ? expanded : node.isExpanded,
+          };
+          if (node.children) {
+            merged.children = applyExpanded(node.children);
+          }
+          return merged;
+        });
+      return applyExpanded(newTree);
+    });
   }, [activeConnections]);
 
   // Handle connection deletion
@@ -655,7 +685,13 @@ export function ConnectionManager({
           <div className="absolute bottom-0 right-0 h-0.5 bg-primary rounded" style={{ left: `${level * 16 + 8}px` }} />
         )}
         {node.type === 'folder' && (
-          <Button variant="ghost" size="sm" className="p-0 h-4 w-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="p-0 h-4 w-4"
+            aria-label={node.isExpanded ? t('connectionManager.collapseFolder') : t('connectionManager.expandFolder')}
+            aria-expanded={node.isExpanded}
+          >
             {node.isExpanded ?
               <ChevronDown className="w-3 h-3" /> :
               <ChevronRight className="w-3 h-3" />

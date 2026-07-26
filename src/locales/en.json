@@ -767,7 +767,9 @@
     "connectionDetails": "Connection Details",
     "noConnectionSelected": "No connection selected",
     "movedToRoot": "Moved \"{{name}}\" to All Connections",
-    "failedToReorder": "Failed to reorder items"
+    "failedToReorder": "Failed to reorder items",
+    "expandFolder": "Expand folder",
+    "collapseFolder": "Collapse folder"
   },
   "filePanel": {
     "selectDirectory": "Select a directory to view its contents",

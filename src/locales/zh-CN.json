@@ -767,7 +767,9 @@
     "connectionDetails": "连接详情",
     "noConnectionSelected": "未选择连接",
     "movedToRoot": "已将\"{{name}}\"移动到所有连接",
-    "failedToReorder": "重新排序失败"
+    "failedToReorder": "重新排序失败",
+    "expandFolder": "展开文件夹",
+    "collapseFolder": "折叠文件夹"
   },
   "filePanel": {
     "selectDirectory": "选择目录以查看其内容",

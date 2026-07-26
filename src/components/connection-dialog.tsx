@@ -125,10 +125,15 @@ export function ConnectionDialog({
 
       // Load editing connection data into config when dialog opens
       if (editingConnection) {
-        setConfig({
+        const mergedConfig = {
           ...defaultConfig,
-          ...editingConnection
-        });
+          ...editingConnection,
+        };
+        // If editingConnection omits port, derive it from the protocol
+        if (editingConnection.port === undefined) {
+          mergedConfig.port = getDefaultPort(mergedConfig.protocol);
+        }
+        setConfig(mergedConfig);
         // When editing, don't show "save as connection" since it already exists
         setSaveAsConnection(false);
       } else {
@@ -563,7 +568,11 @@ export function ConnectionDialog({
                       id="port"
                       type="number"
                       value={config.port}
-                      onChange={(e) => updateConfig({ port: parseInt(e.target.value) || 22 })}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const num = val === '' ? getDefaultPort(config.protocol) : Math.floor(Number(val));
+                        if (!Number.isNaN(num)) updateConfig({ port: num });
+                      }}
                     />
                   </div>
                 </div>
@@ -818,7 +827,11 @@ export function ConnectionDialog({
                           id="proxy-port"
                           type="number"
                           value={config.proxyPort}
-                          onChange={(e) => updateConfig({ proxyPort: parseInt(e.target.value) || 8080 })}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const num = val === '' ? 8080 : Math.floor(Number(val));
+                            if (!Number.isNaN(num)) updateConfig({ proxyPort: num });
+                          }}
                         />
                       </div>
                     </div>
@@ -925,7 +938,11 @@ export function ConnectionDialog({
                                   id="keep-alive-interval"
                                   type="number"
                                   value={config.keepAliveInterval}
-                                  onChange={(e) => updateConfig({ keepAliveInterval: parseInt(e.target.value) || 60 })}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const num = val === '' ? 60 : Math.floor(Number(val));
+                                    if (!Number.isNaN(num)) updateConfig({ keepAliveInterval: num });
+                                  }}
                                 />
                               </div>
                               <div className="space-y-2">
@@ -934,7 +951,11 @@ export function ConnectionDialog({
                                   id="max-count"
                                   type="number"
                                   value={config.serverAliveCountMax}
-                                  onChange={(e) => updateConfig({ serverAliveCountMax: parseInt(e.target.value) || 3 })}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const num = val === '' ? 3 : Math.floor(Number(val));
+                                    if (!Number.isNaN(num)) updateConfig({ serverAliveCountMax: num });
+                                  }}
                                 />
                               </div>
                             </div>

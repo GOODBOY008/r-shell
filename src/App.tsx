@@ -96,6 +96,13 @@ function AppContent() {
     return Object.values(state.groups).flatMap(g => g.tabs);
   }, [state.groups]);
 
+  // Memoized set of active connection IDs — stable reference prevents
+  // ConnectionManager from rebuilding its tree on every parent render.
+  const activeConnectionIds = useMemo(
+    () => new Set(allTabs.map(tab => tab.id)),
+    [allTabs],
+  );
+
   // Apply stored language preference (follows OS locale when set to "auto")
   useEffect(() => {
     void applyLanguageFromPreference();
@@ -1580,7 +1587,7 @@ function AppContent() {
                   onConnectionSelect={handleConnectionSelect}
                   onConnectionConnect={handleConnectionConnect}
                   selectedConnectionId={selectedConnection?.id || null}
-                  activeConnections={new Set(allTabs.map(tab => tab.id))}
+                  activeConnections={activeConnectionIds}
                   onNewConnection={handleNewTab}
                   onEditConnection={handleEditConnection}
                   recentConnections={recentConnections}
