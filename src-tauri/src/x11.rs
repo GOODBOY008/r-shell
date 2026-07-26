@@ -1,5 +1,6 @@
 //! SSH X11 forwarding: DISPLAY parsing, cookie generation, local X-server bridging.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,7 @@ pub struct ParsedDisplay {
 #[derive(Debug)]
 enum LocalXServer {
     /// Unix domain socket, e.g. `/tmp/.X11-unix/X0`.
+    #[cfg(unix)]
     Unix(PathBuf),
     /// TCP endpoint: a host (DNS name or literal IP) and port. The host is
     /// resolved at connect time, so it may be a name like `myhost`.
@@ -97,14 +99,35 @@ pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
         .map_err(|_| anyhow::anyhow!("invalid DISPLAY '{}': display number not numeric", display))?;
 
     let server = if host_part.is_empty() || host_part == "unix" {
-        LocalXServer::Unix(PathBuf::from(format!("/tmp/.X11-unix/X{}", num)))
+        // `:N` and `unix:N` are Unix-domain socket forms. On Windows the local
+        // X server (VcXsrv/Xming) exposes itself over TCP, so resolve to
+        // 127.0.0.1:{6000+N} there instead.
+        #[cfg(unix)]
+        {
+            LocalXServer::Unix(PathBuf::from(format!("/tmp/.X11-unix/X{}", num)))
+        }
+        #[cfg(not(unix))]
+        {
+            let port = tcp_port_for_display(num, display)?;
+            LocalXServer::Tcp { host: "127.0.0.1".to_string(), port }
+        }
     } else if host_part.starts_with('/') {
         // macOS launchd form: $DISPLAY is an absolute path to a unix socket,
         // e.g. `/var/run/com.apple.launchd.<id>/org.xquartz:0`. The display
         // number is informational (the socket path already encodes it); use
         // the path verbatim. Treating this as a TCP host would fail DNS
         // lookup, breaking X11 forwarding on every macOS + XQuartz install.
-        LocalXServer::Unix(PathBuf::from(host_part))
+        #[cfg(unix)]
+        {
+            LocalXServer::Unix(PathBuf::from(host_part))
+        }
+        #[cfg(not(unix))]
+        {
+            // Absolute-path DISPLAY never appears on Windows; if it somehow
+            // does, fall back to TCP loopback with the parsed display number.
+            let port = tcp_port_for_display(num, display)?;
+            LocalXServer::Tcp { host: "127.0.0.1".to_string(), port }
+        }
     } else {
         // `localhost` and arbitrary hosts both carry their host string as-is;
         // the canonical loopback IP is used for the `localhost` keyword. The
@@ -114,18 +137,23 @@ pub fn parse_display(display: &str) -> anyhow::Result<ParsedDisplay> {
         } else {
             host_part.to_string()
         };
-        // Checked arithmetic: DISPLAY comes from the environment and may be
-        // untrusted. Avoid overflow panics / silent wrap on large `num`.
-        let port = 6000u32
-            .checked_add(num)
-            .and_then(|p| u16::try_from(p).ok())
-            .ok_or_else(|| {
-                anyhow::anyhow!("invalid DISPLAY '{}': display number out of range", display)
-            })?;
+        let port = tcp_port_for_display(num, display)?;
         LocalXServer::Tcp { host, port }
     };
 
     Ok(ParsedDisplay { server, screen, display_num: num })
+}
+
+/// Compute the TCP port (6000 + display_number) for an X server, with overflow
+/// checking. Factored out so both the Unix-fallback and native TCP paths share
+/// the same validation.
+fn tcp_port_for_display(num: u32, display: &str) -> anyhow::Result<u16> {
+    // Checked arithmetic: DISPLAY comes from the environment and may be
+    // untrusted. Avoid overflow panics / silent wrap on large `num`.
+    6000u32
+        .checked_add(num)
+        .and_then(|p| u16::try_from(p).ok())
+        .ok_or_else(|| anyhow::anyhow!("invalid DISPLAY '{}': display number out of range", display))
 }
 
 /// Generate a fake MIT-MAGIC-COOKIE-1 (16 random bytes, 32 lowercase hex chars).
@@ -261,6 +289,7 @@ impl X11DispatcherRegistry {
 
 /// A connected local X-server socket, abstracted over Unix domain and TCP.
 pub enum LocalXConnection {
+    #[cfg(unix)]
     Unix(tokio::net::UnixStream),
     Tcp(tokio::net::TcpStream),
 }
@@ -272,6 +301,7 @@ impl tokio::io::AsyncRead for LocalXConnection {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match &mut *self {
+            #[cfg(unix)]
             LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_read(cx, buf),
             LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_read(cx, buf),
         }
@@ -285,6 +315,7 @@ impl tokio::io::AsyncWrite for LocalXConnection {
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
         match &mut *self {
+            #[cfg(unix)]
             LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_write(cx, buf),
             LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_write(cx, buf),
         }
@@ -294,6 +325,7 @@ impl tokio::io::AsyncWrite for LocalXConnection {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match &mut *self {
+            #[cfg(unix)]
             LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_flush(cx),
             LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_flush(cx),
         }
@@ -303,6 +335,7 @@ impl tokio::io::AsyncWrite for LocalXConnection {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         match &mut *self {
+            #[cfg(unix)]
             LocalXConnection::Unix(s) => std::pin::Pin::new(s).poll_shutdown(cx),
             LocalXConnection::Tcp(s) => std::pin::Pin::new(s).poll_shutdown(cx),
         }
@@ -312,6 +345,7 @@ impl tokio::io::AsyncWrite for LocalXConnection {
 /// Open a connection to the local X server described by `parsed`.
 pub async fn connect_local_x_server(parsed: &ParsedDisplay) -> anyhow::Result<LocalXConnection> {
     match &parsed.server {
+        #[cfg(unix)]
         LocalXServer::Unix(path) => {
             match tokio::net::UnixStream::connect(path).await {
                 Ok(s) => Ok(LocalXConnection::Unix(s)),
@@ -460,6 +494,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn parse_display_unix() {
         let p = parse_display(":0").unwrap();
         assert!(matches!(p.server, LocalXServer::Unix(ref path) if path == std::path::Path::new("/tmp/.X11-unix/X0")));
@@ -467,6 +502,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn parse_display_unix_screen() {
         let p = parse_display(":0.1").unwrap();
         assert!(matches!(p.server, LocalXServer::Unix(ref path) if path == std::path::Path::new("/tmp/.X11-unix/X0")));
@@ -474,9 +510,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn parse_display_unix_keyword() {
         let p = parse_display("unix:0").unwrap();
         assert!(matches!(p.server, LocalXServer::Unix(ref path) if path == std::path::Path::new("/tmp/.X11-unix/X0")));
+    }
+
+    #[test]
+    #[cfg(not(unix))]
+    fn parse_display_bare_resolves_to_tcp_loopback_on_non_unix() {
+        // On Windows, `:N` has no unix socket, so it resolves to TCP loopback.
+        let p = parse_display(":0").unwrap();
+        match p.server {
+            LocalXServer::Tcp { host, port } => {
+                assert_eq!(host, "127.0.0.1");
+                assert_eq!(port, 6000);
+            }
+        }
+        assert_eq!(p.screen, 0);
     }
 
     #[test]
@@ -547,6 +598,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn parse_display_macos_launchd_socket() {
         // macOS sets $DISPLAY to a launchd-managed socket path like
         // /var/run/com.apple.launchd.<id>/org.xquartz:0 . The host part is an
@@ -565,6 +617,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn parse_display_macos_launchd_socket_with_screen() {
         let p = parse_display("/var/run/com.apple.launchd.abc/org.xquartz:0.1").unwrap();
         assert!(
