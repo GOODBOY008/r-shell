@@ -113,9 +113,27 @@ export function ConnectionManager({
   const suppressClickRef = useRef(false);
   const treeContainerRef = useRef<HTMLDivElement>(null);
 
-  // Reload connections when active connections change
+  // Reload connections when active connections change, preserving expand state
   useEffect(() => {
-    setConnections(loadConnections());
+    const newTree = loadConnections();
+    setConnections(prev => {
+      // Merge isExpanded from the previous tree to preserve the user's
+      // expand/collapse state across tree rebuilds (the storage backend
+      // always returns isExpanded: true).
+      const mergeExpanded = (newNodes: ConnectionNode[]): ConnectionNode[] =>
+        newNodes.map(newNode => {
+          const prevNode = prev.find(n => n.id === newNode.id);
+          const merged: ConnectionNode = {
+            ...newNode,
+            isExpanded: prevNode !== undefined ? prevNode.isExpanded : newNode.isExpanded,
+          };
+          if (newNode.children && prevNode?.children) {
+            merged.children = mergeExpanded(newNode.children);
+          }
+          return merged;
+        });
+      return mergeExpanded(newTree);
+    });
   }, [activeConnections]);
 
   // Handle connection deletion
@@ -615,13 +633,8 @@ export function ConnectionManager({
       // Suppress the synthetic click that follows a completed drag
       if (suppressClickRef.current) return;
 
-      // Always select the node first
+      // Select the node — folder toggle is handled separately by the chevron button
       onConnectionSelect(node);
-
-      // Then toggle folder expansion if it's a folder
-      if (node.type === 'folder') {
-        toggleExpanded(node.id);
-      }
     };
 
     const handleNodeDoubleClick = () => {
@@ -655,7 +668,15 @@ export function ConnectionManager({
           <div className="absolute bottom-0 right-0 h-0.5 bg-primary rounded" style={{ left: `${level * 16 + 8}px` }} />
         )}
         {node.type === 'folder' && (
-          <Button variant="ghost" size="sm" className="p-0 h-4 w-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="p-0 h-4 w-4"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleExpanded(node.id);
+            }}
+          >
             {node.isExpanded ?
               <ChevronDown className="w-3 h-3" /> :
               <ChevronRight className="w-3 h-3" />
