@@ -14,36 +14,26 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// X11 forwarding configuration, carried inside `SshConfig`.
+///
+/// Forwarding always runs in trusted (-Y) mode: the real local xauth cookie is
+/// passed to the remote side. Untrusted (fake-cookie) mode was removed because
+/// it requires the X11 SECURITY extension, which standard local X servers
+/// (XQuartz, native Linux Xorg, Xwayland) reject — the X client's connection is
+/// dropped immediately (instant EOF on the bridge). There is no reliable way to
+/// make untrusted work with russh + the common X server ecosystem, so the
+/// option would only mislead users.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct X11Config {
     pub enabled: bool,
-    /// Trusted (-Y): pass the real local xauth cookie. This is the DEFAULT
-    /// because the alternative (untrusted / fake cookie) is rejected by a
-    /// standard local X server (XQuartz, native Linux) — it only honours the
-    /// real cookie in the user's .Xauthority, so a fake cookie causes the X
-    /// client's connection to be dropped immediately (instant EOF on the
-    /// bridge). Untrusted mode also requires the sshd + X server to negotiate
-    /// the X11 SECURITY extension, which most setups don't. Users who
-    /// understand the security trade-off and have a compatible server can
-    /// opt into untrusted explicitly.
-    #[serde(default = "default_trusted")]
-    pub trusted: bool,
     /// DISPLAY override; None => auto-detect from `$DISPLAY` or default to `:0`.
     #[serde(default)]
     pub display: Option<String>,
-}
-
-/// Serde default for `X11Config::trusted`. Kept as a function so both
-/// `#[serde(default)]` deserialization and the `Default` impl agree.
-fn default_trusted() -> bool {
-    true
 }
 
 impl Default for X11Config {
     fn default() -> Self {
         Self {
             enabled: false,
-            trusted: default_trusted(),
             display: None,
         }
     }
@@ -183,9 +173,11 @@ fn weak_cookie() -> String {
 }
 
 /// Read the real MIT-MAGIC-COOKIE-1 for the local display from the Xauthority
-/// file. Used in trusted mode (-Y). Returns an error if the file is missing,
-/// unreadable, or contains no matching entry; the caller falls back to a fake
-/// cookie in that case.
+/// file. This cookie is passed to the remote side so X11 forwarding is always
+/// trusted (-Y). Returns an error if the file is missing, unreadable, or
+/// contains no matching entry; the caller falls back to a fake cookie in that
+/// case (forwarding will then fail at the X server, but the SSH session is
+/// unaffected).
 pub fn read_local_cookie(parsed: &ParsedDisplay) -> anyhow::Result<String> {
     let _ = parsed; // display-specific matching reserved for future use
 
@@ -608,25 +600,21 @@ mod tests {
     }
 
     #[test]
-    fn x11_config_default_is_trusted() {
-        // Regression: the default MUST be trusted=true. A fake (untrusted)
-        // cookie is rejected by standard local X servers (XQuartz, native
-        // Linux), so an untrusted-by-default would silently break X11
-        // forwarding for every user — the X client's connection is dropped
-        // immediately (instant EOF on the bridge).
+    fn x11_config_default() {
         let cfg = X11Config::default();
         assert!(!cfg.enabled, "enabled defaults to false");
-        assert!(cfg.trusted, "trusted MUST default to true");
         assert!(cfg.display.is_none(), "display defaults to None");
     }
 
     #[test]
-    fn x11_config_deserialize_missing_trusted_uses_serde_default_true() {
-        // Deserializing a config that omits `trusted` (e.g. an old saved
-        // connection) must yield trusted=true, not false.
-        let json = r#"{"enabled":true}"#;
+    fn x11_config_deserialize_ignores_legacy_trusted_field() {
+        // Backward compatibility: connections saved before the `trusted` field
+        // was removed still carry `"trusted": true|false` in localStorage.
+        // serde ignores unknown fields by default, so those configs must still
+        // deserialize cleanly (the legacy value is simply dropped).
+        let json = r#"{"enabled":true,"trusted":false,"display":":1"}"#;
         let cfg: X11Config = serde_json::from_str(json).unwrap();
         assert!(cfg.enabled);
-        assert!(cfg.trusted, "missing trusted field must default to true");
+        assert_eq!(cfg.display.as_deref(), Some(":1"));
     }
 }

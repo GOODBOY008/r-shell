@@ -12,7 +12,6 @@ import { Switch } from './ui/switch';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 
 import { Separator } from './ui/separator';
-import { Checkbox } from './ui/checkbox';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
 import { toast } from 'sonner';
@@ -967,11 +966,6 @@ export function ConnectionDialog({
                                 ...c,
                                 x11: {
                                   enabled: checked,
-                                  // Default trusted: a fake (untrusted) cookie is
-                                  // rejected by standard local X servers (XQuartz,
-                                  // native Linux) causing instant disconnect; the
-                                  // real cookie is required for forwarding to work.
-                                  trusted: c.x11?.trusted ?? true,
                                   display: c.x11?.display,
                                 },
                               }))
@@ -981,31 +975,6 @@ export function ConnectionDialog({
 
                         {config.x11?.enabled && (
                           <>
-                            <div className="flex items-start gap-2 ml-4">
-                              <Checkbox
-                                id="x11-trusted"
-                                checked={config.x11.trusted}
-                                onCheckedChange={(checked) =>
-                                  setConfig((c) => ({
-                                    ...c,
-                                    x11: {
-                                      enabled: c.x11?.enabled ?? false,
-                                      trusted: checked === true,
-                                      display: c.x11?.display,
-                                    },
-                                  }))
-                                }
-                              />
-                              <div className="grid gap-1 leading-none">
-                                <Label htmlFor="x11-trusted" className="cursor-pointer">
-                                  {t('connectionDialog.x11.trusted')}
-                                </Label>
-                                <span className="text-xs text-muted-foreground">
-                                  {t('connectionDialog.x11.trustedHint')}
-                                </span>
-                              </div>
-                            </div>
-
                             <div className="grid gap-1 ml-4">
                               <Label htmlFor="x11-display">{t('connectionDialog.x11.displayOverride')}</Label>
                               <Input
@@ -1017,7 +986,6 @@ export function ConnectionDialog({
                                     ...c,
                                     x11: {
                                       enabled: c.x11?.enabled ?? false,
-                                      trusted: c.x11?.trusted ?? true,
                                       display: e.target.value || undefined,
                                     },
                                   }))

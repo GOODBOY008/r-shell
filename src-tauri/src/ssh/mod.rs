@@ -369,14 +369,16 @@ impl SshClient {
 
                 match crate::x11::parse_display(&display_str) {
                     Ok(parsed) => {
-                        let cookie = if cfg.trusted {
-                            crate::x11::read_local_cookie(&parsed).unwrap_or_else(|e| {
-                                tracing::warn!("[X11] xauth read failed ({e}); falling back to fake cookie");
-                                crate::x11::generate_fake_cookie()
-                            })
-                        } else {
+                        // Forwarding is always trusted (-Y): pass the real local
+                        // xauth cookie. Untrusted mode was removed because the X11
+                        // SECURITY extension it requires is rejected by standard
+                        // local X servers. We still fall back to a fake cookie if
+                        // xauth is unreadable: forwarding will then fail at the X
+                        // server (logged), but the SSH session itself is unaffected.
+                        let cookie = crate::x11::read_local_cookie(&parsed).unwrap_or_else(|e| {
+                            tracing::warn!("[X11] xauth read failed ({e}); falling back to fake cookie");
                             crate::x11::generate_fake_cookie()
-                        };
+                        });
 
                         // C1: do NOT set DISPLAY ourselves. sshd sets the remote
                         // DISPLAY itself (per its X11DisplayOffset) when it handles
@@ -410,7 +412,7 @@ impl SshClient {
                             screen,
                         ).await {
                             Ok(()) => {
-                                tracing::info!("[X11] forwarding requested (trusted={})", cfg.trusted);
+                                tracing::info!("[X11] forwarding requested (trusted)");
 
                                 // I2 / Lifetime note: this dispatcher lives until
                                 // the SSH connection's receiver is dropped (on

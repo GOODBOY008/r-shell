@@ -212,8 +212,6 @@
     "x11": {
       "enable": "Enable X11 forwarding",
       "enableDesc": "Forward remote X11 apps to your local X server (e.g. XQuartz)",
-      "trusted": "Trusted mode (−Y, default)",
-      "trustedHint": "Pass the real local X cookie so forwarded apps display correctly. Untrusted (−X) uses a fake cookie that most X servers reject, so apps won't appear.",
       "displayOverride": "DISPLAY override",
       "displayPlaceholder": "Auto-detected if blank"
     }

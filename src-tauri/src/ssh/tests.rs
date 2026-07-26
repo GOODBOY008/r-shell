@@ -385,7 +385,7 @@ mod x11_e2e_tests {
         });
     }
 
-    fn x11_config(enabled: bool, trusted: bool, display: Option<&str>) -> SshConfig {
+    fn x11_config(enabled: bool, display: Option<&str>) -> SshConfig {
         SshConfig {
             host: E2E_HOST.to_string(),
             port: E2E_PORT,
@@ -395,7 +395,6 @@ mod x11_e2e_tests {
             },
             x11: Some(X11Config {
                 enabled,
-                trusted,
                 display: display.map(str::to_string),
             }),
         }
@@ -514,7 +513,7 @@ mod x11_e2e_tests {
     async fn x11_forwarding_sets_remote_display() {
         init_tracing();
         let mut client = SshClient::new();
-        let config = x11_config(true, false, None);
+        let config = x11_config(true, None);
 
         client
             .connect("x11-e2e-1".to_string(), &config)
@@ -564,7 +563,7 @@ mod x11_e2e_tests {
     async fn x11_disabled_leaves_display_empty() {
         init_tracing();
         let mut client = SshClient::new();
-        let config = x11_config(false, false, None);
+        let config = x11_config(false, None);
 
         client
             .connect("x11-e2e-2".to_string(), &config)
@@ -604,7 +603,7 @@ mod x11_e2e_tests {
         use crate::connection_manager::ConnectionManager;
 
         let mgr = std::sync::Arc::new(ConnectionManager::new());
-        let config = x11_config(false, false, None);
+        let config = x11_config(false, None);
 
         // First connection.
         mgr.create_connection("reconnect-1".to_string(), config.clone())
@@ -652,9 +651,10 @@ mod x11_e2e_tests {
     async fn x11_end_to_end_dispatcher_receives_channel() {
         init_tracing();
         let mut client = SshClient::new();
-        // trusted=true (-Y): pass the real local xauth cookie. Untrusted
-        // (fake cookie) is rejected by the local X server → instant EOF.
-        let config = x11_config(true, true, None);
+        // Forwarding is always trusted (-Y): the real local xauth cookie is
+        // passed. Untrusted (fake cookie) was removed — it is rejected by the
+        // local X server, causing instant EOF.
+        let config = x11_config(true, None);
 
         client
             .connect("x11-e2e-3".to_string(), &config)

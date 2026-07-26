@@ -30,8 +30,8 @@ describe('SSH advanced option + X11 persistence', () => {
       keepAlive: true,
       keepAliveInterval: 45,
       serverAliveCountMax: 5,
-      // X11 forwarding enabled, trusted, with a DISPLAY override
-      x11: { enabled: true, trusted: true, display: ':1' },
+      // X11 forwarding enabled, with a DISPLAY override
+      x11: { enabled: true, display: ':1' },
     };
 
     ConnectionStorageManager.saveConnectionWithId(id, input);
@@ -42,7 +42,7 @@ describe('SSH advanced option + X11 persistence', () => {
     expect(loaded!.keepAlive).toBe(true);
     expect(loaded!.keepAliveInterval).toBe(45);
     expect(loaded!.serverAliveCountMax).toBe(5);
-    expect(loaded!.x11).toEqual({ enabled: true, trusted: true, display: ':1' });
+    expect(loaded!.x11).toEqual({ enabled: true, display: ':1' });
   });
 
   it('updateConnection preserves an existing x11 config when other fields change', () => {
@@ -57,7 +57,7 @@ describe('SSH advanced option + X11 persistence', () => {
       protocol: 'SSH',
       authMethod: 'password',
       password: 'p',
-      x11: { enabled: true, trusted: false },
+      x11: { enabled: true },
       compression: true,
       keepAlive: false,
     });
@@ -66,7 +66,7 @@ describe('SSH advanced option + X11 persistence', () => {
     // (now that the dialog does). X11 should remain enabled.
     ConnectionStorageManager.updateConnection(id, {
       name: 'Renamed',
-      x11: { enabled: true, trusted: false },
+      x11: { enabled: true },
       compression: true,
       keepAlive: false,
       keepAliveInterval: undefined,
@@ -75,7 +75,7 @@ describe('SSH advanced option + X11 persistence', () => {
 
     const loaded = ConnectionStorageManager.getConnection(id);
     expect(loaded!.name).toBe('Renamed');
-    expect(loaded!.x11).toEqual({ enabled: true, trusted: false });
+    expect(loaded!.x11).toEqual({ enabled: true });
     expect(loaded!.compression).toBe(true);
   });
 
@@ -107,15 +107,42 @@ describe('SSH advanced option + X11 persistence', () => {
       protocol: 'SSH',
       authMethod: 'password',
       password: 'p',
-      x11: { enabled: true, trusted: true, display: ':0' },
+      x11: { enabled: true, display: ':0' },
     });
 
     // User turns the switch off in the dialog and saves.
     ConnectionStorageManager.updateConnection(id, {
-      x11: { enabled: false, trusted: false, display: undefined },
+      x11: { enabled: false, display: undefined },
     });
 
     const loaded = ConnectionStorageManager.getConnection(id);
-    expect(loaded!.x11).toEqual({ enabled: false, trusted: false, display: undefined });
+    expect(loaded!.x11).toEqual({ enabled: false, display: undefined });
+  });
+
+  it('a legacy saved connection carrying a `trusted` field still loads (harmless)', () => {
+    // Backward compatibility: connections saved before the `trusted` field was
+    // removed still carry `"trusted": true|false` in localStorage. The JS layer
+    // (JSON.parse) keeps unknown fields as-is rather than dropping them, so X11
+    // remains fully functional; the Rust side uses serde, which also ignores the
+    // unknown field. This test pins that loading does not throw and X11 is intact.
+    const id = `legacy-x11-${Date.now()}`;
+    const legacyRecord = {
+      id,
+      name: 'Legacy',
+      host: '1.1.1.1',
+      port: 22,
+      username: 'u',
+      protocol: 'SSH',
+      authMethod: 'password',
+      password: 'p',
+      createdAt: new Date().toISOString(),
+      x11: { enabled: true, trusted: true, display: ':2' },
+    };
+    localStorage.setItem('r-shell-connections', JSON.stringify([legacyRecord]));
+
+    const loaded = ConnectionStorageManager.getConnection(id);
+    expect(loaded).toBeDefined();
+    expect(loaded!.x11?.enabled).toBe(true);
+    expect(loaded!.x11?.display).toBe(':2');
   });
 });

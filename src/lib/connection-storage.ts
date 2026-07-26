@@ -6,11 +6,14 @@
 /**
  * X11 forwarding options for an SSH connection. Mirrors the Rust-side
  * `X11Config` and the `ConnectionConfig.x11` shape in connection-dialog.tsx.
+ *
+ * Forwarding is always trusted (-Y): the real local xauth cookie is passed.
+ * Untrusted mode was removed because the fake cookie it requires is rejected
+ * by standard local X servers (XQuartz, native Linux Xorg, Xwayland),
+ * causing forwarded X clients to disconnect immediately.
  */
 export interface X11Config {
   enabled: boolean;
-  /** Trusted (-Y): pass the real local xauth cookie. Untrusted (-X, default): fake cookie. */
-  trusted: boolean;
   /** DISPLAY override; undefined => auto-detect from `$DISPLAY`. */
   display?: string;
 }
