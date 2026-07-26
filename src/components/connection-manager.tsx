@@ -691,6 +691,10 @@ export function ConnectionManager({
             className="p-0 h-4 w-4"
             aria-label={node.isExpanded ? t('connectionManager.collapseFolder') : t('connectionManager.expandFolder')}
             aria-expanded={node.isExpanded}
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleExpanded(node.id);
+            }}
           >
             {node.isExpanded ?
               <ChevronDown className="w-3 h-3" /> :
