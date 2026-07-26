@@ -30,6 +30,7 @@ interface ConnectionDialogProps {
   onOpenChange: (open: boolean) => void;
   onConnect: (config: ConnectionConfig) => void;
   editingConnection?: ConnectionConfig | null;
+  initialFolder?: string;
 }
 
 export interface ConnectionConfig {
@@ -72,7 +73,8 @@ export function ConnectionDialog({
   open,
   onOpenChange,
   onConnect,
-  editingConnection
+  editingConnection,
+  initialFolder
 }: ConnectionDialogProps) {
   const defaultConfig: ConnectionConfig = {
     name: '',
@@ -139,6 +141,13 @@ export function ConnectionDialog({
       resetConnectionState();
     }
   }, [open, editingConnection]);
+
+  // Dedicated effect: pre-select folder when initialFolder is provided (new connection from folder context menu)
+  useEffect(() => {
+    if (open && !editingConnection && initialFolder) {
+      setConnectionFolder(initialFolder);
+    }
+  }, [open, editingConnection, initialFolder]);
 
   const _handleSaveProfile = () => {
     try {
