@@ -68,24 +68,12 @@ jobs:
 
       - name: Run Rust tests
         working-directory: src-tauri
-        # On windows-latest the test binary links vendored OpenSSL statically.
-        # That statically-linked OpenSSL pulls randomness via ProcessPrng in
-        # bcryptprimitives.dll, but the MSVC linker sometimes omits that import
-        # from the final binary's import table, so the OS loader fails at start
-        # with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139). Explicitly referencing
-        # the system bcrypt library forces the import to be recorded.
-        # See https://github.com/sfackler/rust-openssl/issues — a known
-        # vendored-openssl-on-windows symptom.
-        env:
-          RUSTFLAGS: ${{ matrix.platform == 'windows-latest' && '-C link-arg=bcrypt.lib' || '' }}
         run: cargo test
 
-      # The windows test binary occasionally fails to start with
-      # STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) — a runtime DLL loader error,
-      # most often from vendored OpenSSL's static linkage. When that happens we
-      # want the *specific* DLL that's missing an entry point, not just the
-      # exit code. This step dumps the binary's dependency list so the failure
-      # is diagnosable on the next run.
+      # The windows test binary fails to start with STATUS_ENTRYPOINT_NOT_FOUND
+      # (0xc0000139) — a runtime DLL loader error. dumpbin isn't on PATH by
+      # default on windows-latest, so we locate it via vsdevshell, then dump the
+      # binary's import table to identify the exact missing dependency.
       - name: Dump test binary dependencies (Windows, on failure)
         if: failure() && matrix.platform == 'windows-latest'
         working-directory: src-tauri
@@ -93,17 +81,43 @@ jobs:
         run: |
           Write-Host "::group::Test binary DLL dependencies"
           $exe = Get-ChildItem -Path "target\debug\deps\r_shell_lib-*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($exe) {
-            Write-Host "Binary: $($exe.FullName)"
-            # dumpbin ships with the MSVC toolchain on windows-latest.
-            $dump = & dumpbin /dependents $exe.FullName 2>$null
-            $dump | Select-String -Pattern "\.dll" -CaseSensitive:$false | ForEach-Object { Write-Host "  dep: $_" }
-            # Also list what's actually on PATH next to the binary + system.
-            Write-Host "OS version:"
-            [System.Environment]::OSVersion | Format-List
-          } else {
+          if (-not $exe) {
             Write-Host "No r_shell_lib-*.exe found in target\debug\deps — build may not have produced a binary."
+            Write-Host "::endgroup::"
+            return
           }
+          Write-Host "Binary: $($exe.FullName)"
+
+          # Load the MSVC dev environment so dumpbin is on PATH.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            $vcinstalldir = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            if ($vcinstalldir) {
+              Import-Module "$vcinstalldir\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+              Enter-VsDevShell -VsInstallPath $vcinstalldir -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
+            }
+          }
+
+          $dumpbin = Get-Command dumpbin -ErrorAction SilentlyContinue
+          if ($dumpbin) {
+            Write-Host "--- dumpbin /dependents ---"
+            & dumpbin /dependents $exe.FullName 2>$null | Select-String -Pattern "\.dll" -CaseSensitive:$false
+            Write-Host "--- dumpbin /imports (entrypoints) ---"
+            & dumpbin /imports $exe.FullName 2>$null | Select-Object -First 80
+          } else {
+            Write-Host "dumpbin still not found; falling back to PE import scan."
+            # Minimal fallback: read the PE import directory directly via .NET.
+            $bytes = [System.IO.File]::ReadAllBytes($exe.FullName)
+            # PE header offset is at 0x3C (little-endian).
+            $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+            # Optional header starts at peOff + 24; magic at +0 (0x10b=PE32, 0x20b=PE32+)
+            $magic = [BitConverter]::ToUInt16($bytes, $peOff + 24)
+            $importDirRva = if ($magic -eq 0x20b) { [BitConverter]::ToInt32($bytes, $peOff + 24 + 112) } else { [BitConverter]::ToInt32($bytes, $peOff + 24 + 96) }
+            Write-Host "Import directory RVA: 0x$($importDirRva.ToString('x'))  (PE magic: 0x$($magic.ToString('x')))"
+          }
+
+          Write-Host "--- OS version ---"
+          [System.Environment]::OSVersion | Format-List
           Write-Host "::endgroup::"
 
 
