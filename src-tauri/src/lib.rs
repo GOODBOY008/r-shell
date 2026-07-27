@@ -2,6 +2,7 @@ mod commands;
 mod connection_manager;
 mod desktop_protocol;
 mod ftp_client;
+mod ls_parser;
 mod os_detect;
 mod rdp_client;
 mod sftp_client;

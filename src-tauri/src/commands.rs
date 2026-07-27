@@ -331,7 +331,7 @@ pub async fn list_files(
     connection_id: String,
     path: String,
     state: State<'_, Arc<ConnectionManager>>,
-) -> Result<String, String> {
+) -> Result<Vec<FileEntry>, String> {
     let connection = state
         .get_connection(&connection_id)
         .await
@@ -341,10 +341,21 @@ pub async fn list_files(
     let os_info = get_os_info(&connection_id, &client, state.inner()).await;
     let command = os_info.list_files_cmd(&path);
 
-    match client.execute_command(&command).await {
-        Ok(output) => Ok(output),
-        Err(e) => Err(e.to_string()),
-    }
+    let output = client
+        .execute_command(&command)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Parse the `ls -l` output on the backend so the frontend never has to
+    // guess the column layout. Supports GNU `--time-style=long-iso` (used when
+    // GNU coreutils are detected) and the BusyBox/BSD default layout, plus
+    // ACL/SELinux/no-group variants. See `ls_parser` for details.
+    let entries = output
+        .lines()
+        .filter_map(crate::ls_parser::parse_ls_long_line)
+        .collect::<Vec<_>>();
+
+    Ok(entries)
 }
 
 #[derive(Debug, Serialize, Deserialize)]

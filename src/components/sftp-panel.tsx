@@ -84,39 +84,35 @@ export function SFTPPanel({
   // Load files from remote server
   const loadRemoteFiles = async (path: string) => {
     if (!connectionId) return;
-    
+
     try {
       setLoading(true);
-      const output = await invoke<string>(
+      const entries = await invoke<Array<{ name: string; size: number; modified: string | null; permissions: string | null; file_type: 'File' | 'Directory' | 'Symlink' }>>(
         'list_files',
         { connection_id: connectionId, path }
       );
-      
-      if (output) {
-        // Parse ls -la output to FileItem format
-        const lines = output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
-        const parsedFiles: FileItem[] = lines.map(line => {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length < 9) return null;
-          
-          const permissions = parts[0];
-          const owner = parts[2];
-          const group = parts[3];
-          const size = parseInt(parts[4]) || 0;
-          const name = parts.slice(8).join(' ');
-          const type: 'directory' | 'file' = permissions.startsWith('d') ? 'directory' : 'file';
-          
+
+      if (entries) {
+        // Backend returns structured FileEntry values; no ls column parsing here.
+        const parsedFiles: FileItem[] = entries.map((entry) => {
+          const type: 'directory' | 'file' =
+            entry.file_type === 'Directory' ? 'directory' : 'file';
+          let modified = new Date();
+          if (entry.modified) {
+            const parsed = new Date(entry.modified.replace(' ', 'T'));
+            if (!isNaN(parsed.getTime())) modified = parsed;
+          }
           return {
-            name,
+            name: entry.name,
             type,
-            size,
-            modified: new Date(),
-            permissions,
-            owner,
-            group
+            size: entry.size,
+            modified,
+            permissions: entry.permissions ?? '',
+            owner: '-',
+            group: '-',
           };
-        }).filter(f => f !== null);
-        
+        });
+
         // Add parent directory navigation
         if (path !== '/') {
           parsedFiles.unshift({
@@ -129,7 +125,7 @@ export function SFTPPanel({
             group: '-'
           });
         }
-        
+
         setFiles(parsedFiles);
       }
     } catch (error) {
