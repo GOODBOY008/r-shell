@@ -868,12 +868,14 @@ export function PtyTerminal({
       term.reset(); // clear scrollback + viewport so GC can reclaim xterm buffers sooner
       term.dispose();
     };
-  }, [connectionId, connectionName, host, username, terminalKey, reconnectKey, sendInputToPty]);
-  // NOTE: themeKey and appearanceKey are intentionally NOT in the deps above.
-  // Including them would tear down the WebSocket + PTY session on every theme
-  // change (e.g. macOS auto Dark/Light switch), killing any running remote
-  // processes such as nvitop. Theme/appearance updates are handled in-place
-  // by the effect below without any connection disruption.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, host, username, terminalKey, reconnectKey, sendInputToPty]);
+  // NOTE: themeKey, appearanceKey, and connectionName are intentionally NOT
+  // in the deps above. Including them would tear down the WebSocket + PTY
+  // session on every theme change (e.g. macOS auto Dark/Light switch), killing
+  // any running remote processes. Including connectionName would do the same
+  // when the user renames the connection via edit dialog — the tab title
+  // already updates via UPDATE_TAB_NAME without reconnecting.
 
   // Update terminal colors and font in-place when theme or appearance changes.
   React.useEffect(() => {

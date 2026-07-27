@@ -480,6 +480,30 @@ describe('UPDATE_TAB_STATUS', () => {
   });
 });
 
+// ── Reducer: UPDATE_TAB_NAME ──
+
+describe('UPDATE_TAB_NAME', () => {
+  it('updates tab name across groups', () => {
+    const state = stateWithTabs('1', [makeTab('t1', 'Old Name')]);
+    const next = terminalGroupReducer(state, {
+      type: 'UPDATE_TAB_NAME',
+      tabId: 't1',
+      name: 'New Name',
+    });
+    expect(next.groups['1'].tabs[0].name).toBe('New Name');
+  });
+
+  it('returns same state if tab not found', () => {
+    const state = createDefaultState();
+    const next = terminalGroupReducer(state, {
+      type: 'UPDATE_TAB_NAME',
+      tabId: 'nope',
+      name: 'Whatever',
+    });
+    expect(next).toBe(state);
+  });
+});
+
 // ── Reducer: UPDATE_GRID_SIZES ──
 
 describe('UPDATE_GRID_SIZES', () => {

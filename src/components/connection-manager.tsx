@@ -64,6 +64,7 @@ interface ConnectionManagerProps {
   onConnectionConnect?: (connection: ConnectionNode) => void;
   selectedConnectionId: string | null;
   activeConnections?: Set<string>;
+  refreshTrigger?: number;
   onNewConnection?: (folderPath?: string) => void;
   onEditConnection?: (connection: ConnectionNode) => void;
   onDeleteConnection?: (connectionId: string) => void;
@@ -80,6 +81,7 @@ export function ConnectionManager({
   onConnectionConnect,
   selectedConnectionId,
   activeConnections = new Set(),
+  refreshTrigger = 0,
   onNewConnection,
   onEditConnection,
   onDeleteConnection,
@@ -113,7 +115,8 @@ export function ConnectionManager({
   const suppressClickRef = useRef(false);
   const treeContainerRef = useRef<HTMLDivElement>(null);
 
-  // Reload connections when active connections change, preserving expand state
+  // Reload connections when active connections or refreshTrigger changes,
+  // preserving expand state across tree rebuilds.
   useEffect(() => {
     const newTree = loadConnections();
     setConnections(prev => {
@@ -134,7 +137,7 @@ export function ConnectionManager({
         });
       return mergeExpanded(newTree);
     });
-  }, [activeConnections]);
+  }, [activeConnections, refreshTrigger]);
 
   // Handle connection deletion
   const handleDelete = (connectionId: string) => {

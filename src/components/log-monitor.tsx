@@ -284,15 +284,27 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         if (result.sources.length === 0) {
           toast.info(t('logMonitor.noSourcesDiscovered'));
         }
+      } else if (result.error && (
+        result.error.includes('Connection not found') ||
+        result.error.includes('Session not found')
+      )) {
+        // Transient: the SSH session was just created and may not be fully
+        // initialized yet. Silently skip — the user can rediscover later.
+        console.debug('[LogMonitor] Session not ready yet, skipping source discovery:', result.error);
       } else {
         toast.error(t('logMonitor.failedToDiscoverSources'), {
           description: result.error,
         });
       }
     } catch (err) {
-      toast.error(t('logMonitor.failedToDiscoverSources'), {
-        description: err instanceof Error ? err.message : String(err),
-      });
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('Connection not found') || msg.includes('Session not found')) {
+        console.debug('[LogMonitor] Session not ready yet, skipping source discovery:', msg);
+      } else {
+        toast.error(t('logMonitor.failedToDiscoverSources'), {
+          description: msg,
+        });
+      }
     } finally {
       setIsDiscovering(false);
     }

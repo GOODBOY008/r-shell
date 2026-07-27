@@ -29,6 +29,7 @@ interface ConnectionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConnect: (config: ConnectionConfig) => void;
+  onSave?: (config: ConnectionConfig) => void;
   editingConnection?: ConnectionConfig | null;
   initialFolder?: string;
 }
@@ -73,6 +74,7 @@ export function ConnectionDialog({
   open,
   onOpenChange,
   onConnect,
+  onSave,
   editingConnection,
   initialFolder
 }: ConnectionDialogProps) {
@@ -340,95 +342,99 @@ export function ConnectionDialog({
       return;
     }
 
-    // SSH / Telnet / Raw / Serial — connect via ssh_connect
-    try {
-      const result = await invoke<{ success: boolean; error?: string }>(
-        'ssh_connect',
-        {
-          request: {
-            connection_id: connectionId,
-            host: config.host,
-            port: config.port || 22,
-            username: config.username,
-            auth_method: config.authMethod || 'password',
-            password: config.password || '',
-            key_path: config.privateKeyPath || null,
-            passphrase: config.passphrase || null,
-          }
-        }
-      );
+	    // SSH / Telnet / Raw / Serial — connect via ssh_connect
+	    // Save connection config FIRST (consistent with SFTP/FTP/Desktop),
+	    // so the config is preserved even if the remote server is temporarily unreachable.
+	    let connectionSaved = false;
+	    if (editingConnection?.id) {
+	      ConnectionStorageManager.updateConnection(editingConnection.id, {
+	        name: config.name,
+	        host: config.host,
+	        port: config.port || 22,
+	        username: config.username,
+	        protocol: config.protocol,
+	        authMethod: config.authMethod,
+	        password: config.password,
+	        privateKeyPath: config.privateKeyPath,
+	        passphrase: config.passphrase,
+	        lastConnected: new Date().toISOString(),
+	      });
+	      connectionSaved = true;
+	    } else if (saveAsConnection) {
+	      ConnectionStorageManager.saveConnectionWithId(connectionId, {
+	        name: config.name,
+	        host: config.host,
+	        port: config.port || 22,
+	        username: config.username,
+	        protocol: config.protocol,
+	        folder: connectionFolder,
+	        authMethod: config.authMethod,
+	        password: config.password,
+	        privateKeyPath: config.privateKeyPath,
+	        passphrase: config.passphrase,
+	      });
+	      connectionSaved = true;
+	    }
 
-      if (result.success) {
-        // Save or update connection based on whether we're editing or creating new
-        if (editingConnection?.id) {
-          // Update existing connection with new connection details
-          ConnectionStorageManager.updateConnection(editingConnection.id, {
-            name: config.name,
-            host: config.host,
-            port: config.port || 22,
-            username: config.username,
-            protocol: config.protocol,
-            authMethod: config.authMethod,
-            password: config.password,
-            privateKeyPath: config.privateKeyPath,
-            passphrase: config.passphrase,
-            lastConnected: new Date().toISOString(),
-          });
-        } else if (saveAsConnection) {
-          // Save new connection with the same ID used for the SSH connection
-          // This ensures the tab ID matches the connection ID in storage
-          ConnectionStorageManager.saveConnectionWithId(connectionId, {
-            name: config.name,
-            host: config.host,
-            port: config.port || 22,
-            username: config.username,
-            protocol: config.protocol,
-            folder: connectionFolder,
-            authMethod: config.authMethod,
-            password: config.password,
-            privateKeyPath: config.privateKeyPath,
-            passphrase: config.passphrase,
-          });
-        }
+	    try {
+	      const result = await invoke<{ success: boolean; error?: string }>(
+	        'ssh_connect',
+	        {
+	          request: {
+	            connection_id: connectionId,
+	            host: config.host,
+	            port: config.port || 22,
+	            username: config.username,
+	            auth_method: config.authMethod || 'password',
+	            password: config.password || '',
+	            key_path: config.privateKeyPath || null,
+	            passphrase: config.passphrase || null,
+	          }
+	        }
+	      );
 
-        onConnect({
-          ...config,
-          id: connectionId
-        });
-        onOpenChange(false);
+	      if (result.success) {
+	        onConnect({
+	          ...config,
+	          id: connectionId
+	        });
+	        if (!editingConnection) {
+	          setConfig(defaultConfig);
+	        }
+	      } else {
+	        // Connection failed — config was already saved above, user can retry from sidebar
+	        console.error('Connection failed:', result.error);
+	        if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
+	          toast.info(t('connectionDialog.toast.connectionCancelled'));
+	        } else {
+	          toast.error(t('connectionDialog.toast.connectionFailed'), {
+	            description: result.error || t('connectionDialog.toast.connectionFailedDesc'),
+	            duration: 5000,
+	          });
+	        }
+	      }
+	    } catch (error) {
+	      console.error('Connection error:', error);
+	      if (cancelRequestedRef.current) {
+	        toast.info(t('connectionDialog.toast.connectionCancelled'));
+	      } else {
+	        toast.error(t('connectionDialog.toast.connectionError'), {
+	          description: error instanceof Error ? error.message : t('connectionDialog.toast.connectionErrorDesc'),
+	          duration: 5000,
+	        });
+	      }
+	    } finally {
+	      // Close dialog — config is already saved if connectionSaved is true
+	      onOpenChange(false);
+	      if (!editingConnection) {
+	        setConfig(defaultConfig);
+	      }
+	      resetConnectionState();
+	    }
 
-        // Reset form if creating new connection
-        if (!editingConnection) {
-          setConfig(defaultConfig);
-        }
-      } else {
-        // Show error toast
-        console.error('Connection failed:', result.error);
-        if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
-          toast.info(t('connectionDialog.toast.connectionCancelled'));
-        } else {
-          toast.error(t('connectionDialog.toast.connectionFailed'), {
-            description: result.error || t('connectionDialog.toast.connectionFailedDesc'),
-            duration: 5000,
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Connection error:', error);
-      if (cancelRequestedRef.current) {
-        toast.info(t('connectionDialog.toast.connectionCancelled'));
-      } else {
-        toast.error(t('connectionDialog.toast.connectionError'), {
-          description: error instanceof Error ? error.message : t('connectionDialog.toast.connectionErrorDesc'),
-          duration: 5000,
-        });
-      }
-    } finally {
-      resetConnectionState();
-    }
-  };
+	  }
 
-  const handleCancelConnectionAttempt = async () => {
+const handleCancelConnectionAttempt = async () => {
     if (!isConnecting) {
       onOpenChange(false);
       return;
@@ -463,6 +469,37 @@ export function ConnectionDialog({
       // Always reset the state when user requests cancel
       resetConnectionState();
     }
+  };
+
+  const handleSave = async () => {
+    if (!editingConnection?.id) return;
+
+    // Save updated connection to storage
+    ConnectionStorageManager.updateConnection(editingConnection.id, {
+      name: config.name,
+      host: config.host,
+      port: config.port || 22,
+      username: config.username,
+      protocol: config.protocol,
+      authMethod: config.authMethod,
+      password: config.password,
+      privateKeyPath: config.privateKeyPath,
+      passphrase: config.passphrase,
+      ftpsEnabled: config.ftpsEnabled,
+      domain: config.domain,
+      rdpResolution: config.rdpResolution,
+      vncColorDepth: config.vncColorDepth,
+    });
+
+    // Notify parent to update tab display info (e.g. tab title)
+    // May also trigger a connection attempt if there's no open tab
+    await onSave?.({
+      ...config,
+      id: editingConnection.id,
+    });
+
+    onOpenChange(false);
+    resetConnectionState();
   };
 
   const updateConfig = (updates: Partial<ConnectionConfig>) => {
@@ -1036,9 +1073,15 @@ export function ConnectionDialog({
               >
                 {isConnecting ? (isCancelling ? t('connectionDialog.button.cancelling') : t('connectionDialog.button.stop')) : t('connectionDialog.button.cancel')}
               </Button>
-              <Button onClick={handleConnect} disabled={isConnecting || isCancelling} className="min-w-[140px]">
-                {isConnecting ? t('connectionDialog.button.connecting') : editingConnection ? t('connectionDialog.button.updateAndConnect') : t('connectionDialog.button.connect')}
-              </Button>
+              {editingConnection ? (
+                <Button onClick={handleSave} className="min-w-[140px]">
+                  {t('connectionDialog.button.save')}
+                </Button>
+              ) : (
+                <Button onClick={handleConnect} disabled={isConnecting || isCancelling} className="min-w-[140px]">
+                  {isConnecting ? t('connectionDialog.button.connecting') : t('connectionDialog.button.connect')}
+                </Button>
+              )}
             </div>
           </div>
         </DialogFooter>
