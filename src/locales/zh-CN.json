@@ -958,7 +958,8 @@
     "navigateTo": "导航到 {{path}}"
   },
   "terminal": {
-    "search": "搜索..."
+    "search": "搜索...",
+    "unreadOutput": "终端有新输出"
   },
   "terminalSearchBar": {
     "findInTerminal": "在终端中查找...",

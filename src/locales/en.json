@@ -958,7 +958,8 @@
     "navigateTo": "Navigate to {{path}}"
   },
   "terminal": {
-    "search": "Search..."
+    "search": "Search...",
+    "unreadOutput": "Unread terminal output"
   },
   "terminalSearchBar": {
     "findInTerminal": "Find in terminal...",

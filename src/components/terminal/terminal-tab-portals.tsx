@@ -53,6 +53,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
+  const isVisible = group?.activeTabId === tab.id;
 
   const handleActivateGroup = useCallback(() => {
     if (groupId && state.activeGroupId !== groupId) {
@@ -74,6 +75,13 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
       status: 'connected' | 'connecting' | 'disconnected' | 'pending',
     ) => {
       dispatch({ type: 'UPDATE_TAB_STATUS', tabId: connectionId, status });
+    },
+    [dispatch],
+  );
+
+  const handleTerminalOutput = useCallback(
+    (connectionId: string) => {
+      dispatch({ type: 'MARK_TAB_UNREAD_OUTPUT', tabId: connectionId });
     },
     [dispatch],
   );
@@ -130,6 +138,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         themeKey={themeKey}
         isActive={isActive}
         onConnectionStatusChange={handleConnectionStatusChange}
+        onOutput={isVisible ? undefined : handleTerminalOutput}
       />
     );
   }

@@ -11,6 +11,10 @@ const lifecycle = vi.hoisted(() => ({
   mounted: vi.fn(),
   unmounted: vi.fn(),
   dispatch: vi.fn(),
+  ptyTerminalProps: [] as Array<{
+    connectionId: string;
+    onOutput?: (connectionId: string) => void;
+  }>,
 }));
 
 let mockState: TerminalGroupState;
@@ -30,7 +34,12 @@ vi.mock('../components/pty-terminal', async () => {
   const ReactModule = await import('react');
 
   return {
-    PtyTerminal: ({ connectionId }: { connectionId: string }) => {
+    PtyTerminal: (props: {
+      connectionId: string;
+      onOutput?: (connectionId: string) => void;
+    }) => {
+      const { connectionId } = props;
+      lifecycle.ptyTerminalProps.push(props);
       ReactModule.useEffect(() => {
         lifecycle.mounted(connectionId);
         return () => lifecycle.unmounted(connectionId);
@@ -129,6 +138,7 @@ describe('TerminalTabPortalProvider', () => {
     lifecycle.mounted.mockClear();
     lifecycle.unmounted.mockClear();
     lifecycle.dispatch.mockClear();
+    lifecycle.ptyTerminalProps.length = 0;
     mockState = singleGroupState();
   });
 
@@ -155,5 +165,26 @@ describe('TerminalTabPortalProvider', () => {
     expect(lifecycle.unmounted).toHaveBeenCalledTimes(2);
     expect(lifecycle.unmounted).toHaveBeenCalledWith(tabA.id);
     expect(lifecycle.unmounted).toHaveBeenCalledWith(tabB.id);
+  });
+
+  it('only reports output from hidden terminal tabs as unread', () => {
+    render(<PortalHosts split={false} />);
+
+    const activeTerminal = lifecycle.ptyTerminalProps.find(
+      (props) => props.connectionId === tabA.id,
+    );
+    const hiddenTerminal = lifecycle.ptyTerminalProps.find(
+      (props) => props.connectionId === tabB.id,
+    );
+
+    expect(activeTerminal?.onOutput).toBeUndefined();
+    expect(hiddenTerminal?.onOutput).toEqual(expect.any(Function));
+
+    hiddenTerminal?.onOutput?.(tabB.id);
+
+    expect(lifecycle.dispatch).toHaveBeenCalledWith({
+      type: 'MARK_TAB_UNREAD_OUTPUT',
+      tabId: tabB.id,
+    });
   });
 });
