@@ -29,6 +29,10 @@ pub struct ConnectionManager {
     connection_types: Arc<RwLock<HashMap<String, String>>>,
     /// Cached OS info per SSH connection (auto-detected on first monitoring call)
     os_info_cache: OsInfoCache,
+    /// Tauri app handle, cloned into each SshClient so the X11 dispatcher can
+    /// emit failure events (e.g. the macOS "install XQuartz" toast). `None` in
+    /// unit tests (the emit is then skipped).
+    app_handle: Option<tauri::AppHandle>,
 }
 
 impl ConnectionManager {
@@ -43,15 +47,26 @@ impl ConnectionManager {
             desktop_connections: Arc::new(RwLock::new(HashMap::new())),
             connection_types: Arc::new(RwLock::new(HashMap::new())),
             os_info_cache: OsInfoCache::new(),
+            app_handle: None,
         }
+    }
+
+    /// Attach a Tauri app handle so SSH clients can emit X11 failure events.
+    /// Called in production setup; omitted in unit tests.
+    pub fn with_app_handle(mut self, app_handle: tauri::AppHandle) -> Self {
+        self.app_handle = Some(app_handle);
+        self
     }
 
     pub async fn create_connection(&self, connection_id: String, config: SshConfig) -> Result<()> {
         let mut client = SshClient::new();
+        if let Some(handle) = self.app_handle.clone() {
+            client = client.with_app_handle(handle);
+        }
         let cancel_token = self.register_pending_connection(&connection_id).await;
 
         let connect_result = tokio::select! {
-            res = client.connect(&config) => res,
+            res = client.connect(connection_id.clone(), &config) => res,
             _ = cancel_token.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
         };
 
@@ -59,10 +74,58 @@ impl ConnectionManager {
 
         connect_result?;
 
+        // Teardown any pre-existing connection under the same id BEFORE
+        // installing the new one. When a user edits an already-open connection
+        // and reconnects, the same connection_id is reused; without this the
+        // old SshClient would be silently overwritten (leaked, never
+        // disconnected) while the frontend's PTY/WebSocket is still bound to
+        // the old session — manifesting as the tab going dead. Cancel the PTY
+        // first (signals the WS reader to stop), then disconnect the client.
+        self.teardown_existing_connection(&connection_id).await;
+
         let mut connections = self.connections.write().await;
         connections.insert(connection_id, Arc::new(RwLock::new(client)));
 
         Ok(())
+    }
+
+    /// Remove and clean up any connection + PTY state held under `connection_id`.
+    /// Safe to call when nothing exists for the id. Acquires locks one at a time
+    /// (no nested writes) to avoid deadlock.
+    async fn teardown_existing_connection(&self, connection_id: &str) {
+        // 1. Cancel + drop the PTY session so the WebSocket reader task exits.
+        {
+            let mut pty_sessions = self.pty_sessions.write().await;
+            if let Some(session) = pty_sessions.remove(connection_id) {
+                session.cancel.cancel();
+                tracing::info!(
+                    "[reconnect] cancelled existing PTY session for {}",
+                    connection_id
+                );
+            }
+        }
+        // 2. Drop the generation counter so a fresh StartPty starts at gen 1.
+        {
+            let mut generations = self.pty_generations.write().await;
+            generations.remove(connection_id);
+        }
+        // 3. Disconnect + drop the old SSH client. Errors here are non-fatal:
+        //    we're tearing down a connection we're about to replace anyway.
+        {
+            let mut connections = self.connections.write().await;
+            if let Some(old) = connections.remove(connection_id) {
+                let mut old = old.write().await;
+                if let Err(e) = old.disconnect().await {
+                    tracing::warn!(
+                        "[reconnect] error disconnecting old client for {}: {}",
+                        connection_id,
+                        e
+                    );
+                }
+            }
+        }
+        // 4. Drop cached OS info so the new connection re-detects.
+        self.os_info_cache.remove(connection_id).await;
     }
 
     async fn register_pending_connection(&self, connection_id: &str) -> CancellationToken {
@@ -143,7 +206,7 @@ impl ConnectionManager {
         }
 
         // Create PTY session
-        let pty = client.create_pty_session(cols, rows).await?;
+        let pty = client.create_pty_session(cols, rows, connection_id).await?;
 
         // Bump generation so any in-flight Close for the old session is ignored
         let mut generations = self.pty_generations.write().await;

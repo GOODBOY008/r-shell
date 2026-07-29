@@ -3,6 +3,21 @@
  * Handles saving, loading, and managing SSH connections with hierarchical organization
  */
 
+/**
+ * X11 forwarding options for an SSH connection. Mirrors the Rust-side
+ * `X11Config` and the `ConnectionConfig.x11` shape in connection-dialog.tsx.
+ *
+ * Forwarding is always trusted (-Y): the real local xauth cookie is passed.
+ * Untrusted mode was removed because the fake cookie it requires is rejected
+ * by standard local X servers (XQuartz, native Linux Xorg, Xwayland),
+ * causing forwarded X clients to disconnect immediately.
+ */
+export interface X11Config {
+  enabled: boolean;
+  /** DISPLAY override; undefined => auto-detect from `$DISPLAY`. */
+  display?: string;
+}
+
 export interface ConnectionData {
   id: string;
   name: string;
@@ -31,6 +46,13 @@ export interface ConnectionData {
   // VNC-specific
   vncColorDepth?: string;
   vncPassword?: string;
+  // SSH-specific advanced options
+  compression?: boolean;
+  keepAlive?: boolean;
+  keepAliveInterval?: number;
+  serverAliveCountMax?: number;
+  /** SSH X11 forwarding options. Absent => X11 disabled. */
+  x11?: X11Config;
   // Ordering
   sortOrder?: number;
 }

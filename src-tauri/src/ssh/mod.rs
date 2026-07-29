@@ -1,5 +1,6 @@
 use anyhow::Result;
 use russh::*;
+use russh::client::{Msg, Session};
 use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,10 @@ pub struct SshConfig {
     pub port: u16,
     pub username: String,
     pub auth_method: AuthMethod,
+    /// Optional X11 forwarding configuration. `None`/absent = X11 disabled
+    /// (backwards compatible via serde default).
+    #[serde(default)]
+    pub x11: Option<crate::x11::X11Config>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +57,19 @@ pub struct SshSession {
 
 pub struct SshClient {
     session: Option<Arc<client::Handle<Client>>>,
+    /// X11 dispatcher registry shared with the russh Handler. Populated in
+    /// new(); read by create_pty_session to register per-session senders.
+    x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
+    /// The stored X11 config, captured at connect time so create_pty_session
+    /// can read it without the caller re-passing it.
+    x11_config: Option<crate::x11::X11Config>,
+    /// Connection id, used to key the dispatcher registry.
+    connection_id: Option<String>,
+    /// Tauri app handle, used to emit X11 failure events to the frontend
+    /// (e.g. the macOS "install XQuartz" toast). Cloned into the dispatcher
+    /// task so it can emit asynchronously when a local X server is unreachable.
+    /// `None` in unit tests (the emit is then simply skipped).
+    app_handle: Option<tauri::AppHandle>,
 }
 
 // PTY session handle for interactive shell
@@ -66,7 +84,18 @@ pub struct PtySession {
     pub cancel: CancellationToken,
 }
 
-pub struct Client;
+pub struct Client {
+    /// Shared registry of X11 dispatcher senders. The Handler callback
+    /// `server_channel_open_x11` runs on russh's internal task and forwards
+    /// each inbound X11 channel through the active sender.
+    pub x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
+}
+
+impl Client {
+    pub fn new(x11_registry: Arc<crate::x11::X11DispatcherRegistry>) -> Self {
+        Self { x11_registry }
+    }
+}
 
 #[async_trait::async_trait]
 impl client::Handler for Client {
@@ -78,14 +107,58 @@ impl client::Handler for Client {
     ) -> Result<bool, Self::Error> {
         Ok(true) // In production, verify the server key
     }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: Channel<Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // One SSH session == one R-Shell connection == one active dispatcher
+        // sender. `values().next()` is used because the Handler has no
+        // connection_id context; in practice exactly one sender is live per
+        // Client (session swaps briefly overlap, but the old sender is dropped
+        // on insert, closing the old receiver).
+        let senders = self.x11_registry.senders.read().await;
+        if let Some(tx) = senders.values().next() {
+            let _ = tx.send(crate::x11::InboundX11Channel {
+                channel,
+                originator_address: originator_address.to_string(),
+                originator_port,
+            });
+        } else {
+            tracing::warn!("[X11] inbound X11 channel but no dispatcher registered; dropping");
+            let _ = channel.close().await;
+        }
+        Ok(())
+    }
 }
 
 impl SshClient {
     pub fn new() -> Self {
-        Self { session: None }
+        Self {
+            session: None,
+            x11_registry: Arc::new(crate::x11::X11DispatcherRegistry::new()),
+            x11_config: None,
+            connection_id: None,
+            app_handle: None,
+        }
     }
 
-    pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+    /// Attach a Tauri app handle so the X11 dispatcher can emit failure events
+    /// (e.g. the macOS "install XQuartz" toast). Called by ConnectionManager
+    /// in production; omitted in unit tests.
+    pub fn with_app_handle(mut self, app_handle: tauri::AppHandle) -> Self {
+        self.app_handle = Some(app_handle);
+        self
+    }
+
+    pub async fn connect(&mut self, connection_id: String, config: &SshConfig) -> Result<()> {
+        // Capture X11 config + connection id for create_pty_session.
+        self.x11_config = config.x11.clone();
+        self.connection_id = Some(connection_id.clone());
+
         let ssh_config = client::Config {
             preferred: russh::Preferred {
                 key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
@@ -104,7 +177,7 @@ impl SshClient {
 
         let mut ssh_session = tokio::time::timeout(
             connection_timeout,
-            client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client)
+            client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client::new(self.x11_registry.clone()))
         ).await
             .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
             .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?;
@@ -239,6 +312,13 @@ impl SshClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
+        // Deregister any X11 dispatcher for this connection so the Handler
+        // stops handing inbound channels to a dead session.
+        if let Some(cid) = &self.connection_id {
+            let mut senders = self.x11_registry.senders.write().await;
+            senders.remove(cid);
+        }
+
         if let Some(session) = self.session.take() {
             // Try to unwrap Arc, if we're the only owner
             match Arc::try_unwrap(session) {
@@ -262,7 +342,7 @@ impl SshClient {
 
     /// Create a persistent PTY shell session (like ttyd)
     /// This enables interactive commands like vim, less, more, top, etc.
-    pub async fn create_pty_session(&self, cols: u32, rows: u32) -> Result<PtySession> {
+    pub async fn create_pty_session(&self, cols: u32, rows: u32, connection_id: &str) -> Result<PtySession> {
         if let Some(session) = &self.session {
             // Open a new SSH channel
             let mut channel = session.channel_open_session().await?;
@@ -280,6 +360,140 @@ impl SshClient {
                     &[],              // terminal modes
                 )
                 .await?;
+
+            // --- X11 forwarding ---
+            if let Some(cfg) = self.x11_config.as_ref().filter(|c| c.enabled) {
+                let display_str = cfg.display.clone()
+                    .or_else(|| std::env::var("DISPLAY").ok())
+                    .unwrap_or_else(|| ":0".to_string());
+
+                match crate::x11::parse_display(&display_str) {
+                    Ok(parsed) => {
+                        // Forwarding is always trusted (-Y): pass the real local
+                        // xauth cookie. Untrusted mode was removed because the X11
+                        // SECURITY extension it requires is rejected by standard
+                        // local X servers. We still fall back to a fake cookie if
+                        // xauth is unreadable: forwarding will then fail at the X
+                        // server (logged), but the SSH session itself is unaffected.
+                        let cookie = crate::x11::read_local_cookie(&parsed).unwrap_or_else(|e| {
+                            tracing::warn!("[X11] xauth read failed ({e}); falling back to fake cookie");
+                            crate::x11::generate_fake_cookie()
+                        });
+
+                        // C1: do NOT set DISPLAY ourselves. sshd sets the remote
+                        // DISPLAY itself (per its X11DisplayOffset) when it handles
+                        // request_x11; the client overriding it with an assumed
+                        // `localhost:10.0` can break forwarding on servers that use
+                        // a different offset.
+
+                        // Capture the screen number now: it's a Copy u32 needed by
+                        // request_x11, but `parsed` itself will be moved into the
+                        // dispatcher task below (it is not Clone).
+                        let screen = parsed.screen();
+
+                        // C2: register the dispatcher sender BEFORE request_x11.
+                        // request_x11 (want_reply=true) only enqueues the request
+                        // and returns; it does NOT await the server reply. The
+                        // server can therefore open the inbound X11 channel before
+                        // we would otherwise have inserted the sender, and the
+                        // Handler would drop it. We insert first, then deregister
+                        // on request_x11 failure.
+                        let (x11_tx, mut x11_rx) = mpsc::unbounded_channel::<crate::x11::InboundX11Channel>();
+                        {
+                            let mut senders = self.x11_registry.senders.write().await;
+                            senders.insert(connection_id.to_string(), x11_tx);
+                        }
+
+                        match channel.request_x11(
+                            true,                       // want_reply
+                            false,                      // single_connection
+                            "MIT-MAGIC-COOKIE-1",
+                            &cookie,
+                            screen,
+                        ).await {
+                            Ok(()) => {
+                                tracing::info!("[X11] forwarding requested (trusted)");
+
+                                // I2 / Lifetime note: this dispatcher lives until
+                                // the SSH connection's receiver is dropped (on
+                                // disconnect) or the task itself deregisters.
+                                // Replacing the PTY session (start_pty_connection)
+                                // inserts a new sender under the same key, dropping
+                                // the old one and ending this task.
+
+                                // N1: parse DISPLAY once and move ParsedDisplay
+                                // into the dispatcher task. The original `parsed`
+                                // is reused here for every inbound channel rather
+                                // than re-parsing per channel inside the loop.
+                                let registry = self.x11_registry.clone();
+                                let cid = connection_id.to_string();
+                                let app_handle = self.app_handle.clone();
+                                tokio::spawn(async move {
+                                    // Emit the macOS XQuartz hint at most once per
+                                    // session: a flapping remote X app must not
+                                    // spam toasts on every inbound channel.
+                                    let mut hinted = false;
+                                    while let Some(inbound) = x11_rx.recv().await {
+                                        let crate::x11::InboundX11Channel {
+                                            channel,
+                                            originator_address,
+                                            originator_port,
+                                        } = inbound;
+                                        let _ = (originator_address, originator_port);
+                                        // Connect to the local X server and bridge.
+                                        // A fresh per-bridge cancel token; session
+                                        // teardown (disconnect) deregisters this
+                                        // dispatcher, whose channel closes and ends
+                                        // both bridge tasks.
+                                        match crate::x11::connect_local_x_server(&parsed).await {
+                                            Ok(socket) => {
+                                                let cancel = CancellationToken::new();
+                                                crate::x11::bridge_x11_channel(channel, socket, cancel);
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("[X11] could not connect to local X server: {}. Remote app will fail to display.", e);
+                                                // macOS UX (spec §4.5): the most
+                                                // common cause is a missing XQuartz.
+                                                // Surface a single toast guiding
+                                                // the user to install it. Other
+                                                // platforms keep the warn-only log
+                                                // (the terminal still works). The
+                                                // handle is None in unit tests.
+                                                #[cfg(target_os = "macos")]
+                                                if !hinted {
+                                                    hinted = true;
+                                                    if let Some(handle) = app_handle.as_ref() {
+                                                        use tauri::Emitter;
+                                                        let _ = handle.emit(
+                                                            "x11-local-server-unreachable",
+                                                            &cid,
+                                                        );
+                                                    }
+                                                }
+                                                let _ = channel.close().await;
+                                            }
+                                        }
+                                    }
+                                    // Dispatcher shut down (session closing) — deregister.
+                                    let mut senders = registry.senders.write().await;
+                                    senders.remove(&cid);
+                                });
+                            }
+                            Err(e) => {
+                                // C2: deregister the sender we optimistically
+                                // inserted above so the Handler stops routing
+                                // inbound channels to a session whose X11 setup
+                                // failed.
+                                self.x11_registry.senders.write().await.remove(connection_id);
+                                tracing::warn!("[X11] request_x11 rejected by server: {}. Terminal will work without X11.", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("[X11] could not parse DISPLAY '{}': {}. Skipping X11.", display_str, e);
+                    }
+                }
+            }
 
             // Start interactive shell
             channel.request_shell(true).await?;

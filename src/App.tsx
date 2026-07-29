@@ -13,7 +13,7 @@ import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
-import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
+import { ActiveConnectionsManager, ConnectionStorageManager, type ConnectionData } from './lib/connection-storage';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { useLayout, LayoutProvider } from './lib/layout-context';
@@ -49,6 +49,39 @@ interface ConnectionNode {
   isConnected?: boolean;
   children?: ConnectionNode[];
   isExpanded?: boolean;
+}
+
+/**
+ * Build a `ConnectionConfig` for the edit dialog from a stored `ConnectionData`.
+ * Centralised so every "edit connection" entry point loads the SAME field set —
+ * previously each of the 7 call sites picked its own subset, which silently
+ * dropped advanced options (compression/keepAlive/x11) on edit.
+ */
+
+function connectionDataToConfig(connectionData: ConnectionData, id: string): ConnectionConfig {
+  return {
+    id,
+    name: connectionData.name,
+    protocol: connectionData.protocol as ConnectionConfig['protocol'],
+    host: connectionData.host,
+    port: connectionData.port,
+    username: connectionData.username,
+    authMethod: connectionData.authMethod || 'password',
+    password: connectionData.password,
+    privateKeyPath: connectionData.privateKeyPath,
+    passphrase: connectionData.passphrase,
+    // FTP / desktop-specific
+    ftpsEnabled: connectionData.ftpsEnabled,
+    domain: connectionData.domain,
+    rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
+    vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
+    // SSH-specific advanced options (now persisted, see ConnectionData)
+    compression: connectionData.compression,
+    keepAlive: connectionData.keepAlive,
+    keepAliveInterval: connectionData.keepAliveInterval,
+    serverAliveCountMax: connectionData.serverAliveCountMax,
+    x11: connectionData.x11,
+  };
 }
 
 function AppContent() {
@@ -391,6 +424,9 @@ function AppContent() {
                     password: connectionData.password || '',
                     key_path: connectionData.privateKeyPath || null,
                     passphrase: connectionData.passphrase || null,
+                    // Restore X11 forwarding + SSH advanced options if the saved
+                    // connection had them (otherwise null → X11 disabled).
+                    x11: connectionData.x11 ?? null,
                   }
                 }
               ),
@@ -504,15 +540,7 @@ function AppContent() {
           : !!connectionData.privateKeyPath);
 
       if (!hasCredentials) {
-        setEditingConnection({
-          id: connection.id,
-          name: connectionData.name,
-          protocol: connectionData.protocol as ConnectionConfig['protocol'],
-          host: connectionData.host,
-          port: connectionData.port,
-          username: connectionData.username,
-          authMethod: connectionData.authMethod || 'password',
-        });
+        setEditingConnection(connectionDataToConfig(connectionData, connection.id));
         setConnectionDialogOpen(true);
         return;
       }
@@ -587,6 +615,7 @@ function AppContent() {
                 password: connectionData.password || '',
                 key_path: connectionData.privateKeyPath || null,
                 passphrase: connectionData.passphrase || null,
+                x11: connectionData.x11 ?? null,
               }
             }
           );
@@ -611,15 +640,7 @@ function AppContent() {
             toast.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
-            setEditingConnection({
-              id: connection.id,
-              name: connectionData.name,
-              protocol: connectionData.protocol as ConnectionConfig['protocol'],
-              host: connectionData.host,
-              port: connectionData.port,
-              username: connectionData.username,
-              authMethod: connectionData.authMethod || 'password',
-            });
+            setEditingConnection(connectionDataToConfig(connectionData, connection.id));
             setConnectionDialogOpen(true);
           }
         } catch (error) {
@@ -627,15 +648,7 @@ function AppContent() {
           toast.error(t('app.connectionError'), {
             description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
           });
-          setEditingConnection({
-            id: connection.id,
-            name: connectionData.name,
-            protocol: connectionData.protocol as ConnectionConfig['protocol'],
-            host: connectionData.host,
-            port: connectionData.port,
-            username: connectionData.username,
-            authMethod: connectionData.authMethod || 'password',
-          });
+          setEditingConnection(connectionDataToConfig(connectionData, connection.id));
           setConnectionDialogOpen(true);
         }
       }
@@ -781,6 +794,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              x11: connectionData.x11 ?? null,
             }
           }
         );
@@ -843,15 +857,7 @@ function AppContent() {
       toast.error(t('app.cannotReconnect'), {
         description: t('app.noCredentialsDesc'),
       });
-      setEditingConnection({
-        id: originalConnectionId,
-        name: connectionData.name,
-        protocol: connectionData.protocol as ConnectionConfig['protocol'],
-        host: connectionData.host,
-        port: connectionData.port,
-        username: connectionData.username,
-        authMethod: connectionData.authMethod || 'password',
-      });
+      setEditingConnection(connectionDataToConfig(connectionData, originalConnectionId));
       setConnectionDialogOpen(true);
       return;
     }
@@ -926,6 +932,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              x11: connectionData.x11 ?? null,
             }
           }
         );
@@ -1043,6 +1050,16 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
           break;
         }
+      }
+
+      // For SSH terminal tabs, the connection-dialog has already re-run
+      // ssh_connect (which on the backend tears down the previous session via
+      // create_connection's teardown_existing_connection). The frontend PTY
+      // must now reconnect: dispatching RECONNECT_TAB bumps reconnectCount,
+      // which is part of PtyTerminal's React key (see terminal-tab-portals),
+      // forcing a remount → fresh WebSocket → StartPty on the new session.
+      if (!isFileBrowser && !isDesktop) {
+        dispatch({ type: 'RECONNECT_TAB', tabId });
       }
 
       // For SFTP/FTP reconnect flow
@@ -1258,21 +1275,7 @@ function AppContent() {
     if (connection.type === 'connection') {
       const connectionData = ConnectionStorageManager.getConnection(connection.id);
       if (connectionData) {
-        setEditingConnection({
-          id: connectionData.id,
-          name: connectionData.name,
-          protocol: connectionData.protocol as ConnectionConfig['protocol'],
-          host: connectionData.host,
-          port: connectionData.port,
-          username: connectionData.username,
-          authMethod: connectionData.authMethod || 'password',
-          password: connectionData.password,
-          privateKeyPath: connectionData.privateKeyPath,
-          passphrase: connectionData.passphrase,
-          domain: connectionData.domain,
-          rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
-          vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
-        });
+        setEditingConnection(connectionDataToConfig(connectionData, connectionData.id));
         setConnectionDialogOpen(true);
       } else {
         toast.error('Connection Not Found', {
@@ -1324,15 +1327,7 @@ function AppContent() {
         : !!connectionData.privateKeyPath);
 
     if (!hasCredentials) {
-      setEditingConnection({
-        id: connectionData.id,
-        name: connectionData.name,
-        protocol: connectionData.protocol as ConnectionConfig['protocol'],
-        host: connectionData.host,
-        port: connectionData.port,
-        username: connectionData.username,
-        authMethod: connectionData.authMethod || 'password',
-      });
+      setEditingConnection(connectionDataToConfig(connectionData, connectionData.id));
       setConnectionDialogOpen(true);
       return;
     }
@@ -1371,6 +1366,7 @@ function AppContent() {
               password: connectionData.password || '',
               key_path: connectionData.privateKeyPath || null,
               passphrase: connectionData.passphrase || null,
+              x11: connectionData.x11 ?? null,
             }
           }
         );
@@ -1401,15 +1397,7 @@ function AppContent() {
           toast.error(t('app.connectionFailed'), {
             description: result.error || 'Unable to connect. Please try again.',
           });
-          setEditingConnection({
-            id: connectionData.id,
-            name: connectionData.name,
-            protocol: connectionData.protocol as ConnectionConfig['protocol'],
-            host: connectionData.host,
-            port: connectionData.port,
-            username: connectionData.username,
-            authMethod: connectionData.authMethod || 'password',
-          });
+          setEditingConnection(connectionDataToConfig(connectionData, connectionData.id));
           setConnectionDialogOpen(true);
         }
       } catch (error) {

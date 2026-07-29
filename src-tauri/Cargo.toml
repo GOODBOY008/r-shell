@@ -46,6 +46,13 @@ open = "5"
 base64 = "0.22"
 sys-locale = "0.3"
 
+[features]
+default = []
+# Enables the X11-forwarding E2E integration tests in ssh/tests.rs. These
+# require the Dockerized sshd from tests/x11-e2e/ and are #[ignore]d; run with:
+#   cargo test --features x11-e2e -- --ignored --nocapture x11_e2e
+x11-e2e = []
+
 [dev-dependencies]
 tempfile = "3"
 

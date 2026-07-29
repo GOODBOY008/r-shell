@@ -82,7 +82,7 @@ impl StandaloneSftpClient {
             client::connect(
                 Arc::new(ssh_config),
                 (&config.host[..], config.port),
-                Client,
+                Client::new(Arc::new(crate::x11::X11DispatcherRegistry::new())),
             ),
         )
         .await

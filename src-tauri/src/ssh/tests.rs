@@ -18,6 +18,7 @@ mod tests {
             auth_method: AuthMethod::Password {
                 password: TEST_PASSWORD.to_string(),
             },
+            x11: None,
         }
     }
 
@@ -41,7 +42,7 @@ mod tests {
         let mut client_write = client.write().await;
         let config = create_test_config();
 
-        let result = client_write.connect(&config).await;
+        let result = client_write.connect("test-conn-1".to_string(), &config).await;
 
         assert!(
             result.is_ok(),
@@ -63,7 +64,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect(&config)
+            .connect("test-conn-2".to_string(), &config)
             .await
             .expect("Failed to connect");
 
@@ -95,9 +96,10 @@ mod tests {
             auth_method: AuthMethod::Password {
                 password: "wrongpassword".to_string(),
             },
+            x11: None,
         };
 
-        let result = client_write.connect(&config).await;
+        let result = client_write.connect("test-conn-3".to_string(), &config).await;
 
         assert!(
             result.is_err(),
@@ -114,7 +116,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect(&config)
+            .connect("test-conn".to_string(), &config)
             .await
             .expect("Failed to connect");
 
@@ -143,7 +145,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect(&config)
+            .connect("test-conn".to_string(), &config)
             .await
             .expect("Failed to connect");
 
@@ -250,10 +252,11 @@ mod key_loading_tests {
                 key_path: "/nonexistent/path/id_rsa".to_string(),
                 passphrase: None,
             },
+            x11: None,
         };
 
         let mut client = SshClient::new();
-        let err = client.connect(&config).await.unwrap_err();
+        let err = client.connect("test-conn-missing".to_string(), &config).await.unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("not found") || msg.contains("SSH key file") || msg.contains("Connection refused"),
@@ -345,5 +348,352 @@ mod key_loading_tests {
             }
         }
         key_path.to_string()
+    }
+}
+
+/// E2E integration tests for X11 forwarding against a real sshd.
+///
+/// These require the Dockerized SSH server from `tests/x11-e2e/`:
+///
+/// ```bash
+/// docker compose -f tests/x11-e2e/docker-compose.yml up -d --build
+/// # wait for healthy: docker inspect --format='{{.State.Health.Status}}' r-shell-sshd-x11
+/// cargo test --features x11-e2e -- --ignored --nocapture x11_e2e
+/// ```
+///
+/// Marked `#[ignore]` (like the other live-server tests above) so they never
+/// run in CI without an explicit `--ignored` flag.
+#[cfg(all(test, feature = "x11-e2e"))]
+mod x11_e2e_tests {
+    use crate::ssh::{AuthMethod, SshClient, SshConfig};
+    use crate::x11::X11Config;
+    use std::sync::Once;
+    use std::time::{Duration, Instant};
+
+    const E2E_HOST: &str = "127.0.0.1";
+    const E2E_PORT: u16 = 2222;
+    const E2E_USER: &str = "testuser";
+    const E2E_PASS: &str = "testpass";
+
+    // Initialise tracing once per process so `--nocapture` surfaces the X11
+    // handshake logs ([X11] forwarding requested / request_x11 rejected / ...).
+    // Uses the plain fmt subscriber (no env-filter feature required).
+    static TRACING_INIT: Once = Once::new();
+    fn init_tracing() {
+        TRACING_INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        });
+    }
+
+    fn x11_config(enabled: bool, display: Option<&str>) -> SshConfig {
+        SshConfig {
+            host: E2E_HOST.to_string(),
+            port: E2E_PORT,
+            username: E2E_USER.to_string(),
+            auth_method: AuthMethod::Password {
+                password: E2E_PASS.to_string(),
+            },
+            x11: Some(X11Config {
+                enabled,
+                display: display.map(str::to_string),
+            }),
+        }
+    }
+
+    /// Read PTY output until `needle` appears or `timeout` elapses.
+    ///
+    /// Returns the concatenated bytes seen, so callers can assert on content.
+    async fn read_until(
+        session: &crate::ssh::PtySession,
+        needle: &str,
+        timeout: Duration,
+    ) -> String {
+        let deadline = Instant::now() + timeout;
+        let mut buf = String::new();
+        let mut rx = session.output_rx.lock().await;
+        loop {
+            let remaining = deadline.checked_duration_since(Instant::now());
+            match remaining {
+                None => break,
+                Some(r) => match tokio::time::timeout(r, rx.recv()).await {
+                    Ok(Some(chunk)) => {
+                        buf.push_str(&String::from_utf8_lossy(&chunk));
+                        if buf.contains(needle) {
+                            break;
+                        }
+                    }
+                    Ok(None) => break, // channel closed
+                    Err(_) => break,   // timed out
+                },
+            }
+        }
+        buf
+    }
+
+    /// Send a command that prints `$DISPLAY` between two sentinels and return
+    /// the expanded value. Robust to the noise an interactive bash PTY emits.
+    ///
+    /// The echoed command line would otherwise also contain the sentinels,
+    /// making string-search ambiguous. The fix: turn off terminal echo
+    /// (`stty -echo`) and bracketed paste *before* the probe, so only the
+    /// command's *output* reaches the buffer. We then read between START and
+    /// END, stripping any residual ANSI/CR.
+    async fn read_remote_display(session: &crate::ssh::PtySession) -> String {
+        // Silence echo + bracketed paste so the buffer holds only command output.
+        session
+            .input_tx
+            .send(b"stty -echo 2>/dev/null; printf '\\0033[?2004l'\n".to_vec())
+            .await
+            .ok();
+        // Let the stty line take effect and be (not) echoed.
+        let _ = read_until(session, "NO_SUCH_MARKER_FLUSH", Duration::from_millis(400)).await;
+
+        session
+            .input_tx
+            .send(b"printf 'X11PROBE_START\\n%s\\nX11PROBE_END\\n' \"$DISPLAY\"\n".to_vec())
+            .await
+            .expect("send input");
+
+        let buf = read_until(session, "X11PROBE_END", Duration::from_secs(10)).await;
+
+        // With echo off, START and END each appear once (in the output). Take
+        // the text strictly between them.
+        let start_tag = "X11PROBE_START";
+        let end_tag = "X11PROBE_END";
+        let between = match (buf.find(start_tag), buf.find(end_tag)) {
+            (Some(s), Some(e)) if s + start_tag.len() <= e => {
+                buf[s + start_tag.len()..e].to_string()
+            }
+            _ => return String::new(),
+        };
+
+        let stripped = strip_ansi(&between);
+        stripped
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    /// Strip ANSI CSI escape sequences and carriage returns from a PTY buffer.
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let bytes = s.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
+                // CSI: ESC '[' ... (terminated by 0x40..=0x7e)
+                i += 2;
+                while i < bytes.len() && !(0x40..=0x7e).contains(&bytes[i]) {
+                    i += 1;
+                }
+                i += 1; // consume the terminator
+            } else if bytes[i] == b'\r' {
+                i += 1;
+            } else {
+                out.push(bytes[i] as char);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// The core X11 E2E assertion: with X11 enabled, `create_pty_session`
+    /// succeeds (so sshd accepted the `request_x11`) AND the remote shell's
+    /// `$DISPLAY` is set by sshd to the forwarded value (`localhost:10.0`
+    /// given `X11DisplayOffset 10`).
+    ///
+    /// Both conditions are meaningful:
+    /// - If `X11Forwarding no`, `create_pty_session` returns an error (the
+    ///   request_x11 Err branch).
+    /// - If X11 is off, `$DISPLAY` is empty in the non-interactive PTY shell.
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
+    async fn x11_forwarding_sets_remote_display() {
+        init_tracing();
+        let mut client = SshClient::new();
+        let config = x11_config(true, None);
+
+        client
+            .connect("x11-e2e-1".to_string(), &config)
+            .await
+            .expect("SSH connect should succeed against the test sshd");
+
+        // This is the X11 handshake: registers the dispatcher, calls
+        // request_x11, then request_shell. A server with X11Forwarding off
+        // makes request_x11 return Err, failing here.
+        let session = client
+            .create_pty_session(80, 24, "x11-e2e-1")
+            .await
+            .expect("PTY session (incl. request_x11) should succeed");
+
+        // Drain the MOTD/prompt before issuing the probe.
+        let _ = read_until(&session, "MARKER_UNUSED_DRAIN", Duration::from_millis(600)).await;
+
+        let display = read_remote_display(&session).await;
+
+        // sshd with X11Forwarding yes + X11DisplayOffset 10 sets DISPLAY to a
+        // forwarded value of the form `<host>:<N>.0`. sshd picks the first free
+        // display number starting at the offset, so across multiple test runs
+        // (each establishes its own X11 forwarding) the number increments
+        // (10, 11, 12, ...). The essential proof is a value matching
+        // `<host>:<N>=10>.0`, i.e. at or above the configured offset.
+        let proof = display
+            .rsplit(':')
+            .next()
+            .and_then(|tail| tail.split('.').next())
+            .and_then(|n| n.parse::<u32>().ok())
+            .map(|n| n >= 10)
+            .unwrap_or(false);
+        assert!(
+            proof && display.ends_with(".0"),
+            "remote $DISPLAY should be set to a forwarded value '<host>:<N>=10>.0' by sshd; got display={display:?}"
+        );
+
+        session.cancel.cancel();
+        let _ = client.disconnect().await;
+    }
+
+    /// Negative control: with X11 disabled, the remote `$DISPLAY` is empty
+    /// (no forwarding established). This proves the positive test above is
+    /// actually testing X11 behaviour, not just "sshd sets DISPLAY anyway".
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
+    async fn x11_disabled_leaves_display_empty() {
+        init_tracing();
+        let mut client = SshClient::new();
+        let config = x11_config(false, None);
+
+        client
+            .connect("x11-e2e-2".to_string(), &config)
+            .await
+            .expect("SSH connect should succeed");
+
+        let session = client
+            .create_pty_session(80, 24, "x11-e2e-2")
+            .await
+            .expect("PTY session should succeed without X11");
+
+        let _ = read_until(&session, "MARKER_UNUSED_DRAIN", Duration::from_millis(600)).await;
+
+        let display = read_remote_display(&session).await;
+
+        assert!(
+            display.is_empty(),
+            "with X11 disabled, remote $DISPLAY should be empty; got display={display:?}"
+        );
+
+        session.cancel.cancel();
+        let _ = client.disconnect().await;
+    }
+
+    /// Problem #1 regression: reconnecting with the same connection_id (the
+    /// "edit an open connection → update & connect" flow) must tear down the
+    /// previous connection — the old client disconnected, old PTY session
+    /// cancelled — so the frontend's bound session does not go dead.
+    ///
+    /// Verified against the Dockerized sshd: two sequential `create_connection`
+    /// calls with the same id both succeed, and after the second the manager
+    /// holds exactly one connection for that id (no leak), and the PTY map has
+    /// no stale entry.
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/"]
+    async fn reconnect_same_id_tears_down_previous_connection() {
+        use crate::connection_manager::ConnectionManager;
+
+        let mgr = std::sync::Arc::new(ConnectionManager::new());
+        let config = x11_config(false, None);
+
+        // First connection.
+        mgr.create_connection("reconnect-1".to_string(), config.clone())
+            .await
+            .expect("first connect should succeed");
+        assert!(
+            mgr.get_connection("reconnect-1").await.is_some(),
+            "first connection should be present"
+        );
+
+        // Reconnect with the SAME id — simulates "update & connect" on an
+        // already-open connection. Before the fix this silently overwrote the
+        // old client (leaked, never disconnected) leaving the frontend's PTY
+        // pointing at a dead session.
+        mgr.create_connection("reconnect-1".to_string(), config.clone())
+            .await
+            .expect("reconnect should succeed");
+
+        // The manager must still hold exactly one connection for this id
+        // (the new one), and it must be usable.
+        assert!(
+            mgr.get_connection("reconnect-1").await.is_some(),
+            "reconnected client should be present"
+        );
+
+        // Clean up.
+        mgr.close_connection("reconnect-1").await.expect("close ok");
+    }
+
+    /// Problem #2 diagnostic: drive the FULL R-Shell X11 path end-to-end and
+    /// capture evidence of where it breaks. Connects with X11 enabled, opens a
+    /// PTY (which runs request_x11 + installs the dispatcher), then launches
+    /// an X client inside the container (`xdpyinfo`) — which connects to the
+    /// remote $DISPLAY and forces sshd to open an inbound X11 channel back to
+    /// R-Shell. We then observe, via tracing, whether:
+    ///   - the inbound channel reached the dispatcher,
+    ///   - connect_local_x_server succeeded (local XQuartz reachable),
+    ///   - the bridge streamed bytes.
+    ///
+    /// This is a DIAGNOSTIC (not a strict assertion): it prints what happened
+    /// so the failure point is visible. Run with:
+    ///   cargo test --features x11-e2e -- --nocapture --ignored x11_end_to_end
+    #[tokio::test]
+    #[ignore = "requires the Dockerized sshd from tests/x11-e2e/ + a local X server"]
+    async fn x11_end_to_end_dispatcher_receives_channel() {
+        init_tracing();
+        let mut client = SshClient::new();
+        // Forwarding is always trusted (-Y): the real local xauth cookie is
+        // passed. Untrusted (fake cookie) was removed — it is rejected by the
+        // local X server, causing instant EOF.
+        let config = x11_config(true, None);
+
+        client
+            .connect("x11-e2e-3".to_string(), &config)
+            .await
+            .expect("connect");
+        let session = client
+            .create_pty_session(80, 24, "x11-e2e-3")
+            .await
+            .expect("PTY + request_x11");
+
+        // Drain MOTD.
+        let _ = read_until(&session, "NO_SUCH", Duration::from_millis(500)).await;
+
+        // Launch an X client that talks to the remote $DISPLAY. xlogo opens a
+        // window via the SSH-forwarded X11 channel, so it exercises the full
+        // inbound path: sshd -> inbound X11 channel -> R-Shell dispatcher ->
+        // connect_local_x_server -> bridge. Run it backgrounded so the PTY
+        // prompt returns; the window (if forwarding works) appears on the
+        // local XQuartz.
+        session
+            .input_tx
+            .send(b"(xlogo >/tmp/xlogo.out 2>&1 &); sleep 1; echo XLOGO_LAUNCHED_RC=$?\n".to_vec())
+            .await
+            .ok();
+        let _ = read_until(&session, "XLOGO_LAUNCHED_RC=", Duration::from_secs(6)).await;
+
+        // Give sshd + the dispatcher + the local X connect a moment to happen.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+
+        // Read back any error output from xlogo.
+        session
+            .input_tx
+            .send(b"echo XLOGO_OUT_START; cat /tmp/xlogo.out 2>/dev/null; echo; echo XLOGO_OUT_END\n".to_vec())
+            .await
+            .ok();
+        let out = read_until(&session, "XLOGO_OUT_END", Duration::from_secs(5)).await;
+        println!("---- xlogo output ----\n{out}\n---- (watch the [X11] tracing logs above for the dispatcher path) ----");
+
+        session.cancel.cancel();
+        let _ = client.disconnect().await;
     }
 }

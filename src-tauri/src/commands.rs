@@ -18,6 +18,9 @@ pub struct ConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// Optional X11 forwarding config. Omitted by older frontends (serde default).
+    #[serde(default)]
+    pub x11: Option<crate::x11::X11Config>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,6 +77,7 @@ pub async fn ssh_connect(
         port: request.port,
         username: request.username,
         auth_method,
+        x11: request.x11,
     };
 
     match state

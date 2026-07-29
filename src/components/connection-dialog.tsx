@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
-import { ConnectionStorageManager } from '../lib/connection-storage';
+import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
 import { toast } from 'sonner';
 import {
   Server,
@@ -60,6 +60,9 @@ export interface ConnectionConfig {
   keepAlive?: boolean;
   keepAliveInterval?: number;
   serverAliveCountMax?: number;
+
+  // X11 forwarding (SSH specific)
+  x11?: X11Config;
 
   // RDP specific
   domain?: string;
@@ -354,6 +357,7 @@ export function ConnectionDialog({
             password: config.password || '',
             key_path: config.privateKeyPath || null,
             passphrase: config.passphrase || null,
+            x11: config.x11 ?? null,
           }
         }
       );
@@ -372,6 +376,11 @@ export function ConnectionDialog({
             password: config.password,
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
+            compression: config.compression,
+            keepAlive: config.keepAlive,
+            keepAliveInterval: config.keepAliveInterval,
+            serverAliveCountMax: config.serverAliveCountMax,
+            x11: config.x11,
             lastConnected: new Date().toISOString(),
           });
         } else if (saveAsConnection) {
@@ -388,6 +397,11 @@ export function ConnectionDialog({
             password: config.password,
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
+            compression: config.compression,
+            keepAlive: config.keepAlive,
+            keepAliveInterval: config.keepAliveInterval,
+            serverAliveCountMax: config.serverAliveCountMax,
+            x11: config.x11,
           });
         }
 
@@ -981,6 +995,55 @@ export function ConnectionDialog({
                           )}
                         </>
                       )}
+
+                      <Separator />
+
+                      {/* X11 Forwarding */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <Label htmlFor="x11-enable">{t('connectionDialog.x11.enable')}</Label>
+                            <p className="text-sm text-muted-foreground">
+                              {t('connectionDialog.x11.enableDesc')}
+                            </p>
+                          </div>
+                          <Switch
+                            id="x11-enable"
+                            checked={config.x11?.enabled ?? false}
+                            onCheckedChange={(checked) =>
+                              setConfig((c) => ({
+                                ...c,
+                                x11: {
+                                  enabled: checked,
+                                  display: c.x11?.display,
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+
+                        {config.x11?.enabled && (
+                          <>
+                            <div className="grid gap-1 ml-4">
+                              <Label htmlFor="x11-display">{t('connectionDialog.x11.displayOverride')}</Label>
+                              <Input
+                                id="x11-display"
+                                placeholder={t('connectionDialog.x11.displayPlaceholder')}
+                                value={config.x11.display ?? ''}
+                                onChange={(e) =>
+                                  setConfig((c) => ({
+                                    ...c,
+                                    x11: {
+                                      enabled: c.x11?.enabled ?? false,
+                                      display: e.target.value || undefined,
+                                    },
+                                  }))
+                                }
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
