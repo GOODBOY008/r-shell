@@ -485,4 +485,45 @@ mod tests {
         assert_eq!(gamelist.size, 85234);
         assert_eq!(gamelist.modified.as_deref(), Some("2000-11-09 00:00:00"));
     }
+
+    /// OpenWrt ships BusyBox `ls` by default, so the backend runs plain
+    /// `ls -la` (no `--time-style`). This reproduces the exact failure the user
+    /// saw on their OpenWrt router: right-aligned, space-padded columns and the
+    /// default `Mon DD HH:MM` / `Mon DD YYYY` date layout.
+    #[test]
+    fn test_user_scenario_openwrt_busybox() {
+        let lines = [
+            "drwxr-xr-x    1 root     root           104 Jan 15 12:32 dev",
+            "drwxr-xr-x    1 root     root             0 Jan 15 12:32 proc",
+            "drwxr-xr-x    1 root     root             0 Jan 15 12:32 sys",
+            "drwxr-xr-x    2 root     root          4096 Jul 25 12:46 Pacman",
+            "drwxr-xr-x    2 root     root          4096 Jul 25 12:46 SEGA",
+            "-rw-r--r--    1 root     root         85234 Nov  9  2000 gamelist.xml",
+            "lrwxrwxrwx    1 root     root            11 Jan 15 12:32 sbin -> usr/sbin",
+        ];
+
+        let dev = parse_ls_long_line(lines[0]).expect("dev must parse");
+        assert_eq!(dev.name, "dev");
+        assert_eq!(dev.size, 104);
+        assert!(matches!(dev.file_type, FileEntryType::Directory));
+
+        let proc_entry = parse_ls_long_line(lines[1]).expect("proc must parse");
+        assert_eq!(proc_entry.name, "proc");
+        assert_eq!(proc_entry.size, 0);
+
+        let pacman = parse_ls_long_line(lines[3]).expect("Pacman must parse");
+        assert_eq!(pacman.name, "Pacman");
+        assert_eq!(pacman.size, 4096);
+
+        // Older file → year is shown; time defaults to 00:00:00.
+        let gamelist = parse_ls_long_line(lines[5]).expect("gamelist.xml must parse");
+        assert_eq!(gamelist.name, "gamelist.xml");
+        assert_eq!(gamelist.size, 85234);
+        assert_eq!(gamelist.modified.as_deref(), Some("2000-11-09 00:00:00"));
+
+        // Symlink target must be stripped from the name.
+        let sbin = parse_ls_long_line(lines[6]).expect("sbin symlink must parse");
+        assert_eq!(sbin.name, "sbin");
+        assert!(matches!(sbin.file_type, FileEntryType::Symlink));
+    }
 }
