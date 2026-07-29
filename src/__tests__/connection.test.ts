@@ -104,24 +104,26 @@ describe('SSH Connection Tests', () => {
   }, 5000);
 
   it('should list files in home directory', async () => {
-    const result = await invoke<{ 
-      success: boolean; 
-      files?: Array<{
-        name: string;
-        size: number;
-        is_dir: boolean;
-        modified: string;
-        permissions: string;
-      }>; 
-      error?: string 
-    }>('list_files', {
+    const result = await invoke<Array<{
+      name: string;
+      size: number;
+      modified: string | null;
+      permissions: string | null;
+      file_type: 'File' | 'Directory' | 'Symlink';
+    }>>('list_files', {
       connection_id: connectionId,
       path: '~'
     });
 
-    expect(result.success).toBe(true);
-    expect(result.files).toBeDefined();
-    expect(Array.isArray(result.files)).toBe(true);
+    expect(Array.isArray(result)).toBe(true);
+    // Every entry must have a non-empty name that does not leak time/date
+    // tokens (the regression we fixed for non-GNU ls output).
+    for (const entry of result) {
+      expect(typeof entry.name).toBe('string');
+      expect(entry.name.length).toBeGreaterThan(0);
+      expect(entry.name).not.toBe('.');
+      expect(entry.name).not.toBe('..');
+    }
   }, 5000);
 
   it('should fail with invalid credentials', async () => {

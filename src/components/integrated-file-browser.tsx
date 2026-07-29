@@ -464,18 +464,14 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const loadSSHDirectories = useCallback(async (path: string): Promise<string[]> => {
     if (!connectionId || !isConnected) return [];
     try {
-      const output = await invoke<string>('list_files', { connectionId, path });
-      if (!output) return [];
-      const lines = output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
-      const dirs: string[] = [];
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 8 && parts[0].startsWith('d')) {
-          const name = parts.slice(7).join(' ');
-          if (name && name !== '.' && name !== '..') dirs.push(name);
-        }
-      }
-      return dirs;
+      const entries = await invoke<Array<{ name: string; file_type: 'File' | 'Directory' | 'Symlink' }>>(
+        'list_files',
+        { connectionId, path },
+      );
+      // Backend already filters `.`/`..` and returns structured types.
+      return entries
+        .filter((e) => e.file_type === 'Directory')
+        .map((e) => e.name);
     } catch {
       return [];
     }
@@ -537,59 +533,43 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       // successful await, so stale calls from a previous connection are
       // discarded without showing an error toast.  maxRetries=2 means up
       // to 3 total attempts with 1 s → 2 s backoff.
-      const output = await withRetry(
-        () => invoke<string>('list_files', { connectionId, path: targetPath }),
+      const entries = await withRetry(
+        () => invoke<Array<{ name: string; size: number; modified: string | null; permissions: string | null; file_type: 'File' | 'Directory' | 'Symlink' }>>(
+          'list_files',
+          { connectionId, path: targetPath },
+        ),
         isCancelled,
         { maxRetries: 2, baseDelayMs: 1000 },
       );
-      
-      if (output && output.trim()) {
-        // Parse ls -la --time-style=long-iso output to FileItem format
-        // Format: perms links owner group size date time filename
-        // Example: drwxr-xr-x  5 root root 72 2025-09-17 03:38 giga-sls
-        const lines = output.split('\n').filter(l => l.trim() && !l.startsWith('total'));
-        
-        const parsedFiles: FileItem[] = lines.map(line => {
-          const parts = line.trim().split(/\s+/);
-          
-          if (parts.length < 8) {
-            return null;
-          }
-          
-          const permissions = parts[0];
-          const owner = parts[2];
-          const group = parts[3];
-          const size = parseInt(parts[4]) || 0;
-          // parts[5] is date (YYYY-MM-DD), parts[6] is time (HH:MM), parts[7+] is filename
-          const dateStr = parts[5];
-          const timeStr = parts[6];
-          const name = parts.slice(7).join(' ');
-          const type: 'directory' | 'file' = permissions.startsWith('d') ? 'directory' : 'file';
-          
-          // Parse the modification date from ls output
+
+      if (entries && entries.length > 0) {
+        // The backend now returns structured FileEntry values (parsed in Rust),
+        // so we no longer need to interpret the `ls -l` column layout here.
+        // The Rust `ls_parser` handles GNU long-iso, BusyBox/BSD default,
+        // ACL/SELinux/no-group variants — see src-tauri/src/ls_parser.rs.
+        const parsedFiles: FileItem[] = entries.map((entry) => {
+          const type: 'directory' | 'file' =
+            entry.file_type === 'Directory' ? 'directory' : 'file';
+          // `modified` is either null or an ISO-style string from the backend
+          // ("YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS"). Replace the space
+          // with "T" so Date parses it as local time, not UTC.
           let modifiedDate = new Date();
-          if (dateStr && timeStr) {
-            // Combine date and time: "2025-01-15 14:30" -> "2025-01-15T14:30"
-            modifiedDate = new Date(`${dateStr}T${timeStr}`);
+          if (entry.modified) {
+            const parsed = new Date(entry.modified.replace(' ', 'T'));
+            if (!isNaN(parsed.getTime())) modifiedDate = parsed;
           }
-          
-          // Skip . and .. entries
-          if (name === '.' || name === '..') {
-            return null;
-          }
-          
           return {
-            name,
+            name: entry.name,
             type,
-            size,
+            size: entry.size,
             modified: modifiedDate,
-            permissions,
-            owner,
-            group,
-            path: targetPath === '/' ? `/${name}` : `${targetPath}/${name}`
+            permissions: entry.permissions ?? '',
+            owner: '-',
+            group: '-',
+            path: targetPath === '/' ? `/${entry.name}` : `${targetPath}/${entry.name}`,
           };
-        }).filter(f => f !== null);
-        
+        });
+
         // Add parent directory navigation
         if (targetPath !== '/') {
           parsedFiles.unshift({
