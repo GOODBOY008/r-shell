@@ -63,6 +63,11 @@ function AppContent() {
   const [connectionInitialFolder, setConnectionInitialFolder] = useState<string | undefined>();
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
+  // Track whether the edit dialog was opened due to a failed connection attempt (double-click)
+  // vs. direct edit (right-click). When non-null and matches saved config id, auto-connect after save.
+  const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
+  // Incremented after any save/connect dialog close to trigger sidebar refresh
+  const [connectionSaveTrigger, setConnectionSaveTrigger] = useState(0);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
   const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
     () => loadKeyboardShortcutSettings(),
@@ -482,12 +487,9 @@ function AppContent() {
     if (connection.type === 'connection') {
       setSelectedConnection(connection);
 
-      // Check if this connection already has a session in ANY group (including active).
-      // If so, we need a unique session ID to avoid sharing the same backend connection.
-      const existsAnywhere = allTabs.some(
-        tab => tab.id === connection.id || tab.originalConnectionId === connection.id
-      );
-
+      // Always use a unique session ID (see sessionId below) to prevent the backend
+      // from reusing a stale session from a previously closed tab that was never
+      // disconnected. This guarantees a fresh TCP connection with the latest config.
       const connectionData = ConnectionStorageManager.getConnection(connection.id);
       if (!connectionData) return;
 
@@ -512,15 +514,23 @@ function AppContent() {
           port: connectionData.port,
           username: connectionData.username,
           authMethod: connectionData.authMethod || 'password',
+          password: connectionData.password,
+          privateKeyPath: connectionData.privateKeyPath,
+          passphrase: connectionData.passphrase,
+          ftpsEnabled: connectionData.ftpsEnabled,
+          domain: connectionData.domain,
+          rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
+          vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
         });
+        setPendingConnectionId(connection.id);
         setConnectionDialogOpen(true);
         return;
       }
 
-      // Use a unique session ID if the connection already exists anywhere
-      const sessionId = existsAnywhere
-        ? `${connection.id}-dup-${Date.now()}`
-        : connection.id;
+      // Always use a unique session ID — the backend may still hold a stale
+      // session from a previously closed tab that was never disconnected.
+      // A fresh session ID guarantees a new TCP connection with the latest config.
+      const sessionId = `${connection.id}-dup-${Date.now()}`;
 
       if (isFileBrowser) {
         // SFTP/FTP connect flow
@@ -531,7 +541,7 @@ function AppContent() {
           protocol: connectionData.protocol,
           host: connectionData.host,
           username: connectionData.username,
-          originalConnectionId: existsAnywhere ? connection.id : undefined,
+          originalConnectionId: connection.id,
           connectionStatus: 'connecting',
           reconnectCount: 0,
         };
@@ -573,7 +583,26 @@ function AppContent() {
           });
         }
       } else {
-        // SSH connect flow (existing behavior)
+        // SSH connect flow — create a placeholder tab first (shows "Waiting for
+        // connection..." so the user knows something is happening), then ssh_connect.
+        // Only after ssh_connect succeeds do we switch to 'connecting' status, which
+        // triggers PtyTerminal to mount and establish the WebSocket + PTY session.
+        // This avoids a race where PtyTerminal sends StartPty before the backend
+        // SSH session is fully established.
+        const newTab: TerminalTab = {
+          id: sessionId,
+          name: connectionData.name,
+          protocol: connectionData.protocol,
+          host: connectionData.host,
+          username: connectionData.username,
+          originalConnectionId: connection.id,
+          connectionStatus: 'pending',
+          reconnectCount: 0,
+        };
+        dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+
+        console.debug('[SSH] Connecting:', { id: connectionData.id, host: connectionData.host, port: connectionData.port, authMethod: connectionData.authMethod });
+
         try {
           const result = await invoke<{ success: boolean; error?: string }>(
             'ssh_connect',
@@ -593,21 +622,12 @@ function AppContent() {
 
           if (result.success) {
             ConnectionStorageManager.updateLastConnected(connection.id);
-
-            const newTab: TerminalTab = {
-              id: sessionId,
-              name: connectionData.name,
-              protocol: connectionData.protocol,
-              host: connectionData.host,
-              username: connectionData.username,
-              originalConnectionId: existsAnywhere ? connection.id : undefined,
-              connectionStatus: 'connecting',
-              reconnectCount: 0,
-            };
-
-            dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+            // Switch to 'connecting' — this mounts PtyTerminal which opens WebSocket
+            // and sends StartPty. The backend SSH session is ready by now.
+            dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connecting' });
           } else {
             console.error('SSH connection failed:', result.error);
+            dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
             toast.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
@@ -619,11 +639,16 @@ function AppContent() {
               port: connectionData.port,
               username: connectionData.username,
               authMethod: connectionData.authMethod || 'password',
+              password: connectionData.password,
+              privateKeyPath: connectionData.privateKeyPath,
+              passphrase: connectionData.passphrase,
             });
+            setPendingConnectionId(connection.id);
             setConnectionDialogOpen(true);
           }
         } catch (error) {
           console.error('Error connecting to SSH:', error);
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
           toast.error(t('app.connectionError'), {
             description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
           });
@@ -635,7 +660,11 @@ function AppContent() {
             port: connectionData.port,
             username: connectionData.username,
             authMethod: connectionData.authMethod || 'password',
+            password: connectionData.password,
+            privateKeyPath: connectionData.privateKeyPath,
+            passphrase: connectionData.passphrase,
           });
+          setPendingConnectionId(connection.id);
           setConnectionDialogOpen(true);
         }
       }
@@ -680,6 +709,7 @@ function AppContent() {
     setConnectionInitialFolder(folderPath);
     setConnectionDialogOpen(true);
     setEditingConnection(null);
+    setPendingConnectionId(null);
   }, []);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
@@ -851,7 +881,15 @@ function AppContent() {
         port: connectionData.port,
         username: connectionData.username,
         authMethod: connectionData.authMethod || 'password',
+        password: connectionData.password,
+        privateKeyPath: connectionData.privateKeyPath,
+        passphrase: connectionData.passphrase,
+        ftpsEnabled: connectionData.ftpsEnabled,
+        domain: connectionData.domain,
+        rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
+        vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
       });
+      setPendingConnectionId(originalConnectionId);
       setConnectionDialogOpen(true);
       return;
     }
@@ -1274,6 +1312,7 @@ function AppContent() {
           vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
         });
         setConnectionDialogOpen(true);
+        setPendingConnectionId(null);
       } else {
         toast.error('Connection Not Found', {
           description: 'The connection data could not be loaded.',
@@ -1281,6 +1320,184 @@ function AppContent() {
       }
     }
   }, []);
+
+  const handleSaveConnection = useCallback(async (config: ConnectionConfig) => {
+    if (!config.id) return;
+
+    // Update any open tab name for this connection
+    for (const group of Object.values(state.groups)) {
+      for (const tab of group.tabs) {
+        if (tab.id === config.id || tab.originalConnectionId === config.id) {
+          dispatch({ type: 'UPDATE_TAB_NAME', tabId: tab.id, name: config.name });
+        }
+      }
+    }
+
+    const wasPendingConnect = pendingConnectionId === config.id;
+    if (wasPendingConnect) {
+      setPendingConnectionId(null);
+
+      // Reuse the existing disconnected/pending tab (created by the initial failed
+      // connection attempt) instead of creating a new one. This avoids leaving a
+      // dead tab behind after the user saves a fix and auto-connects.
+      const pendingTab = allTabs.find(tab =>
+        tab.originalConnectionId === config.id &&
+        (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
+      );
+      const sessionId = pendingTab ? pendingTab.id : `${config.id}-dup-${Date.now()}`;
+
+      const isSftp = config.protocol === 'SFTP';
+      const isFtp = config.protocol === 'FTP';
+      const isFileBrowser = isSftp || isFtp;
+      const isDesktop = isDesktopProtocol(config.protocol);
+
+      if (isDesktop) {
+        if (!pendingTab) {
+          const newTab: TerminalTab = {
+            id: sessionId,
+            name: config.name,
+            tabType: 'desktop',
+            protocol: config.protocol,
+            host: config.host,
+            username: config.username,
+            originalConnectionId: config.id,
+            connectionStatus: 'connecting',
+            reconnectCount: 0,
+          };
+          dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+        } else {
+          dispatch({ type: 'UPDATE_TAB_NAME', tabId: sessionId, name: config.name });
+          dispatch({ type: 'RECONNECT_TAB', tabId: sessionId });
+        }
+
+        try {
+          await invoke('desktop_connect', {
+            request: {
+              connection_id: sessionId,
+              host: config.host,
+              port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
+              protocol: config.protocol.toLowerCase(),
+              username: config.username || '',
+              password: config.password || '',
+              domain: config.domain || null,
+              resolution: config.rdpResolution || '1920x1080',
+              color_depth: config.vncColorDepth ? parseInt(config.vncColorDepth) : 24,
+            }
+          });
+          ConnectionStorageManager.updateLastConnected(config.id);
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
+        } catch (error) {
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          toast.error(t('app.connectionFailed'), {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (isFileBrowser) {
+        if (!pendingTab) {
+          const newTab: TerminalTab = {
+            id: sessionId,
+            name: config.name,
+            tabType: 'file-browser',
+            protocol: config.protocol,
+            host: config.host,
+            username: config.username,
+            originalConnectionId: config.id,
+            connectionStatus: 'connecting',
+            reconnectCount: 0,
+          };
+          dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+        } else {
+          dispatch({ type: 'UPDATE_TAB_NAME', tabId: sessionId, name: config.name });
+          dispatch({ type: 'RECONNECT_TAB', tabId: sessionId });
+        }
+
+        try {
+          if (isSftp) {
+            await invoke('sftp_connect', {
+              request: {
+                connection_id: sessionId,
+                host: config.host,
+                port: config.port || 22,
+                username: config.username,
+                auth_method: config.authMethod || 'password',
+                password: config.password || '',
+                key_path: config.privateKeyPath || null,
+                passphrase: config.passphrase || null,
+              }
+            });
+          } else {
+            await invoke('ftp_connect', {
+              request: {
+                connection_id: sessionId,
+                host: config.host,
+                port: config.port || 21,
+                username: config.username || '',
+                password: config.password || '',
+                ftps_enabled: config.ftpsEnabled ?? false,
+                anonymous: config.authMethod === 'anonymous',
+              }
+            });
+          }
+          ConnectionStorageManager.updateLastConnected(config.id);
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
+        } catch (error) {
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          toast.error(t('app.connectionFailed'), {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else {
+        // SSH / Telnet / Raw — connect then create/reuse tab
+        try {
+          const result = await invoke<{ success: boolean; error?: string }>('ssh_connect', {
+            request: {
+              connection_id: sessionId,
+              host: config.host,
+              port: config.port || 22,
+              username: config.username,
+              auth_method: config.authMethod || 'password',
+              password: config.password || '',
+              key_path: config.privateKeyPath || null,
+              passphrase: config.passphrase || null,
+            }
+          });
+
+          if (result.success) {
+            ConnectionStorageManager.updateLastConnected(config.id);
+            if (pendingTab) {
+              // Reuse existing tab — RECONNECT_TAB increments reconnectCount so
+              // PtyTerminal's React key changes, forcing a remount with a fresh
+              // WebSocket + StartPty session. (UPDATE_TAB_STATUS alone would leave
+              // the old terminal content showing.)
+              dispatch({ type: 'UPDATE_TAB_NAME', tabId: sessionId, name: config.name });
+              dispatch({ type: 'RECONNECT_TAB', tabId: sessionId });
+            } else {
+              // No existing tab — create a new one
+              const newTab: TerminalTab = {
+                id: sessionId,
+                name: config.name,
+                protocol: config.protocol,
+                host: config.host,
+                username: config.username,
+                originalConnectionId: config.id,
+                connectionStatus: 'connecting',
+                reconnectCount: 0,
+              };
+              dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+            }
+          } else {
+            toast.error(t('app.connectionFailed'), {
+              description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
+            });
+          }
+        } catch (error) {
+          toast.error(t('app.connectionError'), {
+            description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
+          });
+        }
+      }
+    }
+  }, [state.groups, state.activeGroupId, allTabs, dispatch, t, pendingConnectionId]);
 
   // Get recent connections for quick connect
   const recentConnections = useMemo(() => {
@@ -1332,7 +1549,15 @@ function AppContent() {
         port: connectionData.port,
         username: connectionData.username,
         authMethod: connectionData.authMethod || 'password',
+        password: connectionData.password,
+        privateKeyPath: connectionData.privateKeyPath,
+        passphrase: connectionData.passphrase,
+        ftpsEnabled: connectionData.ftpsEnabled,
+        domain: connectionData.domain,
+        rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
+        vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
       });
+      setPendingConnectionId(connectionData.id);
       setConnectionDialogOpen(true);
       return;
     }
@@ -1409,7 +1634,11 @@ function AppContent() {
             port: connectionData.port,
             username: connectionData.username,
             authMethod: connectionData.authMethod || 'password',
+            password: connectionData.password,
+            privateKeyPath: connectionData.privateKeyPath,
+            passphrase: connectionData.passphrase,
           });
+          setPendingConnectionId(connectionData.id);
           setConnectionDialogOpen(true);
         }
       } catch (error) {
@@ -1586,6 +1815,7 @@ function AppContent() {
                   onConnectionConnect={handleConnectionConnect}
                   selectedConnectionId={selectedConnection?.id || null}
                   activeConnections={activeConnectionIds}
+                  refreshTrigger={connectionSaveTrigger}
                   onNewConnection={handleNewTab}
                   onEditConnection={handleEditConnection}
                   recentConnections={recentConnections}
@@ -1708,9 +1938,14 @@ function AppContent() {
         open={connectionDialogOpen}
         onOpenChange={(open) => {
           setConnectionDialogOpen(open);
-          if (!open) setConnectionInitialFolder(undefined);
+          if (!open) {
+            setConnectionInitialFolder(undefined);
+            setEditingConnection(null);
+            setConnectionSaveTrigger(t => t + 1);
+          }
         }}
         onConnect={handleConnectionDialogConnect}
+        onSave={handleSaveConnection}
         editingConnection={editingConnection}
         initialFolder={connectionInitialFolder}
       />

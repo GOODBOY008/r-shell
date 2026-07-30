@@ -50,6 +50,7 @@
     "connectionFailed": "Connection Failed",
     "connectionError": "Connection Error",
     "connectionErrorDesc": "An unexpected error occurred while connecting.",
+    "waitingForConnection": "Waiting for connection...",
     "cannotDuplicate": "Cannot Duplicate Tab",
     "cannotDuplicateDesc": "Connection data not found. Please create a new connection.",
     "cannotReconnect": "Cannot Reconnect",
@@ -184,6 +185,7 @@
     "allConnections": "All Connections",
     "button": {
       "cancel": "Cancel",
+      "save": "Save",
       "stop": "Stop",
       "cancelling": "Cancelling...",
       "connecting": "Connecting...",

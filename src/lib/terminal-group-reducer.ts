@@ -511,6 +511,29 @@ export function terminalGroupReducer(
       };
     }
 
+    case 'UPDATE_TAB_NAME': {
+      const { tabId, name } = action;
+      const groupId = state.tabToGroupMap[tabId];
+      if (!groupId) return state;
+
+      const group = state.groups[groupId];
+      if (!group) return state;
+
+      const tabIndex = group.tabs.findIndex((t) => t.id === tabId);
+      if (tabIndex === -1) return state;
+
+      const newTabs = [...group.tabs];
+      newTabs[tabIndex] = { ...newTabs[tabIndex], name };
+
+      return {
+        ...state,
+        groups: {
+          ...state.groups,
+          [groupId]: { ...group, tabs: newTabs },
+        },
+      };
+    }
+
     case 'RECONNECT_TAB': {
       const { tabId } = action;
       const groupId = state.tabToGroupMap[tabId];
