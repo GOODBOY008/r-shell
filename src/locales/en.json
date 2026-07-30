@@ -501,6 +501,7 @@
     },
     "contextMenu": {
       "download": "Download",
+      "downloadDirectory": "Download directory",
       "upload": "Upload",
       "rename": "Rename",
       "delete": "Delete",
@@ -549,6 +550,7 @@
       "pathCopied": "Path copied to clipboard",
       "loadFailed": "Failed to Load Files",
       "loadFailedDesc": "Unable to load remote directory contents.",
+      "followDirectoryFailed": "Could not follow terminal directory {{path}}",
       "pasteFailed": "Failed to Paste Files",
       "pasteFailedDesc": "Unable to complete paste operation.",
       "uploadFolderFailed": "Folder upload failed",
@@ -570,6 +572,7 @@
       "forward": "Forward",
       "parentDir": "Parent directory",
       "home": "Home",
+      "followTerminalDirectory": "Follow terminal directory",
       "refresh": "Refresh",
       "newFolder": "New Folder",
       "newFile": "New File",

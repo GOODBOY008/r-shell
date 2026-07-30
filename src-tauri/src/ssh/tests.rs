@@ -164,6 +164,124 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod shell_integration_tests {
+    use crate::sftp_client::list_sftp_dir;
+    use crate::ssh::{
+        bash_version_from_probe, AuthMethod, PtySession, SshClient, SshConfig,
+        BASH_SHELL_INTEGRATION_COMMAND,
+    };
+    use std::time::Duration;
+    use tokio::time::{timeout, Instant};
+
+    #[test]
+    fn detects_only_non_empty_bash_probe_results() {
+        assert_eq!(
+            bash_version_from_probe("__RSHELL_BASH_VERSION__5.2.37"),
+            Some("5.2.37")
+        );
+        assert_eq!(
+            bash_version_from_probe("profile output\n__RSHELL_BASH_VERSION__4.4.20"),
+            Some("4.4.20")
+        );
+        assert_eq!(bash_version_from_probe("__RSHELL_BASH_VERSION__"), None);
+    }
+
+    #[test]
+    fn shell_integration_restores_echo_and_emits_osc_7() {
+        assert!(BASH_SHELL_INTEGRATION_COMMAND.starts_with(b" stty echo;"));
+        assert!(!BASH_SHELL_INTEGRATION_COMMAND
+            .windows(b"history -d".len())
+            .any(|window| window == b"history -d"));
+        assert!(BASH_SHELL_INTEGRATION_COMMAND
+            .windows(b"]7;file://".len())
+            .any(|window| window == b"]7;file://"));
+        assert!(BASH_SHELL_INTEGRATION_COMMAND.ends_with(b"\n"));
+    }
+
+    async fn read_until(pty: &PtySession, needle: &[u8]) -> Vec<u8> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        while !output.windows(needle.len()).any(|window| window == needle) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "timed out waiting for PTY output");
+            let chunk = timeout(remaining, async { pty.output_rx.lock().await.recv().await })
+                .await
+                .expect("timed out waiting for PTY output")
+                .expect("PTY output channel closed");
+            output.extend_from_slice(&chunk);
+        }
+        output
+    }
+
+    async fn send_and_expect_cwd(pty: &PtySession, command: &str, expected_path: &str) {
+        let mut input = command.as_bytes().to_vec();
+        input.push(b'\n');
+        pty.input_tx.send(input).await.expect("send shell command");
+
+        let output = read_until(pty, b"\x1b\\").await;
+        assert!(
+            String::from_utf8_lossy(&output).contains(expected_path),
+            "OSC 7 output should contain {expected_path:?}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn docker_ssh_reports_cwd_and_lists_sftp_directories() {
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host: std::env::var("RSHELL_TEST_SSH_HOST")
+                    .unwrap_or_else(|_| "rshell-test-ssh".to_string()),
+                port: 22,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "testpass".to_string(),
+                },
+            })
+            .await
+            .expect("connect to Docker SSH server");
+
+        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let initial_output = read_until(&pty, b"\x1b\\").await;
+        assert!(
+            String::from_utf8_lossy(&initial_output).contains("/home/testuser"),
+            "initial OSC 7 should report the login directory"
+        );
+
+        send_and_expect_cwd(
+            &pty,
+            "cd '/srv/release files/子目录'",
+            "/srv/release%20files/子目录",
+        )
+        .await;
+        send_and_expect_cwd(&pty, "cd ..", "/srv/release%20files").await;
+        send_and_expect_cwd(&pty, "cd '子目录'", "/srv/release%20files/子目录").await;
+        send_and_expect_cwd(&pty, "cd -", "/srv/release%20files").await;
+        send_and_expect_cwd(&pty, "cd ~", "/home/testuser").await;
+        send_and_expect_cwd(
+            &pty,
+            "pushd '/srv/release files/子目录'",
+            "/srv/release%20files/子目录",
+        )
+        .await;
+        send_and_expect_cwd(&pty, "popd", "/home/testuser").await;
+
+        let sftp = client.open_sftp_session().await.expect("open SFTP");
+        let root_entries = list_sftp_dir(&sftp, "/srv/release files")
+            .await
+            .expect("list directory over SFTP");
+        assert!(root_entries.iter().any(|entry| entry.name == "子目录"));
+        let nested_entries = list_sftp_dir(&sftp, "/srv/release files/子目录")
+            .await
+            .expect("list nested directory over SFTP");
+        assert!(nested_entries
+            .iter()
+            .any(|entry| entry.name == "report 1.txt"));
+    }
+}
+
 // ── Key-loading unit tests (no SSH server required) ──────────────────────────
 
 #[cfg(test)]

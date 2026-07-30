@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
 import { invoke } from '@tauri-apps/api/core';
@@ -57,6 +57,20 @@ function AppContent() {
 
   // Terminal group state from context
   const { state, dispatch, activeGroup, activeTab, activeConnection } = useTerminalGroups();
+  const workingDirectorySequenceRef = useRef(0);
+  const [terminalWorkingDirectories, setTerminalWorkingDirectories] = useState<
+    Record<string, { path: string; sequence: number }>
+  >({});
+
+  const handleWorkingDirectoryChange = useCallback((connectionId: string, path: string) => {
+    setTerminalWorkingDirectories((previous) => ({
+      ...previous,
+      [connectionId]: {
+        path,
+        sequence: ++workingDirectorySequenceRef.current,
+      },
+    }));
+  }, []);
 
   // Modal states
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
@@ -1856,6 +1870,7 @@ function AppContent() {
                       onNewTab: handleNewTab,
                       onReconnectTab: handleReconnect,
                       closeTabShortcut: keyboardShortcutSettings.closeTab,
+                      onWorkingDirectoryChange: handleWorkingDirectoryChange,
                     }}>
                       <ErrorBoundary label="Terminal">
                         <GridRenderer node={state.gridLayout} path={[]} />
@@ -1881,6 +1896,7 @@ function AppContent() {
                           connectionId={activeConnection.connectionId}
                           host={activeConnection.host}
                           isConnected={activeConnection.status === 'connected'}
+                          terminalWorkingDirectory={terminalWorkingDirectories[activeConnection.connectionId]}
                           onClose={() => {}}
                           onOpenInLogMonitor={handleOpenInLogMonitor}
                           onOpenInEditor={handleOpenInEditor}

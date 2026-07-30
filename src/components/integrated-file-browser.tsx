@@ -22,7 +22,9 @@ import {
 } from '@/lib/upload-paths';
 import { useWebviewFileDrop } from '@/lib/use-webview-file-drop';
 import { TransferQueue } from './transfer-queue';
+import { DirectoryTransferDialog } from './directory-transfer-dialog';
 import { DirectoryTree } from './directory-tree';
+import { pathJoin } from '@/lib/file-entry-types';
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -31,6 +33,7 @@ import {
 import { 
   Folder, 
   FolderUp,
+  FolderDown,
   File, 
   Upload, 
   Download, 
@@ -63,7 +66,8 @@ import {
   Pencil,
   Loader2,
   CornerLeftUp,
-  SearchX
+  SearchX,
+  LocateFixed,
 } from 'lucide-react';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from './ui/context-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
@@ -85,6 +89,7 @@ interface IntegratedFileBrowserProps {
   connectionId: string;
   host?: string;
   isConnected: boolean;
+  terminalWorkingDirectory?: { path: string; sequence: number };
   onClose: () => void;
   /** Called when user wants to open a file in the Log Monitor */
   onOpenInLogMonitor?: (filePath: string) => void;
@@ -110,8 +115,9 @@ const treeStateCache = new Map<string, {
 
 // Cache to store the directory tree scroll position per connection.
 const treeScrollCache = new Map<string, number>();
+const FOLLOW_TERMINAL_DIRECTORY_KEY = 'rshell-follow-terminal-directory';
 
-export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, onClose: _onClose, onOpenInLogMonitor, onOpenInEditor }: IntegratedFileBrowserProps) {
+export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, terminalWorkingDirectory, onClose: _onClose, onOpenInLogMonitor, onOpenInEditor }: IntegratedFileBrowserProps) {
   const { t } = useTranslation();
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -122,7 +128,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showLoadingOverlay, setShowLoadingOverlay] = useState(false);
+  const [followTerminalDirectory, setFollowTerminalDirectory] = useState(
+    () => localStorage.getItem(FOLLOW_TERMINAL_DIRECTORY_KEY) !== 'false',
+  );
   const loadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastFailedFollowPathRef = useRef<string | null>(null);
   // Tracks which connectionId the current path/files state belongs to.
   // Updated synchronously (via ref) in the restore effect so the save effect
   // never writes stale data from the previous connection under the new id.
@@ -135,6 +145,9 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   // connection-change loads (leaving them to the safety-net) and only handle
   // path / isConnected changes within the same connection.
   const prevConnectionIdRef = useRef<string | undefined>(undefined);
+  // A successful follow load already fetched its target before committing the
+  // breadcrumb path. Skip the normal path-change load once to avoid a duplicate request.
+  const followedPathLoadRef = useRef<string | null>(null);
   // Tracks the path that is authoritative for the current connectionId.
   // Updated synchronously in the restore effect (before setState), so the load
   // effect always uses the correct path even before React re-renders with the
@@ -145,6 +158,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [newFileName, setNewFileName] = useState('');
   const [deletingFile, setDeletingFile] = useState<FileItem | null>(null);
+  const [directoryTransfer, setDirectoryTransfer] = useState<{
+    sourcePath: string;
+    destPath: string;
+  } | null>(null);
   
   // Column widths state
   const [columnWidths, setColumnWidths] = useState({
@@ -243,6 +260,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     if (!isConnected || !connectionId) return;
     // Skip if connectionId just changed — the safety-net effect handles that.
     if (prevConnectionIdRef.current !== connectionId) return;
+    if (followedPathLoadRef.current === committedPathRef.current) {
+      followedPathLoadRef.current = null;
+      return;
+    }
     void loadFiles(committedPathRef.current);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn; adding it would cause infinite re-renders
   }, [currentPath, isConnected, connectionId]);
@@ -260,6 +281,20 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn
   }, [connectionId, isConnected]);
+
+  useEffect(() => {
+    if (
+      !followTerminalDirectory
+      || !isConnected
+      || !terminalWorkingDirectory
+      || terminalWorkingDirectory.path === committedPathRef.current
+    ) {
+      return;
+    }
+
+    void loadFiles(terminalWorkingDirectory.path, true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- sequence intentionally re-runs follow after every completed prompt
+  }, [connectionId, isConnected, followTerminalDirectory, terminalWorkingDirectory?.path, terminalWorkingDirectory?.sequence]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -513,7 +548,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     [connectionId],
   );
 
-  async function loadFiles(pathOverride?: string) {
+  async function loadFiles(pathOverride?: string, preservePathOnError = false) {
     if (!connectionId || !isConnected) {
       // Don't clear files on disconnect — preserve the cached file list so
       // the user still sees their directory contents when reconnecting or
@@ -592,12 +627,14 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         // so we update it here together with files in a single batched
         // setState — breadcrumb and file list stay consistent.
         if (currentPath !== targetPath) {
+          if (preservePathOnError) followedPathLoadRef.current = targetPath;
           setCurrentPath(targetPath);
           setNavHistory([targetPath]);
           setNavIndex(0);
           setSelectedFiles(new Set());
         }
         lastLoadedConnectionIdRef.current = connectionId;
+        lastFailedFollowPathRef.current = null;
       } else {
         // Empty or whitespace-only output — directory is genuinely empty
         // or the SSH command returned nothing.
@@ -614,16 +651,29 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         }] : [];
         setFiles(emptyFiles);
         if (currentPath !== targetPath) {
+          if (preservePathOnError) followedPathLoadRef.current = targetPath;
           setCurrentPath(targetPath);
           setNavHistory([targetPath]);
           setNavIndex(0);
           setSelectedFiles(new Set());
         }
         lastLoadedConnectionIdRef.current = connectionId;
+        lastFailedFollowPathRef.current = null;
       }
     } catch (error) {
       // CancelledError means a newer load superseded this one — discard silently.
       if (error instanceof CancelledError || gen !== loadGenRef.current) return;
+
+      if (preservePathOnError) {
+        const failedPath = `${connectionId}:${targetPath}`;
+        if (lastFailedFollowPathRef.current !== failedPath) {
+          lastFailedFollowPathRef.current = failedPath;
+          toast.warning(t('fileBrowser.toast.followDirectoryFailed', { path: targetPath }), {
+            description: error instanceof Error ? error.message : t('fileBrowser.toast.loadFailedDesc'),
+          });
+        }
+        return;
+      }
 
       // If the target path doesn't exist on this server (ls exit code 2),
       // fall back to /home.  This commonly happens when switching to a
@@ -950,6 +1000,20 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       toast.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
     } catch (error) {
       console.error('Download dialog error:', error);
+    }
+  };
+
+  const handleDownloadDirectory = async (directory: FileItem) => {
+    try {
+      const destDir = await tauriOpen({ directory: true });
+      if (!destDir || Array.isArray(destDir)) return;
+
+      setDirectoryTransfer({
+        sourcePath: directory.path,
+        destPath: pathJoin(destDir, directory.name),
+      });
+    } catch (error) {
+      console.error('Download directory dialog error:', error);
     }
   };
 
@@ -1432,6 +1496,21 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             )}
           </div>
 
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 rounded-md"
+            title={t('fileBrowser.toolbar.followTerminalDirectory')}
+            aria-pressed={followTerminalDirectory}
+            onClick={() => {
+              const enabled = !followTerminalDirectory;
+              setFollowTerminalDirectory(enabled);
+              localStorage.setItem(FOLLOW_TERMINAL_DIRECTORY_KEY, String(enabled));
+            }}
+          >
+            <LocateFixed className={`h-3.5 w-3.5 ${followTerminalDirectory ? 'text-primary' : 'text-muted-foreground'}`} />
+          </Button>
+
           {/* Refresh */}
           <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-md" title={t('fileBrowser.toolbar.refresh')} onClick={() => loadFiles()} disabled={isLoading}>
             <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? 'animate-spin' : ''}`} />
@@ -1735,6 +1814,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                         <Folder className="mr-2 h-4 w-4" />
                         Open Folder
                       </ContextMenuItem>
+                      <ContextMenuItem onClick={() => handleDownloadDirectory(file)}>
+                        <FolderDown className="mr-2 h-4 w-4" />
+                        {t('fileBrowser.contextMenu.downloadDirectory')}
+                      </ContextMenuItem>
                       <ContextMenuSeparator />
                     </>
                   )}
@@ -1884,6 +1967,20 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         expanded={queueExpanded}
         onToggleExpanded={() => setQueueExpanded(p => !p)}
       />
+
+      {directoryTransfer && (
+        <DirectoryTransferDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setDirectoryTransfer(null);
+          }}
+          direction="download"
+          connectionId={connectionId}
+          sourcePath={directoryTransfer.sourcePath}
+          destPath={directoryTransfer.destPath}
+          onComplete={() => {}}
+        />
+      )}
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={!!deletingFile} onOpenChange={(open) => !open && setDeletingFile(null)}>

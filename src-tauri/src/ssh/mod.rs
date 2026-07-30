@@ -23,6 +23,18 @@ pub static PREFERRED_HOST_KEY_ALGOS: &[russh_keys::key::Name] = &[
     russh_keys::key::SSH_RSA,
 ];
 
+const BASH_VERSION_PROBE: &str = r#"printf '__RSHELL_BASH_VERSION__%s' "${BASH_VERSION-}""#;
+const BASH_VERSION_MARKER: &str = "__RSHELL_BASH_VERSION__";
+pub(crate) const BASH_SHELL_INTEGRATION_COMMAND: &[u8] = br#" stty echo; __rshell_report_cwd(){ local p=${PWD//%/%25}; p=${p// /%20}; p=${p//#/%23}; p=${p//\?/%3F}; printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "$p"; }; if declare -p PROMPT_COMMAND &>/dev/null; then PROMPT_COMMAND=("${PROMPT_COMMAND[@]}" __rshell_report_cwd); else PROMPT_COMMAND=(__rshell_report_cwd); fi; printf '\r\033[2K'
+"#;
+
+pub(crate) fn bash_version_from_probe(output: &str) -> Option<&str> {
+    output
+        .rsplit_once(BASH_VERSION_MARKER)
+        .map(|(_, version)| version.trim())
+        .filter(|version| !version.is_empty())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConfig {
     pub host: String,
@@ -264,8 +276,23 @@ impl SshClient {
     /// This enables interactive commands like vim, less, more, top, etc.
     pub async fn create_pty_session(&self, cols: u32, rows: u32) -> Result<PtySession> {
         if let Some(session) = &self.session {
+            let is_bash = tokio::time::timeout(
+                Duration::from_secs(2),
+                self.execute_command(BASH_VERSION_PROBE),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .is_some_and(|output| bash_version_from_probe(&output).is_some());
+
             // Open a new SSH channel
             let mut channel = session.channel_open_session().await?;
+            let bash_terminal_modes = [(Pty::ECHO, 0), (Pty::ECHONL, 0)];
+            let terminal_modes = if is_bash {
+                bash_terminal_modes.as_slice()
+            } else {
+                &[]
+            };
 
             // Request PTY with terminal type and dimensions
             // Similar to ttyd's approach: xterm-256color terminal
@@ -277,7 +304,7 @@ impl SshClient {
                     rows,             // rows
                     0,                // pixel_width (not used)
                     0,                // pixel_height (not used)
-                    &[],              // terminal modes
+                    terminal_modes,
                 )
                 .await?;
 
@@ -292,7 +319,13 @@ impl SshClient {
             let channel_id = channel.id();
 
             // Clone channel for input task
-            let input_channel = channel.make_writer();
+            let mut input_channel = channel.make_writer();
+            if is_bash {
+                input_channel
+                    .write_all(BASH_SHELL_INTEGRATION_COMMAND)
+                    .await?;
+                input_channel.flush().await?;
+            }
 
             // Create a channel for resize requests
             let (resize_tx, mut resize_rx) = mpsc::channel::<(u32, u32)>(16);
@@ -376,6 +409,16 @@ impl SshClient {
         } else {
             Err(anyhow::anyhow!("Not connected"))
         }
+    }
+
+    pub(crate) async fn open_sftp_session(&self) -> Result<SftpSession> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
+        let channel = session.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        Ok(SftpSession::new(channel.into_stream()).await?)
     }
 
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {

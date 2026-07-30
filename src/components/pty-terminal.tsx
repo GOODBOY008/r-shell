@@ -14,6 +14,7 @@ import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
 import { signalReady } from '../lib/restoration-manager';
 import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
+import { registerTerminalWorkingDirectoryHandler } from '../lib/terminal-working-directory';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -54,6 +55,7 @@ export function PtyTerminal({
   onConnectionStatusChange
 }: PtyTerminalProps) {
   const { t } = useTranslation();
+  const { onReconnectTab, onWorkingDirectoryChange } = useTerminalCallbacks();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -157,6 +159,10 @@ export function PtyTerminal({
 
     // Create terminal with user's appearance settings
     const term = new XTerm(termOptions);
+    const workingDirectoryDisposable = registerTerminalWorkingDirectoryHandler(
+      term.parser,
+      (path) => onWorkingDirectoryChange?.(connectionId, path),
+    );
 
     const fitAddon = new FitAddon();
     const webLinks = new WebLinksAddon();
@@ -846,6 +852,7 @@ export function PtyTerminal({
       inputDisposable.dispose();
       resizeDisposable.dispose();
       lineFeedDisposable.dispose();
+      workingDirectoryDisposable.dispose();
       window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
       if (selectionDoc) {
@@ -869,7 +876,7 @@ export function PtyTerminal({
       term.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, host, username, terminalKey, reconnectKey, sendInputToPty]);
+  }, [connectionId, host, username, terminalKey, reconnectKey, sendInputToPty, onWorkingDirectoryChange]);
   // NOTE: themeKey, appearanceKey, and connectionName are intentionally NOT
   // in the deps above. Including them would tear down the WebSocket + PTY
   // session on every theme change (e.g. macOS auto Dark/Light switch), killing
@@ -977,8 +984,6 @@ export function PtyTerminal({
   const handleSelectAll = React.useCallback(() => {
     xtermRef.current?.selectAll();
   }, []);
-
-  const { onReconnectTab } = useTerminalCallbacks();
 
   const handleReconnect = React.useCallback(() => {
     if (onReconnectTab) {

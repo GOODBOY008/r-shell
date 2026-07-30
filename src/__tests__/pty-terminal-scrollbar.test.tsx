@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => {
         getLine: vi.fn(),
       },
     };
+    parser = {
+      registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
+    };
 
     loadAddon = vi.fn();
     open = vi.fn();

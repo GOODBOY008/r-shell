@@ -2904,7 +2904,50 @@ pub async fn list_local_files_recursive(
     Ok(results)
 }
 
-/// Recursively list all files/dirs under a remote directory (SFTP/FTP).
+fn walk_sftp<'a>(
+    sftp: &'a russh_sftp::client::SftpSession,
+    base: &'a str,
+    current: &'a str,
+    exclude: &'a [String],
+    results: &'a mut Vec<SyncFileEntry>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+    Box::pin(async move {
+        let entries = crate::sftp_client::list_sftp_dir(sftp, current)
+            .await
+            .map_err(|e| e.to_string())?;
+        for entry in entries {
+            if matches_exclude(&entry.name, exclude) {
+                continue;
+            }
+            let full_path = if current == "/" {
+                format!("/{}", entry.name)
+            } else {
+                format!("{}/{}", current, entry.name)
+            };
+            let relative_path = full_path
+                .strip_prefix(base)
+                .unwrap_or(&full_path)
+                .trim_start_matches('/')
+                .to_string();
+            let is_dir = matches!(entry.file_type, FileEntryType::Directory);
+
+            results.push(SyncFileEntry {
+                relative_path,
+                name: entry.name,
+                size: entry.size,
+                modified: entry.modified,
+                file_type: entry.file_type,
+            });
+
+            if is_dir {
+                walk_sftp(sftp, base, &full_path, exclude, results).await?;
+            }
+        }
+        Ok(())
+    })
+}
+
+/// Recursively list all files/dirs under a remote directory (SSH/SFTP/FTP).
 #[tauri::command]
 pub async fn list_remote_files_recursive(
     connection_id: String,
@@ -2912,67 +2955,21 @@ pub async fn list_remote_files_recursive(
     exclude_patterns: Vec<String>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<Vec<SyncFileEntry>, String> {
-    let conn_type = state
-        .get_connection_type(&connection_id)
-        .await
-        .ok_or_else(|| format!("No file connection found for '{}'", connection_id))?;
+    let conn_type = state.get_connection_type(&connection_id).await;
 
     let mut results = Vec::new();
 
-    match conn_type.as_str() {
-        "SFTP" => {
+    match conn_type.as_deref() {
+        Some("SFTP") => {
             let sftp_map = state.get_sftp_connection().await;
             let connections = sftp_map.read().await;
             let client = connections
                 .get(&connection_id)
                 .ok_or("SFTP connection not found")?;
-
-            fn walk_sftp<'a>(
-                client: &'a crate::sftp_client::StandaloneSftpClient,
-                base: &'a str,
-                current: &'a str,
-                exclude: &'a [String],
-                results: &'a mut Vec<SyncFileEntry>,
-            ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
-            {
-                Box::pin(async move {
-                    let entries = client.list_dir(current).await.map_err(|e| e.to_string())?;
-                    for entry in entries {
-                        if matches_exclude(&entry.name, exclude) {
-                            continue;
-                        }
-                        let full_path = if current == "/" {
-                            format!("/{}", entry.name)
-                        } else {
-                            format!("{}/{}", current, entry.name)
-                        };
-                        let rel = full_path
-                            .strip_prefix(base)
-                            .unwrap_or(&full_path)
-                            .trim_start_matches('/')
-                            .to_string();
-
-                        let is_dir = matches!(entry.file_type, FileEntryType::Directory);
-
-                        results.push(SyncFileEntry {
-                            relative_path: rel.clone(),
-                            name: entry.name.clone(),
-                            size: entry.size,
-                            modified: entry.modified.clone(),
-                            file_type: entry.file_type.clone(),
-                        });
-
-                        if is_dir {
-                            walk_sftp(client, base, &full_path, exclude, results).await?;
-                        }
-                    }
-                    Ok(())
-                })
-            }
-
-            walk_sftp(client, &path, &path, &exclude_patterns, &mut results).await?;
+            let sftp = client.sftp_session().map_err(|e| e.to_string())?;
+            walk_sftp(sftp, &path, &path, &exclude_patterns, &mut results).await?;
         }
-        "FTP" => {
+        Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
             let mut connections = ftp_map.write().await;
             let client = connections
@@ -3014,7 +3011,19 @@ pub async fn list_remote_files_recursive(
                 }
             }
         }
-        _ => return Err(format!("Unsupported protocol: {}", conn_type)),
+        None | Some("SSH") => {
+            let connection = state
+                .get_connection(&connection_id)
+                .await
+                .ok_or("SSH connection not found")?;
+            let client = connection.read().await;
+            let sftp = client
+                .open_sftp_session()
+                .await
+                .map_err(|e| e.to_string())?;
+            walk_sftp(&sftp, &path, &path, &exclude_patterns, &mut results).await?;
+        }
+        Some(other) => return Err(format!("Unsupported protocol: {}", other)),
     }
 
     // Sort similarly
