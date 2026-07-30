@@ -51,6 +51,48 @@ pub enum FileEntryType {
     Symlink,
 }
 
+pub(crate) async fn list_sftp_dir(sftp: &SftpSession, path: &str) -> Result<Vec<RemoteFileEntry>> {
+    let entries = sftp
+        .read_dir(path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to list directory '{}': {}", path, e))?;
+
+    let mut result = Vec::new();
+    for entry in entries {
+        let name = entry.file_name();
+        if name == "." || name == ".." {
+            continue;
+        }
+
+        let attrs = entry.metadata();
+        let file_type = if attrs.is_dir() {
+            FileEntryType::Directory
+        } else if attrs.is_symlink() {
+            FileEntryType::Symlink
+        } else {
+            FileEntryType::File
+        };
+
+        result.push(RemoteFileEntry {
+            name,
+            size: attrs.size.unwrap_or(0),
+            modified: attrs.mtime.map(|t| chrono_from_unix_timestamp(t as u64)),
+            permissions: attrs.permissions.map(format_permissions),
+            file_type,
+        });
+    }
+
+    result.sort_by(|a, b| {
+        let a_is_dir = matches!(a.file_type, FileEntryType::Directory);
+        let b_is_dir = matches!(b.file_type, FileEntryType::Directory);
+        b_is_dir
+            .cmp(&a_is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    Ok(result)
+}
+
 /// Standalone SFTP client — opens an SSH connection and SFTP subsystem
 /// channel without allocating a PTY.
 pub struct StandaloneSftpClient {
@@ -196,59 +238,15 @@ impl StandaloneSftpClient {
 
     // ===== File Operations =====
 
+    pub(crate) fn sftp_session(&self) -> Result<&SftpSession> {
+        self.sftp
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))
+    }
+
     /// List directory contents at `path`.
     pub async fn list_dir(&self, path: &str) -> Result<Vec<RemoteFileEntry>> {
-        let sftp = self
-            .sftp
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
-
-        let entries = sftp
-            .read_dir(path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to list directory '{}': {}", path, e))?;
-
-        let mut result = Vec::new();
-        for entry in entries {
-            let name = entry.file_name();
-            // Skip . and .. entries
-            if name == "." || name == ".." {
-                continue;
-            }
-
-            let attrs = entry.metadata();
-            let size = attrs.size.unwrap_or(0);
-            let modified = attrs.mtime.map(|t| chrono_from_unix_timestamp(t as u64));
-
-            let permissions = attrs.permissions.map(|p| format_permissions(p));
-
-            let file_type = if attrs.is_dir() {
-                FileEntryType::Directory
-            } else if attrs.is_symlink() {
-                FileEntryType::Symlink
-            } else {
-                FileEntryType::File
-            };
-
-            result.push(RemoteFileEntry {
-                name,
-                size,
-                modified,
-                permissions,
-                file_type,
-            });
-        }
-
-        // Sort: directories first, then by name
-        result.sort_by(|a, b| {
-            let a_is_dir = matches!(a.file_type, FileEntryType::Directory);
-            let b_is_dir = matches!(b.file_type, FileEntryType::Directory);
-            b_is_dir
-                .cmp(&a_is_dir)
-                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
-
-        Ok(result)
+        list_sftp_dir(self.sftp_session()?, path).await
     }
 
     /// Download a remote file to a local path. Returns bytes downloaded.

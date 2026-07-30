@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => {
   const terminals: Array<any> = [];
   const fitAddons: Array<any> = [];
   const webSockets: Array<any> = [];
+  const terminalCallbacks = {
+    onWorkingDirectoryChange: vi.fn(),
+  };
 
   class MockTerminal {
     cols = 80;
@@ -17,6 +20,13 @@ const mocks = vi.hoisted(() => {
         length: 0,
         getLine: vi.fn(),
       },
+    };
+    oscHandlers = new Map<number, (data: string) => boolean | Promise<boolean>>();
+    parser = {
+      registerOscHandler: vi.fn((identifier: number, handler: (data: string) => boolean | Promise<boolean>) => {
+        this.oscHandlers.set(identifier, handler);
+        return { dispose: vi.fn() };
+      }),
     };
 
     loadAddon = vi.fn();
@@ -70,7 +80,7 @@ const mocks = vi.hoisted(() => {
     return terminal;
   });
 
-  return { terminals, fitAddons, webSockets, Terminal, MockFitAddon, MockWebSocket };
+  return { terminals, fitAddons, webSockets, terminalCallbacks, Terminal, MockFitAddon, MockWebSocket };
 });
 
 vi.mock('@xterm/xterm', () => ({
@@ -152,7 +162,7 @@ vi.mock('../lib/restoration-manager', () => ({
 }));
 
 vi.mock('../lib/terminal-callbacks-context', () => ({
-  useTerminalCallbacks: () => ({}),
+  useTerminalCallbacks: () => mocks.terminalCallbacks,
 }));
 
 vi.mock('sonner', () => ({
@@ -201,6 +211,7 @@ describe('PtyTerminal activation', () => {
     mocks.terminals.length = 0;
     mocks.fitAddons.length = 0;
     mocks.webSockets.length = 0;
+    mocks.terminalCallbacks.onWorkingDirectoryChange.mockClear();
 
     Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
       configurable: true,
@@ -238,6 +249,14 @@ describe('PtyTerminal activation', () => {
     renderTerminal(false);
 
     expect(mocks.terminals[0].focus).not.toHaveBeenCalled();
+  });
+
+  it('reports OSC 7 working-directory changes for its own connection', () => {
+    renderTerminal(true);
+
+    expect(mocks.terminals[0].oscHandlers.get(7)?.('file://server/srv/app')).toBe(true);
+    expect(mocks.terminalCallbacks.onWorkingDirectoryChange)
+      .toHaveBeenCalledWith('connection-1', '/srv/app');
   });
 
   it('fits, refreshes, and focuses the terminal when it becomes active', async () => {

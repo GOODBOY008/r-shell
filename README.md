@@ -91,6 +91,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Terminal search** — Regex and case-sensitive search with F3 navigation
 - **Context menu** — Copy, paste, select all, clear, save to file, reconnect
 - **IME / CJK input** — Full support for Chinese, Japanese, Korean input methods
+- **Working-directory follow** — Keep the remote file browser aligned with the active Bash terminal
 
 ### 🪟 Split Panes & Tab Groups
 

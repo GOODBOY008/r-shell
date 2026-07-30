@@ -10,6 +10,8 @@ export interface TerminalCallbacks {
   closeTabShortcut?: string;
   /** Full reconnect: re-establishes the backend connection then remounts the terminal. */
   onReconnectTab?: (tabId: string) => void | Promise<void>;
+  /** Reports a terminal's remote working directory without coupling it to the file browser. */
+  onWorkingDirectoryChange?: (connectionId: string, path: string) => void;
 }
 
 const TerminalCallbacksContext = createContext<TerminalCallbacks>({});

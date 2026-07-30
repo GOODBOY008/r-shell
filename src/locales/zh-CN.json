@@ -501,6 +501,7 @@
     },
     "contextMenu": {
       "download": "下载",
+      "downloadDirectory": "下载目录",
       "upload": "上传",
       "rename": "重命名",
       "delete": "删除",
@@ -549,6 +550,7 @@
       "pathCopied": "路径已复制到剪贴板",
       "loadFailed": "加载文件失败",
       "loadFailedDesc": "无法加载远程目录内容。",
+      "followDirectoryFailed": "无法跟随终端目录 {{path}}",
       "pasteFailed": "粘贴文件失败",
       "pasteFailedDesc": "无法完成粘贴操作。",
       "uploadFolderFailed": "文件夹上传失败",
@@ -570,6 +572,7 @@
       "forward": "前进",
       "parentDir": "上级目录",
       "home": "首页",
+      "followTerminalDirectory": "跟随终端目录",
       "refresh": "刷新",
       "newFolder": "新建文件夹",
       "newFile": "新建文件",
