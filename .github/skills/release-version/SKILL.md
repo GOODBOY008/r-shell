@@ -1,16 +1,16 @@
 ---
 name: release-version
-description: "Release a new r-shell version and draft a GitHub release. Use when: releasing, publishing, bumping version, tagging, drafting release, creating release notes, gh release create, version bump, patch release, minor release, major release."
+description: "Release a new r-shell version and create a published GitHub release with contributor credits. Use when: releasing, publishing, bumping version, tagging, creating release notes, gh release create, version bump, patch release, minor release, major release."
 argument-hint: "bump type: patch | minor | major"
 ---
 
-# Release New Version & Draft GitHub Release
+# Release New Version & Create GitHub Release
 
-Bumps the project version across all config files, updates the CHANGELOG, pushes a tag, and creates a **draft** GitHub release using `gh`.
+Bumps the project version across all config files, updates the CHANGELOG, pushes a tag, and creates a **published** GitHub release using `gh`, with release notes that credit the contributors.
 
 ## When to Use
 - Releasing a new patch, minor, or major version of r-shell
-- Creating a GitHub draft release with changelog notes
+- Creating a GitHub release (published) with changelog notes and contributor credits
 - Tagging a new version and pushing to origin
 
 ## Procedure
@@ -62,6 +62,18 @@ Open `CHANGELOG.md` and fill in the new version section that the script created.
 
 Use emoji prefixes consistent with existing entries (e.g. `🔌`, `🖥️`, `🐛`). Add a release headline as the first paragraph after the version header (see existing entries for the pattern: `### 🔖 R-Shell X.Y — Codename`).
 
+**Append a contributors section.** Add a `### Contributors` section at the end of the new version's notes crediting everyone who committed to this release (excluding bots). Generate the list from the actual commits:
+```bash
+PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
+git log "${PREV_TAG}..HEAD" --format="%aN" --no-merges | sort -u
+```
+Format each name as a GitHub link when the username is known (e.g. `- [@htazq](https://github.com/htazq)`), otherwise use the plain author name. Example:
+```markdown
+### Contributors
+
+Thanks to [@htazq](https://github.com/htazq), [@ArtefactoO](https://github.com/ArtefactoO), and [@sunxiaobin89](https://github.com/sunxiaobin89) for contributing to this release! 🙏
+```
+
 After editing, amend the commit to include the updated CHANGELOG:
 ```bash
 git add CHANGELOG.md
@@ -95,22 +107,24 @@ wc -l "${NOTES_FILE}"
 
 If the file is empty, do NOT continue — fix the CHANGELOG header format first.
 
-### 6. Draft the GitHub Release
+### 6. Create the GitHub Release (Published)
 
-Use `--notes-file` (not `--notes`) to pass multiline content reliably:
+The release is created in a **published** state — visible immediately to users and triggering any release notifications/webhooks. Use `--notes-file` (not `--notes`) to pass multiline content reliably:
 ```bash
 VERSION=$(node -p "require('./package.json').version")
 
 gh release create "v${VERSION}" \
   --title "v${VERSION}" \
   --notes-file "${NOTES_FILE}" \
-  --draft \
+  --latest \
   --repo GOODBOY008/r-shell
 
 rm -f "${NOTES_FILE}"
 ```
 
-The `--draft` flag keeps the release hidden until you publish it manually on GitHub. Remove `--draft` only if you want to publish immediately.
+The `--latest` flag marks this release as the repo's current "Latest" release. Do **not** use `--draft` — the release should publish immediately.
+
+> The release notes already include the `### Contributors` section added in step 3.
 
 ### 7. Verify
 
@@ -123,10 +137,10 @@ Check the output includes the release body text (not just "See the assets…"). 
 
 ## Decision Points
 
-- **Changelog already accurate?** Skip step 3 and the amend.
-- **Want to publish immediately instead of drafting?** Drop `--draft` in step 6.
-- **Attaching build artifacts?** Add file paths after the tag in `gh release create`: `gh release create "v${VERSION}" ./dist/*.dmg ./dist/*.exe --draft ...`
-- **Pre-release?** Append `--prerelease` to the `gh release create` command.
+- **Changelog already accurate?** Skip step 3's changelog edits (but still add the `### Contributors` section) and the amend.
+- **Want to keep the release hidden until you publish it manually?** Add `--draft` to the `gh release create` command in step 6.
+- **Attaching build artifacts?** Add file paths after the tag in `gh release create`: `gh release create "v${VERSION}" ./dist/*.dmg ./dist/*.exe --latest ...`
+- **Pre-release?** Append `--prerelease` to the `gh release create` command (this replaces `--latest`).
 
 ## Prerequisites
 
