@@ -23,6 +23,8 @@ export interface TerminalCallbacks {
    * file-browser sessions first, then empties the group via CLOSE_ALL_TABS.
    */
   onCloseAllTabs?: (groupId: string) => void | Promise<void>;
+  /** Xshell-style detach (Ctrl+A+D): keep the session alive in the background. */
+  onDetachTab?: (tabId: string) => void | Promise<void>;
 }
 
 const TerminalCallbacksContext = createContext<TerminalCallbacks>({});
