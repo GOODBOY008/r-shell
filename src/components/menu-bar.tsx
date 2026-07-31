@@ -17,6 +17,7 @@ import {
 } from './ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
+import { DEFAULT_LAYOUT_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
 import { 
   Plus, 
   FolderOpen, 
@@ -61,6 +62,8 @@ interface MenuBarProps {
   onNextTab?: () => void;
   onPreviousTab?: () => void;
   closeConnectionShortcutLabel?: string;
+  nextTabShortcutLabel?: string;
+  previousTabShortcutLabel?: string;
   onRecentConnectionSelect?: (connection: ConnectionData) => void;
   hasActiveConnection?: boolean;
   canPaste?: boolean;
@@ -96,6 +99,8 @@ export function MenuBar({
   onNextTab,
   onPreviousTab,
   closeConnectionShortcutLabel,
+  nextTabShortcutLabel,
+  previousTabShortcutLabel,
   onRecentConnectionSelect,
   hasActiveConnection = false,
   canPaste = true,
@@ -111,7 +116,7 @@ export function MenuBar({
 }: MenuBarProps) {
   const { t } = useTranslation();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-  const cmdOrCtrl = isMac ? '⌘' : 'Ctrl';
+  const formatShortcut = (shortcut: string) => formatKeyboardShortcut(shortcut, isMac);
 
   // Load recent connections
   const [recentConnections, setRecentConnections] = useState<ConnectionData[]>([]);
@@ -158,12 +163,12 @@ export function MenuBar({
           <DropdownMenuItem onClick={onNewConnection}>
             <Plus className="mr-2 h-4 w-4" />
             {t('menuBar.newConnection')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+N</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+N')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onOpenConnection}>
             <FolderOpen className="mr-2 h-4 w-4" />
             {t('menuBar.openConnection')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+O</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+O')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
@@ -195,23 +200,23 @@ export function MenuBar({
           <DropdownMenuItem onClick={onSaveConnection} disabled={!hasActiveConnection}>
             <Save className="mr-2 h-4 w-4" />
             {t('menuBar.saveConnection')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+S</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+S')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Save className="mr-2 h-4 w-4" />
             {t('menuBar.saveConnectionAs')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+Shift+S</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+Shift+S')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onCloseConnection} disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
             {t('menuBar.closeConnection')}
-            <DropdownMenuShortcut>{closeConnectionShortcutLabel ?? `${cmdOrCtrl}+Shift+W`}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(closeConnectionShortcutLabel ?? 'Ctrl+W')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem>
             <X className="mr-2 h-4 w-4" />
             {t('menuBar.exit')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+Q</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+Q')}</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -225,28 +230,28 @@ export function MenuBar({
           <DropdownMenuItem onClick={onCopy} disabled={!hasActiveConnection}>
             <Copy className="mr-2 h-4 w-4" />
             {t('menuBar.copy')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+C</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+C')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onPaste} disabled={!hasActiveConnection || !canPaste}>
             <Clipboard className="mr-2 h-4 w-4" />
             {t('menuBar.paste')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+V</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+V')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Scissors className="mr-2 h-4 w-4" />
             {t('menuBar.cut')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+X</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+X')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onSelectAll} disabled={!hasActiveConnection}>
             {t('menuBar.selectAll')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+A</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+A')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onFind} disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
             {t('menuBar.find')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+F</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+F')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
@@ -256,13 +261,13 @@ export function MenuBar({
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <Search className="mr-2 h-4 w-4" />
             {t('menuBar.findPrevious')}
-            <DropdownMenuShortcut>Shift+F3</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Shift+F3')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={!hasActiveConnection}>
             <RefreshCw className="mr-2 h-4 w-4" />
             {t('menuBar.clearScreen')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+L</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+L')}</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -366,23 +371,23 @@ export function MenuBar({
           <DropdownMenuItem onClick={onNewTab}>
             <Plus className="mr-2 h-4 w-4" />
             {t('menuBar.newTab')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+T</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+T')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onCloneTab} disabled={!hasActiveConnection}>
             <Copy className="mr-2 h-4 w-4" />
             {t('menuBar.duplicateTab')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+D</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+D')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onNextTab} disabled={!hasActiveConnection}>
             <ArrowRight className="mr-2 h-4 w-4" />
             {t('menuBar.nextTab')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+→</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(nextTabShortcutLabel ?? 'Ctrl+Tab')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onPreviousTab} disabled={!hasActiveConnection}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             {t('menuBar.previousTab')}
-            <DropdownMenuShortcut>{cmdOrCtrl}+←</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(previousTabShortcutLabel ?? 'Ctrl+Shift+Tab')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={!hasActiveConnection}>
@@ -419,7 +424,12 @@ export function MenuBar({
                   : <PanelLeftOpen className="w-4 h-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t(leftSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleConnectionManager')}</TooltipContent>
+            <TooltipContent className="flex items-center gap-2">
+              <span>{t(leftSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleConnectionManager')}</span>
+              <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar)}
+              </kbd>
+            </TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -430,7 +440,12 @@ export function MenuBar({
                   : <PanelBottomOpen className="w-4 h-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t(bottomPanelVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleFileBrowser')}</TooltipContent>
+            <TooltipContent className="flex items-center gap-2">
+              <span>{t(bottomPanelVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleFileBrowser')}</span>
+              <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel)}
+              </kbd>
+            </TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -441,7 +456,12 @@ export function MenuBar({
                   : <PanelRightOpen className="w-4 h-4" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t(rightSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleMonitorPanel')}</TooltipContent>
+            <TooltipContent className="flex items-center gap-2">
+              <span>{t(rightSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleMonitorPanel')}</span>
+              <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar)}
+              </kbd>
+            </TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -455,7 +475,12 @@ export function MenuBar({
                 <Maximize2 className="w-4 h-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t('menuBar.toggleZenMode')}</TooltipContent>
+            <TooltipContent className="flex items-center gap-2">
+              <span>{t('menuBar.toggleZenMode')}</span>
+              <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode)}
+              </kbd>
+            </TooltipContent>
           </Tooltip>
 
           <DropdownMenu>

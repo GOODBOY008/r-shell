@@ -7,6 +7,7 @@ import { createContext, useContext } from 'react';
 export interface TerminalCallbacks {
   onDuplicateTab?: (tabId: string) => void | Promise<void>;
   onNewTab?: () => void;
+  closeTabShortcut?: string;
   /** Full reconnect: re-establishes the backend connection then remounts the terminal. */
   onReconnectTab?: (tabId: string) => void | Promise<void>;
 }

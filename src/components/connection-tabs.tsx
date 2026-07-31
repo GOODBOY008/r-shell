@@ -6,8 +6,10 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuTrigger,
 } from './ui/context-menu';
+import { DEFAULT_APP_KEYBOARD_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
 
 interface ConnectionTab {
   id: string;
@@ -42,6 +44,15 @@ export function ConnectionTabs({
   onCloseToRight,
   onCloseToLeft
 }: ConnectionTabsProps) {
+  const duplicateTabShortcut = formatKeyboardShortcut(
+    'Ctrl+D',
+    navigator.platform.toUpperCase().includes('MAC'),
+  );
+  const closeTabShortcut = formatKeyboardShortcut(
+    DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
+    navigator.platform.toUpperCase().includes('MAC'),
+  );
+
   return (
     <div className="bg-muted border-b border-border flex items-center">
       <div className="flex items-center overflow-x-auto">
@@ -95,6 +106,7 @@ export function ConnectionTabs({
                   <ContextMenuItem onClick={() => onDuplicateTab(tab.id)}>
                     <Copy className="mr-2 h-4 w-4" />
                     Duplicate Tab
+                    <ContextMenuShortcut>{duplicateTabShortcut}</ContextMenuShortcut>
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                 </>
@@ -102,6 +114,7 @@ export function ConnectionTabs({
               <ContextMenuItem onClick={() => onTabClose(tab.id)}>
                 <X className="mr-2 h-4 w-4" />
                 Close Tab
+                <ContextMenuShortcut>{closeTabShortcut}</ContextMenuShortcut>
               </ContextMenuItem>
               {onCloseOthers && tabs.length > 1 && (
                 <ContextMenuItem onClick={() => onCloseOthers(tab.id)}>

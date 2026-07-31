@@ -4,7 +4,9 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   createLayoutShortcuts,
   createSplitViewShortcuts,
+  DEFAULT_LAYOUT_SHORTCUTS,
   DEFAULT_SPLIT_VIEW_SHORTCUTS,
+  formatKeyboardShortcut,
   KeyboardShortcut,
   loadKeyboardShortcutSettings,
   parseKeyboardShortcut,
@@ -92,21 +94,21 @@ describe('createSplitViewShortcuts', () => {
     );
   });
 
-  // Requirement 5.3: Ctrl+Shift+W closes active tab without stealing bash Ctrl+W
-  it('Ctrl+Shift+W triggers closeTab by default', () => {
+  // Requirement 5.3: Ctrl+W closes the active tab
+  it('Ctrl+W triggers closeTab by default', () => {
     const actions = createMockActions();
     const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'w', { ctrlKey: true, shiftKey: true });
+    const shortcut = findShortcut(shortcuts, 'w', { ctrlKey: true, shiftKey: false });
 
     expect(shortcut).toBeDefined();
     shortcut!.handler();
     expect(actions.closeTab).toHaveBeenCalledOnce();
   });
 
-  it('does not bind Ctrl+W to closeTab by default', () => {
+  it('does not bind Ctrl+Shift+W to closeTab by default', () => {
     const actions = createMockActions();
     const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'w', { ctrlKey: true, shiftKey: false });
+    const shortcut = findShortcut(shortcuts, 'w', { ctrlKey: true, shiftKey: true });
 
     expect(shortcut).toBeUndefined();
   });
@@ -241,6 +243,29 @@ describe('useKeyboardShortcuts', () => {
     expect(wasNotPrevented).toBe(false);
     expect(actions.toggleLeftSidebar).toHaveBeenCalledOnce();
   });
+
+  it('handles terminal Ctrl+W to close the active tab', () => {
+    const actions = createMockActions();
+    const shortcuts = createSplitViewShortcuts(actions);
+    render(React.createElement(ShortcutHarness, { shortcuts }));
+
+    const xterm = document.createElement('div');
+    xterm.className = 'xterm';
+    const textarea = document.createElement('textarea');
+    xterm.appendChild(textarea);
+    document.body.appendChild(xterm);
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'w',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const wasNotPrevented = textarea.dispatchEvent(event);
+
+    expect(wasNotPrevented).toBe(false);
+    expect(actions.closeTab).toHaveBeenCalledOnce();
+  });
 });
 
 describe('keyboard shortcut settings', () => {
@@ -272,11 +297,19 @@ describe('keyboard shortcut settings', () => {
     });
   });
 
-  it('migrates the legacy Ctrl+W close shortcut to the new default', () => {
+  it('migrates the former Ctrl+Shift+W close shortcut to the new default', () => {
     localStorage.setItem('sshClientSettings', JSON.stringify({
-      closeSession: 'Ctrl+W',
+      closeSession: 'Ctrl+Shift+W',
     }));
 
     expect(loadKeyboardShortcutSettings().closeTab).toBe(DEFAULT_SPLIT_VIEW_SHORTCUTS.closeTab);
+  });
+});
+
+describe('formatKeyboardShortcut', () => {
+  it('uses platform-appropriate modifier labels', () => {
+    expect(formatKeyboardShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar, false)).toBe('Ctrl+B');
+    expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘+⇧+→');
+    expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥+W');
   });
 });

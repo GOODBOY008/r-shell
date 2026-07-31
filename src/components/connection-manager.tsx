@@ -42,6 +42,7 @@ import {
   ContextMenuTrigger,
 } from './ui/context-menu';
 import { toast } from 'sonner';
+import { DEFAULT_APP_KEYBOARD_SHORTCUTS, formatKeyboardShortcut } from '../lib/keyboard-shortcuts';
 
 interface ConnectionNode {
   id: string;
@@ -90,6 +91,10 @@ export function ConnectionManager({
   onQuickConnect,
 }: ConnectionManagerProps) {
   const { t } = useTranslation();
+  const newConnectionShortcut = formatKeyboardShortcut(
+    DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+    navigator.platform.toUpperCase().includes('MAC'),
+  );
   // Load connections from storage
   const loadConnections = (): ConnectionNode[] => {
     const tree = ConnectionStorageManager.buildConnectionTree(activeConnections);
@@ -884,7 +889,12 @@ export function ConnectionManager({
                   <Plus className="w-3.5 h-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{t('connectionManager.newConnection')}</TooltipContent>
+              <TooltipContent className="flex items-center gap-2">
+                <span>{t('connectionManager.newConnection')}</span>
+                <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {newConnectionShortcut}
+                </kbd>
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>

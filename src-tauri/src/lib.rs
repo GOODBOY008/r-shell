@@ -75,7 +75,7 @@ fn build_app_menu<F: Fn(&str) -> String>(
                 "close_connection",
                 &t("menuBar.closeTab"),
                 true,
-                None::<&str>,
+                Some("CmdOrCtrl+W"),
             )?,
         ],
     )?;

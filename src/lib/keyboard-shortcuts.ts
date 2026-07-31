@@ -30,9 +30,16 @@ export const APP_SETTINGS_CHANGED_EVENT = 'sshClientSettingsChanged';
 
 export const DEFAULT_APP_KEYBOARD_SHORTCUTS = {
   newSession: 'Ctrl+N',
-  closeSession: 'Ctrl+Shift+W',
+  closeSession: 'Ctrl+W',
   nextTab: 'Ctrl+Tab',
   previousTab: 'Ctrl+Shift+Tab',
+} as const;
+
+export const DEFAULT_LAYOUT_SHORTCUTS = {
+  toggleLeftSidebar: 'Ctrl+B',
+  toggleBottomPanel: 'Ctrl+J',
+  toggleRightSidebar: 'Ctrl+M',
+  toggleZenMode: 'Ctrl+Z',
 } as const;
 
 export const DEFAULT_SPLIT_VIEW_SHORTCUTS: SplitViewShortcutBindings = {
@@ -73,6 +80,39 @@ function normalizeShortcutKey(key: string): string {
   }
 
   return KEY_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
+
+export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string {
+  return shortcut
+    .split('+')
+    .map(part => {
+      switch (part.trim().toLowerCase()) {
+        case 'ctrl':
+        case 'control':
+        case 'cmdorctrl':
+          return isMac ? '⌘' : 'Ctrl';
+        case 'shift':
+          return isMac ? '⇧' : 'Shift';
+        case 'alt':
+        case 'option':
+          return isMac ? '⌥' : 'Alt';
+        case 'meta':
+        case 'cmd':
+        case 'command':
+          return isMac ? '⌘' : 'Meta';
+        case 'arrowup':
+          return '↑';
+        case 'arrowdown':
+          return '↓';
+        case 'arrowleft':
+          return '←';
+        case 'arrowright':
+          return '→';
+        default:
+          return part.trim();
+      }
+    })
+    .join('+');
 }
 
 export function parseKeyboardShortcut(shortcut: string): ParsedKeyboardShortcut | null {
@@ -116,7 +156,7 @@ export function parseKeyboardShortcut(shortcut: string): ParsedKeyboardShortcut 
   return parsed.key ? parsed : null;
 }
 
-const LEGACY_CLOSE_TAB_SHORTCUTS = new Set(['ctrl+w', 'cmdorctrl+w']);
+const LEGACY_CLOSE_TAB_SHORTCUTS = new Set(['ctrl+shift+w', 'cmdorctrl+shift+w']);
 
 function compactShortcut(shortcut: string): string {
   return shortcut.replace(/\s+/g, '').toLowerCase();
@@ -182,7 +222,7 @@ function isTerminalInputTarget(target: EventTarget | null): boolean {
     return false;
   }
 
-  return target.tagName === 'TEXTAREA' || target.closest('.xterm') !== null;
+  return target.closest('.xterm') !== null;
 }
 
 export function isEditableTarget(target: EventTarget | null): boolean {
@@ -215,7 +255,8 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
     const isMac = navigator.platform.toUpperCase().includes('MAC');
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) {
+      const terminalInputTarget = isTerminalInputTarget(event.target);
+      if (isEditableTarget(event.target) && !terminalInputTarget) {
         return;
       }
 
@@ -239,7 +280,7 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
         }
 
         if (keyMatch && ctrlMatch && shiftMatch && altMatch && metaMatch) {
-          if (shortcut.ignoreInTerminal && isTerminalInputTarget(event.target)) {
+          if (shortcut.ignoreInTerminal && terminalInputTarget) {
             return;
           }
           event.preventDefault();
@@ -265,32 +306,40 @@ export const createLayoutShortcuts = (actions: {
   toggleZenMode: () => void;
 }): KeyboardShortcut[] => [
   {
-    key: 'b',
-    ctrlKey: true,
+    ...createConfiguredShortcut(
+      DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar,
+      DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar,
+      actions.toggleLeftSidebar,
+      'Toggle Connection Manager (Left Sidebar)',
+    ),
     ignoreInTerminal: true,
-    handler: actions.toggleLeftSidebar,
-    description: 'Toggle Connection Manager (Left Sidebar)',
   },
   {
-    key: 'j',
-    ctrlKey: true,
+    ...createConfiguredShortcut(
+      DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel,
+      DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel,
+      actions.toggleBottomPanel,
+      'Toggle File Browser (Bottom Panel)',
+    ),
     ignoreInTerminal: true,
-    handler: actions.toggleBottomPanel,
-    description: 'Toggle File Browser (Bottom Panel)',
   },
   {
-    key: 'm',
-    ctrlKey: true,
+    ...createConfiguredShortcut(
+      DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar,
+      DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar,
+      actions.toggleRightSidebar,
+      'Toggle Monitor Panel (Right Sidebar)',
+    ),
     ignoreInTerminal: true,
-    handler: actions.toggleRightSidebar,
-    description: 'Toggle Monitor Panel (Right Sidebar)',
   },
   {
-    key: 'z',
-    ctrlKey: true,
+    ...createConfiguredShortcut(
+      DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode,
+      DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode,
+      actions.toggleZenMode,
+      'Toggle Zen Mode',
+    ),
     ignoreInTerminal: true,
-    handler: actions.toggleZenMode,
-    description: 'Toggle Zen Mode',
   },
   {
     key: '\\',

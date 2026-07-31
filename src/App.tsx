@@ -126,6 +126,19 @@ function AppContent() {
     };
   }, []);
 
+  const handleCloseActiveTab = useCallback(() => {
+    if (!activeGroup?.activeTabId) {
+      return;
+    }
+
+    const isLastTab = allTabs.length === 1;
+    dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
+
+    if (isLastTab) {
+      ActiveConnectionsManager.clearActiveConnections();
+    }
+  }, [activeGroup, allTabs.length, dispatch]);
+
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
     const groupIds = Object.keys(state.groups);
@@ -147,9 +160,7 @@ function AppContent() {
           }
         },
         closeTab: () => {
-          if (activeGroup && activeGroup.activeTabId) {
-            dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
-          }
+          handleCloseActiveTab();
         },
         nextTab: () => {
           if (activeGroup && activeGroup.activeTabId && activeGroup.tabs.length > 1) {
@@ -168,7 +179,7 @@ function AppContent() {
       },
       keyboardShortcutSettings,
     );
-  }, [state.activeGroupId, state.groups, activeGroup, dispatch, keyboardShortcutSettings]);
+  }, [state.activeGroupId, state.groups, activeGroup, dispatch, handleCloseActiveTab, keyboardShortcutSettings]);
 
   const layoutShortcuts = useMemo(() => createLayoutShortcuts({
     toggleLeftSidebar,
@@ -1258,9 +1269,7 @@ function AppContent() {
           handleNewTab();
           break;
         case 'close_connection':
-          if (activeGroup && activeGroup.activeTabId) {
-            dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
-          }
+          handleCloseActiveTab();
           break;
         case 'clone_tab':
           if (activeTab) { handleDuplicateTab(activeTab.id); }
@@ -1290,7 +1299,7 @@ function AppContent() {
       }
     });
     return () => { unlistenPromise.then(fn => fn()); };
-  }, [activeGroup, activeTab, handleNewTab, handleOpenSettings, handleDuplicateTab, dispatch]);
+  }, [activeGroup, activeTab, handleNewTab, handleOpenSettings, handleDuplicateTab, handleCloseActiveTab, dispatch]);
 
   const handleEditConnection = useCallback((connection: ConnectionNode) => {
     if (connection.type === 'connection') {
@@ -1755,11 +1764,7 @@ function AppContent() {
       <MenuBar
         onNewConnection={handleNewTab}
         onNewTab={handleNewTab}
-        onCloseConnection={() => {
-          if (activeGroup && activeGroup.activeTabId) {
-            dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
-          }
-        }}
+        onCloseConnection={handleCloseActiveTab}
         onNextTab={() => {
           if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
             const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
@@ -1784,6 +1789,8 @@ function AppContent() {
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
         closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
+        nextTabShortcutLabel={keyboardShortcutSettings.nextTab}
+        previousTabShortcutLabel={keyboardShortcutSettings.prevTab}
         hasActiveConnection={!!activeTab}
         canPaste={true}
         onToggleLeftSidebar={toggleLeftSidebar}
@@ -1844,7 +1851,12 @@ function AppContent() {
                 <ResizablePanelGroup direction="vertical" className="flex-1">
                   {/* Terminal Grid Panel */}
                   <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
-                    <TerminalCallbacksProvider value={{ onDuplicateTab: handleDuplicateTab, onNewTab: handleNewTab, onReconnectTab: handleReconnect }}>
+                    <TerminalCallbacksProvider value={{
+                      onDuplicateTab: handleDuplicateTab,
+                      onNewTab: handleNewTab,
+                      onReconnectTab: handleReconnect,
+                      closeTabShortcut: keyboardShortcutSettings.closeTab,
+                    }}>
                       <ErrorBoundary label="Terminal">
                         <GridRenderer node={state.gridLayout} path={[]} />
                       </ErrorBoundary>

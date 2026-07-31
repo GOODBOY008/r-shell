@@ -11,7 +11,7 @@ interface TerminalGroupViewProps {
 
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const { state, dispatch } = useTerminalGroups();
-  const { onDuplicateTab, onNewTab, onReconnectTab } = useTerminalCallbacks();
+  const { onDuplicateTab, onNewTab, onReconnectTab, closeTabShortcut } = useTerminalCallbacks();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
 
@@ -81,6 +81,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         onReconnect={handleReconnect}
         onDuplicateTab={onDuplicateTab}
         onNewTab={onNewTab}
+        closeTabShortcut={closeTabShortcut}
       />
       <div className="flex-1 relative overflow-hidden">
         {showWelcome ? (
