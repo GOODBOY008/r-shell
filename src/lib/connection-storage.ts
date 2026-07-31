@@ -31,6 +31,12 @@ export interface ConnectionData {
   // VNC-specific
   vncColorDepth?: string;
   vncPassword?: string;
+  // Proxy settings
+  proxyType?: 'none' | 'http' | 'socks4' | 'socks5';
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  proxyPassword?: string;
   // Ordering
   sortOrder?: number;
 }

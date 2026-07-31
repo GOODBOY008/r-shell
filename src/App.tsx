@@ -13,6 +13,7 @@ import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
+import { toConnectionConfig } from './lib/connection-config';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
@@ -517,22 +518,7 @@ function AppContent() {
           : !!connectionData.privateKeyPath);
 
       if (!hasCredentials) {
-        setEditingConnection({
-          id: connection.id,
-          name: connectionData.name,
-          protocol: connectionData.protocol as ConnectionConfig['protocol'],
-          host: connectionData.host,
-          port: connectionData.port,
-          username: connectionData.username,
-          authMethod: connectionData.authMethod || 'password',
-          password: connectionData.password,
-          privateKeyPath: connectionData.privateKeyPath,
-          passphrase: connectionData.passphrase,
-          ftpsEnabled: connectionData.ftpsEnabled,
-          domain: connectionData.domain,
-          rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
-          vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
-        });
+        setEditingConnection(toConnectionConfig(connectionData));
         setPendingConnectionId(connection.id);
         setConnectionDialogOpen(true);
         return;
@@ -642,18 +628,7 @@ function AppContent() {
             toast.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
-            setEditingConnection({
-              id: connection.id,
-              name: connectionData.name,
-              protocol: connectionData.protocol as ConnectionConfig['protocol'],
-              host: connectionData.host,
-              port: connectionData.port,
-              username: connectionData.username,
-              authMethod: connectionData.authMethod || 'password',
-              password: connectionData.password,
-              privateKeyPath: connectionData.privateKeyPath,
-              passphrase: connectionData.passphrase,
-            });
+            setEditingConnection(toConnectionConfig(connectionData));
             setPendingConnectionId(connection.id);
             setConnectionDialogOpen(true);
           }
@@ -663,18 +638,7 @@ function AppContent() {
           toast.error(t('app.connectionError'), {
             description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
           });
-          setEditingConnection({
-            id: connection.id,
-            name: connectionData.name,
-            protocol: connectionData.protocol as ConnectionConfig['protocol'],
-            host: connectionData.host,
-            port: connectionData.port,
-            username: connectionData.username,
-            authMethod: connectionData.authMethod || 'password',
-            password: connectionData.password,
-            privateKeyPath: connectionData.privateKeyPath,
-            passphrase: connectionData.passphrase,
-          });
+          setEditingConnection(toConnectionConfig(connectionData));
           setPendingConnectionId(connection.id);
           setConnectionDialogOpen(true);
         }
@@ -884,22 +848,7 @@ function AppContent() {
       toast.error(t('app.cannotReconnect'), {
         description: t('app.noCredentialsDesc'),
       });
-      setEditingConnection({
-        id: originalConnectionId,
-        name: connectionData.name,
-        protocol: connectionData.protocol as ConnectionConfig['protocol'],
-        host: connectionData.host,
-        port: connectionData.port,
-        username: connectionData.username,
-        authMethod: connectionData.authMethod || 'password',
-        password: connectionData.password,
-        privateKeyPath: connectionData.privateKeyPath,
-        passphrase: connectionData.passphrase,
-        ftpsEnabled: connectionData.ftpsEnabled,
-        domain: connectionData.domain,
-        rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
-        vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
-      });
+      setEditingConnection(toConnectionConfig(connectionData));
       setPendingConnectionId(originalConnectionId);
       setConnectionDialogOpen(true);
       return;
@@ -1305,21 +1254,7 @@ function AppContent() {
     if (connection.type === 'connection') {
       const connectionData = ConnectionStorageManager.getConnection(connection.id);
       if (connectionData) {
-        setEditingConnection({
-          id: connectionData.id,
-          name: connectionData.name,
-          protocol: connectionData.protocol as ConnectionConfig['protocol'],
-          host: connectionData.host,
-          port: connectionData.port,
-          username: connectionData.username,
-          authMethod: connectionData.authMethod || 'password',
-          password: connectionData.password,
-          privateKeyPath: connectionData.privateKeyPath,
-          passphrase: connectionData.passphrase,
-          domain: connectionData.domain,
-          rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
-          vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
-        });
+        setEditingConnection(toConnectionConfig(connectionData));
         setConnectionDialogOpen(true);
         setPendingConnectionId(null);
       } else {
@@ -1550,22 +1485,7 @@ function AppContent() {
         : !!connectionData.privateKeyPath);
 
     if (!hasCredentials) {
-      setEditingConnection({
-        id: connectionData.id,
-        name: connectionData.name,
-        protocol: connectionData.protocol as ConnectionConfig['protocol'],
-        host: connectionData.host,
-        port: connectionData.port,
-        username: connectionData.username,
-        authMethod: connectionData.authMethod || 'password',
-        password: connectionData.password,
-        privateKeyPath: connectionData.privateKeyPath,
-        passphrase: connectionData.passphrase,
-        ftpsEnabled: connectionData.ftpsEnabled,
-        domain: connectionData.domain,
-        rdpResolution: connectionData.rdpResolution as ConnectionConfig['rdpResolution'],
-        vncColorDepth: connectionData.vncColorDepth as ConnectionConfig['vncColorDepth'],
-      });
+      setEditingConnection(toConnectionConfig(connectionData));
       setPendingConnectionId(connectionData.id);
       setConnectionDialogOpen(true);
       return;
@@ -1573,19 +1493,7 @@ function AppContent() {
 
     if (isFileBrowser) {
       // Route through handleConnectionDialogConnect which handles SFTP/FTP
-      const config: ConnectionConfig = {
-        id: connectionData.id,
-        name: connectionData.name,
-        protocol: connectionData.protocol as ConnectionConfig['protocol'],
-        host: connectionData.host,
-        port: connectionData.port,
-        username: connectionData.username,
-        authMethod: connectionData.authMethod || 'password',
-        password: connectionData.password,
-        privateKeyPath: connectionData.privateKeyPath,
-        passphrase: connectionData.passphrase,
-        ftpsEnabled: connectionData.ftpsEnabled,
-      };
+      const config: ConnectionConfig = toConnectionConfig(connectionData);
       await handleConnectionDialogConnect(config);
       toast.success(t('app.quickConnected'), {
         description: t('app.quickConnectedDesc', { name: connectionData.name }),
@@ -1612,18 +1520,7 @@ function AppContent() {
         if (result.success) {
           ConnectionStorageManager.updateLastConnected(connectionData.id);
 
-          const config: ConnectionConfig = {
-            id: connectionData.id,
-            name: connectionData.name,
-            protocol: connectionData.protocol as ConnectionConfig['protocol'],
-            host: connectionData.host,
-            port: connectionData.port,
-            username: connectionData.username,
-            authMethod: connectionData.authMethod || 'password',
-            password: connectionData.password,
-            privateKeyPath: connectionData.privateKeyPath,
-            passphrase: connectionData.passphrase,
-          };
+          const config: ConnectionConfig = toConnectionConfig(connectionData);
 
           handleConnectionDialogConnect(config);
 
@@ -1635,18 +1532,7 @@ function AppContent() {
           toast.error(t('app.connectionFailed'), {
             description: result.error || 'Unable to connect. Please try again.',
           });
-          setEditingConnection({
-            id: connectionData.id,
-            name: connectionData.name,
-            protocol: connectionData.protocol as ConnectionConfig['protocol'],
-            host: connectionData.host,
-            port: connectionData.port,
-            username: connectionData.username,
-            authMethod: connectionData.authMethod || 'password',
-            password: connectionData.password,
-            privateKeyPath: connectionData.privateKeyPath,
-            passphrase: connectionData.passphrase,
-          });
+          setEditingConnection(toConnectionConfig(connectionData));
           setPendingConnectionId(connectionData.id);
           setConnectionDialogOpen(true);
         }
