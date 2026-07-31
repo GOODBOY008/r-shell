@@ -43,6 +43,16 @@ import {
 } from './ui/context-menu';
 import { toast } from 'sonner';
 
+export interface DetachedSession {
+  connectionId: string;
+  name: string;
+  host?: string;
+  username?: string;
+  protocol?: string;
+  originalConnectionId?: string;
+  detachedAt?: number;
+}
+
 interface ConnectionNode {
   id: string;
   name: string;
@@ -71,6 +81,10 @@ interface ConnectionManagerProps {
   onDuplicateConnection?: (connection: ConnectionNode) => void;
   recentConnections?: { id: string; name: string; host: string; username: string; port?: number; lastConnected?: string }[];
   onQuickConnect?: (connectionId: string) => void;
+  /** Xshell-style detached (background) sessions — reattach or terminate. */
+  detachedSessions?: DetachedSession[];
+  onReattachSession?: (session: DetachedSession) => void;
+  onCloseDetachedSession?: (connectionId: string) => void;
 }
 
 type DropPosition = 'before' | 'after' | 'inside';
@@ -88,6 +102,9 @@ export function ConnectionManager({
   onDuplicateConnection,
   recentConnections = [],
   onQuickConnect,
+  detachedSessions = [],
+  onReattachSession,
+  onCloseDetachedSession,
 }: ConnectionManagerProps) {
   const { t } = useTranslation();
   // Load connections from storage
@@ -888,6 +905,44 @@ export function ConnectionManager({
             </Tooltip>
           </TooltipProvider>
         </div>
+        {detachedSessions.length > 0 && (
+          <div className="border-b border-border px-3 py-2">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Monitor className="w-3.5 h-3.5 text-muted-foreground" />
+              <h4 className="text-xs font-medium text-muted-foreground flex-1">
+                {t('connectionManager.detachedSessions')}
+              </h4>
+              <span className="text-[10px] text-muted-foreground">{detachedSessions.length}</span>
+            </div>
+            <div className="space-y-1">
+              {detachedSessions.map((session) => (
+                <div
+                  key={session.connectionId}
+                  className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60 cursor-pointer group"
+                  onClick={() => onReattachSession?.(session)}
+                  title={t('connectionManager.reattachSession')}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium truncate">{session.name}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">
+                      {session.username ? `${session.username}@` : ''}{session.host || ''}
+                    </div>
+                  </div>
+                  <button
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCloseDetachedSession?.(session.connectionId);
+                    }}
+                    title={t('connectionManager.closeDetachedSession')}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div
           ref={treeContainerRef}
           data-conn-tree-container="true"

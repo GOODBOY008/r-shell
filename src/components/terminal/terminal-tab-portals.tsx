@@ -51,7 +51,7 @@ function useThemeKey(): number {
 function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: number }) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onReconnectTab } = useTerminalCallbacks();
+  const { onReconnectTab, onDetachTab } = useTerminalCallbacks();
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
@@ -69,6 +69,14 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
     }
     dispatch({ type: 'RECONNECT_TAB', tabId: tab.id });
   }, [dispatch, onReconnectTab, tab.id]);
+
+  const handleDetach = useCallback(() => {
+    if (onDetachTab) {
+      void onDetachTab(tab.id);
+      return;
+    }
+    // Fallback: no App-level handler — nothing to do.
+  }, [onDetachTab, tab.id]);
 
   const handleConnectionStatusChange = useCallback(
     (
@@ -132,6 +140,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         themeKey={themeKey}
         isActive={isActive}
         onConnectionStatusChange={handleConnectionStatusChange}
+        onDetach={handleDetach}
       />
     );
   }

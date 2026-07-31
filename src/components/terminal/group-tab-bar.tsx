@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode } from 'lucide-react';
+import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode, MonitorOff } from 'lucide-react';
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
 import { getTabDisplayName } from '../../lib/terminal-group-utils';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
@@ -63,6 +63,7 @@ interface GroupTabBarProps {
   onNewTab?: () => void;
   onDuplicateTab?: (tabId: string) => void;
   onReconnect?: (tabId: string) => void;
+  onDetachTab?: (tabId: string) => void;
 }
 
 export function GroupTabBar({
@@ -72,6 +73,7 @@ export function GroupTabBar({
   onNewTab,
   onDuplicateTab,
   onReconnect,
+  onDetachTab,
 }: GroupTabBarProps) {
   const { t } = useTranslation();
   const { dispatch } = useTerminalGroups();
@@ -337,6 +339,16 @@ export function GroupTabBar({
                       <ContextMenuItem onClick={() => onDuplicateTab(tab.id)}>
                         <Copy className="mr-2 h-4 w-4" />
                         {t('contextMenu.duplicateTab')}
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                    </>
+                  )}
+                  {/* Detach into background (SSH terminal tabs only) */}
+                  {onDetachTab && tab.tabType !== 'file-browser' && tab.tabType !== 'desktop' && tab.tabType !== 'editor' && (
+                    <>
+                      <ContextMenuItem onClick={() => onDetachTab(tab.id)}>
+                        <MonitorOff className="mr-2 h-4 w-4" />
+                        {t('contextMenu.detach')}
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                     </>

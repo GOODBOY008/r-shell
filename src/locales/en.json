@@ -66,6 +66,14 @@
     "reconnectionFailedDesc": "Unable to reconnect. Please try again.",
     "reconnectionError": "Reconnection Error",
     "reconnectionErrorDesc": "An unexpected error occurred.",
+    "sessionDetached": "Session Detached",
+    "sessionDetachedDesc": "{{name}} keeps running in the background. Reattach it from the sidebar.",
+    "sessionReattached": "Session Reattached",
+    "sessionReattachedDesc": "Attached to the running session of {{name}}",
+    "detachedSessionExpired": "Session Ended",
+    "detachedSessionExpiredDesc": "The background session of {{name}} is no longer running.",
+    "detachedSessionClosed": "Background session closed",
+    "detachedSessionCloseFailed": "Failed to close background session",
     "openingInLogMonitor": "Opening {{filename}} in Log Monitor",
     "failedToOpenWindow": "Failed to open file window",
     "couldNotOpenWindow": "Could not open file window",
@@ -639,7 +647,8 @@
     "clearTerminal": "Clear Terminal",
     "clearScrollback": "Clear Scrollback",
     "saveOutputToFile": "Save Output to File",
-    "closeTabsToLeft": "Close Tabs to Left"
+    "closeTabsToLeft": "Close Tabs to Left",
+    "detach": "Detach Session"
   },
   "updateChecker": {
     "checkForUpdates": "Check for Updates",
@@ -769,7 +778,10 @@
     "connectionDetails": "Connection Details",
     "noConnectionSelected": "No connection selected",
     "movedToRoot": "Moved \"{{name}}\" to All Connections",
-    "failedToReorder": "Failed to reorder items"
+    "failedToReorder": "Failed to reorder items",
+    "detachedSessions": "Detached Sessions",
+    "reattachSession": "Reattach Session",
+    "closeDetachedSession": "Close Session"
   },
   "filePanel": {
     "selectDirectory": "Select a directory to view its contents",

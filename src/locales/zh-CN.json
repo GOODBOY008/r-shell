@@ -66,6 +66,14 @@
     "reconnectionFailedDesc": "无法重新连接，请重试。",
     "reconnectionError": "重新连接错误",
     "reconnectionErrorDesc": "发生意外错误。",
+    "sessionDetached": "会话已分离",
+    "sessionDetachedDesc": "{{name}} 正在后台继续运行。可从侧边栏重新挂载。",
+    "sessionReattached": "会话已挂载",
+    "sessionReattachedDesc": "已附加到 {{name}} 正在运行的会话",
+    "detachedSessionExpired": "会话已结束",
+    "detachedSessionExpiredDesc": "{{name}} 的后台会话已不再运行。",
+    "detachedSessionClosed": "后台会话已关闭",
+    "detachedSessionCloseFailed": "关闭后台会话失败",
     "openingInLogMonitor": "正在日志监视器中打开 {{filename}}",
     "failedToOpenWindow": "无法打开文件窗口",
     "couldNotOpenWindow": "无法打开文件窗口",
@@ -639,7 +647,8 @@
     "clearTerminal": "清除终端",
     "clearScrollback": "清除回滚",
     "saveOutputToFile": "保存输出到文件",
-    "closeTabsToLeft": "关闭左侧标签页"
+    "closeTabsToLeft": "关闭左侧标签页",
+    "detach": "分离会话"
   },
   "updateChecker": {
     "checkForUpdates": "检查更新",
@@ -769,7 +778,10 @@
     "connectionDetails": "连接详情",
     "noConnectionSelected": "未选择连接",
     "movedToRoot": "已将\"{{name}}\"移动到所有连接",
-    "failedToReorder": "重新排序失败"
+    "failedToReorder": "重新排序失败",
+    "detachedSessions": "分离的会话",
+    "reattachSession": "重新挂载会话",
+    "closeDetachedSession": "关闭会话"
   },
   "filePanel": {
     "selectDirectory": "选择目录以查看其内容",

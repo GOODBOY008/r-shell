@@ -132,6 +132,43 @@ pub async fn ssh_disconnect(
     }
 }
 
+/// List connection IDs that currently have a detached (background) session.
+#[tauri::command]
+pub async fn list_detached_sessions(
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<Vec<String>, String> {
+    Ok(state.list_detached_sessions().await)
+}
+
+/// Check whether a connection currently has a detached session.
+#[tauri::command]
+pub async fn has_detached_session(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<bool, String> {
+    Ok(state.has_detached_session(&connection_id).await)
+}
+
+/// Terminate a detached background session (PTY + SSH connection).
+#[tauri::command]
+pub async fn close_detached_session(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    match state.close_detached_session(&connection_id).await {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some("Detached session closed".to_string()),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_execute_command(
     connection_id: String,

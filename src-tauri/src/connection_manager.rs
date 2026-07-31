@@ -12,9 +12,22 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+/// A PTY session that was detached from its WebSocket consumer (Xshell-style
+/// Ctrl+A+D). The SSH connection and PTY channel stay alive so the remote
+/// shell keeps running; only the streaming reader is stopped.
+pub struct DetachedSession {
+    pub session: Arc<PtySession>,
+    pub generation: u64,
+    /// Cancelled when the session is re-attached or terminated — stops the
+    /// background output drain task.
+    pub drain_cancel: CancellationToken,
+}
+
 pub struct ConnectionManager {
     connections: Arc<RwLock<HashMap<String, Arc<RwLock<SshClient>>>>>,
     pty_sessions: Arc<RwLock<HashMap<String, Arc<PtySession>>>>,
+    /// PTY sessions kept alive in the background after being detached.
+    detached_sessions: Arc<RwLock<HashMap<String, DetachedSession>>>,
     /// Generation counter per connection_id — incremented on each StartPty.
     /// Used to prevent a stale Close from killing a newly created session.
     pty_generations: Arc<RwLock<HashMap<String, u64>>>,
@@ -36,6 +49,7 @@ impl ConnectionManager {
         Self {
             connections: Arc::new(RwLock::new(HashMap::new())),
             pty_sessions: Arc::new(RwLock::new(HashMap::new())),
+            detached_sessions: Arc::new(RwLock::new(HashMap::new())),
             pty_generations: Arc::new(RwLock::new(HashMap::new())),
             pending_connections: Arc::new(RwLock::new(HashMap::new())),
             sftp_connections: Arc::new(RwLock::new(HashMap::new())),
@@ -98,6 +112,14 @@ impl ConnectionManager {
             let mut client = client.write().await;
             client.disconnect().await?;
         }
+        // If a detached session exists for this connection, cancel it so the
+        // SSH channel and PTY are torn down (no reader is streaming it).
+        {
+            let mut detached = self.detached_sessions.write().await;
+            if let Some(info) = detached.remove(connection_id) {
+                info.session.cancel.cancel();
+            }
+        }
         // Clean up cached OS info for this connection
         self.os_info_cache.remove(connection_id).await;
         Ok(())
@@ -115,14 +137,34 @@ impl ConnectionManager {
 
     // ===== PTY Connection Management (Interactive Terminal) =====
 
-    /// Start a PTY shell connection (like ttyd does)
+    /// Start a PTY shell connection (like ttyd does).
     /// Enables interactive commands: vim, less, more, top, htop, etc.
+    ///
+    /// If a session for this connection was previously detached (Ctrl+A+D),
+    /// it is re-attached instead of creating a brand-new shell — the remote
+    /// process keeps its state. Otherwise a fresh PTY channel is opened.
     pub async fn start_pty_connection(
         &self,
         connection_id: &str,
         cols: u32,
         rows: u32,
     ) -> Result<u64> {
+        // First try to re-attach a detached session.
+        if let Some(detached) = self.take_detached_session(connection_id).await {
+            tracing::info!("Re-attaching detached PTY session for {}", connection_id);
+            // Store back as the active PTY session.
+            let mut pty_sessions = self.pty_sessions.write().await;
+            pty_sessions.insert(connection_id.to_string(), detached.session.clone());
+            drop(pty_sessions);
+
+            // Apply the new terminal size so the remote shell redraws.
+            if let Err(e) = detached.session.resize_tx.send((cols, rows)).await {
+                tracing::warn!("Failed to resize re-attached PTY: {}", e);
+            }
+
+            return Ok(detached.generation);
+        }
+
         // Get the SSH client
         let connections = self.connections.read().await;
         let client = connections
@@ -157,6 +199,114 @@ impl ConnectionManager {
         pty_sessions.insert(connection_id.to_string(), Arc::new(pty));
 
         Ok(current_gen)
+    }
+
+    /// Remove a detached session from the registry (without cancelling the
+    /// session itself), stopping its background drain task.
+    async fn take_detached_session(&self, connection_id: &str) -> Option<DetachedSession> {
+        let mut detached = self.detached_sessions.write().await;
+        let session = detached.remove(connection_id)?;
+        // Stop the drain so the re-attached reader gets the output stream.
+        session.drain_cancel.cancel();
+        Some(session)
+    }
+
+    /// Detach a live PTY session: move it out of `pty_sessions` into the
+    /// detached registry so it survives WebSocket disconnects. The SSH
+    /// connection and PTY channel stay alive; the reader task is cancelled
+    /// separately by the WebSocket server.
+    pub async fn detach_pty_connection(
+        &self,
+        connection_id: &str,
+        expected_gen: Option<u64>,
+    ) -> Result<()> {
+        // Generation check mirrors close_pty_connection to avoid a stale detach
+        // racing a newer session.
+        if let Some(gen) = expected_gen {
+            let generations = self.pty_generations.read().await;
+            let current_gen = generations.get(connection_id).copied().unwrap_or(0);
+            if current_gen != gen {
+                tracing::info!(
+                    "Ignoring stale Detach for {} (gen {} != current {})",
+                    connection_id,
+                    gen,
+                    current_gen
+                );
+                return Ok(());
+            }
+        }
+
+        // Take the session out of the active map first, then move it into the
+        // detached registry — avoids holding two locks at once.
+        let session = {
+            let mut pty_sessions = self.pty_sessions.write().await;
+            pty_sessions.remove(connection_id)
+        };
+
+        if let Some(session) = session {
+            let generation = {
+                let generations = self.pty_generations.read().await;
+                generations.get(connection_id).copied().unwrap_or(0)
+            };
+
+            // Spawn a drain task that keeps consuming PTY output while the
+            // session is detached. Without it, the bounded output channel
+            // fills up and backpressures the SSH channel, stalling the remote
+            // process — defeating "keep running in the background".
+            let drain_cancel = CancellationToken::new();
+            let output_rx = session.output_rx.clone();
+            let drain_cancel_clone = drain_cancel.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = drain_cancel_clone.cancelled() => break,
+                        result = async {
+                            let mut rx = output_rx.lock().await;
+                            rx.recv().await
+                        } => {
+                            match result {
+                                Some(_) => {} // discard output while detached
+                                None => break, // channel closed → session gone
+                            }
+                        }
+                    }
+                }
+            });
+
+            let mut detached = self.detached_sessions.write().await;
+            detached.insert(
+                connection_id.to_string(),
+                DetachedSession { session, generation, drain_cancel },
+            );
+            tracing::info!("Detached PTY session for {}", connection_id);
+        }
+        Ok(())
+    }
+
+    /// List connection IDs that currently have a detached (background) session.
+    pub async fn list_detached_sessions(&self) -> Vec<String> {
+        let detached = self.detached_sessions.read().await;
+        detached.keys().cloned().collect()
+    }
+
+    /// Check whether a connection currently has a detached session.
+    pub async fn has_detached_session(&self, connection_id: &str) -> bool {
+        let detached = self.detached_sessions.read().await;
+        detached.contains_key(connection_id)
+    }
+
+    /// Terminate a detached session: cancels the PTY and closes the SSH
+    /// connection, removing it from the detached registry.
+    pub async fn close_detached_session(&self, connection_id: &str) -> Result<()> {
+        {
+            let mut detached = self.detached_sessions.write().await;
+            if let Some(info) = detached.remove(connection_id) {
+                info.drain_cancel.cancel();
+                info.session.cancel.cancel();
+                tracing::info!("Closed detached PTY session for {}", connection_id);
+            }
+        }
+        self.close_connection(connection_id).await
     }
 
     /// Send data to PTY (user input)
@@ -515,5 +665,94 @@ mod tests {
 
         // Unknown connection returns None
         assert!(mgr.get_connection_type("conn-unknown").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_detached_registry_starts_empty() {
+        let mgr = ConnectionManager::new();
+        assert!(mgr.list_detached_sessions().await.is_empty());
+        assert!(!mgr.has_detached_session("nonexistent").await);
+    }
+
+    #[tokio::test]
+    async fn test_detach_without_active_session_is_noop() {
+        let mgr = ConnectionManager::new();
+        // No active PTY session → detach should succeed but leave registry empty.
+        let result = mgr.detach_pty_connection("ghost", None).await;
+        assert!(result.is_ok());
+        assert!(mgr.list_detached_sessions().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_stale_detach_generation_is_ignored() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut generations = mgr.pty_generations.write().await;
+            generations.insert("conn-1".to_string(), 3);
+        }
+        // Stale generation (2 != 3) → no-op.
+        let result = mgr.detach_pty_connection("conn-1", Some(2)).await;
+        assert!(result.is_ok());
+        assert!(mgr.list_detached_sessions().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_detached_registry_list_and_has() {
+        let mgr = ConnectionManager::new();
+        // Insert a placeholder entry directly into the registry (the session
+        // Arc is never dereferenced by list/has).
+        {
+            let (tx, _rx) = mpsc::channel::<Vec<u8>>(1);
+            let (rtx, _rrx) = mpsc::channel::<(u32, u32)>(1);
+            let session = crate::ssh::PtySession {
+                input_tx: tx,
+                output_rx: Arc::new(tokio::sync::Mutex::new(mpsc::channel::<Vec<u8>>(1).1)),
+                channel_id: unsafe { std::mem::transmute(0u32) },
+                resize_tx: rtx,
+                cancel: CancellationToken::new(),
+            };
+            let mut detached = mgr.detached_sessions.write().await;
+            detached.insert(
+                "det-1".to_string(),
+                DetachedSession {
+                    session: Arc::new(session),
+                    generation: 1,
+                    drain_cancel: CancellationToken::new(),
+                },
+            );
+        }
+        assert!(mgr.has_detached_session("det-1").await);
+        assert!(!mgr.has_detached_session("det-2").await);
+        assert_eq!(mgr.list_detached_sessions().await, vec!["det-1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_close_detached_removes_registry_entry() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut detached = mgr.detached_sessions.write().await;
+            let (tx, _rx) = mpsc::channel::<Vec<u8>>(1);
+            let (rtx, _rrx) = mpsc::channel::<(u32, u32)>(1);
+            let session = crate::ssh::PtySession {
+                input_tx: tx,
+                output_rx: Arc::new(tokio::sync::Mutex::new(mpsc::channel::<Vec<u8>>(1).1)),
+                channel_id: unsafe { std::mem::transmute(0u32) },
+                resize_tx: rtx,
+                cancel: CancellationToken::new(),
+            };
+            detached.insert(
+                "det-1".to_string(),
+                DetachedSession {
+                    session: Arc::new(session),
+                    generation: 1,
+                    drain_cancel: CancellationToken::new(),
+                },
+            );
+        }
+        assert!(mgr.has_detached_session("det-1").await);
+        // No SSH connection exists, so close should still remove the registry
+        // entry even if disconnect reports nothing to disconnect.
+        let _ = mgr.close_detached_session("det-1").await;
+        assert!(!mgr.has_detached_session("det-1").await);
     }
 }
