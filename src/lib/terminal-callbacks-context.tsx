@@ -9,6 +9,8 @@ export interface TerminalCallbacks {
   onNewTab?: () => void;
   /** Full reconnect: re-establishes the backend connection then remounts the terminal. */
   onReconnectTab?: (tabId: string) => void | Promise<void>;
+  /** Xshell-style detach (Ctrl+A+D): keep the session alive in the background. */
+  onDetachTab?: (tabId: string) => void | Promise<void>;
 }
 
 const TerminalCallbacksContext = createContext<TerminalCallbacks>({});

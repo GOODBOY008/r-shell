@@ -14,6 +14,7 @@ import { TerminalSearchBar } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
 import { signalReady } from '../lib/restoration-manager';
 import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
+import { registerDetachHandler } from '../lib/terminal-detach-registry';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -25,6 +26,8 @@ interface PtyTerminalProps {
   themeKey?: number;
   isActive?: boolean;
   onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => void;
+  /** Xshell-style detach (Ctrl+A then D): keep the session alive in the background. */
+  onDetach?: (connectionId: string) => void;
 }
 
 /**
@@ -51,7 +54,8 @@ export function PtyTerminal({
   appearanceKey = 0,
   themeKey = 0,
   isActive = true,
-  onConnectionStatusChange
+  onConnectionStatusChange,
+  onDetach,
 }: PtyTerminalProps) {
   const { t } = useTranslation();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
@@ -101,6 +105,22 @@ export function PtyTerminal({
   const sessionOutputRef = React.useRef(0);
   const inputEncoderRef = React.useRef(new TextEncoder());
 
+  // Xshell-style Ctrl+A prefix: after Ctrl+A, a following 'd' detaches the
+  // session into the background. Any other key flushes the buffered Ctrl+A
+  // (\x01) to the remote so tmux/screen users are unaffected.
+  const prefixArmedRef = React.useRef(false);
+  const prefixTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const PREFIX_TIMEOUT_MS = 1500;
+  // Set once a detach has been requested — the cleanup must skip sending Close
+  // so the backend keeps the detached session alive.
+  const detachedRef = React.useRef(false);
+  // Latest onDetach prop — the key-handler closure is attached once, so it must
+  // read the current prop through a ref to avoid stale-closure detaches.
+  const onDetachRef = React.useRef(onDetach);
+  React.useEffect(() => {
+    onDetachRef.current = onDetach;
+  }, [onDetach]);
+
   const sendInputToPty = React.useCallback((data: string): boolean => {
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) {
@@ -115,6 +135,55 @@ export function PtyTerminal({
     }));
     return true;
   }, [connectionId]);
+
+  const flushPrefixCtrlA = React.useCallback(() => {
+    if (prefixArmedRef.current) {
+      sendInputToPty('\x01');
+    }
+  }, [sendInputToPty]);
+
+  const armPrefix = React.useCallback(() => {
+    prefixArmedRef.current = true;
+    if (prefixTimerRef.current) clearTimeout(prefixTimerRef.current);
+    prefixTimerRef.current = setTimeout(() => {
+      // Timeout: forward the buffered Ctrl+A to the remote (no detach).
+      flushPrefixCtrlA();
+      prefixArmedRef.current = false;
+      prefixTimerRef.current = null;
+    }, PREFIX_TIMEOUT_MS);
+  }, [flushPrefixCtrlA]);
+
+  const sendDetach = React.useCallback(() => {
+    if (detachedRef.current) return;
+    detachedRef.current = true;
+
+    // Tell the backend to move this PTY session into the detached registry.
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const detachMsg: Record<string, unknown> = {
+        type: 'Detach',
+        connection_id: connectionId,
+      };
+      if (ptyGenerationRef.current !== null) {
+        detachMsg.generation = ptyGenerationRef.current;
+      }
+      ws.send(JSON.stringify(detachMsg));
+    }
+  }, [connectionId]);
+
+  const handleDetach = React.useCallback(() => {
+    if (detachedRef.current) return;
+    sendDetach();
+    onDetachRef.current?.(connectionId);
+  }, [connectionId, sendDetach]);
+
+  // Let tab-bar context menus (outside the terminal tree) trigger a detach
+  // through this component, which owns the WebSocket + PTY generation.
+  // Note: only sends the WS handshake — App's handleDetachTab does the
+  // tab-removal, so this must NOT call onDetach (would recurse).
+  React.useEffect(() => {
+    return registerDetachHandler(connectionId, sendDetach);
+  }, [connectionId, sendDetach]);
 
   const pasteClipboardIntoPty = React.useCallback(async () => {
     try {
@@ -254,7 +323,43 @@ export function PtyTerminal({
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modKey = isMac ? event.metaKey : event.ctrlKey;
       const key = event.key.toLowerCase();
-      
+
+      // Xshell-style Ctrl+A prefix (Ctrl+A then D detaches; any other key
+      // forwards the buffered Ctrl+A to the remote so tmux/screen users are
+      // unaffected). Uses raw Ctrl (not Cmd on macOS) to match Xshell.
+      if (event.ctrlKey && !event.metaKey && key === 'a') {
+        event.preventDefault();
+        if (prefixArmedRef.current) {
+          // Ctrl+A twice sends a literal \x01 (readline: start-of-line) and
+          // re-arms the prefix.
+          flushPrefixCtrlA();
+        }
+        armPrefix();
+        return false;
+      }
+
+      if (prefixArmedRef.current && !event.metaKey) {
+        // A key was pressed after Ctrl+A within the timeout window.
+        if (prefixTimerRef.current) {
+          clearTimeout(prefixTimerRef.current);
+          prefixTimerRef.current = null;
+        }
+
+        if (key === 'd' && !event.altKey) {
+          // Ctrl+A then D → detach the session into the background.
+          prefixArmedRef.current = false;
+          event.preventDefault();
+          handleDetach();
+          return false;
+        }
+
+        // Any other key: forward the buffered Ctrl+A to the remote, then let
+        // xterm process this key normally (e.g. Ctrl+A then 'p' sends \x01p).
+        flushPrefixCtrlA();
+        prefixArmedRef.current = false;
+        // Fall through to the normal key handling below.
+      }
+
       // Handle copy shortcut
       if (modKey && key === 'c' && term.hasSelection()) {
         // Allow copy to happen
@@ -272,14 +377,14 @@ export function PtyTerminal({
         setSearchFocusTrigger(prev => prev + 1);
         return false;
       }
-      
-      // Handle select all shortcut
-      if (modKey && key === 'a') {
+
+      // Handle select all shortcut (Cmd+A on macOS — Ctrl+A is the prefix key)
+      if (isMac && event.metaKey && key === 'a') {
         event.preventDefault();
         term.selectAll();
         return false;
       }
-      
+
       // Handle F3 for search navigation
       if (event.key === 'F3') {
         event.preventDefault();
@@ -651,6 +756,11 @@ export function PtyTerminal({
 
       ws.onclose = () => {
         console.log('[PTY Terminal] WebSocket closed');
+        // If the session was detached (Ctrl+A+D), the backend now owns it —
+        // don't auto-reconnect. The tab is being removed by the App.
+        if (detachedRef.current) {
+          return;
+        }
         if (isRunning) {
           // If a session was successfully established, a WS drop means the
           // remote shell is gone (e.g. sleep/wake cycle, server timeout).
@@ -817,8 +927,10 @@ export function PtyTerminal({
 
       // Close PTY connection via WebSocket — include generation so the
       // backend can ignore this close if a newer session already exists.
+      // If the session was detached (Ctrl+A+D), skip the Close message so the
+      // backend keeps the PTY + SSH connection alive in the background.
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN && !detachedRef.current) {
         const closeMsg: Record<string, unknown> = {
           type: 'Close',
           connection_id: connectionId,
@@ -827,6 +939,10 @@ export function PtyTerminal({
           closeMsg.generation = ptyGenerationRef.current;
         }
         ws.send(JSON.stringify(closeMsg));
+        ws.close();
+      } else if (ws) {
+        // Detached (or already-closed) — just tear down the WebSocket without
+        // sending Close; the backend owns the detached session now.
         ws.close();
       }
       ptyGenerationRef.current = null;
@@ -854,6 +970,11 @@ export function PtyTerminal({
         selectionDoc.removeEventListener('mousemove', detectStuckSelectionDrag, true);
       }
       if (fitTimer) clearTimeout(fitTimer);
+      if (prefixTimerRef.current) {
+        clearTimeout(prefixTimerRef.current);
+        prefixTimerRef.current = null;
+      }
+      prefixArmedRef.current = false;
       
       // Dispose WebGL addon FIRST so GPU textures are released before the
       // terminal canvas is removed from the DOM.
@@ -1041,6 +1162,7 @@ export function PtyTerminal({
       onSelectAll={handleSelectAll}
       onSaveToFile={handleSaveToFile}
       onReconnect={handleReconnect}
+      onDetach={handleDetach}
       hasSelection={hasSelection}
       searchActive={searchVisible}
     >
