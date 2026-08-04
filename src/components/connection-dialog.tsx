@@ -957,6 +957,7 @@ const handleCancelConnectionAttempt = async () => {
                         <Input
                           id="proxy-username"
                           placeholder={t('connectionDialog.placeholder.proxyUsername')}
+                          value={config.proxyUsername}
                           onChange={(e) => updateConfig({ proxyUsername: e.target.value })}
                         />
                       </div>
