@@ -44,10 +44,12 @@ vi.mock('../components/directory-transfer-dialog', () => ({
   DirectoryTransferDialog: ({
     sourcePath,
     destPath,
+    destinationDirectoryName,
   }: {
     sourcePath: string;
     destPath: string;
-  }) => <div data-testid="directory-transfer">{sourcePath} → {destPath}</div>,
+    destinationDirectoryName?: string;
+  }) => <div data-testid="directory-transfer">{sourcePath} → {destPath}/{destinationDirectoryName}</div>,
 }));
 
 vi.mock('../components/ui/context-menu', () => ({
@@ -143,8 +145,15 @@ describe('IntegratedFileBrowser terminal directory following', () => {
       />,
     );
 
-    const followButton = await screen.findByTitle('Follow terminal directory');
-    fireEvent.click(followButton);
+    const followToggle = await screen.findByTitle('Follow terminal directory');
+    expect(followToggle.getAttribute('aria-pressed')).toBe('true');
+    expect(followToggle.getAttribute('data-state')).toBe('on');
+
+    fireEvent.click(followToggle);
+
+    expect(followToggle.getAttribute('aria-pressed')).toBe('false');
+    expect(followToggle.getAttribute('data-state')).toBe('off');
+    expect(localStorage.getItem('rshell-follow-terminal-directory')).toBe('false');
     mocks.invoke.mockClear();
 
     rerender(

@@ -535,7 +535,11 @@ pub async fn rename_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("mv '{}' '{}'", shell_escape_single_quoted(&old_path), shell_escape_single_quoted(&new_path));
+    let command = format!(
+        "mv '{}' '{}'",
+        shell_escape_single_quoted(&old_path),
+        shell_escape_single_quoted(&new_path)
+    );
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -611,7 +615,10 @@ pub async fn read_remote_file_base64(
     let client = connection.read().await;
 
     // Refuse very large files to avoid memory / performance issues
-    let size_cmd = format!("stat -c '%s' '{}' 2>/dev/null || stat -f '%z' '{}'", path, path);
+    let size_cmd = format!(
+        "stat -c '%s' '{}' 2>/dev/null || stat -f '%z' '{}'",
+        path, path
+    );
     let size_str = client
         .execute_command(&size_cmd)
         .await
@@ -639,11 +646,7 @@ pub async fn read_remote_file_base64(
         .map_err(|e| e.to_string())?;
 
     // Infer MIME type from extension
-    let ext = path
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
+    let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
     let mime = match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
@@ -2281,42 +2284,41 @@ pub async fn list_remote_files(
     }
 }
 
-#[tauri::command]
-pub async fn download_remote_file(
-    connection_id: String,
-    remote_path: String,
-    local_path: String,
-    state: State<'_, Arc<ConnectionManager>>,
+async fn download_remote_file_to_path(
+    connection_id: &str,
+    remote_path: &str,
+    local_path: &str,
+    state: &Arc<ConnectionManager>,
 ) -> Result<FileTransferResponse, String> {
-    let conn_type = state.get_connection_type(&connection_id).await;
+    let conn_type = state.get_connection_type(connection_id).await;
 
     let result = match conn_type.as_deref() {
         Some("SFTP") => {
             let sftp_map = state.get_sftp_connection().await;
             let connections = sftp_map.read().await;
             let client = connections
-                .get(&connection_id)
+                .get(connection_id)
                 .ok_or("SFTP connection not found".to_string())?;
-            client.download_file(&remote_path, &local_path).await
+            client.download_file(remote_path, local_path).await
         }
         Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
             let mut connections = ftp_map.write().await;
             let client = connections
-                .get_mut(&connection_id)
+                .get_mut(connection_id)
                 .ok_or("FTP connection not found".to_string())?;
-            client.download_file(&remote_path, &local_path).await
+            client.download_file(remote_path, local_path).await
         }
         Some(other) => return Err(format!("Unsupported protocol: {}", other)),
         None => {
             // Fallback: try SSH connection (integrated file browser uses SSH connections
             // which are not registered in connection_types)
             let connection = state
-                .get_connection(&connection_id)
+                .get_connection(connection_id)
                 .await
                 .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
             let client = connection.read().await;
-            client.download_file(&remote_path, &local_path).await
+            client.download_file(remote_path, local_path).await
         }
     };
 
@@ -2334,6 +2336,46 @@ pub async fn download_remote_file(
             error: Some(e.to_string()),
         }),
     }
+}
+
+#[tauri::command]
+pub async fn download_remote_file(
+    connection_id: String,
+    remote_path: String,
+    local_path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<FileTransferResponse, String> {
+    download_remote_file_to_path(&connection_id, &remote_path, &local_path, state.inner()).await
+}
+
+#[tauri::command]
+pub async fn download_remote_file_confined(
+    connection_id: String,
+    remote_root: String,
+    destination_root: String,
+    remote_relative_path: String,
+    destination_relative_path: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<FileTransferResponse, String> {
+    validate_remote_relative_path(&remote_relative_path)?;
+    let local_path = resolve_confined_local_path(
+        std::path::Path::new(&destination_root),
+        &destination_relative_path,
+    )?;
+    let local_path = local_path
+        .to_str()
+        .ok_or_else(|| "Local destination path is not valid UTF-8".to_string())?;
+    let remote_path = if remote_root == "/" {
+        format!("/{}", remote_relative_path)
+    } else {
+        format!(
+            "{}/{}",
+            remote_root.trim_end_matches('/'),
+            remote_relative_path
+        )
+    };
+
+    download_remote_file_to_path(&connection_id, &remote_path, local_path, state.inner()).await
 }
 
 #[tauri::command]
@@ -2728,10 +2770,77 @@ pub async fn rename_local_item(old_path: String, new_path: String) -> Result<(),
         .map_err(|e| format!("Failed to rename '{}' to '{}': {}", old_path, new_path, e))
 }
 
+fn validate_remote_relative_path(remote_relative_path: &str) -> Result<(), String> {
+    if remote_relative_path.is_empty()
+        || remote_relative_path.starts_with('/')
+        || remote_relative_path.starts_with('\\')
+        || remote_relative_path.contains('\\')
+    {
+        return Err(format!(
+            "Unsafe remote relative path: {}",
+            remote_relative_path
+        ));
+    }
+
+    for (index, component) in remote_relative_path.split('/').enumerate() {
+        let has_windows_prefix = index == 0
+            && component
+                .as_bytes()
+                .get(1)
+                .is_some_and(|separator| *separator == b':');
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.contains('\0')
+            || has_windows_prefix
+        {
+            return Err(format!(
+                "Unsafe remote relative path: {}",
+                remote_relative_path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_confined_local_path(
+    destination_root: &std::path::Path,
+    remote_relative_path: &str,
+) -> Result<std::path::PathBuf, String> {
+    if !destination_root.is_absolute() {
+        return Err("Destination root must be absolute".to_string());
+    }
+    validate_remote_relative_path(remote_relative_path)?;
+
+    let mut resolved = destination_root.to_path_buf();
+    for component in remote_relative_path.split('/') {
+        resolved.push(component);
+    }
+
+    if !resolved.starts_with(destination_root) {
+        return Err(format!(
+            "Remote path escapes destination root: {}",
+            remote_relative_path
+        ));
+    }
+    Ok(resolved)
+}
+
 #[tauri::command]
 pub async fn create_local_directory(path: String) -> Result<(), String> {
     use std::fs;
     fs::create_dir_all(&path).map_err(|e| format!("Failed to create directory '{}': {}", path, e))
+}
+
+#[tauri::command]
+pub async fn create_local_directory_confined(
+    destination_root: String,
+    relative_path: String,
+) -> Result<(), String> {
+    let path =
+        resolve_confined_local_path(std::path::Path::new(&destination_root), &relative_path)?;
+    std::fs::create_dir_all(&path)
+        .map_err(|e| format!("Failed to create directory '{}': {}", path.display(), e))
 }
 
 #[tauri::command]
@@ -3298,6 +3407,90 @@ mod local_fs_tests {
         let result = create_local_directory(new_dir.clone()).await;
         assert!(result.is_ok());
         assert!(std::path::Path::new(&new_dir).is_dir());
+    }
+
+    #[tokio::test]
+    async fn confined_directory_creation_stays_under_destination_root() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().to_string_lossy().to_string();
+
+        create_local_directory_confined(root, "nested/子目录".to_string())
+            .await
+            .unwrap();
+
+        assert!(dir.path().join("nested").join("子目录").is_dir());
+    }
+
+    #[tokio::test]
+    async fn confined_directory_creation_rejects_windows_traversal() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("destination");
+        fs::create_dir(&root).unwrap();
+
+        let result = create_local_directory_confined(
+            root.to_string_lossy().to_string(),
+            "nested\\..\\outside".to_string(),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!dir.path().join("outside").exists());
+    }
+
+    #[test]
+    fn confined_local_path_accepts_portable_nested_paths() {
+        let dir = TempDir::new().unwrap();
+
+        let resolved = resolve_confined_local_path(dir.path(), "子目录/report 1.txt").unwrap();
+
+        assert_eq!(resolved, dir.path().join("子目录").join("report 1.txt"));
+    }
+
+    #[test]
+    fn confined_local_path_rejects_escaping_or_ambiguous_paths() {
+        let dir = TempDir::new().unwrap();
+        let unsafe_paths = [
+            "",
+            ".",
+            "../escape.txt",
+            "nested/../../escape.txt",
+            "/absolute.txt",
+            "\\absolute.txt",
+            "nested//file.txt",
+            "nested/./file.txt",
+            "C:/escape.txt",
+            "C:\\escape.txt",
+            "\\\\server\\share\\escape.txt",
+            "nested\\..\\escape.txt",
+        ];
+
+        for relative_path in unsafe_paths {
+            assert!(
+                resolve_confined_local_path(dir.path(), relative_path).is_err(),
+                "unsafe path should be rejected: {relative_path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn confined_local_path_allows_dots_within_normal_names() {
+        let dir = TempDir::new().unwrap();
+
+        for relative_path in ["report..txt", "..hidden", "nested/v1..2.txt"] {
+            assert!(
+                resolve_confined_local_path(dir.path(), relative_path).is_ok(),
+                "normal name should be accepted: {relative_path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn confined_local_path_requires_an_absolute_root() {
+        assert!(resolve_confined_local_path(
+            std::path::Path::new("relative-root"),
+            "nested/file.txt"
+        )
+        .is_err());
     }
 
     #[tokio::test]

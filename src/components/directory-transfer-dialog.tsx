@@ -47,8 +47,10 @@ export interface DirectoryTransferDialogProps {
   connectionId: string;
   /** Full path to the source directory */
   sourcePath: string;
-  /** Full path to the destination directory (will be created) */
+  /** Full path to the destination root directory */
   destPath: string;
+  /** Optional child directory created below the destination root */
+  destinationDirectoryName?: string;
   /** Called when transfer completes to refresh panels */
   onComplete: () => void;
 }
@@ -85,6 +87,7 @@ export function DirectoryTransferDialog({
   connectionId,
   sourcePath,
   destPath,
+  destinationDirectoryName,
   onComplete,
 }: DirectoryTransferDialogProps) {
   const { t } = useTranslation();
@@ -156,6 +159,12 @@ export function DirectoryTransferDialog({
         totalBytes,
       }));
 
+      const destinationPrefix = destinationDirectoryName
+        ? `${destinationDirectoryName}/`
+        : "";
+      const destinationRelativePath = (relativePath: string) =>
+        `${destinationPrefix}${relativePath}`;
+
       // Phase 2: Create directory structure
       // Sort dirs by path depth so parents come first
       const sortedDirs = [...dirs].sort(
@@ -169,6 +178,15 @@ export function DirectoryTransferDialog({
             "create_remote_directory",
             { connectionId, path: destPath },
           );
+        } catch {
+          // May already exist, continue
+        }
+      } else if (destinationDirectoryName) {
+        try {
+          await invoke<void>("create_local_directory_confined", {
+            destinationRoot: destPath,
+            relativePath: destinationDirectoryName,
+          });
         } catch {
           // May already exist, continue
         }
@@ -187,11 +205,6 @@ export function DirectoryTransferDialog({
           return;
         }
 
-        const dirDestPath =
-          destPath === "/"
-            ? `/${dir.relative_path}`
-            : `${destPath}/${dir.relative_path}`;
-
         setProgress((p) => ({
           ...p,
           currentItem: dir.relative_path,
@@ -200,13 +213,18 @@ export function DirectoryTransferDialog({
 
         try {
           if (direction === "upload") {
+            const dirDestPath =
+              destPath === "/"
+                ? `/${dir.relative_path}`
+                : `${destPath}/${dir.relative_path}`;
             await invoke<{ success: boolean; error?: string }>(
               "create_remote_directory",
               { connectionId, path: dirDestPath },
             );
           } else {
-            await invoke<void>("create_local_directory", {
-              path: dirDestPath,
+            await invoke<void>("create_local_directory_confined", {
+              destinationRoot: destPath,
+              relativePath: destinationRelativePath(dir.relative_path),
             });
           }
         } catch (err) {
@@ -238,10 +256,6 @@ export function DirectoryTransferDialog({
           sourcePath === "/"
             ? `/${file.relative_path}`
             : `${sourcePath}/${file.relative_path}`;
-        const fileDestPath =
-          destPath === "/"
-            ? `/${file.relative_path}`
-            : `${destPath}/${file.relative_path}`;
 
         setProgress((p) => ({
           ...p,
@@ -252,6 +266,10 @@ export function DirectoryTransferDialog({
 
         try {
           if (direction === "upload") {
+            const fileDestPath =
+              destPath === "/"
+                ? `/${file.relative_path}`
+                : `${destPath}/${file.relative_path}`;
             const result = await invoke<{
               success: boolean;
               error?: string;
@@ -267,10 +285,12 @@ export function DirectoryTransferDialog({
             const result = await invoke<{
               success: boolean;
               error?: string;
-            }>("download_remote_file", {
+            }>("download_remote_file_confined", {
               connectionId,
-              remotePath: fileSrcPath,
-              localPath: fileDestPath,
+              remoteRoot: sourcePath,
+              destinationRoot: destPath,
+              remoteRelativePath: file.relative_path,
+              destinationRelativePath: destinationRelativePath(file.relative_path),
             });
             if (!result.success) {
               throw new Error(result.error ?? "Download failed");
@@ -332,7 +352,7 @@ export function DirectoryTransferDialog({
         description: err instanceof Error ? err.message : String(err),
       });
     }
-  }, [direction, connectionId, sourcePath, destPath, onComplete]);
+  }, [direction, connectionId, sourcePath, destPath, destinationDirectoryName, onComplete]);
 
   const isBusy =
     progress.phase === "enumerating" || progress.phase === "transferring";

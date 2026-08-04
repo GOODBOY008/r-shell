@@ -64,7 +64,7 @@ describe('DirectoryTransferDialog download', () => {
           },
         ];
       }
-      if (command === 'download_remote_file') {
+      if (command === 'download_remote_file_confined') {
         return { success: true, bytes_transferred: 1 };
       }
       return undefined;
@@ -78,30 +78,79 @@ describe('DirectoryTransferDialog download', () => {
         direction="download"
         connectionId="conn-1"
         sourcePath="/srv/release files"
-        destPath="C:/Downloads/release files"
+        destPath="C:/Downloads"
+        destinationDirectoryName="release files"
         onComplete={onComplete}
       />,
     );
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
 
-    expect(mocks.invoke).toHaveBeenCalledWith('create_local_directory', {
-      path: 'C:/Downloads/release files',
+    expect(mocks.invoke).toHaveBeenCalledWith('create_local_directory_confined', {
+      destinationRoot: 'C:/Downloads',
+      relativePath: 'release files',
     });
-    expect(mocks.invoke).toHaveBeenCalledWith('create_local_directory', {
-      path: 'C:/Downloads/release files/子目录',
+    expect(mocks.invoke).toHaveBeenCalledWith('create_local_directory_confined', {
+      destinationRoot: 'C:/Downloads',
+      relativePath: 'release files/子目录',
     });
-    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file', {
+    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file_confined', {
       connectionId: 'conn-1',
-      remotePath: '/srv/release files/子目录/report 1.txt',
-      localPath: 'C:/Downloads/release files/子目录/report 1.txt',
+      remoteRoot: '/srv/release files',
+      destinationRoot: 'C:/Downloads',
+      remoteRelativePath: '子目录/report 1.txt',
+      destinationRelativePath: 'release files/子目录/report 1.txt',
     });
-    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file', {
+    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file_confined', {
       connectionId: 'conn-1',
-      remotePath: '/srv/release files/README.md',
-      localPath: 'C:/Downloads/release files/README.md',
+      remoteRoot: '/srv/release files',
+      destinationRoot: 'C:/Downloads',
+      remoteRelativePath: 'README.md',
+      destinationRelativePath: 'release files/README.md',
     });
     expect(mocks.success).toHaveBeenCalledOnce();
+  });
+
+  it('keeps remote relative paths separate from the local destination root', async () => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_remote_files_recursive') {
+        return [{
+          relative_path: 'nested\\..\\outside.txt',
+          name: 'nested\\..\\outside.txt',
+          size: 1,
+          modified: null,
+          file_type: 'File',
+        }];
+      }
+      if (command === 'download_remote_file_confined') {
+        throw new Error('Unsafe remote relative path');
+      }
+      return undefined;
+    });
+
+    render(
+      <DirectoryTransferDialog
+        open
+        onOpenChange={() => {}}
+        direction="download"
+        connectionId="conn-1"
+        sourcePath="/srv/release"
+        destPath="C:/Downloads"
+        destinationDirectoryName="release"
+        onComplete={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(mocks.warning).toHaveBeenCalledOnce());
+    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file_confined', {
+      connectionId: 'conn-1',
+      remoteRoot: '/srv/release',
+      destinationRoot: 'C:/Downloads',
+      remoteRelativePath: 'nested\\..\\outside.txt',
+      destinationRelativePath: 'release/nested\\..\\outside.txt',
+    });
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'download_remote_file')).toBe(false);
+    expect(mocks.success).not.toHaveBeenCalled();
   });
 
   it('stops before creating or downloading when enumeration fails', async () => {
