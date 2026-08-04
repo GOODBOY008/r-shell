@@ -5,6 +5,7 @@ import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-ma
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { withRetry, CancelledError } from '@/lib/async-retry';
 import { Button } from './ui/button';
+import { Toggle } from './ui/toggle';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
 import {
@@ -24,7 +25,6 @@ import { useWebviewFileDrop } from '@/lib/use-webview-file-drop';
 import { TransferQueue } from './transfer-queue';
 import { DirectoryTransferDialog } from './directory-transfer-dialog';
 import { DirectoryTree } from './directory-tree';
-import { pathJoin } from '@/lib/file-entry-types';
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -160,7 +160,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [deletingFile, setDeletingFile] = useState<FileItem | null>(null);
   const [directoryTransfer, setDirectoryTransfer] = useState<{
     sourcePath: string;
-    destPath: string;
+    destinationRoot: string;
+    destinationDirectoryName: string;
   } | null>(null);
   
   // Column widths state
@@ -1010,7 +1011,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
       setDirectoryTransfer({
         sourcePath: directory.path,
-        destPath: pathJoin(destDir, directory.name),
+        destinationRoot: destDir,
+        destinationDirectoryName: directory.name,
       });
     } catch (error) {
       console.error('Download directory dialog error:', error);
@@ -1496,20 +1498,17 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             )}
           </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
+          <Toggle
+            pressed={followTerminalDirectory}
+            onPressedChange={(pressed) => {
+              setFollowTerminalDirectory(pressed);
+              localStorage.setItem(FOLLOW_TERMINAL_DIRECTORY_KEY, String(pressed));
+            }}
             className="h-6 w-6 shrink-0 rounded-md"
             title={t('fileBrowser.toolbar.followTerminalDirectory')}
-            aria-pressed={followTerminalDirectory}
-            onClick={() => {
-              const enabled = !followTerminalDirectory;
-              setFollowTerminalDirectory(enabled);
-              localStorage.setItem(FOLLOW_TERMINAL_DIRECTORY_KEY, String(enabled));
-            }}
           >
-            <LocateFixed className={`h-3.5 w-3.5 ${followTerminalDirectory ? 'text-primary' : 'text-muted-foreground'}`} />
-          </Button>
+            <LocateFixed className="h-3.5 w-3.5" />
+          </Toggle>
 
           {/* Refresh */}
           <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0 rounded-md" title={t('fileBrowser.toolbar.refresh')} onClick={() => loadFiles()} disabled={isLoading}>
@@ -1977,7 +1976,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           direction="download"
           connectionId={connectionId}
           sourcePath={directoryTransfer.sourcePath}
-          destPath={directoryTransfer.destPath}
+          destPath={directoryTransfer.destinationRoot}
+          destinationDirectoryName={directoryTransfer.destinationDirectoryName}
           onComplete={() => {}}
         />
       )}

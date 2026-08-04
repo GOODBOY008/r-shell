@@ -168,35 +168,83 @@ mod tests {
 mod shell_integration_tests {
     use crate::sftp_client::list_sftp_dir;
     use crate::ssh::{
-        bash_version_from_probe, AuthMethod, PtySession, SshClient, SshConfig,
-        BASH_SHELL_INTEGRATION_COMMAND,
+        bash_shell_integration_command, bash_version_from_probe, AuthMethod, BashVersion,
+        PtySession, SshClient, SshConfig,
     };
     use std::time::Duration;
     use tokio::time::{timeout, Instant};
 
     #[test]
-    fn detects_only_non_empty_bash_probe_results() {
+    fn parses_major_and_minor_from_bash_probe_results() {
         assert_eq!(
-            bash_version_from_probe("__RSHELL_BASH_VERSION__5.2.37"),
-            Some("5.2.37")
+            bash_version_from_probe("__RSHELL_BASH_VERSION__5.2.37(1)-release"),
+            Some(BashVersion { major: 5, minor: 2 })
         );
         assert_eq!(
-            bash_version_from_probe("profile output\n__RSHELL_BASH_VERSION__4.4.20"),
-            Some("4.4.20")
+            bash_version_from_probe("profile output\n__RSHELL_BASH_VERSION__4.4.20(1)-release"),
+            Some(BashVersion { major: 4, minor: 4 })
         );
-        assert_eq!(bash_version_from_probe("__RSHELL_BASH_VERSION__"), None);
+        assert_eq!(
+            bash_version_from_probe("__RSHELL_BASH_VERSION__5.1.0"),
+            Some(BashVersion { major: 5, minor: 1 })
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_malformed_bash_probe_results() {
+        for output in [
+            "__RSHELL_BASH_VERSION__",
+            "__RSHELL_BASH_VERSION__five.two",
+            "__RSHELL_BASH_VERSION__5",
+            "5.2.37",
+        ] {
+            assert_eq!(bash_version_from_probe(output), None, "output: {output:?}");
+        }
+    }
+
+    #[test]
+    fn uses_scalar_prompt_command_before_bash_5_1() {
+        for version in [
+            BashVersion { major: 3, minor: 2 },
+            BashVersion { major: 4, minor: 4 },
+            BashVersion { major: 5, minor: 0 },
+        ] {
+            let command = String::from_utf8(bash_shell_integration_command(version)).unwrap();
+            assert!(command.contains("PROMPT_COMMAND+=$'\\n__rshell_report_cwd'"));
+            assert!(!command.contains("PROMPT_COMMAND=(\"${PROMPT_COMMAND[@]}\""));
+        }
+    }
+
+    #[test]
+    fn uses_prompt_command_array_from_bash_5_1() {
+        for version in [
+            BashVersion { major: 5, minor: 1 },
+            BashVersion { major: 5, minor: 2 },
+            BashVersion { major: 6, minor: 0 },
+        ] {
+            let command = String::from_utf8(bash_shell_integration_command(version)).unwrap();
+            assert!(
+                command.contains("PROMPT_COMMAND=(\"${PROMPT_COMMAND[@]}\" __rshell_report_cwd)")
+            );
+        }
     }
 
     #[test]
     fn shell_integration_restores_echo_and_emits_osc_7() {
-        assert!(BASH_SHELL_INTEGRATION_COMMAND.starts_with(b" stty echo;"));
-        assert!(!BASH_SHELL_INTEGRATION_COMMAND
-            .windows(b"history -d".len())
-            .any(|window| window == b"history -d"));
-        assert!(BASH_SHELL_INTEGRATION_COMMAND
-            .windows(b"]7;file://".len())
-            .any(|window| window == b"]7;file://"));
-        assert!(BASH_SHELL_INTEGRATION_COMMAND.ends_with(b"\n"));
+        for version in [
+            BashVersion { major: 4, minor: 4 },
+            BashVersion { major: 5, minor: 2 },
+        ] {
+            let command = bash_shell_integration_command(version);
+            assert!(command.starts_with(b" stty echo;"));
+            assert!(!command
+                .windows(b"history -d".len())
+                .any(|window| window == b"history -d"));
+            assert!(command
+                .windows(b"]7;file://".len())
+                .any(|window| window == b"]7;file://"));
+            assert!(command.ends_with(b"\n"));
+        }
     }
 
     async fn read_until(pty: &PtySession, needle: &[u8]) -> Vec<u8> {
@@ -374,7 +422,9 @@ mod key_loading_tests {
         let err = client.connect(&config).await.unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("not found") || msg.contains("SSH key file") || msg.contains("Connection refused"),
+            msg.contains("not found")
+                || msg.contains("SSH key file")
+                || msg.contains("Connection refused"),
             "Error should mention the missing file, got: {msg}"
         );
     }

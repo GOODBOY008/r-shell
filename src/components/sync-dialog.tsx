@@ -330,15 +330,15 @@ export function SyncDialog({
             break;
           }
           case "download": {
-            const srcPath = pathJoin(remotePath, entry.relativePath);
-            const destPath = pathJoin(localPath, entry.relativePath);
             const result = await invoke<{
               success: boolean;
               error?: string;
-            }>("download_remote_file", {
+            }>("download_remote_file_confined", {
               connectionId,
-              remotePath: srcPath,
-              localPath: destPath,
+              remoteRoot: remotePath,
+              destinationRoot: localPath,
+              remoteRelativePath: entry.relativePath,
+              destinationRelativePath: entry.relativePath,
             });
             if (!result.success) {
               throw new Error(result.error ?? "Download failed");

@@ -25,14 +25,35 @@ pub static PREFERRED_HOST_KEY_ALGOS: &[russh_keys::key::Name] = &[
 
 const BASH_VERSION_PROBE: &str = r#"printf '__RSHELL_BASH_VERSION__%s' "${BASH_VERSION-}""#;
 const BASH_VERSION_MARKER: &str = "__RSHELL_BASH_VERSION__";
-pub(crate) const BASH_SHELL_INTEGRATION_COMMAND: &[u8] = br#" stty echo; __rshell_report_cwd(){ local p=${PWD//%/%25}; p=${p// /%20}; p=${p//#/%23}; p=${p//\?/%3F}; printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "$p"; }; if declare -p PROMPT_COMMAND &>/dev/null; then PROMPT_COMMAND=("${PROMPT_COMMAND[@]}" __rshell_report_cwd); else PROMPT_COMMAND=(__rshell_report_cwd); fi; printf '\r\033[2K'
-"#;
+const BASH_SHELL_INTEGRATION_PREFIX: &str = r#" stty echo; __rshell_report_cwd(){ local p=${PWD//%/%25}; p=${p// /%20}; p=${p//#/%23}; p=${p//\?/%3F}; printf '\033]7;file://%s%s\033\\' "${HOSTNAME:-localhost}" "$p"; }; "#;
+const BASH_SHELL_INTEGRATION_SUFFIX: &str = "printf '\\r\\033[2K'\n";
 
-pub(crate) fn bash_version_from_probe(output: &str) -> Option<&str> {
-    output
-        .rsplit_once(BASH_VERSION_MARKER)
-        .map(|(_, version)| version.trim())
-        .filter(|version| !version.is_empty())
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct BashVersion {
+    pub(crate) major: u32,
+    pub(crate) minor: u32,
+}
+
+pub(crate) fn bash_version_from_probe(output: &str) -> Option<BashVersion> {
+    let version = output.rsplit_once(BASH_VERSION_MARKER)?.1.trim();
+    let mut parts = version.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next()?.parse().ok()?;
+    Some(BashVersion { major, minor })
+}
+
+pub(crate) fn bash_shell_integration_command(version: BashVersion) -> Vec<u8> {
+    let prompt_command = if version >= (BashVersion { major: 5, minor: 1 }) {
+        r#"if declare -p PROMPT_COMMAND &>/dev/null; then PROMPT_COMMAND=("${PROMPT_COMMAND[@]}" __rshell_report_cwd); else PROMPT_COMMAND=(__rshell_report_cwd); fi; "#
+    } else {
+        r#"if [[ -n ${PROMPT_COMMAND-} ]]; then PROMPT_COMMAND+=$'\n__rshell_report_cwd'; else PROMPT_COMMAND=__rshell_report_cwd; fi; "#
+    };
+
+    format!(
+        "{}{}{}",
+        BASH_SHELL_INTEGRATION_PREFIX, prompt_command, BASH_SHELL_INTEGRATION_SUFFIX
+    )
+    .into_bytes()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -276,19 +297,19 @@ impl SshClient {
     /// This enables interactive commands like vim, less, more, top, etc.
     pub async fn create_pty_session(&self, cols: u32, rows: u32) -> Result<PtySession> {
         if let Some(session) = &self.session {
-            let is_bash = tokio::time::timeout(
+            let bash_version = tokio::time::timeout(
                 Duration::from_secs(2),
                 self.execute_command(BASH_VERSION_PROBE),
             )
             .await
             .ok()
             .and_then(Result::ok)
-            .is_some_and(|output| bash_version_from_probe(&output).is_some());
+            .and_then(|output| bash_version_from_probe(&output));
 
             // Open a new SSH channel
             let mut channel = session.channel_open_session().await?;
             let bash_terminal_modes = [(Pty::ECHO, 0), (Pty::ECHONL, 0)];
-            let terminal_modes = if is_bash {
+            let terminal_modes = if bash_version.is_some() {
                 bash_terminal_modes.as_slice()
             } else {
                 &[]
@@ -320,10 +341,9 @@ impl SshClient {
 
             // Clone channel for input task
             let mut input_channel = channel.make_writer();
-            if is_bash {
-                input_channel
-                    .write_all(BASH_SHELL_INTEGRATION_COMMAND)
-                    .await?;
+            if let Some(version) = bash_version {
+                let integration_command = bash_shell_integration_command(version);
+                input_channel.write_all(&integration_command).await?;
                 input_channel.flush().await?;
             }
 

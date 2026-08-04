@@ -133,14 +133,38 @@ fn build_app_menu<F: Fn(&str) -> String>(
         &t("menuBar.connection"),
         true,
         &[
-            &MenuItem::with_id(app, "new_tab", &t("menuBar.newTab"), true, Some("CmdOrCtrl+T"))?,
-            &MenuItem::with_id(app, "clone_tab", &t("menuBar.duplicateTab"), true, Some("CmdOrCtrl+D"))?,
+            &MenuItem::with_id(
+                app,
+                "new_tab",
+                &t("menuBar.newTab"),
+                true,
+                Some("CmdOrCtrl+T"),
+            )?,
+            &MenuItem::with_id(
+                app,
+                "clone_tab",
+                &t("menuBar.duplicateTab"),
+                true,
+                Some("CmdOrCtrl+D"),
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "next_tab", &t("menuBar.nextTab"), true, None::<&str>)?,
-            &MenuItem::with_id(app, "prev_tab", &t("menuBar.previousTab"), true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "prev_tab",
+                &t("menuBar.previousTab"),
+                true,
+                None::<&str>,
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "reconnect", &t("menuBar.reconnect"), true, Some("F5"))?,
-            &MenuItem::with_id(app, "disconnect", &t("menuBar.disconnect"), true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "disconnect",
+                &t("menuBar.disconnect"),
+                true,
+                None::<&str>,
+            )?,
         ],
     )?;
 
@@ -294,6 +318,7 @@ pub fn run() {
             // Unified file operation commands
             commands::list_remote_files,
             commands::download_remote_file,
+            commands::download_remote_file_confined,
             commands::upload_remote_file,
             commands::delete_remote_item,
             commands::create_remote_directory,
@@ -304,6 +329,7 @@ pub fn run() {
             commands::delete_local_item,
             commands::rename_local_item,
             commands::create_local_directory,
+            commands::create_local_directory_confined,
             commands::open_in_os,
             commands::stat_local_path,
             // Directory synchronization commands
