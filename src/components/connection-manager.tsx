@@ -175,6 +175,12 @@ export function ConnectionManager({
           password: connectionData.password,
           privateKeyPath: connectionData.privateKeyPath,
           passphrase: connectionData.passphrase,
+          // Copy proxy settings
+          proxyType: connectionData.proxyType,
+          proxyHost: connectionData.proxyHost,
+          proxyPort: connectionData.proxyPort,
+          proxyUsername: connectionData.proxyUsername,
+          proxyPassword: connectionData.proxyPassword,
         });
         setConnections(loadConnections());
         toast.success(t('connectionManager.duplicated', { name: duplicated.name }));
