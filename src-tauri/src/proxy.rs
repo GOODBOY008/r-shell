@@ -100,33 +100,45 @@ pub async fn connect_via_proxy(
         )
     })?;
 
-    let pending = match proxy.proxy_type {
-        ProxyType::Http => {
-            http_connect(
-                &mut stream,
-                host,
-                port,
-                proxy.username.as_deref(),
-                proxy.password.as_deref(),
-            )
-            .await?
+    // The handshake is also bounded by `timeout`: a proxy that accepts the TCP
+    // connection but stalls mid-handshake must not hang the SSH connect
+    // indefinitely (the direct-connection path is bounded by the same timeout).
+    let pending = tokio::time::timeout(timeout, async {
+        match proxy.proxy_type {
+            ProxyType::Http => {
+                http_connect(
+                    &mut stream,
+                    host,
+                    port,
+                    proxy.username.as_deref(),
+                    proxy.password.as_deref(),
+                )
+                .await
+            }
+            ProxyType::Socks4 => {
+                socks4_connect(&mut stream, host, port, proxy.username.as_deref()).await?;
+                Ok(Vec::new())
+            }
+            ProxyType::Socks5 => {
+                socks5_connect(
+                    &mut stream,
+                    host,
+                    port,
+                    proxy.username.as_deref(),
+                    proxy.password.as_deref(),
+                )
+                .await?;
+                Ok(Vec::new())
+            }
         }
-        ProxyType::Socks4 => {
-            socks4_connect(&mut stream, host, port, proxy.username.as_deref()).await?;
-            Vec::new()
-        }
-        ProxyType::Socks5 => {
-            socks5_connect(
-                &mut stream,
-                host,
-                port,
-                proxy.username.as_deref(),
-                proxy.password.as_deref(),
-            )
-            .await?;
-            Vec::new()
-        }
-    };
+    })
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "Proxy handshake timed out after {}s. Please check the proxy address and network connectivity.",
+            timeout.as_secs()
+        )
+    })??;
 
     Ok(Tunnel { stream, pending })
 }
@@ -175,7 +187,13 @@ async fn http_connect(
     let extra = response.split_off(header_end);
     let header_text = String::from_utf8_lossy(&response);
     let status_line = header_text.lines().next().unwrap_or("");
-    if !status_line.contains(" 200 ") {
+    // Parse the numeric status code rather than substring-matching, so both
+    // "HTTP/1.1 200" and "HTTP/1.1 200 Connection established" are accepted.
+    let status_code = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|code| code.parse::<u16>().ok());
+    if status_code != Some(200) {
         bail!("HTTP proxy CONNECT failed: {status_line}");
     }
     Ok(extra)
@@ -458,6 +476,59 @@ mod tests {
         assert!(
             err.to_string().contains("403"),
             "error should mention the status line: {err}"
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn http_connect_accepts_200_without_reason_phrase() {
+        // "HTTP/1.1 200" with no trailing text must be treated as success —
+        // regression for a status-line parse that relied on a trailing space.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            read_http_headers(&mut sock).await;
+            sock.write_all(b"HTTP/1.1 200\r\n\r\n").await.unwrap();
+        });
+
+        let mut proxy = test_proxy(ProxyType::Http);
+        proxy.port = addr.port();
+
+        let result = connect_via_proxy(&proxy, "example.com", 443, TIMEOUT).await;
+        assert!(
+            result.is_ok(),
+            "HTTP CONNECT should succeed: {:?}",
+            result.err()
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handshake_times_out_when_proxy_never_responds() {
+        // A proxy that accepts the TCP connection but never completes the
+        // handshake must be cut off by the timeout instead of hanging forever.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            // Drain the CONNECT request but hold the connection open silently.
+            read_http_headers(&mut sock).await;
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+
+        let mut proxy = test_proxy(ProxyType::Http);
+        proxy.port = addr.port();
+
+        let err = match connect_via_proxy(&proxy, "example.com", 443, Duration::from_millis(100))
+            .await
+        {
+            Ok(_) => panic!("expected the handshake to time out"),
+            Err(e) => e,
+        };
+        assert!(
+            err.to_string().contains("timed out"),
+            "error should mention the timeout: {err}"
         );
         server.await.unwrap();
     }
