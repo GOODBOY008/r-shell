@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { PasswordInput } from './ui/password-input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
@@ -790,9 +791,8 @@ const handleCancelConnectionAttempt = async () => {
                 {config.authMethod === 'password' && (
                   <div className="space-y-2">
                     <Label htmlFor="password">{t('connectionDialog.label.password')}</Label>
-                    <Input
+                    <PasswordInput
                       id="password"
-                      type="password"
                       placeholder={t('connectionDialog.placeholder.password')}
                       value={config.password}
                       onChange={(e) => updateConfig({ password: e.target.value })}
@@ -816,9 +816,8 @@ const handleCancelConnectionAttempt = async () => {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="passphrase">{t('connectionDialog.label.passphrase')}</Label>
-                      <Input
+                      <PasswordInput
                         id="passphrase"
-                        type="password"
                         placeholder={t('connectionDialog.placeholder.passphrase')}
                         value={config.passphrase}
                         onChange={(e) => updateConfig({ passphrase: e.target.value })}
@@ -937,9 +936,8 @@ const handleCancelConnectionAttempt = async () => {
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="proxy-password">{t('connectionDialog.label.proxyPassword')}</Label>
-                        <Input
+                        <PasswordInput
                           id="proxy-password"
-                          type="password"
                           placeholder={t('connectionDialog.placeholder.proxyPassword')}
                           value={config.proxyPassword}
                           onChange={(e) => updateConfig({ proxyPassword: e.target.value })}
