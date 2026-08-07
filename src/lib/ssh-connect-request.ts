@@ -69,7 +69,9 @@ export function buildSshConnectRequest(
     port: source.port || 22,
     username: source.username,
     auth_method: source.authMethod || 'password',
-    password: source.password || null,
+    // Nullish coalescing so an intentionally empty password stays `""` instead
+    // of becoming `null` (the backend rejects `null` with "Password required").
+    password: source.password ?? null,
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     compression: source.compression !== false,

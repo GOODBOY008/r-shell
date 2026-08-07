@@ -23,6 +23,15 @@ describe('buildSshConnectRequest', () => {
     expect(req.passphrase).toBeNull();
   });
 
+  it('keeps an intentionally empty password instead of sending null', () => {
+    // A blank password must round-trip as `""` so the backend attempts
+    // password auth with an empty value (some servers allow blank passwords)
+    // instead of failing with "Password required".
+    const req = buildSshConnectRequest('conn-1', { ...baseSource, password: '' });
+
+    expect(req.password).toBe('');
+  });
+
   it('applies default advanced settings matching the UI (compression + keepalive 60/3, no proxy)', () => {
     const req = buildSshConnectRequest('conn-1', baseSource);
 

@@ -378,103 +378,103 @@ export function ConnectionDialog({
       return;
     }
 
-	    // SSH / Telnet / Raw / Serial — connect via ssh_connect
-	    // Save connection config FIRST (consistent with SFTP/FTP/Desktop),
-	    // so the config is preserved even if the remote server is temporarily unreachable.
-	    if (editingConnection?.id) {
-	      ConnectionStorageManager.updateConnection(editingConnection.id, {
-	        name: config.name,
-	        host: config.host,
-	        port: config.port || 22,
-	        username: config.username,
-	        protocol: config.protocol,
-	        authMethod: config.authMethod,
-	        password: config.password,
-	        privateKeyPath: config.privateKeyPath,
-	        passphrase: config.passphrase,
-	        proxyType: config.proxyType,
-	        proxyHost: config.proxyHost,
-	        proxyPort: config.proxyPort,
-	        proxyUsername: config.proxyUsername,
-	        proxyPassword: config.proxyPassword,
-	        compression: config.compression,
-	        keepAlive: config.keepAlive,
-	        keepAliveInterval: config.keepAliveInterval,
-	        serverAliveCountMax: config.serverAliveCountMax,
-	        lastConnected: new Date().toISOString(),
-	      });
-	    } else if (saveAsConnection) {
-	      ConnectionStorageManager.saveConnectionWithId(connectionId, {
-	        name: config.name,
-	        host: config.host,
-	        port: config.port || 22,
-	        username: config.username,
-	        protocol: config.protocol,
-	        folder: connectionFolder,
-	        authMethod: config.authMethod,
-	        password: config.password,
-	        privateKeyPath: config.privateKeyPath,
-	        passphrase: config.passphrase,
-	        proxyType: config.proxyType,
-	        proxyHost: config.proxyHost,
-	        proxyPort: config.proxyPort,
-	        proxyUsername: config.proxyUsername,
-	        proxyPassword: config.proxyPassword,
-	        compression: config.compression,
-	        keepAlive: config.keepAlive,
-	        keepAliveInterval: config.keepAliveInterval,
-	        serverAliveCountMax: config.serverAliveCountMax,
-	      });
-	    }
+    // SSH / Telnet / Raw / Serial — connect via ssh_connect
+    // Save connection config FIRST (consistent with SFTP/FTP/Desktop),
+    // so the config is preserved even if the remote server is temporarily unreachable.
+    if (editingConnection?.id) {
+      ConnectionStorageManager.updateConnection(editingConnection.id, {
+        name: config.name,
+        host: config.host,
+        port: config.port || 22,
+        username: config.username,
+        protocol: config.protocol,
+        authMethod: config.authMethod,
+        password: config.password,
+        privateKeyPath: config.privateKeyPath,
+        passphrase: config.passphrase,
+        proxyType: config.proxyType,
+        proxyHost: config.proxyHost,
+        proxyPort: config.proxyPort,
+        proxyUsername: config.proxyUsername,
+        proxyPassword: config.proxyPassword,
+        compression: config.compression,
+        keepAlive: config.keepAlive,
+        keepAliveInterval: config.keepAliveInterval,
+        serverAliveCountMax: config.serverAliveCountMax,
+        lastConnected: new Date().toISOString(),
+      });
+    } else if (saveAsConnection) {
+      ConnectionStorageManager.saveConnectionWithId(connectionId, {
+        name: config.name,
+        host: config.host,
+        port: config.port || 22,
+        username: config.username,
+        protocol: config.protocol,
+        folder: connectionFolder,
+        authMethod: config.authMethod,
+        password: config.password,
+        privateKeyPath: config.privateKeyPath,
+        passphrase: config.passphrase,
+        proxyType: config.proxyType,
+        proxyHost: config.proxyHost,
+        proxyPort: config.proxyPort,
+        proxyUsername: config.proxyUsername,
+        proxyPassword: config.proxyPassword,
+        compression: config.compression,
+        keepAlive: config.keepAlive,
+        keepAliveInterval: config.keepAliveInterval,
+        serverAliveCountMax: config.serverAliveCountMax,
+      });
+    }
 
-	    try {
-	      const result = await invoke<{ success: boolean; error?: string }>(
-	        'ssh_connect',
-	        {
-	          request: buildSshConnectRequest(connectionId, config),
-	        }
-	      );
+    try {
+      const result = await invoke<{ success: boolean; error?: string }>(
+        'ssh_connect',
+        {
+          request: buildSshConnectRequest(connectionId, config),
+        }
+      );
 
-	      if (result.success) {
-	        onConnect({
-	          ...config,
-	          id: connectionId
-	        });
-	        if (!editingConnection) {
-	          setConfig(defaultConfig);
-	        }
-	      } else {
-	        // Connection failed — config was already saved above, user can retry from sidebar
-	        console.error('Connection failed:', result.error);
-	        if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
-	          toast.info(t('connectionDialog.toast.connectionCancelled'));
-	        } else {
-	          toast.error(t('connectionDialog.toast.connectionFailed'), {
-	            description: result.error || t('connectionDialog.toast.connectionFailedDesc'),
-	            duration: 5000,
-	          });
-	        }
-	      }
-	    } catch (error) {
-	      console.error('Connection error:', error);
-	      if (cancelRequestedRef.current) {
-	        toast.info(t('connectionDialog.toast.connectionCancelled'));
-	      } else {
-	        toast.error(t('connectionDialog.toast.connectionError'), {
-	          description: error instanceof Error ? error.message : t('connectionDialog.toast.connectionErrorDesc'),
-	          duration: 5000,
-	        });
-	      }
-	    } finally {
-	      // Close dialog — config was already saved above
-	      onOpenChange(false);
-	      if (!editingConnection) {
-	        setConfig(defaultConfig);
-	      }
-	      resetConnectionState();
-	    }
+      if (result.success) {
+        onConnect({
+          ...config,
+          id: connectionId
+        });
+        if (!editingConnection) {
+          setConfig(defaultConfig);
+        }
+      } else {
+        // Connection failed — config was already saved above, user can retry from sidebar
+        console.error('Connection failed:', result.error);
+        if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
+          toast.info(t('connectionDialog.toast.connectionCancelled'));
+        } else {
+          toast.error(t('connectionDialog.toast.connectionFailed'), {
+            description: result.error || t('connectionDialog.toast.connectionFailedDesc'),
+            duration: 5000,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Connection error:', error);
+      if (cancelRequestedRef.current) {
+        toast.info(t('connectionDialog.toast.connectionCancelled'));
+      } else {
+        toast.error(t('connectionDialog.toast.connectionError'), {
+          description: error instanceof Error ? error.message : t('connectionDialog.toast.connectionErrorDesc'),
+          duration: 5000,
+        });
+      }
+    } finally {
+      // Close dialog — config was already saved above
+      onOpenChange(false);
+      if (!editingConnection) {
+        setConfig(defaultConfig);
+      }
+      resetConnectionState();
+    }
 
-	  }
+  }
 
 const handleCancelConnectionAttempt = async () => {
     if (!isConnecting) {
