@@ -686,6 +686,8 @@ export function ConnectionManager({
             variant="ghost"
             size="sm"
             className="p-0 h-4 w-4"
+            aria-label={node.isExpanded ? t('connectionManager.collapseFolder') : t('connectionManager.expandFolder')}
+            aria-expanded={node.isExpanded}
             onClick={(e) => {
               e.stopPropagation();
               toggleExpanded(node.id);
@@ -768,13 +770,17 @@ export function ConnectionManager({
               {nodeContent}
             </ContextMenuTrigger>
             <ContextMenuContent>
-              <ContextMenuItem
-                onClick={() => onNewConnection?.(node.path)}
-              >
-                <Plus className="w-4 h-4 mr-2" />
-                {t('connectionManager.newConnection')}
-              </ContextMenuItem>
-              <ContextMenuSeparator />
+              {onNewConnection && (
+                <>
+                  <ContextMenuItem
+                    onClick={() => onNewConnection(node.path)}
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    {t('connectionManager.newConnection')}
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              )}
               <ContextMenuItem
                 onClick={() => openNewFolderDialog(node.path)}
               >

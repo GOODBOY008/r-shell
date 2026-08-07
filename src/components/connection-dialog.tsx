@@ -159,11 +159,6 @@ export function ConnectionDialog({
       const folderPaths = folders.map(f => f.path).sort();
       setAvailableFolders(folderPaths);
 
-      // Pre-select folder when initialFolder is provided (new connection from folder context menu)
-      if (initialFolder && !editingConnection) {
-        setConnectionFolder(initialFolder);
-      }
-
       // Load editing connection data into config when dialog opens
       if (editingConnection) {
         setConfig({
@@ -190,6 +185,13 @@ export function ConnectionDialog({
     } else {
       // Reset connection state when dialog closes
       resetConnectionState();
+    }
+  }, [open, editingConnection]);
+
+  // Dedicated effect: pre-select folder when initialFolder is provided (new connection from folder context menu)
+  useEffect(() => {
+    if (open && !editingConnection && initialFolder) {
+      setConnectionFolder(initialFolder);
     }
   }, [open, editingConnection, initialFolder]);
 

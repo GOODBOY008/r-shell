@@ -6,6 +6,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { type ComponentProps } from 'react';
 import { ConnectionDialog } from '../components/connection-dialog';
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -62,7 +63,7 @@ function getFolderSelect() {
 }
 
 describe('ConnectionDialog folder pre-selection', () => {
-  function renderDialog(props: Partial<React.ComponentProps<typeof ConnectionDialog>> = {}) {
+  function renderDialog(props: Partial<ComponentProps<typeof ConnectionDialog>> = {}) {
     return render(
       <ConnectionDialog
         open={true}

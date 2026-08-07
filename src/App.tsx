@@ -506,7 +506,9 @@ function AppContent() {
   }, []);
 
   const handleConnectionSelect = (connection: ConnectionNode) => {
-    setSelectedConnection(connection);
+    if (connection.type === 'connection') {
+      setSelectedConnection(connection);
+    }
   };
 
   const handleConnectionConnect = async (connection: ConnectionNode) => {
@@ -695,7 +697,7 @@ function AppContent() {
   }, [state.groups, dispatch]);
 
   const handleNewTab = useCallback((folderPath?: string) => {
-    setConnectionInitialFolder(folderPath);
+    setConnectionInitialFolder(typeof folderPath === 'string' ? folderPath : undefined);
     setConnectionDialogOpen(true);
     setEditingConnection(null);
     setPendingConnectionId(null);
