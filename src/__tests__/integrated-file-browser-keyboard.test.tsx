@@ -195,6 +195,11 @@ describe('IntegratedFileBrowser terminal directory following', () => {
         path: '/home',
       });
     });
+    // Wait for the Home navigation to fully commit (breadcrumb renders '/home')
+    // before bumping the terminal sequence. Otherwise the follow effect can still
+    // see committedPathRef === '/srv/app' and skip reloading, making this test
+    // order-dependent on async timing.
+    await screen.findByTitle('/home');
 
     rerender(
       <IntegratedFileBrowser
