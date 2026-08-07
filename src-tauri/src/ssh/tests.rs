@@ -18,6 +18,10 @@ mod tests {
             auth_method: AuthMethod::Password {
                 password: TEST_PASSWORD.to_string(),
             },
+            compression: true,
+            keepalive_interval: None,
+            keepalive_max: None,
+            proxy: None,
         }
     }
 
@@ -95,6 +99,10 @@ mod tests {
             auth_method: AuthMethod::Password {
                 password: "wrongpassword".to_string(),
             },
+            compression: true,
+            keepalive_interval: None,
+            keepalive_max: None,
+            proxy: None,
         };
 
         let result = client_write.connect(&config).await;
@@ -287,6 +295,10 @@ mod shell_integration_tests {
                 auth_method: AuthMethod::Password {
                     password: "testpass".to_string(),
                 },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
             })
             .await
             .expect("connect to Docker SSH server");
@@ -416,6 +428,10 @@ mod key_loading_tests {
                 key_path: "/nonexistent/path/id_rsa".to_string(),
                 passphrase: None,
             },
+            compression: true,
+            keepalive_interval: None,
+            keepalive_max: None,
+            proxy: None,
         };
 
         let mut client = SshClient::new();
@@ -513,5 +529,51 @@ mod key_loading_tests {
             }
         }
         key_path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod compression_pref_tests {
+    use crate::ssh::compression_preferences;
+    use russh::compression::{NONE, ZLIB, ZLIB_LEGACY};
+
+    /// Mirror russh's client-side negotiation: pick the first algorithm in our
+    /// preferred list that the server also advertises (see negotiation.rs).
+    fn negotiate<'a>(
+        our_list: &'a [russh::compression::Name],
+        server_list: &str,
+    ) -> Option<&'a str> {
+        for ours in our_list {
+            if server_list.split(',').any(|s| s == ours.as_ref()) {
+                return Some(ours.as_ref());
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn enabled_prefers_zlib_over_none() {
+        let prefs = compression_preferences(true);
+        assert_eq!(
+            prefs[0], ZLIB,
+            "zlib must come before none or russh picks none"
+        );
+        assert!(prefs.contains(&ZLIB_LEGACY));
+        assert!(prefs.contains(&NONE));
+
+        // OpenSSH with `Compression delayed` advertises none,zlib@openssh.com.
+        assert_eq!(
+            negotiate(prefs, "none,zlib@openssh.com"),
+            Some("zlib@openssh.com")
+        );
+        // OpenSSH with `Compression yes` advertises none,zlib.
+        assert_eq!(negotiate(prefs, "none,zlib"), Some("zlib"));
+    }
+
+    #[test]
+    fn disabled_only_offers_none() {
+        let prefs = compression_preferences(false);
+        assert_eq!(prefs, &[NONE]);
+        assert_eq!(negotiate(prefs, "none,zlib@openssh.com"), Some("none"));
     }
 }

@@ -33,5 +33,9 @@ export function toConnectionConfig(data: ConnectionData): ConnectionConfig {
     proxyPort: data.proxyPort ?? 8080,
     proxyUsername: data.proxyUsername,
     proxyPassword: data.proxyPassword,
+    compression: data.compression,
+    keepAlive: data.keepAlive,
+    keepAliveInterval: data.keepAliveInterval,
+    serverAliveCountMax: data.serverAliveCountMax,
   };
 }

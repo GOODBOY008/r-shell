@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager } from '../lib/connection-storage';
+import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { toast } from 'sonner';
 import {
   Server,
@@ -30,7 +31,7 @@ interface ConnectionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onConnect: (config: ConnectionConfig) => void;
-  onSave?: (config: ConnectionConfig) => void;
+  onSave?: (config: ConnectionConfig) => void | Promise<void>;
   editingConnection?: ConnectionConfig | null;
   initialFolder?: string;
 }
@@ -69,6 +70,23 @@ export interface ConnectionConfig {
 
   // VNC specific
   vncColorDepth?: '24' | '16' | '8';
+}
+
+/**
+ * Merge form overrides on top of defaults, falling back to the default when a
+ * field is `undefined`. Historical connections saved before advanced/proxy
+ * fields were persisted have no such values — without this fallback their edit
+ * dialog would show blank controls instead of the defaults used for new ones.
+ */
+function mergeWithDefaults(defaults: ConnectionConfig, overrides: ConnectionConfig): ConnectionConfig {
+  const merged: ConnectionConfig = { ...defaults, ...overrides };
+  const mergedRecord = merged as unknown as Record<string, unknown>;
+  for (const key of Object.keys(defaults) as Array<keyof ConnectionConfig>) {
+    if (mergedRecord[key] === undefined) {
+      mergedRecord[key] = defaults[key];
+    }
+  }
+  return merged;
 }
 
 export function ConnectionDialog({
@@ -164,15 +182,12 @@ export function ConnectionDialog({
         setConnectionFolder(initialFolder);
       }
 
-      // Load editing connection data into config when dialog opens
+      // Load editing connection data into config when dialog opens.
+      // mergeWithDefaults falls back to defaultConfig for fields a historical
+      // connection never stored (advanced/proxy options), matching the
+      // pre-filled values a new connection gets.
       if (editingConnection) {
-        setConfig({
-          ...defaultConfig,
-          ...editingConnection,
-          // Normalize proxyType so legacy connections without proxy settings
-          // don't show the proxy fields as if a proxy were configured.
-          proxyType: editingConnection.proxyType ?? 'none',
-        });
+        setConfig(mergeWithDefaults(defaultConfig, editingConnection));
         syncDisplayValues({
           port: editingConnection.port ?? 22,
           proxyPort: editingConnection.proxyPort ?? 8080,
@@ -309,14 +324,18 @@ export function ConnectionDialog({
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
             ftpsEnabled: config.ftpsEnabled,
-            domain: config.domain,
-            rdpResolution: config.rdpResolution,
-            vncColorDepth: config.vncColorDepth,
             proxyType: config.proxyType,
             proxyHost: config.proxyHost,
             proxyPort: config.proxyPort,
             proxyUsername: config.proxyUsername,
             proxyPassword: config.proxyPassword,
+            compression: config.compression,
+            keepAlive: config.keepAlive,
+            keepAliveInterval: config.keepAliveInterval,
+            serverAliveCountMax: config.serverAliveCountMax,
+            domain: config.domain,
+            rdpResolution: config.rdpResolution,
+            vncColorDepth: config.vncColorDepth,
             lastConnected: new Date().toISOString(),
           });
         } else if (saveAsConnection) {
@@ -332,14 +351,18 @@ export function ConnectionDialog({
             privateKeyPath: config.privateKeyPath,
             passphrase: config.passphrase,
             ftpsEnabled: config.ftpsEnabled,
-            domain: config.domain,
-            rdpResolution: config.rdpResolution,
-            vncColorDepth: config.vncColorDepth,
             proxyType: config.proxyType,
             proxyHost: config.proxyHost,
             proxyPort: config.proxyPort,
             proxyUsername: config.proxyUsername,
             proxyPassword: config.proxyPassword,
+            compression: config.compression,
+            keepAlive: config.keepAlive,
+            keepAliveInterval: config.keepAliveInterval,
+            serverAliveCountMax: config.serverAliveCountMax,
+            domain: config.domain,
+            rdpResolution: config.rdpResolution,
+            vncColorDepth: config.vncColorDepth,
           });
         }
 
@@ -375,6 +398,10 @@ export function ConnectionDialog({
         proxyPort: config.proxyPort,
         proxyUsername: config.proxyUsername,
         proxyPassword: config.proxyPassword,
+        compression: config.compression,
+        keepAlive: config.keepAlive,
+        keepAliveInterval: config.keepAliveInterval,
+        serverAliveCountMax: config.serverAliveCountMax,
         lastConnected: new Date().toISOString(),
       });
     } else if (saveAsConnection) {
@@ -394,6 +421,10 @@ export function ConnectionDialog({
         proxyPort: config.proxyPort,
         proxyUsername: config.proxyUsername,
         proxyPassword: config.proxyPassword,
+        compression: config.compression,
+        keepAlive: config.keepAlive,
+        keepAliveInterval: config.keepAliveInterval,
+        serverAliveCountMax: config.serverAliveCountMax,
       });
     }
 
@@ -401,16 +432,7 @@ export function ConnectionDialog({
       const result = await invoke<{ success: boolean; error?: string }>(
         'ssh_connect',
         {
-          request: {
-            connection_id: connectionId,
-            host: config.host,
-            port: config.port || 22,
-            username: config.username,
-            auth_method: config.authMethod || 'password',
-            password: config.password || '',
-            key_path: config.privateKeyPath || null,
-            passphrase: config.passphrase || null,
-          }
+          request: buildSshConnectRequest(connectionId, config),
         }
       );
 
@@ -445,7 +467,7 @@ export function ConnectionDialog({
         });
       }
     } finally {
-      // Close dialog — config is always saved above
+      // Close dialog — config was already saved above
       onOpenChange(false);
       if (!editingConnection) {
         setConfig(defaultConfig);
@@ -507,14 +529,18 @@ const handleCancelConnectionAttempt = async () => {
       privateKeyPath: config.privateKeyPath,
       passphrase: config.passphrase,
       ftpsEnabled: config.ftpsEnabled,
-      domain: config.domain,
-      rdpResolution: config.rdpResolution,
-      vncColorDepth: config.vncColorDepth,
       proxyType: config.proxyType,
       proxyHost: config.proxyHost,
       proxyPort: config.proxyPort,
       proxyUsername: config.proxyUsername,
       proxyPassword: config.proxyPassword,
+      compression: config.compression,
+      keepAlive: config.keepAlive,
+      keepAliveInterval: config.keepAliveInterval,
+      serverAliveCountMax: config.serverAliveCountMax,
+      domain: config.domain,
+      rdpResolution: config.rdpResolution,
+      vncColorDepth: config.vncColorDepth,
     });
 
     // Notify parent to update tab display info (e.g. tab title)

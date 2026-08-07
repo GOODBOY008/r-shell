@@ -25,18 +25,23 @@ export interface ConnectionData {
   passphrase?: string;
   // FTP-specific
   ftpsEnabled?: boolean;
+  // Proxy
+  proxyType?: 'none' | 'http' | 'socks4' | 'socks5';
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  proxyPassword?: string;
+  // SSH-specific advanced
+  compression?: boolean;
+  keepAlive?: boolean;
+  keepAliveInterval?: number;
+  serverAliveCountMax?: number;
   // RDP-specific
   domain?: string;
   rdpResolution?: string;
   // VNC-specific
   vncColorDepth?: string;
   vncPassword?: string;
-  // Proxy settings
-  proxyType?: 'none' | 'http' | 'socks4' | 'socks5';
-  proxyHost?: string;
-  proxyPort?: number;
-  proxyUsername?: string;
-  proxyPassword?: string;
   // Ordering
   sortOrder?: number;
 }

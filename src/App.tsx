@@ -16,6 +16,7 @@ import { UpdateChecker } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
 import { isDesktopProtocol } from './lib/protocol-config';
+import { buildSshConnectRequest } from './lib/ssh-connect-request';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
@@ -413,16 +414,7 @@ function AppContent() {
               invoke<{ success: boolean; error?: string }>(
                 'ssh_connect',
                 {
-                  request: {
-                    connection_id: activeConn.connectionId,
-                    host: connectionData.host,
-                    port: connectionData.port || 22,
-                    username: connectionData.username,
-                    auth_method: connectionData.authMethod || 'password',
-                    password: connectionData.password || '',
-                    key_path: connectionData.privateKeyPath || null,
-                    passphrase: connectionData.passphrase || null,
-                  }
+                  request: buildSshConnectRequest(activeConn.connectionId, connectionData),
                 }
               ),
               CONNECT_TIMEOUT_MS,
@@ -618,16 +610,7 @@ function AppContent() {
           const result = await invoke<{ success: boolean; error?: string }>(
             'ssh_connect',
             {
-              request: {
-                connection_id: sessionId,
-                host: connectionData.host,
-                port: connectionData.port || 22,
-                username: connectionData.username,
-                auth_method: connectionData.authMethod || 'password',
-                password: connectionData.password || '',
-                key_path: connectionData.privateKeyPath || null,
-                passphrase: connectionData.passphrase || null,
-              }
+              request: buildSshConnectRequest(sessionId, connectionData),
             }
           );
 
@@ -791,16 +774,7 @@ function AppContent() {
         const result = await invoke<{ success: boolean; error?: string }>(
           'ssh_connect',
           {
-            request: {
-              connection_id: duplicateId,
-              host: connectionData.host,
-              port: connectionData.port || 22,
-              username: connectionData.username,
-              auth_method: connectionData.authMethod || 'password',
-              password: connectionData.password || '',
-              key_path: connectionData.privateKeyPath || null,
-              passphrase: connectionData.passphrase || null,
-            }
+            request: buildSshConnectRequest(duplicateId, connectionData),
           }
         );
 
@@ -929,16 +903,7 @@ function AppContent() {
         const result = await invoke<{ success: boolean; error?: string }>(
           'ssh_connect',
           {
-            request: {
-              connection_id: tabId,
-              host: connectionData.host,
-              port: connectionData.port || 22,
-              username: connectionData.username,
-              auth_method: connectionData.authMethod || 'password',
-              password: connectionData.password || '',
-              key_path: connectionData.privateKeyPath || null,
-              passphrase: connectionData.passphrase || null,
-            }
+            request: buildSshConnectRequest(tabId, connectionData),
           }
         );
 
@@ -1408,16 +1373,7 @@ function AppContent() {
         // SSH / Telnet / Raw — connect then create/reuse tab
         try {
           const result = await invoke<{ success: boolean; error?: string }>('ssh_connect', {
-            request: {
-              connection_id: sessionId,
-              host: config.host,
-              port: config.port || 22,
-              username: config.username,
-              auth_method: config.authMethod || 'password',
-              password: config.password || '',
-              key_path: config.privateKeyPath || null,
-              passphrase: config.passphrase || null,
-            }
+            request: buildSshConnectRequest(sessionId, config),
           });
 
           if (result.success) {
@@ -1518,16 +1474,7 @@ function AppContent() {
         const result = await invoke<{ success: boolean; error?: string }>(
           'ssh_connect',
           {
-            request: {
-              connection_id: connectionData.id,
-              host: connectionData.host,
-              port: connectionData.port || 22,
-              username: connectionData.username,
-              auth_method: connectionData.authMethod || 'password',
-              password: connectionData.password || '',
-              key_path: connectionData.privateKeyPath || null,
-              passphrase: connectionData.passphrase || null,
-            }
+            request: buildSshConnectRequest(connectionData.id, connectionData),
           }
         );
 

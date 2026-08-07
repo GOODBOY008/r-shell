@@ -1,3 +1,4 @@
+use crate::proxy::ProxyConfig;
 use anyhow::Result;
 use russh::*;
 use russh_keys::*;
@@ -56,12 +57,38 @@ pub(crate) fn bash_shell_integration_command(version: BashVersion) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Compression algorithms to advertise, ordered so zlib is preferred over none.
+///
+/// Order matters: russh negotiates the first algorithm that the server also
+/// lists, so zlib must come before none for compression to actually take
+/// effect. `zlib@openssh.com` covers servers using OpenSSH's "delayed"
+/// compression. Requires russh's `flate2` feature, which is enabled by default.
+pub fn compression_preferences(enabled: bool) -> &'static [russh::compression::Name] {
+    if enabled {
+        &[
+            russh::compression::ZLIB,
+            russh::compression::ZLIB_LEGACY,
+            russh::compression::NONE,
+        ]
+    } else {
+        &[russh::compression::NONE]
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SshConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
     pub auth_method: AuthMethod,
+    /// Enable zlib compression negotiation (default: true, matching the UI).
+    pub compression: bool,
+    /// Keepalive interval in seconds. `None` disables keepalive.
+    pub keepalive_interval: Option<u64>,
+    /// Max missed keepalive replies before the connection is closed.
+    pub keepalive_max: Option<u32>,
+    /// Optional HTTP/SOCKS proxy tunnel. `None` connects directly.
+    pub proxy: Option<ProxyConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,28 +146,54 @@ impl SshClient {
     }
 
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+        let keepalive_interval = config.keepalive_interval.map(Duration::from_secs);
+
         let ssh_config = client::Config {
             preferred: russh::Preferred {
                 key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
+                compression: std::borrow::Cow::Borrowed(compression_preferences(
+                    config.compression,
+                )),
                 ..russh::Preferred::DEFAULT
             },
-            // Send a keepalive every 60 s. After 3 missed replies russh closes
-            // the connection, preventing the server from silently dropping idle
-            // sessions after hours of inactivity.
-            keepalive_interval: Some(Duration::from_secs(60)),
-            keepalive_max: 3,
+            // Send a keepalive on the user-configured interval. After the
+            // configured number of missed replies russh closes the connection,
+            // preventing the server from silently dropping idle sessions.
+            keepalive_interval,
+            keepalive_max: config.keepalive_max.unwrap_or(3) as usize,
             ..client::Config::default()
         };
 
         // Connection timeout: 3 seconds
         let connection_timeout = Duration::from_secs(3);
 
-        let mut ssh_session = tokio::time::timeout(
-            connection_timeout,
-            client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client)
-        ).await
+        let mut ssh_session = if let Some(proxy) = &config.proxy {
+            // Tunnel through the proxy first, then hand the established stream
+            // to russh so the SSH handshake runs over the tunnel.
+            let stream = crate::proxy::connect_via_proxy(
+                proxy,
+                &config.host,
+                config.port,
+                connection_timeout,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("Proxy connection failed: {e}"))?;
+            tokio::time::timeout(
+                connection_timeout,
+                client::connect_stream(Arc::new(ssh_config), stream, Client),
+            )
+            .await
             .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
-            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?
+        } else {
+            tokio::time::timeout(
+                connection_timeout,
+                client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
+            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?
+        };
 
         let authenticated = match &config.auth_method {
             AuthMethod::Password { password } => ssh_session
