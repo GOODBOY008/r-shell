@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.7.0] - 2026-08-08
+
+### 🖥️ R-Shell 2.7 — Terminal-Integrated File Browser & Connections
+
+This release integrates the file browser with the terminal by following the active terminal's working directory and adding directory downloads, makes advanced SSH and proxy options actually apply to live connections and persist across saves and reconnects, and adds password visibility toggles to the connection dialog. It also updates keyboard shortcuts with improved tab management, hardens directory downloads and legacy bash hooks, and wires the Edit menu to the active terminal.
+
+### Added
+
+- 🖥️ **File Browser Follows Terminal CWD**: The integrated file browser now follows the active terminal's working directory, and directories can be downloaded directly
+- 👁️ **Password Visibility Toggles**: Added show/hide toggles to the password fields in the connection dialog so credentials can be reviewed before saving (#77)
+- ⌨️ **Keyboard Shortcuts & Tab Management**: Updated keyboard shortcuts and improved tab management functionality
+
+### Fixed
+
+- 🔌 **Advanced SSH & Proxy Options on Live Connections**: Advanced SSH and proxy options are now applied to live connections instead of being dropped (#73)
+- 💾 **Proxy Config Persistence**: Proxy configuration now persists across saves and reconnects (#72)
+- 🖥️ **Edit Menu Targets Active Terminal**: The Edit menu commands are now wired to the active terminal
+- 🔒 **Secure Directory Downloads & Legacy Bash Hooks**: Hardened directory downloads and legacy bash hooks, and polished the sync button/icon styling
+
+### Contributors
+
+Thanks to [@htazq](https://github.com/htazq), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
 ## [2.6.0] - 2026-07-30
 
 ### 🔗 R-Shell 2.6 — Connection Management, Clipboard & Update Flexibility
