@@ -22,8 +22,9 @@
 //!
 //! `owner`/`group` are extracted from the fixed left-hand columns
 //! (`perms links owner group [context] size`): owner is always token 2, and
-//! group is token 3 whenever the size token sits at index 3 or later (absent
-//! in the no-group BusyBox variant).
+//! group is token 3 whenever the size token sits at index 4 or later — a size
+//! at index 3 marks the no-group BusyBox variant, and an optional SELinux
+//! context column pushes size further right.
 
 use crate::sftp_client::{FileEntry, FileEntryType};
 
