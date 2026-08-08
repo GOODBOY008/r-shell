@@ -98,9 +98,9 @@ pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
         .unwrap_or(0);
 
     // Owner/group: `ls -l` lays out `perms links owner group [context] size`.
-    // Owner is always the 3rd column; group is the 4th — when the size lands at
-    // index 3 the group column is absent (busybox-embedded variants), and when
-    // it lands at index 4+ a SELinux context column sits between group and size.
+    // Owner is always the 3rd column; group is the 4th whenever the size token
+    // sits at index 4 or later — a size at index 3 marks the no-group BusyBox
+    // variant, and an optional SELinux context column pushes size further right.
     let owner = tokens.get(2).map(|s| s.to_string());
     let group = match size_idx {
         Some(i) if i > 3 => tokens.get(3).map(|s| s.to_string()),
