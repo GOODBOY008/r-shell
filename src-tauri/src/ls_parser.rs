@@ -19,6 +19,11 @@
 //! The parser is column-count agnostic: it locates the date field by pattern
 //! and treats everything to its right as the filename, so adding or removing
 //! an owner/group/context column does not corrupt the result.
+//!
+//! `owner`/`group` are extracted from the fixed left-hand columns
+//! (`perms links owner group [context] size`): owner is always token 2, and
+//! group is token 3 whenever the size token sits at index 3 or later (absent
+//! in the no-group BusyBox variant).
 
 use crate::sftp_client::{FileEntry, FileEntryType};
 
@@ -83,11 +88,23 @@ pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
     }
 
     // Size is the rightmost numeric token strictly left of the date columns.
-    let size = tokens[..date_start]
+    // Record its index too so owner/group can be read relative to it.
+    let size_idx = tokens[..date_start]
         .iter()
-        .rev()
-        .find_map(|t| t.parse::<u64>().ok())
+        .rposition(|t| t.parse::<u64>().is_ok());
+    let size = size_idx
+        .and_then(|i| tokens[i].parse::<u64>().ok())
         .unwrap_or(0);
+
+    // Owner/group: `ls -l` lays out `perms links owner group [context] size`.
+    // Owner is always the 3rd column; group is the 4th — when the size lands at
+    // index 3 the group column is absent (busybox-embedded variants), and when
+    // it lands at index 4+ a SELinux context column sits between group and size.
+    let owner = tokens.get(2).map(|s| s.to_string());
+    let group = match size_idx {
+        Some(i) if i > 3 => tokens.get(3).map(|s| s.to_string()),
+        _ => None,
+    };
 
     Some(FileEntry {
         name,
@@ -95,6 +112,8 @@ pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
         modified,
         permissions: Some(perms_str.to_string()),
         file_type,
+        owner,
+        group,
     })
 }
 
@@ -300,6 +319,8 @@ mod tests {
         assert_eq!(entry.size, 4096);
         assert_eq!(entry.modified.as_deref(), Some("2025-01-15 12:32"));
         assert_eq!(entry.permissions.as_deref(), Some("drwxr-xr-x"));
+        assert_eq!(entry.owner.as_deref(), Some("root"));
+        assert_eq!(entry.group.as_deref(), Some("root"));
     }
 
     #[test]
@@ -384,6 +405,9 @@ mod tests {
         assert_eq!(entry.name, "gamelist.xml");
         assert_eq!(entry.size, 85234);
         assert!(entry.modified.is_some());
+        // No group column → owner parsed, group left as None.
+        assert_eq!(entry.owner.as_deref(), Some("root"));
+        assert_eq!(entry.group, None);
     }
 
     #[test]
@@ -401,6 +425,9 @@ mod tests {
         let entry = parse_ls_long_line(line).expect("should parse");
         assert_eq!(entry.name, "dev");
         assert_eq!(entry.size, 4096);
+        // SELinux context column sits between group and size — group still found.
+        assert_eq!(entry.owner.as_deref(), Some("root"));
+        assert_eq!(entry.group.as_deref(), Some("root"));
     }
 
     #[test]
@@ -409,6 +436,9 @@ mod tests {
         let entry = parse_ls_long_line(line).expect("should parse");
         assert_eq!(entry.name, "shared");
         assert_eq!(entry.size, 4096);
+        // Numeric uid/gid are the two tokens left of the numeric size.
+        assert_eq!(entry.owner.as_deref(), Some("1000"));
+        assert_eq!(entry.group.as_deref(), Some("1000"));
     }
 
     #[test]
@@ -506,6 +536,8 @@ mod tests {
         assert_eq!(dev.name, "dev");
         assert_eq!(dev.size, 104);
         assert!(matches!(dev.file_type, FileEntryType::Directory));
+        assert_eq!(dev.owner.as_deref(), Some("root"));
+        assert_eq!(dev.group.as_deref(), Some("root"));
 
         let proc_entry = parse_ls_long_line(lines[1]).expect("proc must parse");
         assert_eq!(proc_entry.name, "proc");

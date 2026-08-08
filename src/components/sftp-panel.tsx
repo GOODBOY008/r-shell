@@ -87,7 +87,7 @@ export function SFTPPanel({
 
     try {
       setLoading(true);
-      const entries = await invoke<Array<{ name: string; size: number; modified: string | null; permissions: string | null; file_type: 'File' | 'Directory' | 'Symlink' }>>(
+      const entries = await invoke<Array<{ name: string; size: number; modified: string | null; permissions: string | null; file_type: 'File' | 'Directory' | 'Symlink'; owner: string | null; group: string | null }>>(
         'list_files',
         { connection_id: connectionId, path }
       );
@@ -108,8 +108,8 @@ export function SFTPPanel({
             size: entry.size,
             modified,
             permissions: entry.permissions ?? '',
-            owner: '-',
-            group: '-',
+            owner: entry.owner ?? '-',
+            group: entry.group ?? '-',
           };
         });
 
