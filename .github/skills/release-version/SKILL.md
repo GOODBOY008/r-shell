@@ -15,6 +15,15 @@ Bumps the project version across all config files, updates the CHANGELOG, pushes
 
 ## Procedure
 
+> **Start from `origin/main`:** the version bump and tag land on `main`, so a stale or non-`main` branch would tag the wrong commit. Before anything else, sync:
+>
+> ```bash
+> git fetch origin
+> git checkout main
+> git pull --ff-only origin main
+> git status   # abort if the working tree is dirty
+> ```
+
 ### 1. Determine Bump Type
 
 Ask (or infer from the argument) whether this is a `patch`, `minor`, or `major` bump:
@@ -54,24 +63,39 @@ git log "${PREV_TAG}..HEAD" --oneline --no-merges
 
 > ⚠️ **CRITICAL — Do NOT fabricate changelog entries.** Every bullet point MUST correspond to a commit in the output above. Do not copy bullets from older versions, do not invent features, and do not summarize the whole project history.
 
-Open `CHANGELOG.md` and fill in the new version section that the script created. Replace the placeholder lines with actual release notes derived strictly from the commit list, grouped under:
-- `### Added` — new features (`feat:` commits)
-- `### Changed` — modifications to existing behavior (`refactor:`, `perf:` commits)
-- `### Fixed` — bug fixes (`fix:` commits)
-- `### Removed` — anything deleted (omit section if empty)
+Open `CHANGELOG.md` and fill in the new version section that the script created. Replace the placeholder lines with actual release notes derived strictly from the commit list, grouped under the GitHub "What's Changed" sections:
+- `### Breaking Changes 🛠` — breaking commits (`feat!:` / `BREAKING CHANGE`)
+- `### New Features 🎉` — `feat:` commits
+- `### Bug Fixes 🐛` — `fix:` commits
+- `### Documentation 📚` — `docs:` commits
+- `### Performance Improvements 🚀` — `perf:` commits
+- `### Other Changes` — everything else (`refactor:`, `chore:`, `test:`, `build:`, `ci:`)
 
-Use emoji prefixes consistent with existing entries (e.g. `🔌`, `🖥️`, `🐛`). Add a release headline as the first paragraph after the version header (see existing entries for the pattern: `### 🔖 R-Shell X.Y — Codename`).
+Omit a section when it has no entries.
 
-**Append a contributors section.** Add a `### Contributors` section at the end of the new version's notes crediting everyone who committed to this release (excluding bots). Generate the list from the actual commits:
+**Format every entry as `type(scope): subject by @username in #PR`.** Resolve each commit's GitHub username and PR number:
 ```bash
-PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
-git log "${PREV_TAG}..HEAD" --format="%aN" --no-merges | sort -u
+# GitHub username for a commit SHA (author.login is the account that authored it):
+gh api "repos/GOODBOY008/r-shell/commits/<sha>" --jq .author.login
+# PR number — r-shell subjects usually carry "(#NN)"; fall back to the API:
+gh api "repos/GOODBOY008/r-shell/commits/<sha>/pulls" --jq '.[0].number // empty'
 ```
-Format each name as a GitHub link when the username is known (e.g. `- [@htazq](https://github.com/htazq)`), otherwise use the plain author name. Example:
+If a commit's PR number can't be resolved, omit `in #PR`; if the author has no GitHub account, use the plain author name. Example:
 ```markdown
-### Contributors
+### New Features 🎉
 
-Thanks to [@htazq](https://github.com/htazq), [@ArtefactoO](https://github.com/ArtefactoO), and [@sunxiaobin89](https://github.com/sunxiaobin89) for contributing to this release! 🙏
+- feat(connections): add password visibility toggles by @sunxiaobin89 in #77
+
+### Bug Fixes 🐛
+
+- fix(terminal): wire Edit menu to active terminal by @htazq in #57
+```
+
+Add a release headline as the first paragraph after the version header (see existing entries for the pattern: `### 🔖 R-Shell X.Y — Codename`).
+
+```markdown
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.7.0...v2.8.0
 ```
 
 After editing, amend the commit to include the updated CHANGELOG:
@@ -147,4 +171,5 @@ Check the output includes the release body text (not just "See the assets…"). 
 - `gh` CLI authenticated (`gh auth status`)
 - `pnpm` installed
 - Git remote `origin` points to `GOODBOY008/r-shell`
+- On the `main` branch, synced with `origin/main` (fetch + fast-forward pull — see the note at the top of the Procedure)
 - Clean working tree before starting (`git status`)
