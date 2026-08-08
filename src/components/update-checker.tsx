@@ -112,7 +112,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
         toast.dismiss('update-check');
       }
 
-      const raw = caught instanceof Error ? caught.message : 'Failed to check for updates.';
+      const raw = caught instanceof Error ? caught.message : String(caught);
       // Tauri updater throws when the endpoint is unreachable or returns invalid
       // data. Map the common Rust error substrings to friendlier messages.
       const lower = raw.toLowerCase();
@@ -130,7 +130,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
             : lower.includes('signature') ||
                 lower.includes('verify') ||
                 lower.includes('verification') ||
-                lower.includes('invalid')
+                lower.includes('invalid update proxy url')
               ? 'Update verification failed. Please try again later.'
               : raw;
       setStatus('error');
