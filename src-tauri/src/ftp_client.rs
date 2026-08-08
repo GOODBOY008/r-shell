@@ -342,11 +342,23 @@ fn parse_ftp_list_line(line: &str) -> Option<FileEntry> {
 
     // Size is the rightmost numeric token strictly left of the date triple.
     // (Falls back to 0 for listings without a size column — e.g. some minimal daemons.)
-    let size = tokens[..month_idx]
+    // Its index lets us read owner/group relative to it (see below).
+    let size_idx = tokens[..month_idx]
         .iter()
-        .rev()
-        .find_map(|t| t.parse::<u64>().ok())
+        .rposition(|t| t.parse::<u64>().is_ok());
+    let size = size_idx
+        .and_then(|i| tokens[i].parse::<u64>().ok())
         .unwrap_or(0);
+
+    // Owner/group: `perms links owner group [context] size`. Owner is always the
+    // 3rd column; group is the 4th when the size token sits at index 4 or later
+    // (a size at index 3 is the no-group BusyBox variant, an optional SELinux
+    // context column pushes size further right).
+    let owner = tokens.get(2).map(|s| s.to_string());
+    let group = match size_idx {
+        Some(i) if i > 3 => tokens.get(3).map(|s| s.to_string()),
+        _ => None,
+    };
 
     Some(FileEntry {
         name,
@@ -354,6 +366,8 @@ fn parse_ftp_list_line(line: &str) -> Option<FileEntry> {
         modified,
         permissions: Some(perms_str.to_string()),
         file_type,
+        owner,
+        group,
     })
 }
 
@@ -683,6 +697,8 @@ mod tests {
         assert!(matches!(entry.file_type, FileEntryType::Directory));
         assert_eq!(entry.size, 4096);
         assert_eq!(entry.permissions.as_deref(), Some("drwxr-xr-x"));
+        assert_eq!(entry.owner.as_deref(), Some("user"));
+        assert_eq!(entry.group.as_deref(), Some("group"));
     }
 
     #[test]
@@ -692,6 +708,8 @@ mod tests {
         assert_eq!(entry.name, "report.pdf");
         assert!(matches!(entry.file_type, FileEntryType::File));
         assert_eq!(entry.size, 12345);
+        assert_eq!(entry.owner.as_deref(), Some("user"));
+        assert_eq!(entry.group.as_deref(), Some("group"));
     }
 
     #[test]
@@ -743,6 +761,9 @@ mod tests {
         assert_eq!(entry.name, "dev");
         assert!(matches!(entry.file_type, FileEntryType::Directory));
         assert_eq!(entry.size, 4096);
+        // SELinux context column sits between group and size — group still found.
+        assert_eq!(entry.owner.as_deref(), Some("root"));
+        assert_eq!(entry.group.as_deref(), Some("root"));
         // Time-format date must keep its time-of-day, not bleed into the name.
         assert!(
             entry.modified.as_deref().unwrap_or("").ends_with(" 12:32:00"),
@@ -782,6 +803,9 @@ mod tests {
         assert_eq!(entry.name, "gamelist.xml");
         assert_eq!(entry.size, 85234);
         assert_eq!(entry.permissions.as_deref(), Some("-rw-r--r--"));
+        // No group column → owner parsed, group left as None.
+        assert_eq!(entry.owner.as_deref(), Some("root"));
+        assert_eq!(entry.group, None);
         assert!(
             entry.modified.is_some(),
             "modified should be parsed, got None"
@@ -796,6 +820,8 @@ mod tests {
         assert!(matches!(entry.file_type, FileEntryType::Directory));
         assert_eq!(entry.size, 4096);
         assert!(entry.modified.is_some());
+        assert_eq!(entry.owner.as_deref(), Some("root"));
+        assert_eq!(entry.group, None);
     }
 
     #[test]
@@ -804,6 +830,8 @@ mod tests {
         let entry = parse_ftp_list_line(line).expect("should parse");
         assert_eq!(entry.name, "shared");
         assert_eq!(entry.size, 4096);
+        assert_eq!(entry.owner.as_deref(), Some("1000"));
+        assert_eq!(entry.group.as_deref(), Some("1000"));
     }
 
     #[test]

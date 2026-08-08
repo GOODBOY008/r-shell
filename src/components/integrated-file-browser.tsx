@@ -570,7 +570,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       // discarded without showing an error toast.  maxRetries=2 means up
       // to 3 total attempts with 1 s → 2 s backoff.
       const entries = await withRetry(
-        () => invoke<Array<{ name: string; size: number; modified: string | null; permissions: string | null; file_type: 'File' | 'Directory' | 'Symlink' }>>(
+        () => invoke<Array<{ name: string; size: number; modified: string | null; permissions: string | null; file_type: 'File' | 'Directory' | 'Symlink'; owner: string | null; group: string | null }>>(
           'list_files',
           { connectionId, path: targetPath },
         ),
@@ -600,8 +600,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             size: entry.size,
             modified: modifiedDate,
             permissions: entry.permissions ?? '',
-            owner: '-',
-            group: '-',
+            // owner/group come from the backend's `ls -l` parse; fall back to
+            // '-' for listings that omit the columns (e.g. no-group BusyBox).
+            owner: entry.owner ?? '-',
+            group: entry.group ?? '-',
             path: targetPath === '/' ? `/${entry.name}` : `${targetPath}/${entry.name}`,
           };
         });

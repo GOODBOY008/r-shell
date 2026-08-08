@@ -39,6 +39,11 @@ pub struct FileEntry {
     pub modified: Option<String>,
     pub permissions: Option<String>,
     pub file_type: FileEntryType,
+    /// Owning user (symbolic name where the backend can resolve it, numeric
+    /// uid otherwise). `None` when the listing doesn't carry the column.
+    pub owner: Option<String>,
+    /// Owning group (symbolic name or numeric gid). `None` when absent.
+    pub group: Option<String>,
 }
 
 /// Backward-compatible alias for code that still references RemoteFileEntry.
@@ -79,6 +84,10 @@ pub(crate) async fn list_sftp_dir(sftp: &SftpSession, path: &str) -> Result<Vec<
             modified: attrs.mtime.map(|t| chrono_from_unix_timestamp(t as u64)),
             permissions: attrs.permissions.map(format_permissions),
             file_type,
+            // SFTP exposes numeric ids only — map them to strings so the UI can
+            // render something real instead of a placeholder.
+            owner: attrs.uid.map(|uid| uid.to_string()),
+            group: attrs.gid.map(|gid| gid.to_string()),
         });
     }
 
@@ -505,6 +514,8 @@ mod tests {
             modified: Some("2024-01-01 00:00:00".to_string()),
             permissions: Some("rw-r--r--".to_string()),
             file_type: FileEntryType::File,
+            owner: None,
+            group: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"name\":\"test.txt\""));
@@ -520,6 +531,8 @@ mod tests {
             modified: None,
             permissions: Some("rwxr-xr-x".to_string()),
             file_type: FileEntryType::Directory,
+            owner: None,
+            group: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("Directory"));
@@ -534,6 +547,8 @@ mod tests {
             modified: None,
             permissions: None,
             file_type: FileEntryType::Symlink,
+            owner: None,
+            group: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("Symlink"));

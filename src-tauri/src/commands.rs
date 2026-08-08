@@ -2695,12 +2695,24 @@ pub async fn list_local_files(path: String) -> Result<Vec<FileEntry>, String> {
         #[cfg(not(unix))]
         let permissions: Option<String> = None;
 
+        // Numeric uid/gid — the filesystem exposes ids, not names, without a
+        // passwd/group lookup. Symbolic names come from remote `ls -l` listings.
+        #[cfg(unix)]
+        let (owner, group): (Option<String>, Option<String>) = {
+            use std::os::unix::fs::MetadataExt;
+            (Some(metadata.uid().to_string()), Some(metadata.gid().to_string()))
+        };
+        #[cfg(not(unix))]
+        let (owner, group): (Option<String>, Option<String>) = (None, None);
+
         entries.push(FileEntry {
             name,
             size,
             modified,
             permissions,
             file_type,
+            owner,
+            group,
         });
     }
 
