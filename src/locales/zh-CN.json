@@ -103,7 +103,8 @@
       "connection": "连接",
       "auth": "认证",
       "proxy": "代理",
-      "advanced": "高级"
+      "advanced": "高级",
+      "tunnel": "SSH 隧道"
     },
     "section": {
       "basicSettings": "基本连接设置",
@@ -115,7 +116,10 @@
       "advancedSsh": "高级 SSH 选项",
       "advancedSshDesc": "微调 SSH 连接行为和性能。",
       "advancedOptions": "高级选项",
-      "noAdvancedOptions": "{{protocol}} 连接无可用高级选项。"
+      "noAdvancedOptions": "{{protocol}} 连接无可用高级选项。",
+      "tunnelSettings": "SSH 隧道（跳板机）",
+      "tunnelSettingsDesc": "通过中间 SSH 服务器（跳板机 / Bastion）转发连接。",
+      "noTunnelForProtocol": "{{protocol}} 连接不支持 SSH 隧道。"
     },
     "label": {
       "connectionName": "连接名称",
@@ -135,7 +139,14 @@
       "maxCount": "最大次数",
       "domain": "域（可选）",
       "displayResolution": "显示分辨率",
-      "colorDepth": "色彩深度"
+      "colorDepth": "色彩深度",
+      "tunnelHost": "隧道主机",
+      "tunnelPort": "隧道端口",
+      "tunnelUsername": "隧道用户名",
+      "tunnelAuthMethod": "隧道认证方式",
+      "tunnelPassword": "隧道密码",
+      "tunnelKeyPath": "隧道私钥路径",
+      "tunnelPassphrase": "隧道密钥密码（可选）"
     },
     "placeholder": {
       "connectionName": "我的服务器",
@@ -149,7 +160,13 @@
       "proxyPort": "代理端口",
       "proxyUsername": "可选",
       "proxyPassword": "可选",
-      "domain": "WORKGROUP"
+      "domain": "WORKGROUP",
+      "tunnelHost": "bastion.example.com",
+      "tunnelPort": "隧道端口",
+      "tunnelUsername": "jumpuser",
+      "tunnelPassword": "输入隧道密码",
+      "tunnelKeyPath": "~/.ssh/id_ed25519",
+      "tunnelPassphrase": "密钥加密时输入密码"
     },
     "authMethod": {
       "password": "密码",
@@ -225,6 +242,10 @@
       "connectionFailedDesc": "无法连接到服务器，请检查您的凭据并重试。",
       "connectionError": "连接错误",
       "connectionErrorDesc": "连接时发生意外错误。"
+    },
+    "tunnel": {
+      "enable": "启用 SSH 隧道",
+      "enableDesc": "通过跳板机（Bastion / Jump Host）转发到目标主机。"
     }
   },
   "settings": {
