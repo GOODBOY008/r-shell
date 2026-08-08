@@ -89,4 +89,32 @@ describe('connection-storage advanced & proxy field persistence', () => {
     expect(loaded?.proxyUsername).toBe('user');
     expect(loaded?.proxyPassword).toBe('pass');
   });
+
+  it('round-trips SSH tunnel fields through saveConnectionWithId', () => {
+    ConnectionStorageManager.saveConnectionWithId('conn-4', {
+      name: 'My Server',
+      host: 'example.com',
+      port: 22,
+      username: 'root',
+      protocol: 'SSH',
+      authMethod: 'password',
+      tunnelEnabled: true,
+      tunnelHost: 'bastion.example.com',
+      tunnelPort: 2222,
+      tunnelUsername: 'jumpuser',
+      tunnelAuthMethod: 'publickey',
+      tunnelPassword: '',
+      tunnelKeyPath: '~/.ssh/id_ed25519',
+      tunnelPassphrase: 'secret',
+    });
+
+    const loaded = ConnectionStorageManager.getConnection('conn-4');
+    expect(loaded?.tunnelEnabled).toBe(true);
+    expect(loaded?.tunnelHost).toBe('bastion.example.com');
+    expect(loaded?.tunnelPort).toBe(2222);
+    expect(loaded?.tunnelUsername).toBe('jumpuser');
+    expect(loaded?.tunnelAuthMethod).toBe('publickey');
+    expect(loaded?.tunnelKeyPath).toBe('~/.ssh/id_ed25519');
+    expect(loaded?.tunnelPassphrase).toBe('secret');
+  });
 });

@@ -24,6 +24,7 @@ import {
   Network,
   Terminal as TerminalIcon,
   Monitor,
+  Waypoints,
 } from 'lucide-react';
 import { getDefaultPort, getAuthMethods, getHiddenFields, isDesktopProtocol } from '@/lib/protocol-config';
 
@@ -54,6 +55,16 @@ export interface ConnectionConfig {
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
+
+  // SSH tunnel (jump host)
+  tunnelEnabled?: boolean;
+  tunnelHost?: string;
+  tunnelPort?: number;
+  tunnelUsername?: string;
+  tunnelAuthMethod?: 'password' | 'publickey';
+  tunnelPassword?: string;
+  tunnelKeyPath?: string;
+  tunnelPassphrase?: string;
 
   // FTP specific
   ftpsEnabled?: boolean;
@@ -112,6 +123,14 @@ export function ConnectionDialog({
     proxyPort: 8080,
     proxyUsername: '',
     proxyPassword: '',
+    tunnelEnabled: false,
+    tunnelHost: '',
+    tunnelPort: 22,
+    tunnelUsername: '',
+    tunnelAuthMethod: 'password',
+    tunnelPassword: '',
+    tunnelKeyPath: '',
+    tunnelPassphrase: '',
     compression: true,
     keepAlive: true,
     keepAliveInterval: 60,
@@ -126,6 +145,7 @@ export function ConnectionDialog({
   const initialDisplayValues = {
     port: 22 as number | '',
     proxyPort: 8080 as number | '',
+    tunnelPort: 22 as number | '',
     keepAliveInterval: 60 as number | '',
     serverAliveCountMax: 3 as number | '',
   };
@@ -191,6 +211,7 @@ export function ConnectionDialog({
         syncDisplayValues({
           port: editingConnection.port ?? 22,
           proxyPort: editingConnection.proxyPort ?? 8080,
+          tunnelPort: editingConnection.tunnelPort ?? 22,
           keepAliveInterval: editingConnection.keepAliveInterval ?? 60,
           serverAliveCountMax: editingConnection.serverAliveCountMax ?? 3,
         });
@@ -329,6 +350,14 @@ export function ConnectionDialog({
             proxyPort: config.proxyPort,
             proxyUsername: config.proxyUsername,
             proxyPassword: config.proxyPassword,
+            tunnelEnabled: config.tunnelEnabled,
+            tunnelHost: config.tunnelHost,
+            tunnelPort: config.tunnelPort,
+            tunnelUsername: config.tunnelUsername,
+            tunnelAuthMethod: config.tunnelAuthMethod,
+            tunnelPassword: config.tunnelPassword,
+            tunnelKeyPath: config.tunnelKeyPath,
+            tunnelPassphrase: config.tunnelPassphrase,
             compression: config.compression,
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
@@ -356,6 +385,14 @@ export function ConnectionDialog({
             proxyPort: config.proxyPort,
             proxyUsername: config.proxyUsername,
             proxyPassword: config.proxyPassword,
+            tunnelEnabled: config.tunnelEnabled,
+            tunnelHost: config.tunnelHost,
+            tunnelPort: config.tunnelPort,
+            tunnelUsername: config.tunnelUsername,
+            tunnelAuthMethod: config.tunnelAuthMethod,
+            tunnelPassword: config.tunnelPassword,
+            tunnelKeyPath: config.tunnelKeyPath,
+            tunnelPassphrase: config.tunnelPassphrase,
             compression: config.compression,
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
@@ -398,6 +435,14 @@ export function ConnectionDialog({
         proxyPort: config.proxyPort,
         proxyUsername: config.proxyUsername,
         proxyPassword: config.proxyPassword,
+        tunnelEnabled: config.tunnelEnabled,
+        tunnelHost: config.tunnelHost,
+        tunnelPort: config.tunnelPort,
+        tunnelUsername: config.tunnelUsername,
+        tunnelAuthMethod: config.tunnelAuthMethod,
+        tunnelPassword: config.tunnelPassword,
+        tunnelKeyPath: config.tunnelKeyPath,
+        tunnelPassphrase: config.tunnelPassphrase,
         compression: config.compression,
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
@@ -421,6 +466,14 @@ export function ConnectionDialog({
         proxyPort: config.proxyPort,
         proxyUsername: config.proxyUsername,
         proxyPassword: config.proxyPassword,
+        tunnelEnabled: config.tunnelEnabled,
+        tunnelHost: config.tunnelHost,
+        tunnelPort: config.tunnelPort,
+        tunnelUsername: config.tunnelUsername,
+        tunnelAuthMethod: config.tunnelAuthMethod,
+        tunnelPassword: config.tunnelPassword,
+        tunnelKeyPath: config.tunnelKeyPath,
+        tunnelPassphrase: config.tunnelPassphrase,
         compression: config.compression,
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
@@ -534,6 +587,14 @@ const handleCancelConnectionAttempt = async () => {
       proxyPort: config.proxyPort,
       proxyUsername: config.proxyUsername,
       proxyPassword: config.proxyPassword,
+      tunnelEnabled: config.tunnelEnabled,
+      tunnelHost: config.tunnelHost,
+      tunnelPort: config.tunnelPort,
+      tunnelUsername: config.tunnelUsername,
+      tunnelAuthMethod: config.tunnelAuthMethod,
+      tunnelPassword: config.tunnelPassword,
+      tunnelKeyPath: config.tunnelKeyPath,
+      tunnelPassphrase: config.tunnelPassphrase,
       compression: config.compression,
       keepAlive: config.keepAlive,
       keepAliveInterval: config.keepAliveInterval,
@@ -610,6 +671,13 @@ const handleCancelConnectionAttempt = async () => {
             >
               <Network className="h-3.5 w-3.5" />
               <span>{t('connectionDialog.tab.proxy')}</span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="tunnel"
+              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+            >
+              <Waypoints className="h-3.5 w-3.5" />
+              <span>{t('connectionDialog.tab.tunnel')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="advanced"
@@ -974,6 +1042,143 @@ const handleCancelConnectionAttempt = async () => {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="tunnel" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+            {(() => {
+              const canTunnel = config.protocol === 'SSH' || config.protocol === 'SFTP';
+              if (!canTunnel) {
+                return (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Waypoints className="h-4 w-4" />
+                        {t('connectionDialog.section.tunnelSettings')}
+                      </CardTitle>
+                      <CardDescription>
+                        {t('connectionDialog.section.noTunnelForProtocol', { protocol: config.protocol })}
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                );
+              }
+
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Waypoints className="h-4 w-4" />
+                      {t('connectionDialog.section.tunnelSettings')}
+                    </CardTitle>
+                    <CardDescription>
+                      {t('connectionDialog.section.tunnelSettingsDesc')}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label>{t('connectionDialog.tunnel.enable')}</Label>
+                        <p className="text-sm text-muted-foreground">
+                          {t('connectionDialog.tunnel.enableDesc')}
+                        </p>
+                      </div>
+                      <Switch
+                        aria-label={t('connectionDialog.tunnel.enable')}
+                        checked={config.tunnelEnabled ?? false}
+                        onCheckedChange={(checked) => updateConfig({ tunnelEnabled: checked })}
+                      />
+                    </div>
+
+                    {config.tunnelEnabled && (
+                      <>
+                        <Separator />
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="col-span-2 space-y-2">
+                            <Label htmlFor="tunnel-host">{t('connectionDialog.label.tunnelHost')}</Label>
+                            <Input
+                              id="tunnel-host"
+                              placeholder={t('connectionDialog.placeholder.tunnelHost')}
+                              value={config.tunnelHost}
+                              onChange={(e) => updateConfig({ tunnelHost: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="tunnel-port">{t('connectionDialog.label.tunnelPort')}</Label>
+                            <Input
+                              id="tunnel-port"
+                              type="number"
+                              value={displayValues.tunnelPort}
+                              onChange={(e) => handleNumberInput('tunnelPort', e.target.value, (n) => updateConfig({ tunnelPort: n }))}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="tunnel-username">{t('connectionDialog.label.tunnelUsername')}</Label>
+                          <Input
+                            id="tunnel-username"
+                            placeholder={t('connectionDialog.placeholder.tunnelUsername')}
+                            value={config.tunnelUsername}
+                            onChange={(e) => updateConfig({ tunnelUsername: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>{t('connectionDialog.label.tunnelAuthMethod')}</Label>
+                          <Select
+                            value={config.tunnelAuthMethod}
+                            onValueChange={(value: string) => updateConfig({ tunnelAuthMethod: value as ConnectionConfig['tunnelAuthMethod'] })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="password">{t('connectionDialog.authMethod.password')}</SelectItem>
+                              <SelectItem value="publickey">{t('connectionDialog.authMethod.publicKey')}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {config.tunnelAuthMethod === 'password' && (
+                          <div className="space-y-2">
+                            <Label htmlFor="tunnel-password">{t('connectionDialog.label.tunnelPassword')}</Label>
+                            <PasswordInput
+                              id="tunnel-password"
+                              placeholder={t('connectionDialog.placeholder.tunnelPassword')}
+                              value={config.tunnelPassword}
+                              onChange={(e) => updateConfig({ tunnelPassword: e.target.value })}
+                            />
+                          </div>
+                        )}
+
+                        {config.tunnelAuthMethod === 'publickey' && (
+                          <>
+                            <div className="space-y-2">
+                              <Label htmlFor="tunnel-key">{t('connectionDialog.label.tunnelKeyPath')}</Label>
+                              <Input
+                                id="tunnel-key"
+                                placeholder={t('connectionDialog.placeholder.tunnelKeyPath')}
+                                value={config.tunnelKeyPath}
+                                onChange={(e) => updateConfig({ tunnelKeyPath: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="tunnel-passphrase">{t('connectionDialog.label.tunnelPassphrase')}</Label>
+                              <PasswordInput
+                                id="tunnel-passphrase"
+                                placeholder={t('connectionDialog.placeholder.tunnelPassphrase')}
+                                value={config.tunnelPassphrase}
+                                onChange={(e) => updateConfig({ tunnelPassphrase: e.target.value })}
+                              />
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
           </TabsContent>
 
           <TabsContent value="advanced" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">

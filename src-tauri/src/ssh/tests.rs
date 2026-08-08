@@ -22,6 +22,7 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            tunnel: None,
         }
     }
 
@@ -32,6 +33,28 @@ mod tests {
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 22);
         assert_eq!(config.username, "testuser");
+        assert!(config.tunnel.is_none());
+    }
+
+    // Unit test - tunnel config carries the jump host credentials
+    #[test]
+    fn test_tunnel_config_creation() {
+        let config = SshConfig {
+            tunnel: Some(crate::ssh::TunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 2222,
+                username: "jumpuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "jumppass".to_string(),
+                },
+            }),
+            ..create_test_config()
+        };
+
+        let tunnel = config.tunnel.as_ref().unwrap();
+        assert_eq!(tunnel.host, "bastion.example.com");
+        assert_eq!(tunnel.port, 2222);
+        assert_eq!(tunnel.username, "jumpuser");
     }
 
     // Note: The following tests are integration tests that require a running SSH server.
@@ -103,6 +126,7 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            tunnel: None,
         };
 
         let result = client_write.connect(&config).await;
@@ -299,6 +323,7 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                tunnel: None,
             })
             .await
             .expect("connect to Docker SSH server");
@@ -432,6 +457,7 @@ mod key_loading_tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            tunnel: None,
         };
 
         let mut client = SshClient::new();

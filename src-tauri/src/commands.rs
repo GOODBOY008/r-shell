@@ -3,7 +3,7 @@ use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
 use crate::proxy::{ProxyConfig, ProxyType};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
-use crate::ssh::{AuthMethod, SshConfig};
+use crate::ssh::{AuthMethod, SshConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -30,6 +30,16 @@ pub struct ConnectRequest {
     pub proxy_port: Option<u16>,
     pub proxy_username: Option<String>,
     pub proxy_password: Option<String>,
+    /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
+    /// false/missing. Legacy callers that omit them connect directly.
+    pub tunnel_enabled: Option<bool>,
+    pub tunnel_host: Option<String>,
+    pub tunnel_port: Option<u16>,
+    pub tunnel_username: Option<String>,
+    pub tunnel_auth_method: Option<String>,
+    pub tunnel_password: Option<String>,
+    pub tunnel_key_path: Option<String>,
+    pub tunnel_passphrase: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,6 +81,7 @@ pub async fn ssh_connect(
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<CommandResponse, String> {
     let proxy = build_proxy(&request)?;
+    let tunnel = build_tunnel(&request)?;
 
     // Keepalive defaults match the connection dialog UI: enabled at 60 s / 3.
     let keepalive_enabled = request.keepalive_enabled.unwrap_or(true);
@@ -105,6 +116,7 @@ pub async fn ssh_connect(
         keepalive_interval,
         keepalive_max,
         proxy,
+        tunnel,
     };
 
     match state
@@ -149,6 +161,67 @@ fn build_proxy(request: &ConnectRequest) -> Result<Option<ProxyConfig>, String> 
                 password: request.proxy_password.clone(),
             }))
         }
+    }
+}
+
+/// Map the tunnel request fields into a `TunnelConfig` (SSH jump host), or
+/// `None` when the tunnel is disabled.
+fn build_tunnel(request: &ConnectRequest) -> Result<Option<TunnelConfig>, String> {
+    build_tunnel_config(
+        request.tunnel_enabled,
+        request.tunnel_host.clone(),
+        request.tunnel_port,
+        request.tunnel_username.clone(),
+        request.tunnel_auth_method.clone(),
+        request.tunnel_password.clone(),
+        request.tunnel_key_path.clone(),
+        request.tunnel_passphrase.clone(),
+    )
+}
+
+/// Shared tunnel-config builder, used by both the SSH and SFTP commands.
+///
+/// Takes the eight raw request fields rather than a request struct so the two
+/// (otherwise unrelated) connect request types can share it.
+#[allow(clippy::too_many_arguments)]
+fn build_tunnel_config(
+    enabled: Option<bool>,
+    host: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    auth_method: Option<String>,
+    password: Option<String>,
+    key_path: Option<String>,
+    passphrase: Option<String>,
+) -> Result<Option<TunnelConfig>, String> {
+    match enabled {
+        Some(true) => {
+            let host = host
+                .filter(|h| !h.trim().is_empty())
+                .ok_or("SSH tunnel host is required")?;
+            let username = username
+                .filter(|u| !u.trim().is_empty())
+                .ok_or("SSH tunnel username is required")?;
+            let auth_method = match auth_method.as_deref() {
+                None | Some("password") => AuthMethod::Password {
+                    password: password.unwrap_or_default(),
+                },
+                Some("publickey") => AuthMethod::PublicKey {
+                    key_path: key_path.ok_or("SSH tunnel key path required")?,
+                    passphrase,
+                },
+                other => {
+                    return Err(format!("Invalid SSH tunnel auth method: {other:?}"));
+                }
+            };
+            Ok(Some(TunnelConfig {
+                host,
+                port: port.unwrap_or(22),
+                username,
+                auth_method,
+            }))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -2223,6 +2296,16 @@ pub struct SftpConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
+    /// false/missing. Legacy callers that omit them connect directly.
+    pub tunnel_enabled: Option<bool>,
+    pub tunnel_host: Option<String>,
+    pub tunnel_port: Option<u16>,
+    pub tunnel_username: Option<String>,
+    pub tunnel_auth_method: Option<String>,
+    pub tunnel_password: Option<String>,
+    pub tunnel_key_path: Option<String>,
+    pub tunnel_passphrase: Option<String>,
 }
 
 #[tauri::command]
@@ -2241,11 +2324,23 @@ pub async fn sftp_connect(
         _ => return Err("Invalid SFTP auth method".to_string()),
     };
 
+    let tunnel = build_tunnel_config(
+        request.tunnel_enabled,
+        request.tunnel_host.clone(),
+        request.tunnel_port,
+        request.tunnel_username.clone(),
+        request.tunnel_auth_method.clone(),
+        request.tunnel_password.clone(),
+        request.tunnel_key_path.clone(),
+        request.tunnel_passphrase.clone(),
+    )?;
+
     let config = SftpConfig {
         host: request.host,
         port: request.port,
         username: request.username,
         auth_method: auth,
+        tunnel,
     };
 
     match state
@@ -3678,7 +3773,7 @@ mod local_fs_tests {
 mod proxy_config_tests {
     use super::*;
 
-    fn request(proxy_type: Option<&str>) -> ConnectRequest {
+    pub(super) fn request(proxy_type: Option<&str>) -> ConnectRequest {
         ConnectRequest {
             connection_id: "c1".to_string(),
             host: "example.com".to_string(),
@@ -3697,6 +3792,14 @@ mod proxy_config_tests {
             proxy_port: None,
             proxy_username: None,
             proxy_password: None,
+            tunnel_enabled: None,
+            tunnel_host: None,
+            tunnel_port: None,
+            tunnel_username: None,
+            tunnel_auth_method: None,
+            tunnel_password: None,
+            tunnel_key_path: None,
+            tunnel_passphrase: None,
         }
     }
 
@@ -3756,5 +3859,80 @@ mod proxy_config_tests {
         req.proxy_host = Some("proxy.local".to_string());
         let cfg = build_proxy(&req).unwrap().unwrap();
         assert_eq!(cfg.port, 8080);
+    }
+}
+
+#[cfg(test)]
+mod tunnel_config_tests {
+    use super::*;
+    use crate::ssh::AuthMethod;
+
+    fn request() -> ConnectRequest {
+        let mut req = proxy_config_tests::request(None);
+        req.tunnel_enabled = Some(true);
+        req.tunnel_host = Some("bastion.example.com".to_string());
+        req.tunnel_port = Some(2222);
+        req.tunnel_username = Some("jumpuser".to_string());
+        req
+    }
+
+    #[test]
+    fn no_tunnel_when_disabled_or_missing() {
+        let req = proxy_config_tests::request(None);
+        assert!(build_tunnel(&req).unwrap().is_none());
+
+        let mut req = proxy_config_tests::request(None);
+        req.tunnel_enabled = Some(false);
+        assert!(build_tunnel(&req).unwrap().is_none());
+    }
+
+    #[test]
+    fn maps_password_tunnel() {
+        let mut req = request();
+        req.tunnel_password = Some("jumppass".to_string());
+        let tunnel = build_tunnel(&req).unwrap().unwrap();
+        assert_eq!(tunnel.host, "bastion.example.com");
+        assert_eq!(tunnel.port, 2222);
+        assert_eq!(tunnel.username, "jumpuser");
+        match tunnel.auth_method {
+            AuthMethod::Password { password } => assert_eq!(password, "jumppass"),
+            _ => panic!("expected password auth"),
+        }
+    }
+
+    #[test]
+    fn maps_publickey_tunnel() {
+        let mut req = request();
+        req.tunnel_auth_method = Some("publickey".to_string());
+        req.tunnel_key_path = Some("~/.ssh/id_ed25519".to_string());
+        req.tunnel_passphrase = Some("secret".to_string());
+        let tunnel = build_tunnel(&req).unwrap().unwrap();
+        match tunnel.auth_method {
+            AuthMethod::PublicKey {
+                key_path,
+                passphrase,
+            } => {
+                assert_eq!(key_path, "~/.ssh/id_ed25519");
+                assert_eq!(passphrase.as_deref(), Some("secret"));
+            }
+            _ => panic!("expected publickey auth"),
+        }
+    }
+
+    #[test]
+    fn requires_tunnel_host_when_enabled() {
+        let mut req = proxy_config_tests::request(None);
+        req.tunnel_enabled = Some(true);
+        let err = build_tunnel(&req).unwrap_err();
+        assert!(err.contains("tunnel host is required"));
+    }
+
+    #[test]
+    fn defaults_tunnel_port_to_22() {
+        let mut req = request();
+        req.tunnel_port = None;
+        req.tunnel_password = Some("jumppass".to_string());
+        let tunnel = build_tunnel(&req).unwrap().unwrap();
+        assert_eq!(tunnel.port, 22);
     }
 }
