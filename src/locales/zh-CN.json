@@ -1086,7 +1086,6 @@
     "renderer": "渲染器：{{renderer}}",
     "startingShell": "🚀 正在启动交互式 Shell（WebSocket + PTY 模式）...",
     "webSocketConnected": "✓ WebSocket 已连接",
-    "outputLimitReached": "[已达到输出上限 — 已清空回滚缓冲以释放内存]",
     "previousSessionLost": "⚠ 上一个会话已丢失，已启动新的 Shell 会话。",
     "ptyStarted": "✓ PTY 连接已启动",
     "interactiveHint": "现在可以使用交互式命令：vim、less、more、top 等。",
