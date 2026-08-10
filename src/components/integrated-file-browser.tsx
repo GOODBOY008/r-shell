@@ -1166,7 +1166,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   };
 
   const handleFileInfo = (file: FileItem) => {
-    toast.info(`File: ${file.name}\nSize: ${formatFileSize(file.size)}\nModified: ${formatDate(file.modified)}\nPermissions: ${file.permissions}`);
+    toast.info(t('fileBrowser.toast.fileInfo', {
+      name: file.name,
+      size: formatFileSize(file.size),
+      modified: formatDate(file.modified),
+      permissions: file.permissions,
+    }));
   };
 
   const handleNewFile = async () => {
@@ -1607,8 +1612,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 <div className="absolute inset-0 bg-accent/20 border-2 border-dashed border-primary z-50 flex items-center justify-center pointer-events-none">
                   <div className="bg-background/90 rounded-lg p-6 shadow-lg">
                     <Upload className="h-12 w-12 mx-auto mb-3 text-primary" />
-                    <p className="font-medium">Drop files or folders to upload</p>
-                    <p className="text-sm text-muted-foreground mt-1">Upload to {currentPath}</p>
+                    <p className="font-medium">{t('fileBrowser.dropOverlay')}</p>
+                    <p className="text-sm text-muted-foreground mt-1">{t('fileBrowser.dropUploadTo', { path: currentPath })}</p>
                   </div>
                 </div>
               )}
@@ -1787,11 +1792,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Eye className="mr-2 h-4 w-4" />
-                        Open
+                        {t('fileBrowser.contextMenu.open')}
                       </ContextMenuItem>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Edit className="mr-2 h-4 w-4" />
-                        Edit
+                        {t('fileBrowser.contextMenu.edit')}
                       </ContextMenuItem>
                       {onOpenInLogMonitor && (
                         <ContextMenuItem onClick={() => {
@@ -1813,7 +1818,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Folder className="mr-2 h-4 w-4" />
-                        Open Folder
+                        {t('fileBrowser.contextMenu.openFolder')}
                       </ContextMenuItem>
                       <ContextMenuItem onClick={() => handleDownloadDirectory(file)}>
                         <FolderDown className="mr-2 h-4 w-4" />
@@ -1837,7 +1842,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                       {clipboard && (
                         <ContextMenuItem onClick={handlePasteFiles}>
                           <ClipboardPaste className="mr-2 h-4 w-4" />
-                          {t('fileBrowser.contextMenu.paste')} {clipboard.files.length} item(s)
+                          {t('fileBrowser.contextMenu.paste')} {t('fileBrowser.contextMenu.pasteCount', { count: clipboard.files.length })}
                         </ContextMenuItem>
                       )}
                       <ContextMenuSeparator />

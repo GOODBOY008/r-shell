@@ -76,7 +76,14 @@
     "systemMonitor": "系统监视器",
     "logMonitor": "日志监视器",
     "quickConnected": "快速连接成功",
-    "quickConnectedDesc": "已连接到 {{name}}"
+    "quickConnectedDesc": "已连接到 {{name}}",
+    "connectionNotFound": "未找到连接",
+    "connectionNotFoundDesc1": "无法加载连接数据。",
+    "connectionNotFoundDesc2": "找不到该连接，它可能已被删除。",
+    "alreadyConnected": "已连接",
+    "alreadyConnectedDesc": "已切换到现有的 {{name}} 连接",
+    "terminal": "终端",
+    "fileBrowser": "文件浏览器"
   },
   "connectionDialog": {
     "title": {
@@ -265,7 +272,10 @@
       "foldGutter": "代码折叠",
       "foldGutterDesc": "在侧边栏显示折叠/展开箭头",
       "bracketMatching": "括号匹配",
-      "bracketMatchingDesc": "当光标位于括号旁边时高亮匹配的括号"
+      "bracketMatchingDesc": "当光标位于括号旁边时高亮匹配的括号",
+      "tabSize2": "2 个空格",
+      "tabSize4": "4 个空格",
+      "tabSize8": "8 个空格"
     },
     "connection": {
       "title": "连接设置",
@@ -368,7 +378,9 @@
       "warn": "警告",
       "info": "信息",
       "debug": "调试"
-    }
+    },
+    "tabScrollLeft": "向左滚动",
+    "tabScrollRight": "向右滚动"
   },
   "welcome": {
     "quickTips": "快速提示",
@@ -517,7 +529,12 @@
       "openInLogMonitor": "在日志监视器中打开",
       "openInOS": "在系统中打开",
       "uploadFolder": "上传文件夹",
-      "syncDirectories": "同步目录"
+      "syncDirectories": "同步目录",
+      "open": "打开",
+      "edit": "编辑",
+      "openFolder": "打开文件夹",
+      "pasteCount_one": "{{count}} 个项目",
+      "pasteCount_other": "{{count}} 个项目"
     },
     "toast": {
       "queuedUpload_one": "已排队 {{count}} 个文件等待上传",
@@ -565,7 +582,8 @@
       "droppedPathsSkipped_other": "{{count}} 个拖放路径无法上传",
       "queuedUploadToPath": "已排队 {{count}} 个文件等待上传到 {{path}}",
       "enterFolderName": "请输入文件夹名称：",
-      "enterFileName": "请输入文件名称："
+      "enterFileName": "请输入文件名称：",
+      "fileInfo": "文件：{{name}}\n大小：{{size}}\n修改时间：{{modified}}\n权限：{{permissions}}"
     },
     "toolbar": {
       "back": "后退",
@@ -584,7 +602,7 @@
       "syncDirectories": "同步目录（Ctrl+Shift+S）"
     },
     "selected": "已选择 {{count}} 项",
-    "loading": "加载中\u2026",
+    "loading": "加载中…",
     "downloadSelected": "下载选中的 {{count}} 项",
     "deleteFolderTitle": "删除文件夹？",
     "deleteFileTitle": "删除文件？",
@@ -617,7 +635,9 @@
       "cancelled": "已取消",
       "upload": "上传",
       "download": "下载"
-    }
+    },
+    "dropOverlay": "拖放文件或文件夹以上传",
+    "dropUploadTo": "上传到 {{path}}"
   },
   "contextMenu": {
     "copy": "复制",
@@ -658,7 +678,25 @@
     "downloadFailed": "下载失败",
     "downloadFailedDesc": "无法下载更新，请稍后重试。",
     "checkFailed": "检查失败",
-    "checkFailedDesc": "无法检查更新，请稍后重试。"
+    "checkFailedDesc": "无法检查更新，请稍后重试。",
+    "errorNotConfigured": "更新服务器未针对此版本进行配置。",
+    "errorNetwork": "无法连接到更新服务器，请检查您的网络连接。",
+    "errorVerification": "更新验证失败，请稍后重试。",
+    "installFailed": "安装失败",
+    "installFailedDesc": "无法安装更新，请稍后重试。",
+    "readyToInstall": "更新已就绪，可安装",
+    "readyToDownload": "版本 {{version}} 已准备好下载。",
+    "newVersionAvailable": "有新版本可用。",
+    "newVersionBody": "有新版本可用，包含改进与修复。",
+    "restartToFinish": "更新已下载，立即重启以完成安装。",
+    "later": "稍后",
+    "restartNow": "立即重启",
+    "restarting": "正在重启…",
+    "downloadUpdate": "下载更新",
+    "downloadingButton": "正在下载…",
+    "checkFailedFallback": "检查更新失败。",
+    "downloadFailedFallback": "更新下载失败。",
+    "installFailedFallback": "更新安装失败。"
   },
   "syncDialog": {
     "title": "目录同步",
@@ -697,7 +735,48 @@
     "actionCreateDir": "创建目录",
     "actionDelete": "删除",
     "actionIdentical": "相同",
-    "actionConflict": "冲突"
+    "actionConflict": "冲突",
+    "localDirectory": "本地目录",
+    "remoteDirectory": "远程目录",
+    "directionLocalToRemote": "本地 → 远程",
+    "directionRemoteToLocal": "远程 → 本地",
+    "compareBy": "比较方式",
+    "criteriaSize": "仅比较大小",
+    "criteriaDate": "仅比较日期",
+    "criteriaSizeDate": "大小 + 日期",
+    "recursive": "递归（包含子目录）",
+    "deleteOrphaned": "删除远程孤立文件",
+    "exclude": "排除",
+    "selectAll": "全选",
+    "deselectAll": "取消全选",
+    "showIdentical": "显示相同项",
+    "columnPath": "路径",
+    "columnAction": "操作",
+    "columnLocal": "本地",
+    "columnRemote": "远程",
+    "runComparisonHint": "运行比较以查看差异",
+    "allIdentical": "所有文件均相同",
+    "comparing": "正在比较目录…",
+    "syncItems": "同步（{{count}} 个项目）",
+    "toastFailed": "失败：{{path}}",
+    "toastComplete": "同步完成：已同步 {{count}} 个项目",
+    "toastFinishedWithErrors": "同步完成，共 {{processedItems}} 个项目中有 {{errorCount}} 个错误",
+    "badgeUpload_one": "{{count}} 个上传",
+    "badgeUpload_other": "{{count}} 个上传",
+    "badgeMkdir_one": "{{count}} 个新建目录",
+    "badgeMkdir_other": "{{count}} 个新建目录",
+    "badgeDelete_one": "{{count}} 个删除",
+    "badgeDelete_other": "{{count}} 个删除",
+    "badgeDownload_one": "{{count}} 个下载",
+    "badgeDownload_other": "{{count}} 个下载",
+    "badgeIdentical_one": "{{count}} 个相同",
+    "badgeIdentical_other": "{{count}} 个相同",
+    "badgeConflict_one": "{{count}} 个冲突",
+    "badgeConflict_other": "{{count}} 个冲突",
+    "badgeTotal": "共 {{size}}",
+    "compareButton": "比较",
+    "syncingItem": "正在同步：{{item}}",
+    "recompareButton": "重新比较"
   },
   "directoryTransfer": {
     "title": "目录传输",
@@ -777,7 +856,7 @@
   "filePanel": {
     "selectDirectory": "选择目录以查看其内容",
     "noFiles": "未找到文件",
-    "loading": "加载中...",
+    "loading": "加载中…",
     "dropFilesHint": "将文件拖放到此处以上传",
     "items": "{{count}} 项",
     "itemsSelected_one": "已选择 {{count}} 项",
@@ -797,7 +876,6 @@
       "noMatches": "无匹配",
       "emptyDirectory": "空目录"
     },
-    "loading": "加载中…",
     "column": {
       "name": "名称",
       "size": "大小",
@@ -1117,5 +1195,26 @@
     "desktopDisconnected": "桌面已断开",
     "reconnect": "重新连接",
     "connectingTo": "正在连接到 {{name}}..."
+  },
+  "errorBoundary": {
+    "somethingWentWrong": "出错了",
+    "unexpectedError": "发生了意外错误",
+    "retry": "重试",
+    "labelError": "{{label}} 遇到错误"
+  },
+  "connectionTabs": {
+    "reconnect": "重新连接",
+    "duplicateTab": "复制标签页",
+    "closeTab": "关闭标签页",
+    "closeOtherTabs": "关闭其他标签页",
+    "closeTabsToLeft": "关闭左侧标签页",
+    "closeTabsToRight": "关闭右侧标签页",
+    "closeAllTabs": "关闭所有标签页"
+  },
+  "networkMonitor": {
+    "title": "网络统计",
+    "noConnection": "无活动连接，连接后即可查看网络统计。",
+    "comingSoon": "高级网络监控功能即将推出",
+    "disabledNotice": "网络接口和活动连接监控当前已禁用。请查看「监控」选项卡中的网络使用率和网络延迟图表以获取当前网络指标。"
   }
 }

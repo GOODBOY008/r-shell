@@ -362,7 +362,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   onClick={() => scrollTabs('left')}
                   className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
                   tabIndex={-1}
-                  aria-label="Scroll left"
+                  aria-label={t('settings.tabScrollLeft')}
                 >
                   <ChevronLeft className="h-3.5 w-3.5 text-foreground" />
                 </button>
@@ -377,7 +377,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   onClick={() => scrollTabs('right')}
                   className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
                   tabIndex={-1}
-                  aria-label="Scroll right"
+                  aria-label={t('settings.tabScrollRight')}
                 >
                   <ChevronRight className="h-3.5 w-3.5 text-foreground" />
                 </button>
@@ -790,9 +790,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="2">2 spaces</SelectItem>
-                        <SelectItem value="4">4 spaces</SelectItem>
-                        <SelectItem value="8">8 spaces</SelectItem>
+                        <SelectItem value="2">{t('settings.editor.tabSize2')}</SelectItem>
+                        <SelectItem value="4">{t('settings.editor.tabSize4')}</SelectItem>
+                        <SelectItem value="8">{t('settings.editor.tabSize8')}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>

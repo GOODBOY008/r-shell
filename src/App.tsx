@@ -1256,12 +1256,12 @@ function AppContent() {
         setConnectionDialogOpen(true);
         setPendingConnectionId(null);
       } else {
-        toast.error('Connection Not Found', {
-          description: 'The connection data could not be loaded.',
+        toast.error(t('app.connectionNotFound'), {
+          description: t('app.connectionNotFoundDesc1'),
         });
       }
     }
-  }, []);
+  }, [t]);
 
   const handleSaveConnection = useCallback(async (config: ConnectionConfig) => {
     if (!config.id) return;
@@ -1449,16 +1449,16 @@ function AppContent() {
     const existingTab = allTabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
     if (existingTab) {
       handleTabSelect(existingTab.id);
-      toast.info('Already Connected', {
-        description: `Switched to existing ${existingTab.name} connection`,
+      toast.info(t('app.alreadyConnected'), {
+        description: t('app.alreadyConnectedDesc', { name: existingTab.name }),
       });
       return;
     }
 
     const connectionData = ConnectionStorageManager.getConnection(connectionId);
     if (!connectionData) {
-      toast.error('Connection Not Found', {
-        description: 'The connection could not be found. It may have been deleted.',
+      toast.error(t('app.connectionNotFound'), {
+        description: t('app.connectionNotFoundDesc2'),
       });
       return;
     }
@@ -1732,7 +1732,7 @@ function AppContent() {
                       closeTabShortcut: keyboardShortcutSettings.closeTab,
                       onWorkingDirectoryChange: handleWorkingDirectoryChange,
                     }}>
-                      <ErrorBoundary label="Terminal">
+                      <ErrorBoundary label={t('app.terminal')}>
                         <GridRenderer node={state.gridLayout} path={[]} />
                       </ErrorBoundary>
                     </TerminalCallbacksProvider>
@@ -1751,7 +1751,7 @@ function AppContent() {
                         maxSize={50}
                         onResize={(size) => setBottomPanelSize(size)}
                       >
-                        <ErrorBoundary label="File Browser">
+                        <ErrorBoundary label={t('app.fileBrowser')}>
                           <IntegratedFileBrowser
                           connectionId={activeConnection.connectionId}
                           host={activeConnection.host}
