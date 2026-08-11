@@ -1,15 +1,21 @@
 ---
 name: release-version
-description: "Release a new r-shell version and create a published GitHub release with contributor credits. Use when: releasing, publishing, bumping version, tagging, creating release notes, gh release create, version bump, patch release, minor release, major release."
-argument-hint: "bump type: patch | minor | major"
+description: "Release a new r-shell version and create a published GitHub release with contributor credits. Supports both stable releases (vX.Y.Z) and tagged prerelease versions (vX.Y.Z-beta.N / -rc.N). Use when: releasing, publishing, bumping version, tagging, creating release notes, gh release create, version bump, patch release, minor release, major release, prerelease, beta, rc, tagged release, stable release."
+argument-hint: "bump type: patch | minor | major | prerelease [identifier] | stable"
 ---
 
 # Release New Version & Create GitHub Release
 
-Bumps the project version across all config files, updates the CHANGELOG, pushes a tag, and creates a **published** GitHub release using `gh`, with release notes that credit the contributors.
+Bumps the project version across all config files, updates the CHANGELOG, pushes a tag, and creates a **published** GitHub release using `gh`, with release notes that credit the contributors. Two release kinds are supported:
+
+- **Stable release** — `vX.Y.Z` (e.g. `v2.8.0`), published as the repo's **Latest** release. The Release workflow uploads `latest.json` (the in-app updater manifest) and updates the Homebrew cask, so every stable user sees it.
+- **Tagged (prerelease) release** — `vX.Y.Z-<id>.<n>` (e.g. `v2.8.0-beta.1`, `v2.8.0-rc.1`), published as a GitHub **prerelease** (never Latest). The Release workflow skips `latest.json` and Homebrew for prerelease tags, so stable users are never offered a prerelease and Homebrew is untouched.
+
+Both trigger the same `release.yml` build on a pushed `v*` tag; only the release **kind** differs.
 
 ## When to Use
-- Releasing a new patch, minor, or major version of r-shell
+- Releasing a new patch, minor, or major version of r-shell (stable)
+- Releasing a tagged prerelease of r-shell (`-alpha`, `-beta`, `-rc`) before it goes stable
 - Creating a GitHub release (published) with changelog notes and contributor credits
 - Tagging a new version and pushing to origin
 
@@ -26,19 +32,32 @@ Bumps the project version across all config files, updates the CHANGELOG, pushes
 
 ### 1. Determine Bump Type
 
-Ask (or infer from the argument) whether this is a `patch`, `minor`, or `major` bump:
+Ask (or infer from the argument) which kind of release this is:
 
-| Type | When | Example |
-|------|------|---------|
-| `patch` | Bug fixes, small tweaks | `1.2.3 → 1.2.4` |
-| `minor` | New features, backward-compatible | `1.2.3 → 1.3.0` |
-| `major` | Breaking changes | `1.2.3 → 2.0.0` |
+| Bump type | Release kind | When | Example |
+|-----------|--------------|------|---------|
+| `patch` | Stable | Bug fixes, small tweaks | `1.2.3 → 1.2.4` |
+| `minor` | Stable | New features, backward-compatible | `1.2.3 → 1.3.0` |
+| `major` | Stable | Breaking changes | `1.2.3 → 2.0.0` |
+| `prerelease` | Tagged | A pre-release of the next version | `2.7.0 → 2.8.0-beta.1` |
+| `stable` | Tagged → Stable | Finalize a prerelease to stable | `2.8.0-beta.3 → 2.8.0` |
+
+For prereleases, an optional identifier selects the prerelease line (`alpha`, `beta`, `rc`, ...) and defaults to `beta`:
+- `2.8.0-beta.1 → 2.8.0-beta.2` continues the same beta line
+- `2.8.0-beta.3 → 2.8.0-rc.1` switches from beta to the rc line
+- `2.8.0-beta.3 → 2.8.0` (via `stable`) promotes the prerelease to the stable release
 
 ### 2. Run the Version Bump Script
 
 ```bash
-# Replace <type> with patch, minor, or major
+# Replace <type> with patch, minor, major, prerelease [identifier], or stable
 pnpm run version:<type>
+# e.g.:
+pnpm run version:patch          # 2.7.0 -> 2.7.1 (stable)
+pnpm run version:minor          # 2.7.0 -> 2.8.0 (stable)
+pnpm run version:prerelease     # 2.7.0 -> 2.8.0-beta.1 (tagged)
+pnpm run version:prerelease rc  # 2.8.0-beta.3 -> 2.8.0-rc.1 (tagged)
+pnpm run version:stable         # 2.8.0-beta.3 -> 2.8.0 (finalize)
 ```
 
 This updates **all four** version locations atomically and creates a git commit:
@@ -46,7 +65,7 @@ This updates **all four** version locations atomically and creates a git commit:
 - `src-tauri/Cargo.toml`
 - `src-tauri/Cargo.lock`
 - `src-tauri/tauri.conf.json`
-- `CHANGELOG.md` (adds a skeleton section)
+- `CHANGELOG.md` (adds a skeleton section — for prerelease/stable bumps it renames the existing release-line section instead of adding duplicates)
 
 Read the new version from `package.json`:
 ```bash
@@ -93,10 +112,13 @@ If a commit's PR number can't be resolved, omit `in #PR`; if the author has no G
 
 Add a release headline as the first paragraph after the version header (see existing entries for the pattern: `### 🔖 R-Shell X.Y — Codename`).
 
-```markdown
+The `**Full Changelog**` line must use the actual previous tag → new tag (for a prerelease, `PREV_TAG` is the previous tag and `NEW_TAG` is `v${VERSION}`, e.g. `v2.8.0-beta.1`):
 
-**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.7.0...v2.8.0
+```markdown
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/<PREV_TAG>...<NEW_TAG>
 ```
+
+> For a prerelease, the CHANGELOG section header is the exact prerelease version (`## [2.8.0-beta.1]`); it is renamed to `## [2.8.0]` when the prerelease is finalized. Keep the notes under whichever header matches the version you are releasing.
 
 After editing, amend the commit to include the updated CHANGELOG:
 ```bash
@@ -133,7 +155,10 @@ If the file is empty, do NOT continue — fix the CHANGELOG header format first.
 
 ### 6. Create the GitHub Release (Published)
 
-The release is created in a **published** state — visible immediately to users and triggering any release notifications/webhooks. Use `--notes-file` (not `--notes`) to pass multiline content reliably:
+The release is created in a **published** state — visible immediately to users and triggering any release notifications/webhooks. Use `--notes-file` (not `--notes`) to pass multiline content reliably.
+
+**Stable release** (`v2.8.0`) — mark it `--latest` so it drives the in-app updater and becomes the repo's "Latest":
+
 ```bash
 VERSION=$(node -p "require('./package.json').version")
 
@@ -146,7 +171,21 @@ gh release create "v${VERSION}" \
 rm -f "${NOTES_FILE}"
 ```
 
-The `--latest` flag marks this release as the repo's current "Latest" release. Do **not** use `--draft` — the release should publish immediately.
+**Tagged (prerelease) release** (`v2.8.0-beta.1`, `v2.8.0-rc.1`) — use `--prerelease` **instead of** `--latest`. Do **not** mark a prerelease as latest: the Release workflow's `upload-updater-json` and `update-homebrew` jobs skip prerelease tags, so leaving `--latest` off keeps the stable updater channel and Homebrew pointing at the last stable version.
+
+```bash
+VERSION=$(node -p "require('./package.json').version")
+
+gh release create "v${VERSION}" \
+  --title "v${VERSION}" \
+  --notes-file "${NOTES_FILE}" \
+  --prerelease \
+  --repo GOODBOY008/r-shell
+
+rm -f "${NOTES_FILE}"
+```
+
+Neither path uses `--draft` — the release should publish immediately.
 
 > The release notes already include the `### Contributors` section added in step 3.
 
@@ -159,12 +198,18 @@ gh release view "v${VERSION}" --repo GOODBOY008/r-shell
 
 Check the output includes the release body text (not just "See the assets…"). If the body is empty, the notes file was empty or the `awk` pattern didn't match — re-run step 5 to debug, then use `gh release edit "v${VERSION}" --notes-file <file> --repo GOODBOY008/r-shell` to fix it.
 
+**For a stable release**, also confirm it is marked "Latest" (`gh release view` shows the tag without a `prerelease:` line), so `releases/latest/download/latest.json` serves this version to the in-app updater.
+
+**For a tagged (prerelease) release**, confirm:
+- `gh release view` shows it as **Pre-release** (`prerelease: true` in the API: `gh api repos/GOODBOY008/r-shell/releases/tags/v${VERSION} --jq .prerelease`).
+- `latest.json` was **not** attached to this release (check the assets list), and the stable `releases/latest` endpoint still points at the last stable release — stable users must not be offered a prerelease.
+
 ## Decision Points
 
 - **Changelog already accurate?** Skip step 3's changelog edits (but still add the `### Contributors` section) and the amend.
 - **Want to keep the release hidden until you publish it manually?** Add `--draft` to the `gh release create` command in step 6.
 - **Attaching build artifacts?** Add file paths after the tag in `gh release create`: `gh release create "v${VERSION}" ./dist/*.dmg ./dist/*.exe --latest ...`
-- **Pre-release?** Append `--prerelease` to the `gh release create` command (this replaces `--latest`).
+- **Stable vs tagged (prerelease)?** A stable release uses `--latest` and updates the in-app updater + Homebrew. A tagged prerelease (`-alpha`/`-beta`/`-rc`) uses `--prerelease` instead of `--latest`; the Release workflow skips `latest.json` and Homebrew for prerelease tags, so stable users and Homebrew are never switched to a prerelease. Finalize a prerelease with `pnpm run version:stable` before tagging it as `vX.Y.Z`.
 
 ## Prerequisites
 

@@ -104,10 +104,15 @@ pnpm lint:fix
 ### Version Bumping
 
 ```bash
-pnpm run version:patch   # 0.7.1 → 0.7.2
-pnpm run version:minor   # 0.7.1 → 0.8.0
-pnpm run version:major   # 0.7.1 → 1.0.0
+pnpm run version:patch   # 0.7.1 → 0.7.2 (stable)
+pnpm run version:minor   # 0.7.1 → 0.8.0 (stable)
+pnpm run version:major   # 0.7.1 → 1.0.0 (stable)
+pnpm run version:prerelease   # 0.7.1 → 0.8.0-beta.1, or 0.8.0-beta.1 → 0.8.0-beta.2 (tagged)
+pnpm run version:prerelease rc   # 0.8.0-beta.3 → 0.8.0-rc.1 (switch prerelease line)
+pnpm run version:stable   # 0.8.0-beta.3 → 0.8.0 (finalize to stable)
 ```
+
+Stable releases tag as `vX.Y.Z` and publish as the GitHub **Latest** release; tagged prereleases tag as `vX.Y.Z-<id>.<n>` (e.g. `v0.8.0-beta.1`) and publish with `--prerelease`, never as Latest. See `.github/skills/release-version/SKILL.md` for the full release procedure.
 
 Updates `package.json`, `Cargo.toml`, `Cargo.lock`, `tauri.conf.json`, `CHANGELOG.md` and creates a git commit.
 

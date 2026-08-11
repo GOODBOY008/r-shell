@@ -281,9 +281,12 @@ pnpm test:e2e      # E2E
 ### Version Bumping
 
 ```bash
-pnpm run version:patch   # 2.2.0 → 2.2.1
-pnpm run version:minor   # 2.2.0 → 2.3.0
-pnpm run version:major   # 2.2.0 → 3.0.0
+pnpm run version:patch   # 2.2.0 → 2.2.1 (stable)
+pnpm run version:minor   # 2.2.0 → 2.3.0 (stable)
+pnpm run version:major   # 2.2.0 → 3.0.0 (stable)
+pnpm run version:prerelease   # 2.2.0 → 2.3.0-beta.1, or 2.3.0-beta.1 → 2.3.0-beta.2 (tagged)
+pnpm run version:prerelease rc   # 2.3.0-beta.3 → 2.3.0-rc.1 (switch prerelease line)
+pnpm run version:stable   # 2.3.0-beta.3 → 2.3.0 (finalize to stable)
 ```
 
 ---

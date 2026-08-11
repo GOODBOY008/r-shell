@@ -13,11 +13,16 @@ This directory contains utility scripts for R-Shell development and maintenance.
 pnpm run version:patch
 pnpm run version:minor
 pnpm run version:major
+pnpm run version:prerelease        # stable -> 2.8.0-beta.1, or 2.8.0-beta.1 -> 2.8.0-beta.2
+pnpm run version:prerelease rc     # continue/switch the prerelease line (alpha|beta|rc|...)
+pnpm run version:stable            # finalize a prerelease -> stable (2.8.0-beta.3 -> 2.8.0)
 
 # Direct usage
 node scripts/bump-version.mjs patch
 node scripts/bump-version.mjs minor --no-commit
 node scripts/bump-version.mjs major --skip-changelog
+node scripts/bump-version.mjs prerelease beta
+node scripts/bump-version.mjs stable
 ```
 
 **Features:**
@@ -26,6 +31,15 @@ node scripts/bump-version.mjs major --skip-changelog
 - ✅ Interactive confirmation
 - ✅ Automatic git commit
 - ✅ CHANGELOG.md template generation
+- ✅ Stable (`major`/`minor`/`patch`) and tagged prerelease (`prerelease`/`stable`) bumps
+
+### Bump Types
+
+- `major` / `minor` / `patch` — stable release bump (`2.7.0 -> 2.8.0`); a fresh CHANGELOG section is inserted.
+- `prerelease [identifier]` — tagged prerelease bump. From a stable version it opens the next minor line (`2.7.0 -> 2.8.0-beta.1`); from a prerelease it continues the same identifier (`2.8.0-beta.1 -> 2.8.0-beta.2`) or switches to another one at `.1` (`2.8.0-beta.3 -> 2.8.0-rc.1`). Identifier defaults to `beta`.
+- `stable` — finalize a prerelease to its base version (`2.8.0-beta.3 -> 2.8.0`). Errors if the current version is already stable.
+
+For `prerelease` / `stable`, the CHANGELOG section for the release line is **renamed** (e.g. `## [2.8.0-beta.2]` → `## [2.8.0-beta.3]`, or → `## [2.8.0]` on finalize) instead of inserting a new one each time, so draft notes carry over without accumulating duplicate sections.
 
 ### bump-version.sh
 
@@ -42,6 +56,8 @@ node scripts/bump-version.mjs major --skip-changelog
 - ✅ Uses sed for in-place editing
 - ✅ Colored output
 - ✅ Same functionality as Node.js version
+
+> ⚠️ The bash script supports only **stable** bumps (`major`/`minor`/`patch`). Use `bump-version.mjs` for prerelease (`prerelease [identifier]`) and finalize (`stable`) bumps.
 
 ## Options
 
