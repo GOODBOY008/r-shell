@@ -381,6 +381,13 @@ export function GroupTabBar({
                       {t('contextMenu.closeTabsToLeft')}
                     </ContextMenuItem>
                   )}
+                  {/* Close All */}
+                  {tabs.length > 0 && (
+                    <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_ALL_TABS', groupId })}>
+                      <XCircle className="mr-2 h-4 w-4" />
+                      {t('contextMenu.closeAllTabs')}
+                    </ContextMenuItem>
+                  )}
                   <ContextMenuSeparator />
                   {/* Move to New Group submenu */}
                   <ContextMenuSub>

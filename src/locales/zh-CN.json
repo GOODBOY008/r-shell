@@ -642,7 +642,8 @@
     "clearTerminal": "清除终端",
     "clearScrollback": "清除回滚",
     "saveOutputToFile": "保存输出到文件",
-    "closeTabsToLeft": "关闭左侧标签页"
+    "closeTabsToLeft": "关闭左侧标签页",
+    "closeAllTabs": "关闭全部标签页"
   },
   "updateChecker": {
     "checkForUpdates": "检查更新",

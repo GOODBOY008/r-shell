@@ -642,7 +642,8 @@
     "clearTerminal": "Clear Terminal",
     "clearScrollback": "Clear Scrollback",
     "saveOutputToFile": "Save Output to File",
-    "closeTabsToLeft": "Close Tabs to Left"
+    "closeTabsToLeft": "Close Tabs to Left",
+    "closeAllTabs": "Close All Tabs"
   },
   "updateChecker": {
     "checkForUpdates": "Check for Updates",
