@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import i18n from '../lib/i18n';
 import { changeLanguage, applyLanguageFromPreference, getLanguagePreference, AUTO } from '../lib/i18n';
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -37,9 +39,10 @@ describe('i18n', () => {
     // Guard against future hardcoded translation keys: collect every literal
     // t('...') / i18n.t('...') key from the source tree and assert it resolves
     // in en.json (accounting for plural/context suffixes like _one/_other).
-    const fs = require('node:fs');
-    const path = require('node:path');
-    const srcDir = path.resolve(__dirname, '..');
+    // vitest runs from the project root, so process.cwd() reliably points at
+    // the repo root; scanning src/ from there keeps this ESM-safe (no
+    // require()/__dirname which are unavailable in "type": "module" files).
+    const srcDir = path.join(process.cwd(), 'src');
 
     function flatten(d: Record<string, unknown>, prefix = ''): Record<string, unknown> {
       const out: Record<string, unknown> = {};
@@ -62,12 +65,12 @@ describe('i18n', () => {
 
     const used = new Set<string>();
     function walk(dir: string): void {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (entry.name === 'node_modules' || entry.name === 'locales' || entry.name === '__tests__' || entry.name === '__mocks__') continue;
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) walk(full);
         else if (/\.(ts|tsx)$/.test(entry.name)) {
-          const content = fs.readFileSync(full, 'utf8');
+          const content = readFileSync(full, 'utf8');
           for (const m of content.matchAll(/(?:\bt|i18n\.t)\(\s*['"]([^'"]+)['"]/g)) {
             const key = m[1];
             if (key.includes('${') || key.includes(' + ')) continue; // dynamic keys

@@ -533,8 +533,8 @@
       "open": "打开",
       "edit": "编辑",
       "openFolder": "打开文件夹",
-      "pasteCount_one": "{{count}} 个项目",
-      "pasteCount_other": "{{count}} 个项目"
+      "pasteWithCount_one": "粘贴 {{count}} 个项目",
+      "pasteWithCount_other": "粘贴 {{count}} 个项目"
     },
     "toast": {
       "queuedUpload_one": "已排队 {{count}} 个文件等待上传",

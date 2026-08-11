@@ -533,8 +533,8 @@
       "open": "Open",
       "edit": "Edit",
       "openFolder": "Open Folder",
-      "pasteCount_one": "{{count}} item",
-      "pasteCount_other": "{{count}} items"
+      "pasteWithCount_one": "Paste {{count}} item",
+      "pasteWithCount_other": "Paste {{count}} items"
     },
     "toast": {
       "queuedUpload_one": "Queued {{count}} file for upload",
