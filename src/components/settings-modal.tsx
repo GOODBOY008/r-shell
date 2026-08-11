@@ -337,7 +337,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
           <DialogTitle className="flex items-center gap-2">
             <div className="p-2 bg-primary/10 rounded-lg">
               <Settings className="h-5 w-5 text-primary" />
@@ -353,7 +353,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
           {/* Scrollable tab bar with fade edges and scroll arrows */}
-          <div className="relative border-b">
+          <div className="relative border-b border-border">
             {/* Left scroll button */}
             {canScrollLeft && (
               <div className="absolute left-0 top-0 bottom-0 z-10 flex items-center pl-1 pr-6 bg-gradient-to-r from-background via-background/95 to-transparent pointer-events-none">
@@ -621,7 +621,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   {terminalAppearance.backgroundImage && (
                     <div className="space-y-4 pl-0">
                       <div className="flex items-center gap-3">
-                        <div className="w-16 h-16 rounded border overflow-hidden flex-shrink-0">
+                        <div className="w-16 h-16 rounded border border-border overflow-hidden flex-shrink-0">
                           <img 
                             src={terminalAppearance.backgroundImage} 
                             alt="Background preview" 
@@ -1258,7 +1258,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   </div>
 
                   <div className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                    <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
                         <p className="text-xs text-muted-foreground">
@@ -1277,7 +1277,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       </Button>
                     </div>
 
-                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                    <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium">{t('settings.advanced.importConfig')}</p>
                         <p className="text-xs text-muted-foreground">
@@ -1317,7 +1317,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
           </TabsContent>
         </Tabs>
 
-        <div className="flex justify-between px-6 py-4 border-t bg-muted/30">
+        <div className="flex justify-between px-6 py-4 border-t border-border bg-muted/30">
           <Button variant="ghost" onClick={handleReset}>
             {t('settings.button.resetToDefaults')}
           </Button>

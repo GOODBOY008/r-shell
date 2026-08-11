@@ -525,7 +525,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         data-panel-mode={mode}
       >
         {/* Panel header */}
-        <div className="flex items-center gap-1 px-2 py-0.5 border-b bg-muted/60 shrink-0">
+        <div className="flex items-center gap-1 px-2 py-0.5 border-b border-border bg-muted/60 shrink-0">
           <Badge
             variant={mode === "local" ? "outline" : "secondary"}
             className="text-[10px] px-1.5 py-0 h-5"
@@ -538,7 +538,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         </div>
 
         {/* Toolbar */}
-        <div className="flex items-center gap-0.5 px-1 py-0.5 border-b bg-muted/30 shrink-0">
+        <div className="flex items-center gap-0.5 px-1 py-0.5 border-b border-border bg-muted/30 shrink-0">
           <Button
             variant="ghost"
             size="icon"
@@ -641,7 +641,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                     )}
                   </colgroup>
                   <thead className="sticky top-0 bg-muted/60 z-10">
-                    <tr className="border-b text-muted-foreground">
+                    <tr className="border-b border-border text-muted-foreground">
                       <th
                         className="text-left px-2 py-0.5 font-medium cursor-pointer hover:bg-muted/80 select-none relative"
                         onClick={() => handleSortClick("name")}
@@ -706,7 +706,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         <ContextMenu key={entry.name}>
                           <ContextMenuTrigger asChild>
                             <tr
-                              className={`border-b border-border/40 cursor-pointer transition-colors ${isSelected ? `${selectedBg} font-medium` : "hover:bg-muted/40"}`}
+                              className={`border-b border-border cursor-pointer transition-colors ${isSelected ? `${selectedBg} font-medium` : "hover:bg-muted/40"}`}
                               onClick={(e) => handleRowClick(idx, e)}
                               onDoubleClick={() => handleDoubleClick(entry)}
                               draggable
@@ -829,7 +829,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* Loading overlay — at panel root to avoid ContextMenu stacking issues */}
         {showOverlay && entries.length > 0 && (
           <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
-            <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-sm border border-border/50">
+            <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-sm border border-border">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               <span className="text-[10px] text-muted-foreground">{t('filePanel.loading')}</span>
             </div>
@@ -851,7 +851,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         )}
 
         {/* Status bar */}
-        <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t bg-muted/30 shrink-0">
+        <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t border-border bg-muted/30 shrink-0">
           <span>
             {t('filePanel.statusBar.items', { count: filteredEntries.length })}
             {selectedNames.size > 0 && (

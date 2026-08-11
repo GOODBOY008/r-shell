@@ -574,7 +574,7 @@ const handleCancelConnectionAttempt = async () => {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
           <DialogTitle className="flex items-center gap-2">
             <div className="p-2 bg-primary/10 rounded-lg">
               <Server className="h-5 w-5 text-primary" />
@@ -589,7 +589,7 @@ const handleCancelConnectionAttempt = async () => {
         </DialogHeader>
 
         <Tabs defaultValue="connection" className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="w-full justify-start rounded-none border-b bg-transparent h-auto p-0 px-4 overflow-x-auto">
+          <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0 px-4 overflow-x-auto">
             <TabsTrigger
               value="connection"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
@@ -1078,7 +1078,7 @@ const handleCancelConnectionAttempt = async () => {
 
         </Tabs>
 
-        <DialogFooter className="px-6 py-4 border-t bg-muted/30 flex-col sm:flex-col">
+        <DialogFooter className="px-6 py-4 border-t border-border bg-muted/30 flex-col sm:flex-col">
           <div className="flex flex-col gap-3 w-full">
             {/* Save as Connection Option - Only show for new connections */}
             {!editingConnection && (

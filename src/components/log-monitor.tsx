@@ -622,7 +622,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
     <TooltipProvider delayDuration={300}>
       <div className="h-full flex flex-col text-foreground">
         {/* ── Row 1: Source selector ── */}
-        <div className="flex items-center gap-1 px-2 py-1 border-b bg-muted/30 shrink-0">
+        <div className="flex items-center gap-1 px-2 py-1 border-b border-border bg-muted/30 shrink-0">
           <Select value={selectedSourceId} onValueChange={handleSourceChange}>
             <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
               <SelectValue placeholder={t('logMonitor.selectLogSource')} />
@@ -794,7 +794,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
 
         {/* ── Optional: Custom path input ── */}
         {showCustomInput && (
-          <div className="flex items-center gap-1.5 px-2 py-1 border-b bg-muted/20 shrink-0">
+          <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border bg-muted/20 shrink-0">
             <Input
               placeholder={t('logMonitor.customPathPlaceholder')}
               value={customPath}
@@ -823,7 +823,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         )}
 
         {/* ── Row 2: Filters ── */}
-        <div className="flex items-center gap-1 px-2 py-1 border-b shrink-0">
+        <div className="flex items-center gap-1 px-2 py-1 border-b border-border shrink-0">
           {/* Search input */}
           <div className="relative flex-1 min-w-0">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
@@ -870,7 +870,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
                 <TooltipTrigger asChild>
                   <button
                     className={cn(
-                      "h-6 min-w-6 px-1.5 rounded text-[10px] font-semibold border transition-all shrink-0",
+                      "h-6 min-w-6 px-1.5 rounded text-[10px] font-semibold border border-border transition-all shrink-0",
                       active ? colors.badge : "border-transparent text-muted-foreground/50 hover:text-muted-foreground"
                     )}
                     onClick={() => toggleLevel(level)}
@@ -1013,7 +1013,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         </div>
 
         {/* ── Status bar ── */}
-        <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t bg-muted/30 shrink-0">
+        <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t border-border bg-muted/30 shrink-0">
           {/* Line counts */}
           <span>
             {filteredLines.length === parsedLines.length

@@ -312,7 +312,7 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
       
       {/* Search Bar */}
       {showSearch && (
-        <div className="absolute top-2 right-2 bg-background border rounded-md shadow-lg p-2 flex items-center gap-2 z-10">
+        <div className="absolute top-2 right-2 bg-background border border-border rounded-md shadow-lg p-2 flex items-center gap-2 z-10">
           <Input
             type="text"
             placeholder={t('terminal.search')}

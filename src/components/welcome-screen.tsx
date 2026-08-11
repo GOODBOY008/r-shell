@@ -160,7 +160,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
         </div>
 
         {/* Quick Actions */}
-        <Card className="border-2">
+        <Card className="border-2 border-border">
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-lg">
               <Zap className="h-4 w-4" />
@@ -174,7 +174,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
             {quickActions.map((action, index) => (
               <Card 
                 key={index}
-                className="relative overflow-hidden hover:shadow-md transition-all cursor-pointer group border-2 hover:border-primary/50"
+                className="relative overflow-hidden hover:shadow-md transition-all cursor-pointer group border-2 border-border hover:border-primary/50"
                 onClick={action.action}
               >
                 <CardContent className="p-4">
