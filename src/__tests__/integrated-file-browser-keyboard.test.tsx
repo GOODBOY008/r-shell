@@ -174,6 +174,8 @@ describe('IntegratedFileBrowser terminal directory following', () => {
   });
 
   it('returns to the same terminal directory after manual navigation on the next prompt', async () => {
+    // Generous timeout: this follow-effect test chains several async waits
+    // and has a history of timing out on slow CI runners (pre-existing flake).
     const { rerender } = render(
       <IntegratedFileBrowser
         connectionId="conn-manual"
@@ -215,7 +217,7 @@ describe('IntegratedFileBrowser terminal directory following', () => {
         mocks.invoke.mock.calls.filter(([, args]) => args.path === '/srv/app'),
       ).toHaveLength(2);
     });
-  });
+  }, 15000);
 
   it('keeps the last good directory and warns once when a terminal path is inaccessible', async () => {
     mocks.invoke.mockImplementation(async (_command: string, args: { path: string }) => {
