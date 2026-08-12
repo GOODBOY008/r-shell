@@ -76,7 +76,14 @@
     "systemMonitor": "System Monitor",
     "logMonitor": "Log Monitor",
     "quickConnected": "Quick Connected",
-    "quickConnectedDesc": "Connected to {{name}}"
+    "quickConnectedDesc": "Connected to {{name}}",
+    "connectionNotFound": "Connection Not Found",
+    "connectionNotFoundDesc1": "The connection data could not be loaded.",
+    "connectionNotFoundDesc2": "The connection could not be found. It may have been deleted.",
+    "alreadyConnected": "Already Connected",
+    "alreadyConnectedDesc": "Switched to existing {{name}} connection",
+    "terminal": "Terminal",
+    "fileBrowser": "File Browser"
   },
   "connectionDialog": {
     "title": {
@@ -265,7 +272,10 @@
       "foldGutter": "Code Folding",
       "foldGutterDesc": "Show fold/unfold arrows in the gutter",
       "bracketMatching": "Bracket Matching",
-      "bracketMatchingDesc": "Highlight matching brackets when the cursor is next to one"
+      "bracketMatchingDesc": "Highlight matching brackets when the cursor is next to one",
+      "tabSize2": "2 spaces",
+      "tabSize4": "4 spaces",
+      "tabSize8": "8 spaces"
     },
     "connection": {
       "title": "Connection Settings",
@@ -368,7 +378,9 @@
       "warn": "Warning",
       "info": "Info",
       "debug": "Debug"
-    }
+    },
+    "tabScrollLeft": "Scroll left",
+    "tabScrollRight": "Scroll right"
   },
   "welcome": {
     "quickTips": "Quick Tips",
@@ -517,7 +529,12 @@
       "openInLogMonitor": "Open in Log Monitor",
       "openInOS": "Open in OS",
       "uploadFolder": "Upload Folder",
-      "syncDirectories": "Sync Directories"
+      "syncDirectories": "Sync Directories",
+      "open": "Open",
+      "edit": "Edit",
+      "openFolder": "Open Folder",
+      "pasteWithCount_one": "Paste {{count}} item",
+      "pasteWithCount_other": "Paste {{count}} items"
     },
     "toast": {
       "queuedUpload_one": "Queued {{count}} file for upload",
@@ -565,7 +582,8 @@
       "droppedPathsSkipped_other": "{{count}} dropped paths could not be uploaded",
       "queuedUploadToPath": "Queued {{count}} file(s) for upload to {{path}}",
       "enterFolderName": "Enter folder name:",
-      "enterFileName": "Enter file name:"
+      "enterFileName": "Enter file name:",
+      "fileInfo": "File: {{name}}\nSize: {{size}}\nModified: {{modified}}\nPermissions: {{permissions}}"
     },
     "toolbar": {
       "back": "Back",
@@ -584,7 +602,7 @@
       "syncDirectories": "Sync directories (Ctrl+Shift+S)"
     },
     "selected": "{{count}} selected",
-    "loading": "Loading\u2026",
+    "loading": "Loading…",
     "downloadSelected": "Download {{count}} Selected",
     "deleteFolderTitle": "Delete Folder?",
     "deleteFileTitle": "Delete File?",
@@ -617,7 +635,9 @@
       "cancelled": "Cancelled",
       "upload": "Upload",
       "download": "Download"
-    }
+    },
+    "dropOverlay": "Drop files or folders to upload",
+    "dropUploadTo": "Upload to {{path}}"
   },
   "contextMenu": {
     "copy": "Copy",
@@ -658,7 +678,25 @@
     "downloadFailed": "Download Failed",
     "downloadFailedDesc": "Unable to download the update. Please try again later.",
     "checkFailed": "Check Failed",
-    "checkFailedDesc": "Unable to check for updates. Please try again later."
+    "checkFailedDesc": "Unable to check for updates. Please try again later.",
+    "errorNotConfigured": "Update server is not configured for this version.",
+    "errorNetwork": "Could not reach the update server. Check your internet connection.",
+    "errorVerification": "Update verification failed. Please try again later.",
+    "installFailed": "Install Failed",
+    "installFailedDesc": "Unable to install the update. Please try again later.",
+    "readyToInstall": "Update ready to install",
+    "readyToDownload": "Version {{version}} is ready to download.",
+    "newVersionAvailable": "A new version is available.",
+    "newVersionBody": "A new version is available with improvements and fixes.",
+    "restartToFinish": "The update has been downloaded. Restart now to finish installing.",
+    "later": "Later",
+    "restartNow": "Restart now",
+    "restarting": "Restarting…",
+    "downloadUpdate": "Download update",
+    "downloadingButton": "Downloading…",
+    "checkFailedFallback": "Failed to check for updates.",
+    "downloadFailedFallback": "Failed to download update.",
+    "installFailedFallback": "Failed to install update."
   },
   "syncDialog": {
     "title": "Directory Sync",
@@ -697,7 +735,48 @@
     "actionCreateDir": "Create Dir",
     "actionDelete": "Delete",
     "actionIdentical": "Identical",
-    "actionConflict": "Conflict"
+    "actionConflict": "Conflict",
+    "localDirectory": "Local Directory",
+    "remoteDirectory": "Remote Directory",
+    "directionLocalToRemote": "Local → Remote",
+    "directionRemoteToLocal": "Remote → Local",
+    "compareBy": "Compare by",
+    "criteriaSize": "Size only",
+    "criteriaDate": "Date only",
+    "criteriaSizeDate": "Size + Date",
+    "recursive": "Recursive (include subdirectories)",
+    "deleteOrphaned": "Delete orphaned remote files",
+    "exclude": "Exclude",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "showIdentical": "Show identical",
+    "columnPath": "Path",
+    "columnAction": "Action",
+    "columnLocal": "Local",
+    "columnRemote": "Remote",
+    "runComparisonHint": "Run comparison to see differences",
+    "allIdentical": "All files are identical",
+    "comparing": "Comparing directories…",
+    "syncItems": "Sync ({{count}} items)",
+    "toastFailed": "Failed: {{path}}",
+    "toastComplete": "Sync complete: {{count}} item(s) synchronized",
+    "toastFinishedWithErrors": "Sync finished with {{errorCount}} error(s) out of {{processedItems}} items",
+    "badgeUpload_one": "{{count}} upload",
+    "badgeUpload_other": "{{count}} uploads",
+    "badgeMkdir_one": "{{count}} mkdir",
+    "badgeMkdir_other": "{{count}} mkdirs",
+    "badgeDelete_one": "{{count}} delete",
+    "badgeDelete_other": "{{count}} deletes",
+    "badgeDownload_one": "{{count}} download",
+    "badgeDownload_other": "{{count}} downloads",
+    "badgeIdentical_one": "{{count}} identical",
+    "badgeIdentical_other": "{{count}} identical",
+    "badgeConflict_one": "{{count}} conflict",
+    "badgeConflict_other": "{{count}} conflicts",
+    "badgeTotal": "{{size}} total",
+    "compareButton": "Compare",
+    "syncingItem": "Syncing: {{item}}",
+    "recompareButton": "Re-compare"
   },
   "directoryTransfer": {
     "title": "Directory Transfer",
@@ -777,7 +856,7 @@
   "filePanel": {
     "selectDirectory": "Select a directory to view its contents",
     "noFiles": "No files found",
-    "loading": "Loading...",
+    "loading": "Loading…",
     "dropFilesHint": "Drop files here to upload",
     "items": "{{count}} item(s)",
     "itemsSelected_one": "{{count}} item selected",
@@ -797,7 +876,6 @@
       "noMatches": "No matches",
       "emptyDirectory": "Empty directory"
     },
-    "loading": "Loading…",
     "column": {
       "name": "Name",
       "size": "Size",
@@ -1117,5 +1195,26 @@
     "desktopDisconnected": "Desktop Disconnected",
     "reconnect": "Reconnect",
     "connectingTo": "Connecting to {{name}}..."
+  },
+  "errorBoundary": {
+    "somethingWentWrong": "Something went wrong",
+    "unexpectedError": "An unexpected error occurred",
+    "retry": "Retry",
+    "labelError": "{{label}} encountered an error"
+  },
+  "connectionTabs": {
+    "reconnect": "Reconnect",
+    "duplicateTab": "Duplicate Tab",
+    "closeTab": "Close Tab",
+    "closeOtherTabs": "Close Other Tabs",
+    "closeTabsToLeft": "Close Tabs to the Left",
+    "closeTabsToRight": "Close Tabs to the Right",
+    "closeAllTabs": "Close All Tabs"
+  },
+  "networkMonitor": {
+    "title": "Network Statistics",
+    "noConnection": "No active connection. Connect to view network statistics.",
+    "comingSoon": "Advanced network monitoring features coming soon",
+    "disabledNotice": "Network Interfaces and Active Connections monitoring is currently disabled. Check the Network Usage and Network Latency charts in the Monitor tab for current network metrics."
   }
 }

@@ -192,12 +192,12 @@ describe('UpdateChecker', () => {
       rerender(<UpdateChecker checkSignal={1} />);
       await act(async () => { await new Promise(r => setTimeout(r, 30)); });
 
-      expect(mockToast.loading).toHaveBeenCalledWith('Checking for updates…', { id: 'update-check' });
+      expect(mockToast.loading).toHaveBeenCalledWith('Checking for updates...', { id: 'update-check' });
 
       // Resolve
       await act(async () => { resolveCheck!(null); });
       expect(mockToast.dismiss).toHaveBeenCalledWith('update-check');
-      expect(mockToast.success).toHaveBeenCalledWith('You are up to date.');
+      expect(mockToast.success).toHaveBeenCalledWith("You're up to date!");
     });
 
     it('does NOT trigger check() when signal is same value', async () => {
@@ -257,7 +257,7 @@ describe('UpdateChecker', () => {
       await waitFor(() => expect(mockToast.error).toHaveBeenCalled());
 
       const [title, opts] = mockToast.error.mock.calls[0];
-      expect(title).toBe('Update check failed');
+      expect(title).toBe('Check Failed');
       expect(opts.description).toContain('Update server is not configured');
     });
 
@@ -369,7 +369,7 @@ describe('UpdateChecker', () => {
 
       await waitFor(() => expect(mockToast.error).toHaveBeenCalled());
       const [title, opts] = mockToast.error.mock.calls[0];
-      expect(title).toBe('Update failed');
+      expect(title).toBe('Download Failed');
       expect(opts.description).toBe('disk full');
     });
   });
@@ -422,7 +422,7 @@ describe('UpdateChecker', () => {
 
       await waitFor(() => {
         const calls = mockToast.error.mock.calls;
-        expect(calls.some(([t]: [string]) => t === 'Install failed')).toBe(true);
+        expect(calls.some(([t]: [string]) => t === 'Install Failed')).toBe(true);
       });
     });
   });
