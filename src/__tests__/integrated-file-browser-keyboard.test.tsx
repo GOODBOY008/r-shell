@@ -200,8 +200,8 @@ describe('IntegratedFileBrowser terminal directory following', () => {
     // Wait for the Home navigation to fully commit (breadcrumb renders '/home')
     // before bumping the terminal sequence. Otherwise the follow effect can still
     // see committedPathRef === '/srv/app' and skip reloading, making this test
-    // order-dependent on async timing. Generous findByTitle timeout: slow CI
-    // runners (Windows/macOS) occasionally exceed the default 1000 ms window.
+    // order-dependent on async timing. Generous timeout: slow CI runners
+    // (Windows) occasionally exceed the default 1000 ms commit window.
     await screen.findByTitle('/home', undefined, { timeout: 5000 });
 
     rerender(
@@ -235,7 +235,7 @@ describe('IntegratedFileBrowser terminal directory following', () => {
     );
 
     await waitFor(() => expect(mocks.warning).toHaveBeenCalledOnce());
-    expect(await screen.findByTitle('/home')).toBeTruthy();
+    expect(await screen.findByTitle('/home', undefined, { timeout: 5000 })).toBeTruthy();
 
     rerender(
       <IntegratedFileBrowser
@@ -252,7 +252,7 @@ describe('IntegratedFileBrowser terminal directory following', () => {
       ).toHaveLength(2);
     });
     expect(mocks.warning).toHaveBeenCalledOnce();
-    expect(await screen.findByTitle('/home')).toBeTruthy();
+    expect(await screen.findByTitle('/home', undefined, { timeout: 5000 })).toBeTruthy();
   });
 });
 
