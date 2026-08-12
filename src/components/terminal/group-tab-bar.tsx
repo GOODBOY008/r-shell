@@ -65,6 +65,10 @@ interface GroupTabBarProps {
   onNewTab?: () => void;
   onDuplicateTab?: (tabId: string) => void;
   onReconnect?: (tabId: string) => void;
+  /** Backend-aware close: disconnects SFTP/FTP sessions before removing the tab. */
+  onCloseTab?: (tabId: string) => void | Promise<void>;
+  /** Backend-aware close-all: disconnects SFTP/FTP sessions before emptying the group. */
+  onCloseAllTabs?: (groupId: string) => void | Promise<void>;
   closeTabShortcut?: string;
 }
 
@@ -75,6 +79,8 @@ export function GroupTabBar({
   onNewTab,
   onDuplicateTab,
   onReconnect,
+  onCloseTab,
+  onCloseAllTabs,
   closeTabShortcut,
 }: GroupTabBarProps) {
   const { t } = useTranslation();
@@ -250,10 +256,22 @@ export function GroupTabBar({
 
   const handleTabClose = useCallback(
     (tabId: string) => {
-      dispatch({ type: 'REMOVE_TAB', groupId, tabId });
+      if (onCloseTab) {
+        void onCloseTab(tabId);
+      } else {
+        dispatch({ type: 'REMOVE_TAB', groupId, tabId });
+      }
     },
-    [dispatch, groupId],
+    [onCloseTab, dispatch, groupId],
   );
+
+  const handleCloseAllTabs = useCallback(() => {
+    if (onCloseAllTabs) {
+      void onCloseAllTabs(groupId);
+    } else {
+      dispatch({ type: 'CLOSE_ALL_TABS', groupId });
+    }
+  }, [onCloseAllTabs, dispatch, groupId]);
 
   const handleTabSelect = useCallback(
     (tabId: string) => {
@@ -383,7 +401,7 @@ export function GroupTabBar({
                   )}
                   {/* Close All */}
                   {tabs.length > 0 && (
-                    <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_ALL_TABS', groupId })}>
+                    <ContextMenuItem onClick={handleCloseAllTabs}>
                       <XCircle className="mr-2 h-4 w-4" />
                       {t('contextMenu.closeAllTabs')}
                     </ContextMenuItem>

@@ -667,7 +667,7 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
-  const _handleTabClose = useCallback(async (tabId: string) => {
+  const handleCloseTab = useCallback(async (tabId: string) => {
     // Find which group contains this tab and remove it
     for (const group of Object.values(state.groups)) {
       const tab = group.tabs.find(t => t.id === tabId);
@@ -688,6 +688,29 @@ function AppContent() {
         break;
       }
     }
+  }, [state.groups, dispatch]);
+
+  // Close every tab in a group. Runs backend cleanup for file-browser
+  // sessions first (CLOSE_ALL_TABS is reducer-only and would otherwise
+  // leave SFTP/FTP connections alive), then empties the group.
+  const handleCloseAllTabs = useCallback(async (groupId: string) => {
+    const group = state.groups[groupId];
+    if (!group) return;
+    for (const tab of group.tabs) {
+      // Disconnect SFTP/FTP sessions when closing file-browser tabs
+      if (tab.tabType === 'file-browser') {
+        try {
+          if (tab.protocol === 'SFTP') {
+            await invoke('sftp_standalone_disconnect', { connection_id: tab.id });
+          } else if (tab.protocol === 'FTP') {
+            await invoke('ftp_disconnect', { connection_id: tab.id });
+          }
+        } catch {
+          // Ignore disconnect errors on tab close
+        }
+      }
+    }
+    dispatch({ type: 'CLOSE_ALL_TABS', groupId });
   }, [state.groups, dispatch]);
 
   const handleNewTab = useCallback((folderPath?: string) => {
@@ -1731,6 +1754,8 @@ function AppContent() {
                       onReconnectTab: handleReconnect,
                       closeTabShortcut: keyboardShortcutSettings.closeTab,
                       onWorkingDirectoryChange: handleWorkingDirectoryChange,
+                      onCloseTab: handleCloseTab,
+                      onCloseAllTabs: handleCloseAllTabs,
                     }}>
                       <ErrorBoundary label="Terminal">
                         <GridRenderer node={state.gridLayout} path={[]} />
