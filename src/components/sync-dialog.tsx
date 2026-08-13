@@ -448,7 +448,7 @@ export function SyncDialog({
         </div>
 
         {/* ── Configuration ── */}
-        <div className="space-y-3 border rounded-md p-3 shrink-0">
+        <div className="space-y-3 border border-border rounded-md p-3 shrink-0">
           <div className="flex items-center gap-4 flex-wrap">
             {/* Direction */}
             <div className="flex items-center gap-2">
@@ -656,7 +656,7 @@ export function SyncDialog({
             </div>
 
             {/* Result table */}
-            <ScrollArea className="flex-1 min-h-0 border rounded">
+            <ScrollArea className="flex-1 min-h-0 border border-border rounded">
               <table className="w-full text-[11px]" style={{ tableLayout: "fixed" }}>
                 <colgroup>
                   <col style={{ width: 28 }} />
@@ -666,7 +666,7 @@ export function SyncDialog({
                   <col style={{ width: 70 }} />
                 </colgroup>
                 <thead className="sticky top-0 bg-muted/60 z-10">
-                  <tr className="border-b text-muted-foreground">
+                  <tr className="border-b border-border text-muted-foreground">
                     <th className="px-1 py-0.5" />
                     <th className="text-left px-2 py-0.5 font-medium">
                       {t('syncDialog.columnPath')}

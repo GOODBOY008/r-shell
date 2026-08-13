@@ -113,7 +113,7 @@ export function TransferQueue({
     <Collapsible
       open={expanded}
       onOpenChange={onToggleExpanded}
-      className="border-t bg-muted/30"
+      className="border-t border-border bg-muted/30"
     >
       <CollapsibleTrigger asChild>
         <button className="flex items-center justify-between w-full px-3 py-1 text-xs hover:bg-muted/50 transition">

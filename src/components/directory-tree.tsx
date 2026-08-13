@@ -332,8 +332,8 @@ export function DirectoryTree({
   const selectedPath = normalizePath(currentPath);
 
   return (
-    <div className="h-full w-full flex flex-col overflow-hidden rounded-lg border border-border/70 bg-background/80 shadow-sm">
-      <div className="px-2 py-1 flex items-center border-b bg-muted/30 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
+    <div className="h-full w-full flex flex-col overflow-hidden rounded-lg border border-border bg-background/80 shadow-sm">
+      <div className="px-2 py-1 flex items-center border-b border-border bg-muted/30 text-xs font-medium text-muted-foreground backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
         {t('directoryTree.directories')}
       </div>
       <div

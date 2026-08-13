@@ -423,6 +423,47 @@ describe('CLOSE_TABS_TO_LEFT', () => {
   });
 });
 
+// ── Reducer: CLOSE_ALL_TABS ──
+
+describe('CLOSE_ALL_TABS', () => {
+  it('closes every tab in the group and clears the map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b'), makeTab('c')]);
+    const next = terminalGroupReducer(state, { type: 'CLOSE_ALL_TABS', groupId: '1' });
+    expect(next.groups['1'].tabs).toEqual([]);
+    expect(next.groups['1'].activeTabId).toBeNull();
+    expect(next.tabToGroupMap).toEqual({});
+  });
+
+  it('keeps the last empty group so a new tab can be added', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b')]);
+    const next = terminalGroupReducer(state, { type: 'CLOSE_ALL_TABS', groupId: '1' });
+    expect(Object.keys(next.groups)).toEqual(['1']);
+    expect(next.groups['1'].tabs).toEqual([]);
+    expect(next.groups['1'].activeTabId).toBeNull();
+  });
+
+  it('removes the group when it is not the last one', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b')]);
+    const twoGroups: TerminalGroupState = {
+      ...state,
+      groups: {
+        '1': { id: '1', tabs: [makeTab('a'), makeTab('b')], activeTabId: 'a' },
+        '2': { id: '2', tabs: [makeTab('c')], activeTabId: 'c' },
+      },
+      tabToGroupMap: { a: '1', b: '1', c: '2' },
+    };
+    const next = terminalGroupReducer(twoGroups, { type: 'CLOSE_ALL_TABS', groupId: '1' });
+    expect(next.groups['1']).toBeUndefined();
+    expect(next.tabToGroupMap).toEqual({ c: '2' });
+  });
+
+  it('is a no-op when the group already has no tabs', () => {
+    const state = stateWithTabs('1', []);
+    const next = terminalGroupReducer(state, { type: 'CLOSE_ALL_TABS', groupId: '1' });
+    expect(next).toBe(state);
+  });
+});
+
 // ── Reducer: MOVE_TAB_TO_NEW_GROUP ──
 
 describe('MOVE_TAB_TO_NEW_GROUP', () => {
@@ -611,6 +652,13 @@ describe('tabToGroupMap consistency', () => {
     const next = terminalGroupReducer(state, { type: 'CLOSE_TABS_TO_LEFT', groupId: '1', tabId: 'b' });
     expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
     expect(Object.keys(next.tabToGroupMap).sort()).toEqual(['b', 'c']);
+  });
+
+  it('CLOSE_ALL_TABS cleans every tab of the group from map', () => {
+    const state = stateWithTabs('1', [makeTab('a'), makeTab('b'), makeTab('c')]);
+    const next = terminalGroupReducer(state, { type: 'CLOSE_ALL_TABS', groupId: '1' });
+    expect(next.tabToGroupMap).toEqual(buildExpectedMap(next));
+    expect(next.tabToGroupMap).toEqual({});
   });
 
   it('ADD_TAB updates map', () => {

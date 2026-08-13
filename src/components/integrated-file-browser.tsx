@@ -1405,10 +1405,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   }
 
   return (
-    <div className={`h-full flex flex-col bg-background border-t ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
+    <div className={`h-full flex flex-col bg-background border-t border-border ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
       {/* File Browser Toolbar */}
       <div className="relative z-10 pt-2 pb-1">
-        <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border/70 bg-background/90 px-1.5 py-1 text-xs shadow-sm backdrop-blur-sm scrollbar-none">
+        <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border bg-background/90 px-1.5 py-1 text-xs shadow-sm backdrop-blur-sm scrollbar-none">
           {/* Back */}
           <Button
             variant="ghost"
@@ -1455,7 +1455,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
           {/* Breadcrumb / Editable address bar */}
           <div
-            className="mx-1 flex h-6 min-w-0 flex-1 cursor-text items-center rounded-md border border-border/50 bg-muted/50 px-1.5 shadow-inner group hover:border-border"
+            className="mx-1 flex h-6 min-w-0 flex-1 cursor-text items-center rounded-md border border-border bg-muted/50 px-1.5 shadow-inner group hover:border-border"
             onClick={() => {
               if (!isEditingPath) {
                 setEditPathValue(currentPath);
@@ -1541,7 +1541,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               placeholder={t('fileBrowser.searchFiles')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="h-6 border-border/60 bg-background/70 text-xs shadow-none placeholder:text-muted-foreground/70 focus-visible:bg-background"
+              className="h-6 border-border bg-background/70 text-xs shadow-none placeholder:text-muted-foreground/70 focus-visible:bg-background"
             />
           </div>
 
@@ -1590,7 +1590,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
             <div
               ref={dropZoneRef}
-              className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm"
+              className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border bg-background shadow-sm"
               // Required on Linux/WebKit2GTK: without preventDefault the browser
               // never signals "drop accepted", so Tauri's native drop signal
               // never fires. Also suppresses the browser's default file-open
@@ -1600,7 +1600,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               {/* Loading overlay */}
               {showLoadingOverlay && files.length > 0 && (
                 <div className="absolute inset-0 z-40 flex items-center justify-center bg-background/50 pointer-events-none">
-                  <div className="flex flex-col items-center gap-1.5 bg-background/90 rounded-lg px-4 py-3 shadow-sm border border-border/50">
+                  <div className="flex flex-col items-center gap-1.5 bg-background/90 rounded-lg px-4 py-3 shadow-sm border border-border">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                     <span className="text-[10px] text-muted-foreground">{t('fileBrowser.loading')}</span>
                   </div>
@@ -1619,10 +1619,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               )}
 
               {/* Column Headers — outside ScrollArea so they never move */}
-              <div className="flex shrink-0 border-b bg-muted/30 px-2 py-1 backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
+              <div className="flex shrink-0 border-b border-border bg-muted/30 px-2 py-1 backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
                 {/* Name header */}
                 <div
-                  className={`flex items-center relative cursor-pointer select-none border-r border-border/20 pr-2 ${sortField === 'name' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center relative cursor-pointer select-none border-r border-border pr-2 ${sortField === 'name' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.name}px` }}
                   onClick={() => handleSort('name')}
                 >
@@ -1640,7 +1640,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
                 {/* Size header */}
                 <div
-                  className={`flex items-center justify-end relative cursor-pointer select-none border-r border-border/20 px-2 ${sortField === 'size' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center justify-end relative cursor-pointer select-none border-r border-border px-2 ${sortField === 'size' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.size}px` }}
                   onClick={() => handleSort('size')}
                 >
@@ -1658,7 +1658,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
                 {/* Modified header */}
                 <div
-                  className={`flex items-center relative cursor-pointer select-none border-r border-border/20 px-2 ${sortField === 'modified' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center relative cursor-pointer select-none border-r border-border px-2 ${sortField === 'modified' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.modified}px` }}
                   onClick={() => handleSort('modified')}
                 >
@@ -1676,7 +1676,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
                 {/* Permissions header */}
                 <div
-                  className={`flex items-center relative cursor-pointer select-none border-r border-border/20 px-2 ${sortField === 'permissions' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center relative cursor-pointer select-none border-r border-border px-2 ${sortField === 'permissions' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.permissions}px` }}
                   onClick={() => handleSort('permissions')}
                 >
@@ -1951,7 +1951,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               </ScrollArea>
 
               {/* Status footer */}
-              <div className="flex items-center justify-between px-3 py-1 text-[10px] text-muted-foreground border-t bg-muted/20 shrink-0">
+              <div className="flex items-center justify-between px-3 py-1 text-[10px] text-muted-foreground border-t border-border bg-muted/20 shrink-0">
                 <span>
                   {t('fileBrowser.status.items', { dirs: statusStats.dirs, files: statusStats.fileCount })}
                 </span>

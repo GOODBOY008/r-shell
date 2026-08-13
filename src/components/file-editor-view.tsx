@@ -151,7 +151,7 @@ export function FileEditorView({
 
   // ---------- Shared header toolbar ----------
   const renderToolbar = (showSaveButton: boolean) => (
-    <div className="flex items-center gap-2 px-2 py-1 border-b bg-muted/30 text-xs shrink-0">
+    <div className="flex items-center gap-2 px-2 py-1 border-b border-border bg-muted/30 text-xs shrink-0">
       <span className="font-mono text-muted-foreground truncate flex-1" title={filePath}>
         {filePath}
       </span>

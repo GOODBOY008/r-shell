@@ -443,6 +443,25 @@ export function terminalGroupReducer(
       };
     }
 
+    case 'CLOSE_ALL_TABS': {
+      const { groupId } = action;
+      const group = state.groups[groupId];
+      if (!group || group.tabs.length === 0) return state;
+
+      const newTabToGroupMap = { ...state.tabToGroupMap };
+      for (const t of group.tabs) delete newTabToGroupMap[t.id];
+
+      const newState = {
+        ...state,
+        groups: {
+          ...state.groups,
+          [groupId]: { ...group, tabs: [], activeTabId: null },
+        },
+        tabToGroupMap: newTabToGroupMap,
+      };
+      return maybeRemoveEmptyGroup(newState, groupId);
+    }
+
     case 'MOVE_TAB_TO_NEW_GROUP': {
       const { groupId, tabId, direction } = action;
       const group = state.groups[groupId];

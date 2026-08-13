@@ -773,7 +773,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                     {gpuStats.map((gpu, idx) => {
                       const _gpuInfo = gpuDetection.gpus.find(g => g.index === gpu.index);
                       return (
-                        <div key={gpu.index} className="border rounded p-1.5 space-y-1">
+                        <div key={gpu.index} className="border border-border rounded p-1.5 space-y-1">
                           {/* GPU Name Row */}
                           <div className="flex items-center gap-1.5">
                             <div 
@@ -1155,8 +1155,8 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <CardContent className="p-0">
               <div className="max-h-40 overflow-auto">
                 <table className="w-full caption-bottom text-sm">
-                  <thead className="[&_tr]:border-b">
-                    <tr className="border-b transition-colors">
+                  <thead className="[&_tr]:border-b [&_tr]:border-border">
+                    <tr className="border-b border-border transition-colors">
                       <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px]">{t('systemMonitor.pid')}</th>
                       <th 
                         className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] cursor-pointer hover:bg-muted/50 select-none"
@@ -1182,7 +1182,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                   </thead>
                   <tbody className="[&_tr:last-child]:border-0">
                     {processes.slice(0, 8).map((process) => (
-                      <tr key={process.pid} className="hover:bg-muted/50 border-b transition-colors">
+                      <tr key={process.pid} className="hover:bg-muted/50 border-b border-border transition-colors">
                         <td className="p-1 align-middle whitespace-nowrap text-[10px]">{process.pid}</td>
                         <td className={`p-1 align-middle whitespace-nowrap text-[10px] font-semibold ${getUsageColor(process.cpu)}`}>
                           {process.cpu.toFixed(0)}%
@@ -1228,8 +1228,8 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               ) : (
                 <div className="max-h-40 overflow-auto">
                   <table className="w-full caption-bottom text-sm">
-                    <thead className="[&_tr]:border-b">
-                      <tr className="border-b transition-colors">
+                    <thead className="[&_tr]:border-b [&_tr]:border-border">
+                      <tr className="border-b border-border transition-colors">
                         <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium text-[11px]">{t('systemMonitor.path')}</th>
                         <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.size')}</th>
                         <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.usage')}</th>
@@ -1237,7 +1237,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                     </thead>
                     <tbody className="[&_tr:last-child]:border-0">
                       {disks.map((disk, index) => (
-                        <tr key={index} className="hover:bg-muted/50 border-b transition-colors">
+                        <tr key={index} className="hover:bg-muted/50 border-b border-border transition-colors">
                           <td className="p-1 align-middle font-medium text-[10px] truncate max-w-0" title={`${disk.path} (${disk.filesystem})`}>
                             {disk.path}
                           </td>

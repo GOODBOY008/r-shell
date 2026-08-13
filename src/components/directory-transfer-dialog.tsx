@@ -489,7 +489,7 @@ export function DirectoryTransferDialog({
 
         {/* Error log */}
         {progress.errors.length > 0 && (
-          <ScrollArea className="max-h-24 border rounded text-[10px] font-mono p-2">
+          <ScrollArea className="max-h-24 border border-border rounded text-[10px] font-mono p-2">
             {progress.errors.map((err, i) => (
               <div key={i} className="text-destructive">
                 {err}

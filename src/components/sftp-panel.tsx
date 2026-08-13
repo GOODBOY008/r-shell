@@ -365,8 +365,8 @@ export function SFTPPanel({
 
         <div className="grid grid-cols-2 gap-4 px-6 py-4 flex-1 overflow-hidden">
           {/* Local Files (Left Panel) */}
-          <div className="border rounded-lg">
-            <div className="p-3 border-b bg-muted/50">
+          <div className="border border-border rounded-lg">
+            <div className="p-3 border-b border-border bg-muted/50">
               <div className="flex items-center justify-between">
                 <span className="font-medium">Local Files</span>
                 <div className="flex gap-1">
@@ -434,8 +434,8 @@ export function SFTPPanel({
           </div>
 
           {/* Remote Files (Right Panel) */}
-          <div className="border rounded-lg">
-            <div className="p-3 border-b bg-muted/50">
+          <div className="border border-border rounded-lg">
+            <div className="p-3 border-b border-border bg-muted/50">
               <div className="flex items-center justify-between">
                 <span className="font-medium">
                   Remote Files
@@ -524,13 +524,13 @@ export function SFTPPanel({
 
         {/* Transfer Queue */}
         {transfers.length > 0 && (
-          <div className="border-t px-6 py-4 bg-muted/30">
+          <div className="border-t border-border px-6 py-4 bg-muted/30">
             <h3 className="font-medium mb-2">Transfer Queue</h3>
             <ScrollArea className="h-32">
               {transfers.map((transfer) => (
                 <div
                   key={transfer.id}
-                  className="flex items-center gap-3 p-2 border rounded mb-2"
+                  className="flex items-center gap-3 p-2 border border-border rounded mb-2"
                 >
                   <div className="flex-1">
                     <div className="flex items-center gap-2 text-sm">

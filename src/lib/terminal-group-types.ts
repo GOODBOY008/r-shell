@@ -53,6 +53,7 @@ export type TerminalGroupAction =
   | { type: 'CLOSE_OTHER_TABS'; groupId: string; tabId: string }
   | { type: 'CLOSE_TABS_TO_RIGHT'; groupId: string; tabId: string }
   | { type: 'CLOSE_TABS_TO_LEFT'; groupId: string; tabId: string }
+  | { type: 'CLOSE_ALL_TABS'; groupId: string }
   | { type: 'MOVE_TAB_TO_NEW_GROUP'; groupId: string; tabId: string; direction: SplitDirection }
   | { type: 'UPDATE_TAB_STATUS'; tabId: string; status: 'connected' | 'connecting' | 'disconnected' | 'pending' }
   | { type: 'UPDATE_TAB_NAME'; tabId: string; name: string }
