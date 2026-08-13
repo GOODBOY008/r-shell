@@ -190,12 +190,20 @@ describe('IntegratedFileBrowser terminal directory following', () => {
         mocks.invoke.mock.calls.filter(([, args]) => args.path === '/srv/app'),
       ).toHaveLength(1);
     });
+    // Wait for the follow navigation to FULLY commit (breadcrumb renders
+    // '/srv/app') before clicking Home. Otherwise navigateTo('/home') can no-op
+    // while currentPath is still the initial '/home', and the pending follow
+    // load then lands on /srv/app — making the findByTitle('/home') below time
+    // out under CI timing jitter (pre-existing flake, seen on Windows + macOS).
+    await screen.findByTitle('/srv/app');
     fireEvent.click(screen.getByTitle('Home'));
+    // Require the Home click to trigger its own load (1 mount safety-net call
+    // + 1 navigation call) — a bare "called with" can be satisfied by the
+    // mount's safety-net loadFiles('/home') and masks a no-op navigation.
     await waitFor(() => {
-      expect(mocks.invoke).toHaveBeenCalledWith('list_files', {
-        connectionId: 'conn-manual',
-        path: '/home',
-      });
+      expect(
+        mocks.invoke.mock.calls.filter(([, args]) => args.path === '/home'),
+      ).toHaveLength(2);
     });
     // Wait for the Home navigation to fully commit (breadcrumb renders '/home')
     // before bumping the terminal sequence. Otherwise the follow effect can still
