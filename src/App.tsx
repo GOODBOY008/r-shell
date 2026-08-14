@@ -1117,6 +1117,14 @@ function AppContent() {
             description: error instanceof Error ? error.message : String(error),
           });
         }
+      } else {
+        // SSH / Telnet / Raw / Serial reconnect. The backend SSH session was
+        // already (re-)established by the dialog's own ssh_connect invoke, so
+        // remount PtyTerminal to open a fresh WebSocket/PTY session on it.
+        // (RECONNECT_TAB increments reconnectCount, changing PtyTerminal's key
+        // in terminal-tab-portals so it remounts; the tab status self-heals to
+        // 'connected' once the new PTY session reports ready.)
+        dispatch({ type: 'RECONNECT_TAB', tabId });
       }
     } else {
       if (isDesktop) {
