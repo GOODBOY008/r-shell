@@ -163,24 +163,15 @@ export function ConnectionManager({
       // Load the full connection data to get authentication credentials
       const connectionData = ConnectionStorageManager.getConnection(node.id);
       if (connectionData) {
+        // Duplicate from the full saved record so advanced/protocol-specific
+        // fields are carried over (previously only auth + proxy were copied,
+        // silently dropping ftpsEnabled, SSH keepalive/compression, RDP/VNC
+        // settings, and favorite/color/tags/description). saveConnection is a
+        // full spread of Omit<ConnectionData,'id'|'createdAt'>.
+        const { id: _id, createdAt: _createdAt, ...rest } = connectionData;
         const duplicated = ConnectionStorageManager.saveConnection({
-          name: `${node.name} (Copy)`,
-          host: node.host,
-          port: node.port || 22,
-          username: node.username || '',
-          protocol: node.protocol || 'SSH',
-          folder: connectionData.folder || 'All Connections',
-          // Copy authentication credentials
-          authMethod: connectionData.authMethod,
-          password: connectionData.password,
-          privateKeyPath: connectionData.privateKeyPath,
-          passphrase: connectionData.passphrase,
-          // Copy proxy settings
-          proxyType: connectionData.proxyType,
-          proxyHost: connectionData.proxyHost,
-          proxyPort: connectionData.proxyPort,
-          proxyUsername: connectionData.proxyUsername,
-          proxyPassword: connectionData.proxyPassword,
+          ...rest,
+          name: `${connectionData.name} (Copy)`,
         });
         setConnections(loadConnections());
         toast.success(t('connectionManager.duplicated', { name: duplicated.name }));
