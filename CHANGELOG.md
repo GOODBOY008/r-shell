@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.0] - 2026-08-17
+
+### 🌐 R-Shell 2.8 — Close All Tabs, Internationalization & Connection Fixes
+
+This release adds a Close All Tabs action with unified dark-mode borders and search input icons, completes localization of hardcoded strings across the UI, shows owner and group in SSH file listings, and fixes connection sidebar and tab reconnection issues.
+
+### New Features 🎉
+
+- feat(terminal): add Close All Tabs + unify dark-mode borders and search input icons by @sunxiaobin89 in #84
+- feat(i18n): localize hardcoded strings across components by @sunxiaobin89 in #83
+
+### Bug Fixes 🐛
+
+- fix(connections): remove sidebar connected-status dot by @sunxiaobin89 in #94
+- fix(connections): duplicate keeps advanced and protocol-specific fields by @sunxiaobin89 in #92
+- fix(terminal): reconnect existing SSH tab via RECONNECT_TAB by @sunxiaobin89 in #90
+- fix(test): stabilize flaky file-browser follow test by @GOODBOY008 in #81
+- fix(file-browser): show owner and group in SSH file listings by @GOODBOY008 in #80
+
+### Documentation 📚
+
+- docs(skill): contributor avatars + origin/main sync in release-version by @GOODBOY008 in #82
+
+### Contributors
+
+Thanks to [@sunxiaobin89](https://github.com/sunxiaobin89) and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.7.0...v2.8.0
+
 ## [2.7.0] - 2026-08-08
 
 ### 🖥️ R-Shell 2.7 — Terminal-Integrated File Browser & Connections
