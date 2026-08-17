@@ -692,9 +692,6 @@ export function ConnectionManager({
 
         <div className="relative">
           {getIcon(node)}
-          {isConnected && (
-            <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full border border-card" />
-          )}
         </div>
         <span className="text-sm flex-1">{node.name}</span>
       </div>
