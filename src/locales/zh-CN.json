@@ -583,7 +583,9 @@
       "queuedUploadToPath": "已排队 {{count}} 个文件等待上传到 {{path}}",
       "enterFolderName": "请输入文件夹名称：",
       "enterFileName": "请输入文件名称：",
-      "fileInfo": "文件：{{name}}\n大小：{{size}}\n修改时间：{{modified}}\n权限：{{permissions}}"
+      "fileInfo": "文件：{{name}}\n大小：{{size}}\n修改时间：{{modified}}\n权限：{{permissions}}",
+      "deletedMultiple": "已成功删除 {{count}} 个项目",
+      "deleteSomeFailed": "{{total}} 个项目中有 {{failed}} 个删除失败"
     },
     "toolbar": {
       "back": "后退",
@@ -603,7 +605,6 @@
     },
     "selected": "已选择 {{count}} 项",
     "loading": "加载中…",
-    "downloadSelected": "下载选中的 {{count}} 项",
     "deleteFolderTitle": "删除文件夹？",
     "deleteFileTitle": "删除文件？",
     "contextMenuRefresh": "刷新",
@@ -637,7 +638,10 @@
       "download": "下载"
     },
     "dropOverlay": "拖放文件或文件夹以上传",
-    "dropUploadTo": "上传到 {{path}}"
+    "dropUploadTo": "上传到 {{path}}",
+    "multiSelectHint": "提示：Cmd/Ctrl+点击 多选，Shift+点击 范围选择",
+    "deleteMultipleTitle": "删除 {{count}} 个项目？",
+    "deleteMultipleConfirm": "确定要删除这 {{count}} 个项目吗？"
   },
   "contextMenu": {
     "copy": "复制",

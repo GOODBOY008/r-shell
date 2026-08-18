@@ -583,7 +583,9 @@
       "queuedUploadToPath": "Queued {{count}} file(s) for upload to {{path}}",
       "enterFolderName": "Enter folder name:",
       "enterFileName": "Enter file name:",
-      "fileInfo": "File: {{name}}\nSize: {{size}}\nModified: {{modified}}\nPermissions: {{permissions}}"
+      "fileInfo": "File: {{name}}\nSize: {{size}}\nModified: {{modified}}\nPermissions: {{permissions}}",
+      "deletedMultiple": "{{count}} items deleted successfully",
+      "deleteSomeFailed": "{{failed}} of {{total}} items failed to delete"
     },
     "toolbar": {
       "back": "Back",
@@ -603,7 +605,6 @@
     },
     "selected": "{{count}} selected",
     "loading": "Loading…",
-    "downloadSelected": "Download {{count}} Selected",
     "deleteFolderTitle": "Delete Folder?",
     "deleteFileTitle": "Delete File?",
     "contextMenuRefresh": "Refresh",
@@ -637,7 +638,10 @@
       "download": "Download"
     },
     "dropOverlay": "Drop files or folders to upload",
-    "dropUploadTo": "Upload to {{path}}"
+    "dropUploadTo": "Upload to {{path}}",
+    "multiSelectHint": "Tip: Cmd/Ctrl+Click to select multiple, Shift+Click for range",
+    "deleteMultipleTitle": "Delete {{count}} Items?",
+    "deleteMultipleConfirm": "Are you sure you want to delete these {{count}} items?"
   },
   "contextMenu": {
     "copy": "Copy",
