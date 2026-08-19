@@ -585,7 +585,9 @@
       "enterFileName": "Enter file name:",
       "fileInfo": "File: {{name}}\nSize: {{size}}\nModified: {{modified}}\nPermissions: {{permissions}}",
       "deletedMultiple": "{{count}} items deleted successfully",
-      "deleteSomeFailed": "{{failed}} of {{total}} items failed to delete"
+      "deleteSomeFailed": "{{failed}} of {{total}} items failed to delete",
+      "downloadFoldersNotSupported": "Folders cannot be batch-downloaded; use Download directory instead",
+      "downloadedFilesSkippedFolders": "Downloaded {{count}} files, skipped {{folders}} folder(s)"
     },
     "toolbar": {
       "back": "Back",

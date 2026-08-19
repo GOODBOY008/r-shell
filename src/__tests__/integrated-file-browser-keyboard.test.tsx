@@ -406,9 +406,10 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     });
   });
 
-  it('never includes the ".." parent row in multi-select operations', async () => {
+  it('Ctrl+A selects all real entries but never the ".." parent row', async () => {
     // list_files returns 3 real entries; the component prepends a ".." row,
-    // which sits at the top of the sorted list (index 0).
+    // which sits at the top of the sorted list (index 0). Ctrl+A must exclude
+    // it (the only path where the exclusion is actually exercised).
     render(
       <IntegratedFileBrowser
         connectionId="conn-paren"
@@ -418,13 +419,10 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     );
 
     await screen.findByText('a.txt');
-    // Select a.txt (index 1) then Shift+Click c.txt (index 3): the range
-    // covers a, b, c — the ".." row at index 0 must NOT be selected.
-    fireEvent.click(screen.getByText('a.txt'));
-    fireEvent.click(screen.getByText('c.txt'), { shiftKey: true });
+    fireEvent.keyDown(document, { key: 'a', ctrlKey: true });
     expect(await screen.findByText('3 selected')).toBeTruthy();
 
-    // Delete via the range selection: only a/b/c are deleted, never "..".
+    // Delete via the selection: only a/b/c are deleted, never "..".
     fireEvent.keyDown(document, { key: 'Delete' });
     expect(await screen.findByText('Delete 3 Items?')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));

@@ -867,7 +867,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
 
     if (event.ctrlKey || event.metaKey) {
-      // Ctrl/Cmd + Click: toggle this row in/out of the selection.
+      // Ctrl/Cmd + Click: toggle this row in/out of the selection and move
+      // the range anchor so a following Shift+Click ranges from this row.
       const newSelected = new Set(selectedFiles);
       if (newSelected.has(fileName)) {
         newSelected.delete(fileName);
@@ -875,6 +876,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         newSelected.add(fileName);
       }
       setSelectedFiles(newSelected);
+      lastSelectedIndexRef.current = index;
     } else {
       // Plain click: single-select this row (keeps double-click navigation).
       setSelectedFiles(new Set([fileName]));
@@ -1018,8 +1020,16 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   };
 
   const handleDownloadMultiple = async (selectedFileItems: FileItem[]) => {
+    // Batch download is scoped to files. If the selection contains folders,
+    // tell the user they are skipped instead of silently dropping them.
     const filesToDownload = selectedFileItems.filter(f => f.type === 'file');
-    if (filesToDownload.length === 0) return;
+    const skippedDirs = selectedFileItems.filter(f => f.type === 'directory').length;
+    if (filesToDownload.length === 0) {
+      if (skippedDirs > 0) {
+        toast.info(t('fileBrowser.toast.downloadFoldersNotSupported'));
+      }
+      return;
+    }
     try {
       const destDir = await tauriOpen({ directory: true });
       if (!destDir) return;
@@ -1034,7 +1044,16 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           totalBytes: f.size,
         })),
       });
-      toast.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
+      if (skippedDirs > 0) {
+        toast.info(
+          t('fileBrowser.toast.downloadedFilesSkippedFolders', {
+            count: filesToDownload.length,
+            folders: skippedDirs,
+          }),
+        );
+      } else {
+        toast.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
+      }
     } catch (error) {
       console.error('Download dialog error:', error);
     }
@@ -1120,7 +1139,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         description: t('fileBrowser.toast.deleteFailedDesc'),
       });
     } else {
-      toast.error(t('fileBrowser.toast.deleteSomeFailed', { count: failed.length, total: deletingFiles.length }));
+      toast.error(t('fileBrowser.toast.deleteSomeFailed', { failed: failed.length, total: deletingFiles.length }));
     }
 
     setDeletingFiles(null);
