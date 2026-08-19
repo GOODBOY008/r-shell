@@ -296,3 +296,143 @@ describe('IntegratedFileBrowser directory download', () => {
     );
   });
 });
+
+describe('IntegratedFileBrowser multi-select and batch delete', () => {
+  const listFilesResponse = [
+    { name: 'a.txt', size: 10, modified: '2024-01-01 00:00', permissions: '-rw-r--r--', file_type: 'File', owner: 'u', group: 'g' },
+    { name: 'b.txt', size: 20, modified: '2024-01-02 00:00', permissions: '-rw-r--r--', file_type: 'File', owner: 'u', group: 'g' },
+    { name: 'c.txt', size: 30, modified: '2024-01-03 00:00', permissions: '-rw-r--r--', file_type: 'File', owner: 'u', group: 'g' },
+  ];
+
+  beforeEach(() => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_files') return listFilesResponse;
+      if (command === 'delete_file') return true;
+      return undefined;
+    });
+  });
+
+  it('plain click selects a single row and Ctrl+Click toggles multi-selection', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-multi"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    expect(await screen.findByText('1 selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
+    expect(await screen.findByText('2 selected')).toBeTruthy();
+  });
+
+  it('Shift+Click selects the contiguous range from the anchor', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-range"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    expect(await screen.findByText('1 selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('c.txt'), { shiftKey: true });
+    expect(await screen.findByText('3 selected')).toBeTruthy();
+  });
+
+  it('Delete key with multiple selections opens batch confirm and deletes all', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-del"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
+    expect(await screen.findByText('2 selected')).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: 'Delete' });
+
+    expect(await screen.findByText('Delete 2 Items?')).toBeTruthy();
+    const confirmButton = screen.getByRole('button', { name: 'Delete' });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      const deleteCalls = mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'delete_file');
+      expect(deleteCalls).toHaveLength(2);
+      expect(deleteCalls[0][1]).toMatchObject({ path: '/home/a.txt' });
+      expect(deleteCalls[1][1]).toMatchObject({ path: '/home/b.txt' });
+    });
+  });
+
+  it('right-click on a selected row offers batch delete for the whole selection', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-ctxdel"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
+    expect(await screen.findByText('2 selected')).toBeTruthy();
+
+    // Right-click a row that is part of the selection. The context-menu mock
+    // renders every row's menu (unlike real Radix, which renders only the open
+    // one), so multiple Delete buttons are expected — clicking any of them
+    // triggers the batch delete for the whole selection.
+    fireEvent.contextMenu(screen.getByText('a.txt'));
+
+    const deleteItems = await screen.findAllByText('Delete');
+    fireEvent.click(deleteItems[0]);
+
+    expect(await screen.findByText('Delete 2 Items?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      const deleteCalls = mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'delete_file');
+      expect(deleteCalls).toHaveLength(2);
+    });
+  });
+
+  it('Ctrl+A selects all real entries but never the ".." parent row', async () => {
+    // list_files returns 3 real entries; the component prepends a ".." row,
+    // which sits at the top of the sorted list (index 0). Ctrl+A must exclude
+    // it (the only path where the exclusion is actually exercised).
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-paren"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.keyDown(document, { key: 'a', ctrlKey: true });
+    expect(await screen.findByText('3 selected')).toBeTruthy();
+
+    // Delete via the selection: only a/b/c are deleted, never "..".
+    fireEvent.keyDown(document, { key: 'Delete' });
+    expect(await screen.findByText('Delete 3 Items?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      const deleteCalls = mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'delete_file');
+      expect(deleteCalls).toHaveLength(3);
+      const paths = deleteCalls.map(([, args]) => args.path);
+      expect(paths).toEqual(['/home/a.txt', '/home/b.txt', '/home/c.txt']);
+      expect(paths).not.toContain('/home/..');
+    });
+  });
+});
