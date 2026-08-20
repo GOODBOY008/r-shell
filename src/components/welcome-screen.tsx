@@ -46,7 +46,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       description: t('welcome.connectionManagerDesc'),
       action: () => {},
       variant: 'outline' as const,
-      highlight: 'Left sidebar ⌘B'
+      highlight: t('welcome.connectionManagerHighlight')
     },
     {
       icon: Settings,

@@ -1,5 +1,4 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -13,6 +12,7 @@ import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar, type TerminalSearchState } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
 import { signalReady } from '../lib/restoration-manager';
+import i18n from '../lib/i18n';
 import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
 import { registerTerminalWorkingDirectoryHandler } from '../lib/terminal-working-directory';
 import { TERMINAL_COMMAND_EVENT, type TerminalCommandDetail } from '../lib/terminal-commands';
@@ -55,7 +55,6 @@ export function PtyTerminal({
   isActive = true,
   onConnectionStatusChange
 }: PtyTerminalProps) {
-  const { t } = useTranslation();
   const { onReconnectTab, onWorkingDirectoryChange } = useTerminalCallbacks();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
@@ -126,14 +125,14 @@ export function PtyTerminal({
       if (!text) return;
       const term = xtermRef.current;
       if (!term) {
-        toast.error(t('ptyTerminal.terminalNotConnected'));
+        toast.error(i18n.t('ptyTerminal.terminalNotConnected'));
         return;
       }
       // term.paste() routes through xterm's onData handler,
       // which calls sendInputToPty with proper bracketed paste wrapping
       term.paste(text);
     } catch (_error) {
-      toast.error(t('ptyTerminal.failedToReadClipboard'));
+      toast.error(i18n.t('ptyTerminal.failedToReadClipboard'));
     }
   }, []);
 
@@ -363,10 +362,10 @@ export function PtyTerminal({
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.writeln(`\x1b[1;36m  ${connectionName}\x1b[0m`);
     term.writeln(`\x1b[90m  ${username}@${host}\x1b[0m`);
-    term.writeln(`\x1b[90m  Renderer: ${rendererRef.current.toUpperCase()}\x1b[0m`);
+    term.writeln(`\x1b[90m  ${i18n.t('ptyTerminal.renderer', { renderer: rendererRef.current.toUpperCase() })}\x1b[0m`);
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.write('\r\n');
-    term.writeln('\x1b[33m🚀 Starting interactive shell (WebSocket + PTY mode)...\x1b[0m');
+    term.writeln(`\x1b[33m${i18n.t('ptyTerminal.startingShell')}\x1b[0m`);
     term.write('\r\n');
 
     let isRunning = true;
@@ -451,7 +450,7 @@ export function PtyTerminal({
 
       ws.onopen = () => {
         console.log(`[PTY Terminal] [${connectionId}] WebSocket connected`);
-        term.writeln('\x1b[32m✓ WebSocket connected\x1b[0m');
+        term.writeln(`\x1b[32m${i18n.t('ptyTerminal.webSocketConnected')}\x1b[0m`);
         
         // Start PTY session
         const startMsg = {
@@ -520,7 +519,7 @@ export function PtyTerminal({
           term.reset();
           term.clear();
           sessionOutputRef.current = 0;
-          term.writeln('\x1b[33m[Output limit reached \u2014 scrollback cleared to free memory]\x1b[0m');
+          term.writeln(`\x1b[33m${i18n.t('ptyTerminal.outputLimitReached')}\x1b[0m`);
         }
 
         // Single write per animation frame — the key optimisation.
@@ -580,10 +579,10 @@ export function PtyTerminal({
                 autoReconnectAfterDropRef.current = 0; // Reset drop-reconnect counter on success
                 if (hasEverConnected || isReconnectAfterDrop) {
                   // Reconnected after a drop — warn that a fresh shell was started
-                  term.writeln('\x1b[33m⚠ Previous session lost. New shell session started.\x1b[0m');
+                  term.writeln(`\x1b[33m${i18n.t('ptyTerminal.previousSessionLost')}\x1b[0m`);
                 } else {
-                  term.writeln('\x1b[32m✓ PTY connection started\x1b[0m');
-                  term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
+                  term.writeln(`\x1b[32m${i18n.t('ptyTerminal.ptyStarted')}\x1b[0m`);
+                  term.writeln(`\x1b[90m${i18n.t('ptyTerminal.interactiveHint')}\x1b[0m`);
                 }
                 hasEverConnected = true;
                 isReconnectAfterDrop = false;
@@ -618,7 +617,7 @@ export function PtyTerminal({
               
             case 'Error': {
               console.error('[PTY Terminal] Error:', msg.message);
-              term.write(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m\r\n`);
+              term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.error', { message: msg.message })}\x1b[0m\r\n`);
               const errorMsgLower = msg.message.toLowerCase();
               // Permanent failures (SSH session gone on the backend) — stop the
               // retry loop immediately instead of burning through all 5 attempts.
@@ -653,7 +652,7 @@ export function PtyTerminal({
 
       ws.onerror = (error) => {
         console.error('[PTY Terminal] WebSocket error:', error);
-        term.write('\r\n\x1b[31m[WebSocket error]\x1b[0m\r\n');
+        term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.webSocketError')}\x1b[0m\r\n`);
         // Report disconnected status on WebSocket error
         if (connectionStatusRef.current !== 'disconnected') {
           connectionStatusRef.current = 'disconnected';
@@ -672,7 +671,7 @@ export function PtyTerminal({
             const dropAttempt = autoReconnectAfterDropRef.current;
             if (dropAttempt >= MAX_AUTO_RECONNECT_AFTER_DROP) {
               // Exhausted auto-reconnect attempts — ask user to act manually.
-              term.write('\r\n\x1b[31m[Connection lost. Auto-reconnect failed after ' + MAX_AUTO_RECONNECT_AFTER_DROP + ' attempts. Use right-click → Reconnect.]\x1b[0m\r\n');
+              term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.autoReconnectFailed', { attempts: MAX_AUTO_RECONNECT_AFTER_DROP })}\x1b[0m\r\n`);
               if (connectionStatusRef.current !== 'disconnected') {
                 connectionStatusRef.current = 'disconnected';
                 onConnectionStatusChange?.(connectionId, 'disconnected');
@@ -683,7 +682,7 @@ export function PtyTerminal({
             const delay = Math.min(2000 * Math.pow(2, dropAttempt), 30000);
             autoReconnectAfterDropRef.current = dropAttempt + 1;
 
-            term.write(`\r\n\x1b[33m[Connection lost. Reconnecting in ${Math.round(delay / 1000)}s (attempt ${dropAttempt + 1}/${MAX_AUTO_RECONNECT_AFTER_DROP})...]\x1b[0m\r\n`);
+            term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.reconnectingAfterDrop', { seconds: Math.round(delay / 1000), attempt: dropAttempt + 1, max: MAX_AUTO_RECONNECT_AFTER_DROP })}\x1b[0m\r\n`);
             if (connectionStatusRef.current !== 'connecting') {
               connectionStatusRef.current = 'connecting';
               onConnectionStatusChange?.(connectionId, 'connecting');
@@ -707,7 +706,7 @@ export function PtyTerminal({
           const attempts = reconnectAttemptsRef.current;
           
           if (attempts >= MAX_RECONNECT_ATTEMPTS) {
-            term.write('\r\n\x1b[31m[Connection failed permanently. Use right-click → Reconnect to retry.]\x1b[0m\r\n');
+            term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.reconnectFailedPermanently')}\x1b[0m\r\n`);
             if (connectionStatusRef.current !== 'disconnected') {
               connectionStatusRef.current = 'disconnected';
               onConnectionStatusChange?.(connectionId, 'disconnected');
@@ -722,7 +721,7 @@ export function PtyTerminal({
             connectionStatusRef.current = 'connecting';
             onConnectionStatusChange?.(connectionId, 'connecting');
           }
-          term.write(`\r\n\x1b[33m[Connection closed. Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})...]\x1b[0m\r\n`);
+          term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.reconnectingAfterClose', { seconds: Math.round(delay / 1000), attempt: attempts + 1, max: MAX_RECONNECT_ATTEMPTS })}\x1b[0m\r\n`);
           setTimeout(() => {
             if (isRunning) {
               connectWebSocket();
@@ -941,9 +940,9 @@ export function PtyTerminal({
     if (term?.hasSelection()) {
       const selection = term.getSelection();
       writeClipboardText(selection).then(() => {
-        toast.success(t('ptyTerminal.copiedToClipboard'));
+        toast.success(i18n.t('ptyTerminal.copiedToClipboard'));
       }).catch(() => {
-        toast.error(t('ptyTerminal.failedToCopyClipboard'));
+        toast.error(i18n.t('ptyTerminal.failedToCopyClipboard'));
       });
     }
   }, []);
@@ -1027,7 +1026,7 @@ export function PtyTerminal({
       void onReconnectTab(connectionId);
     } else {
       // Fallback: reconnect only the WebSocket/PTY loop (no SSH re-auth).
-      toast.info(t('ptyTerminal.reconnectingTerminal'));
+      toast.info(i18n.t('ptyTerminal.reconnectingTerminal'));
       reconnectAttemptsRef.current = 0;
       connectionStatusRef.current = 'connecting';
       onConnectionStatusChange?.(connectionId, 'connecting');
@@ -1062,9 +1061,9 @@ export function PtyTerminal({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       
-      toast.success(t('ptyTerminal.outputSaved'));
+      toast.success(i18n.t('ptyTerminal.outputSaved'));
     } catch (error) {
-      toast.error(t('ptyTerminal.failedToSaveOutput'));
+      toast.error(i18n.t('ptyTerminal.failedToSaveOutput'));
       console.error('Save error:', error);
     }
   }, []);

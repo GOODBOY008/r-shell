@@ -51,6 +51,14 @@
     "connectionError": "Connection Error",
     "connectionErrorDesc": "An unexpected error occurred while connecting.",
     "waitingForConnection": "Waiting for connection...",
+    "restoreTitle": "Workspace Restore",
+    "restoreSubtitle": "Bringing your connections back online",
+    "restoreReconnecting": "Reconnecting {{name}}",
+    "restorePreparing": "Preparing saved connections",
+    "restoreUnknownHost": "unknown host",
+    "restoreHighlightSecrets": "Secrets stay encrypted locally",
+    "restoreHighlightAutoReconnect": "Auto reconnect with retry",
+    "restoreHighlightLiveMonitoring": "Live status monitoring",
     "cannotDuplicate": "Cannot Duplicate Tab",
     "cannotDuplicateDesc": "Connection data not found. Please create a new connection.",
     "cannotReconnect": "Cannot Reconnect",
@@ -394,6 +402,7 @@
     "newConnection": "New Connection",
     "newConnectionDesc": "Connect via SSH, SFTP, FTP, or FTPS",
     "connectionManager": "Connection Manager",
+    "connectionManagerHighlight": "Left sidebar ⌘B",
     "connectionManagerDesc": "Browse & organize saved connections",
     "preferences": "Preferences",
     "preferencesDesc": "Terminal themes, fonts & layout",
@@ -809,6 +818,7 @@
     "edit": "Edit Connection",
     "delete": "Delete Connection",
     "duplicate": "Duplicate Connection",
+    "copySuffix": " (Copy)",
     "confirmDelete": "Are you sure you want to delete \"{{name}}\"?",
     "folder": {
       "allConnections": "All Connections",
@@ -1048,7 +1058,8 @@
     "navigateTo": "Navigate to {{path}}"
   },
   "terminal": {
-    "search": "Search..."
+    "search": "Search...",
+    "groupAriaLabel": "Terminal group {{id}}"
   },
   "terminalSearchBar": {
     "findInTerminal": "Find in terminal...",
@@ -1065,7 +1076,20 @@
     "failedToCopyClipboard": "Failed to copy to clipboard",
     "reconnectingTerminal": "Reconnecting terminal…",
     "outputSaved": "Terminal output saved",
-    "failedToSaveOutput": "Failed to save output"
+    "failedToSaveOutput": "Failed to save output",
+    "renderer": "Renderer: {{renderer}}",
+    "startingShell": "🚀 Starting interactive shell (WebSocket + PTY mode)...",
+    "webSocketConnected": "✓ WebSocket connected",
+    "outputLimitReached": "[Output limit reached — scrollback cleared to free memory]",
+    "previousSessionLost": "⚠ Previous session lost. New shell session started.",
+    "ptyStarted": "✓ PTY connection started",
+    "interactiveHint": "You can now use interactive commands: vim, less, more, top, etc.",
+    "error": "[Error: {{message}}]",
+    "webSocketError": "[WebSocket error]",
+    "autoReconnectFailed": "[Connection lost. Auto-reconnect failed after {{attempts}} attempts. Use right-click → Reconnect.]",
+    "reconnectingAfterDrop": "[Connection lost. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]",
+    "reconnectFailedPermanently": "[Connection failed permanently. Use right-click → Reconnect to retry.]",
+    "reconnectingAfterClose": "[Connection closed. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]"
   },
   "systemMonitor": {
     "systemOverview": "System Overview",

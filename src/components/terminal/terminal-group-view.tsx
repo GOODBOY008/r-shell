@@ -1,4 +1,5 @@
 import { useCallback, type KeyboardEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import { GroupTabBar } from './group-tab-bar';
@@ -10,6 +11,7 @@ interface TerminalGroupViewProps {
 }
 
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
+  const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
   const { onDuplicateTab, onNewTab, onReconnectTab, onCloseTab, onCloseAllTabs, closeTabShortcut } = useTerminalCallbacks();
   const group = state.groups[groupId];
@@ -72,7 +74,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
       className={containerClass}
       onMouseDownCapture={handleMouseDown}
       onKeyDown={handleKeyDown}
-      aria-label={`Terminal group ${groupId}`}
+      aria-label={t('terminal.groupAriaLabel', { id: groupId })}
     >
       <GroupTabBar
         groupId={groupId}

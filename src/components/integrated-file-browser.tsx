@@ -2010,7 +2010,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 <>
                   <ContextMenuItem onClick={handlePasteFiles}>
                     <ClipboardPaste className="mr-2 h-4 w-4" />
-                    {t('fileBrowser.contextMenu.paste')} {clipboard.files.length} item(s)
+                    {t('fileBrowser.contextMenu.pasteWithCount', { count: clipboard.files.length })}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                 </>

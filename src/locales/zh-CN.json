@@ -51,6 +51,14 @@
     "connectionError": "连接错误",
     "connectionErrorDesc": "连接时发生意外错误。",
     "waitingForConnection": "等待连接...",
+    "restoreTitle": "工作区恢复",
+    "restoreSubtitle": "正在将您的连接恢复上线",
+    "restoreReconnecting": "正在重新连接 {{name}}",
+    "restorePreparing": "正在准备已保存的连接",
+    "restoreUnknownHost": "未知主机",
+    "restoreHighlightSecrets": "凭据在本地加密保存",
+    "restoreHighlightAutoReconnect": "自动重连（带重试）",
+    "restoreHighlightLiveMonitoring": "实时状态监控",
     "cannotDuplicate": "无法复制标签页",
     "cannotDuplicateDesc": "未找到连接数据，请创建新连接。",
     "cannotReconnect": "无法重新连接",
@@ -394,6 +402,7 @@
     "newConnection": "新建连接",
     "newConnectionDesc": "通过 SSH、SFTP、FTP 或 FTPS 连接",
     "connectionManager": "连接管理器",
+    "connectionManagerHighlight": "左侧栏 ⌘B",
     "connectionManagerDesc": "浏览和管理已保存的连接",
     "preferences": "偏好设置",
     "preferencesDesc": "终端主题、字体和布局",
@@ -809,6 +818,7 @@
     "edit": "编辑连接",
     "delete": "删除连接",
     "duplicate": "复制连接",
+    "copySuffix": "（副本）",
     "confirmDelete": "确定要删除 \"{{name}}\" 吗？",
     "folder": {
       "allConnections": "所有连接",
@@ -1048,7 +1058,8 @@
     "navigateTo": "导航到 {{path}}"
   },
   "terminal": {
-    "search": "搜索..."
+    "search": "搜索...",
+    "groupAriaLabel": "终端组 {{id}}"
   },
   "terminalSearchBar": {
     "findInTerminal": "在终端中查找...",
@@ -1065,7 +1076,20 @@
     "failedToCopyClipboard": "复制到剪贴板失败",
     "reconnectingTerminal": "正在重新连接终端…",
     "outputSaved": "终端输出已保存",
-    "failedToSaveOutput": "保存输出失败"
+    "failedToSaveOutput": "保存输出失败",
+    "renderer": "渲染器：{{renderer}}",
+    "startingShell": "🚀 正在启动交互式 Shell（WebSocket + PTY 模式）...",
+    "webSocketConnected": "✓ WebSocket 已连接",
+    "outputLimitReached": "[已达到输出上限 — 已清空回滚缓冲以释放内存]",
+    "previousSessionLost": "⚠ 上一个会话已丢失，已启动新的 Shell 会话。",
+    "ptyStarted": "✓ PTY 连接已启动",
+    "interactiveHint": "现在可以使用交互式命令：vim、less、more、top 等。",
+    "error": "[错误：{{message}}]",
+    "webSocketError": "[WebSocket 错误]",
+    "autoReconnectFailed": "[连接丢失。自动重连 {{attempts}} 次后失败，请使用右键 → 重新连接。]",
+    "reconnectingAfterDrop": "[连接丢失。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]",
+    "reconnectFailedPermanently": "[连接永久失败，请使用右键 → 重新连接以重试。]",
+    "reconnectingAfterClose": "[连接已关闭。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]"
   },
   "systemMonitor": {
     "systemOverview": "系统概览",
