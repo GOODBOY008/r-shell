@@ -16,11 +16,9 @@ import {
   collectFileVersions,
   findVersionDrift,
   updateCargoLock,
-} from '../../scripts/bump-version.mjs';
-import {
   parseReleaseTag,
   verifyTagAgainstFiles,
-} from '../../scripts/verify-release-tag.mjs';
+} from '../lib/version-bump.mjs';
 
 const SYNCED_FILES = {
   packageJson: JSON.stringify({ name: 'r-shell', version: '2.7.0' }),
