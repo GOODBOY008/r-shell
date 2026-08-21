@@ -1,6 +1,7 @@
 use crate::connection_manager::ConnectionManager;
 use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
+use crate::os_keypath::resolve_private_key_path;
 use crate::proxy::{ProxyConfig, ProxyType};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
 use crate::ssh::{AuthMethod, SshConfig};
@@ -90,7 +91,7 @@ pub async fn ssh_connect(
             password: request.password.ok_or("Password required")?,
         },
         "publickey" => AuthMethod::PublicKey {
-            key_path: request.key_path.ok_or("Key path required")?,
+            key_path: resolve_private_key_path(request.key_path.as_deref())?,
             passphrase: request.passphrase,
         },
         _ => return Err("Invalid auth method".to_string()),
@@ -2187,7 +2188,7 @@ pub async fn sftp_connect(
             password: request.password.unwrap_or_default(),
         },
         "publickey" => SftpAuthMethod::PublicKey {
-            key_path: request.key_path.ok_or("Key path required for SFTP")?,
+            key_path: resolve_private_key_path(request.key_path.as_deref())?,
             passphrase: request.passphrase,
         },
         _ => return Err("Invalid SFTP auth method".to_string()),
@@ -2700,7 +2701,10 @@ pub async fn list_local_files(path: String) -> Result<Vec<FileEntry>, String> {
         #[cfg(unix)]
         let (owner, group): (Option<String>, Option<String>) = {
             use std::os::unix::fs::MetadataExt;
-            (Some(metadata.uid().to_string()), Some(metadata.gid().to_string()))
+            (
+                Some(metadata.uid().to_string()),
+                Some(metadata.gid().to_string()),
+            )
         };
         #[cfg(not(unix))]
         let (owner, group): (Option<String>, Option<String>) = (None, None);
