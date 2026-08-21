@@ -78,10 +78,21 @@ pnpm run version:minor
 
 # Bump major version (0.6.2 → 1.0.0)
 pnpm run version:major
+
+# Tagged prerelease (0.7.0 → 0.8.0-beta.1, or beta.1 → beta.2)
+pnpm run version:prerelease
+pnpm run version:prerelease rc   # switch the prerelease line (beta → rc)
+
+# Finalize a prerelease to stable (0.8.0-beta.3 → 0.8.0)
+pnpm run version:stable
+
+# Verify a tag matches every version file before tagging
+pnpm run version:verify "v0.8.0-beta.1"
 ```
-- Script updates: package.json, Cargo.toml, Cargo.lock, tauri.conf.json, CHANGELOG.md
+- Script updates: package.json, Cargo.toml, Cargo.lock (root package entry, `cargo build` fallback), tauri.conf.json, CHANGELOG.md
 - Auto-creates git commit with template CHANGELOG entry
-- See [docs/VERSION_BUMP.md](docs/VERSION_BUMP.md) for full guide
+- Enforces preflight guardrails (version-drift + dirty-tree checks); `--dry-run` previews, `--yes` skips confirmation, `--force` bypasses guardrails
+- See `.github/skills/release-version/SKILL.md` for the full release guide (stable and tagged prereleases)
 
 ### Adding Tauri Commands
 1. Define function in [commands.rs](src-tauri/src/commands.rs) with `#[tauri::command]`
