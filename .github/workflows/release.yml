@@ -6,8 +6,34 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Serialize releases per tag/branch: two overlapping runs could race on the
+# latest.json manifest upload or the release asset list. Never cancel a run
+# that already started building.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Cheap, fails-fast gate: the tag must be a valid semver tag AND match the
+  # version declared in every version file, so a mis-tagged release never
+  # ships artifacts whose version differs from the tag.
+  validate-tag:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Validate tag matches project version
+        run: node scripts/verify-release-tag.mjs "$GITHUB_REF_NAME"
+
   release:
+    needs: validate-tag
     permissions:
       contents: write
     strategy:
@@ -80,7 +106,11 @@ jobs:
           releaseName: 'r-shell ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: false
-          prerelease: false
+          # Tagged prereleases (vX.Y.Z-<id>.<n>) must be GitHub *prereleases*:
+          # a release created with prerelease: false would be auto-marked
+          # "Latest" and hijack releases/latest for stable users. Stable tags
+          # are always vX.Y.Z (no dash).
+          prerelease: ${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-') }}
           includeUpdaterJson: true
           args: ${{ matrix.args }}
 
