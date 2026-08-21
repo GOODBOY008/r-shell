@@ -287,7 +287,10 @@ pnpm run version:major   # 2.2.0 → 3.0.0 (stable)
 pnpm run version:prerelease   # 2.2.0 → 2.3.0-beta.1, or 2.3.0-beta.1 → 2.3.0-beta.2 (tagged)
 pnpm run version:prerelease rc   # 2.3.0-beta.3 → 2.3.0-rc.1 (switch prerelease line)
 pnpm run version:stable   # 2.3.0-beta.3 → 2.3.0 (finalize to stable)
+pnpm run version:verify "v2.3.0-beta.1"   # verify a tag matches every version file
 ```
+
+The bump script updates `package.json`, `Cargo.toml`, `Cargo.lock`, `tauri.conf.json`, and `CHANGELOG.md`, and creates a git commit. It refuses to run on a dirty tree or when the version files disagree (`--dry-run` previews, `--yes` skips confirmation, `--force` bypasses guardrails).
 
 ---
 

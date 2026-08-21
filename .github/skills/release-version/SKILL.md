@@ -11,7 +11,7 @@ Bumps the project version across all config files, updates the CHANGELOG, pushes
 - **Stable release** — `vX.Y.Z` (e.g. `v2.8.0`), published as the repo's **Latest** release. The Release workflow uploads `latest.json` (the in-app updater manifest) and updates the Homebrew cask, so every stable user sees it.
 - **Tagged (prerelease) release** — `vX.Y.Z-<id>.<n>` (e.g. `v2.8.0-beta.1`, `v2.8.0-rc.1`), published as a GitHub **prerelease** (never Latest). The Release workflow skips `latest.json` and Homebrew for prerelease tags, so stable users are never offered a prerelease and Homebrew is untouched.
 
-Both trigger the same `release.yml` build on a pushed `v*` tag; only the release **kind** differs.
+Both trigger the same `release.yml` build on a pushed `v*` tag; only the release **kind** differs. The workflow runs a `validate-tag` job first that fails fast if the tag is not a valid semver tag or does not match every version file, and it marks tagged prereleases as GitHub prereleases automatically (`prerelease: true`), so stable releases always stay the repo's "Latest".
 
 ## When to Use
 - Releasing a new patch, minor, or major version of r-shell (stable)
@@ -49,7 +49,12 @@ For prereleases, an optional identifier selects the prerelease line (`alpha`, `b
 
 ### 2. Run the Version Bump Script
 
+The script is **non-destructive on preview**: run `--dry-run` first to confirm the target version and its CHANGELOG action without writing anything, then run it for real:
+
 ```bash
+# Preview first (optional but recommended):
+pnpm exec node scripts/bump-version.mjs <type> --dry-run
+
 # Replace <type> with patch, minor, major, prerelease [identifier], or stable
 pnpm run version:<type>
 # e.g.:
@@ -59,6 +64,12 @@ pnpm run version:prerelease     # 2.7.0 -> 2.8.0-beta.1 (tagged)
 pnpm run version:prerelease rc  # 2.8.0-beta.3 -> 2.8.0-rc.1 (tagged)
 pnpm run version:stable         # 2.8.0-beta.3 -> 2.8.0 (finalize)
 ```
+
+The script enforces two **preflight guardrails** before touching anything (both bypassed with `--force` if you know what you are doing):
+1. **Version drift** — `package.json`, `Cargo.toml`, `Cargo.lock`, and `tauri.conf.json` must all agree on the current version.
+2. **Dirty tree** — no uncommitted *tracked* modifications (untracked files are fine), so the bump commit contains exactly the version change.
+
+If the working tree is dirty (e.g. you have uncommitted version-draft edits), the bump will refuse — commit/stash, or run with `--force`. Use `--yes` to skip the interactive confirmation (useful when driving the bump from an automated agent).
 
 This updates **all four** version locations atomically and creates a git commit:
 - `package.json`
@@ -127,6 +138,15 @@ git commit --amend --no-edit
 ```
 
 ### 4. Create and Push the Git Tag
+
+**Before tagging, verify the tag would match every version file** — this is exactly what the Release workflow's `validate-tag` job enforces, so catching it here saves a failed build:
+
+```bash
+VERSION=$(node -p "require('./package.json').version")
+pnpm run version:verify "v${VERSION}"   # or: node scripts/verify-release-tag.mjs "v${VERSION}"
+```
+
+Then create and push the tag:
 
 ```bash
 VERSION=$(node -p "require('./package.json').version")
