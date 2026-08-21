@@ -38,13 +38,6 @@ interface PtyTerminalProps {
  * Communication is done via WebSocket for low-latency bidirectional streaming.
  */
 
-/** Per-session output cap. When cumulative bytes written to xterm exceed this
- *  value the scrollback is cleared automatically so V8 heap stays bounded.
- *  2 MB of decoded text ≈ ~25k typical 80-char terminal lines. Kept low to
- *  prevent V8 heap fragmentation and WebGL texture-cache bloat during
- *  sustained high-throughput output (e.g. `yes`). */
-const SESSION_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
-
 export function PtyTerminal({
   connectionId,
   connectionName,
@@ -101,8 +94,6 @@ export function PtyTerminal({
   const autoReconnectAfterDropRef = React.useRef(0);
   const MAX_AUTO_RECONNECT_AFTER_DROP = 5;
 
-  // Cumulative bytes written to xterm this session — reset on clear.
-  const sessionOutputRef = React.useRef(0);
   const inputEncoderRef = React.useRef(new TextEncoder());
 
   const sendInputToPty = React.useCallback((data: string): boolean => {
@@ -380,9 +371,8 @@ export function PtyTerminal({
 
     // RAF write batching state — lifted to effect scope so cleanup can cancel.
     let writeBuffer = '';
-    let watermark = 0;
+    let bufferedFrameCount = 0;
     let rafId: number | null = null;
-    let creditsGranted = 0;
     
     // CRITICAL: Wait for terminal to have proper dimensions before connecting
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
@@ -465,7 +455,7 @@ export function PtyTerminal({
       };
 
       // =========================================================================
-      // RAF-Based Write Batching + Watermark Flow Control
+      // RAF-Based Write Batching + Credit Flow Control
       //
       // Based on xterm.js best practices:
       // - http://xtermjs.org/docs/guides/flowcontrol/
@@ -479,21 +469,8 @@ export function PtyTerminal({
       // Solution:
       // 1. Accumulate all incoming frames in a string buffer.
       // 2. Flush once per requestAnimationFrame (~60 writes/s instead of 100+).
-      // 3. Use watermark-based flow control: send Resume credits only when the
-      //    pending byte count drops below LOW_WATER, avoiding per-frame ACKs.
+      // 3. Return exactly one credit per frame after xterm processes the batch.
       // =========================================================================
-
-      /** High watermark (bytes): above this, the buffer is considered "full" and
-       *  we stop granting credits until xterm drains below LOW_WATER.  128 KB
-       *  keeps the emulator snappy for keystrokes under fast input (xterm guide
-       *  recommends ≤ 500 KB for responsiveness). */
-      const HIGH_WATER = 128 * 1024;
-      /** Low watermark (bytes): below this, we grant a batch of credits to the
-       *  backend so it can send more data. */
-      const LOW_WATER = 16 * 1024;
-      /** How many credits to grant each time watermark drops below LOW_WATER.
-       *  Keeps the pipeline flowing without flooding the WS receive queue. */
-      const CREDIT_BATCH = 4;
 
       const grantCredits = (count: number) => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -502,7 +479,6 @@ export function PtyTerminal({
           for (let i = 0; i < count; i++) {
             ws.send(msg);
           }
-          creditsGranted += count;
         }
       };
 
@@ -511,31 +487,14 @@ export function PtyTerminal({
         if (!writeBuffer) return;
 
         const data = writeBuffer;
+        const frameCount = bufferedFrameCount;
         writeBuffer = '';
-
-        // Enforce per-session memory cap so xterm's scrollback buffer can't
-        // grow without bound on sustained high-throughput output (e.g. `yes`).
-        sessionOutputRef.current += data.length;
-        if (sessionOutputRef.current >= SESSION_OUTPUT_LIMIT_BYTES) {
-          term.reset();
-          term.clear();
-          sessionOutputRef.current = 0;
-          term.writeln('\x1b[33m[Output limit reached \u2014 scrollback cleared to free memory]\x1b[0m');
-        }
+        bufferedFrameCount = 0;
 
         // Single write per animation frame — the key optimisation.
         // Reduces term.write() calls from hundreds/s to ~60/s.
         term.write(data, () => {
-          // xterm finished processing this batch — update watermark
-          watermark = Math.max(watermark - data.length, 0);
-
-          // Watermark-based flow control: grant credits only when the
-          // pending buffer has drained below LOW_WATER.  Skip granting
-          // if watermark is still above HIGH_WATER (buffer still full).
-          if (watermark < LOW_WATER && watermark < HIGH_WATER && creditsGranted < CREDIT_BATCH * 2) {
-            grantCredits(CREDIT_BATCH);
-            creditsGranted = 0; // reset counter after granting
-          }
+          grantCredits(frameCount);
         });
 
         // If more data arrived during the write, schedule another flush
@@ -545,8 +504,15 @@ export function PtyTerminal({
       };
 
       const enqueueOutput = (text: string) => {
+        // A streaming decoder can retain an incomplete UTF-8 sequence without
+        // producing text. It has already consumed the frame, so return that
+        // credit immediately to avoid stalling on multi-frame characters.
+        if (!text) {
+          grantCredits(1);
+          return;
+        }
         writeBuffer += text;
-        watermark += text.length;
+        bufferedFrameCount += 1;
         if (rafId === null) {
           rafId = requestAnimationFrame(flushWriteBuffer);
         }
@@ -602,8 +568,7 @@ export function PtyTerminal({
                 signalReady(connectionId);
                 // Credit-based flow control: seed the pipeline with initial
                 // credits so the PTY reader can start sending immediately.
-                // Ongoing credits are managed by the watermark-based flow
-                // control in the flush callback above.
+                // Ongoing credits are returned by the flush callback above.
                 const INITIAL_WINDOW = 2;
                 grantCredits(INITIAL_WINDOW);
               }
@@ -825,7 +790,7 @@ export function PtyTerminal({
         rafId = null;
       }
       writeBuffer = '';
-      watermark = 0;
+      bufferedFrameCount = 0;
 
       // Close PTY connection via WebSocket — include generation so the
       // backend can ignore this close if a newer session already exists.

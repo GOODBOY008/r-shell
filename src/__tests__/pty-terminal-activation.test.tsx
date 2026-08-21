@@ -222,6 +222,41 @@ async function flushPromises() {
   });
 }
 
+async function mountTerminalWithPty() {
+  renderTerminal(true);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(60);
+  });
+
+  const webSocket = mocks.webSockets[0];
+  expect(webSocket?.onmessage).toBeTypeOf('function');
+  webSocket.onmessage({
+    data: JSON.stringify({
+      type: 'PtyStarted',
+      connection_id: 'connection-1',
+      generation: 1,
+    }),
+  } as MessageEvent);
+  return webSocket;
+}
+
+function sendOutputFrame(webSocket: any, payload: Uint8Array) {
+  const connectionId = new TextEncoder().encode('connection-1');
+  const frame = new Uint8Array(3 + connectionId.length + payload.length);
+  frame[0] = 0x01;
+  frame[1] = connectionId.length >> 8;
+  frame[2] = connectionId.length & 0xff;
+  frame.set(connectionId, 3);
+  frame.set(payload, 3 + connectionId.length);
+  webSocket.onmessage({ data: frame.buffer } as MessageEvent);
+}
+
+function sentMessagesOfType(webSocket: any, type: string) {
+  return webSocket.send.mock.calls
+    .map(([data]: [string]) => JSON.parse(data))
+    .filter((message: { type: string }) => message.type === type);
+}
+
 describe('PtyTerminal activation', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -369,6 +404,77 @@ describe('PtyTerminal activation', () => {
       caseSensitive: true,
       regex: false,
     });
+  });
+
+  it('returns exactly one credit after xterm processes one output frame', async () => {
+    const webSocket = await mountTerminalWithPty();
+    const terminal = mocks.terminals[0];
+    let writeComplete: (() => void) | undefined;
+    terminal.write.mockImplementation((_data: string, callback?: () => void) => {
+      writeComplete = callback;
+    });
+
+    expect(sentMessagesOfType(webSocket, 'Resume')).toHaveLength(2);
+
+    sendOutputFrame(webSocket, new TextEncoder().encode('output'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(sentMessagesOfType(webSocket, 'Resume')).toHaveLength(2);
+    writeComplete?.();
+    expect(sentMessagesOfType(webSocket, 'Resume')).toHaveLength(3);
+  });
+
+  it('returns one credit per output frame batched into the same xterm write', async () => {
+    const webSocket = await mountTerminalWithPty();
+
+    sendOutputFrame(webSocket, new TextEncoder().encode('one'));
+    sendOutputFrame(webSocket, new TextEncoder().encode('two'));
+    sendOutputFrame(webSocket, new TextEncoder().encode('three'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(sentMessagesOfType(webSocket, 'Resume')).toHaveLength(5);
+  });
+
+  it('returns credits for UTF-8 output split across frames', async () => {
+    const webSocket = await mountTerminalWithPty();
+    const terminal = mocks.terminals[0];
+    terminal.write.mockClear();
+    const encoded = new TextEncoder().encode('中');
+
+    sendOutputFrame(webSocket, encoded.subarray(0, 1));
+    sendOutputFrame(webSocket, encoded.subarray(1));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(terminal.write).toHaveBeenCalledWith('中', expect.any(Function));
+    expect(sentMessagesOfType(webSocket, 'Resume')).toHaveLength(4);
+  });
+
+  it('relies on bounded scrollback without resetting after 2 MiB of output', async () => {
+    const webSocket = await mountTerminalWithPty();
+    const terminal = mocks.terminals[0];
+    terminal.clear.mockClear();
+    terminal.reset.mockClear();
+    terminal.write.mockClear();
+    const payload = new Uint8Array(16 * 1024).fill(0x61);
+
+    for (let batch = 0; batch < 65; batch++) {
+      sendOutputFrame(webSocket, payload);
+      sendOutputFrame(webSocket, payload);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    expect(terminal.write).toHaveBeenCalled();
+    expect(terminal.reset).not.toHaveBeenCalled();
+    expect(terminal.clear).not.toHaveBeenCalled();
+    expect(sentMessagesOfType(webSocket, 'Resume')).toHaveLength(132);
   });
 
   it('lets xterm handle Ctrl+V paste without duplicate custom send', async () => {
