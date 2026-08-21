@@ -124,8 +124,8 @@ node scripts/bump-version.mjs major --skip-changelog
 
 ## Documentation
 
-For detailed information about version bumping workflow, see:
-- [docs/VERSION_BUMP.md](../docs/VERSION_BUMP.md) - Complete version bump guide
+For detailed information about the version bumping workflow, see:
+- [release-version skill](../.github/skills/release-version/SKILL.md) - Full release procedure (stable and tagged prereleases)
 - [CHANGELOG.md](../CHANGELOG.md) - Version history
 
 ## Adding New Scripts
