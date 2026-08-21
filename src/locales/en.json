@@ -402,7 +402,7 @@
     "newConnection": "New Connection",
     "newConnectionDesc": "Connect via SSH, SFTP, FTP, or FTPS",
     "connectionManager": "Connection Manager",
-    "connectionManagerHighlight": "Left sidebar ⌘B",
+    "connectionManagerHighlight": "Left sidebar",
     "connectionManagerDesc": "Browse & organize saved connections",
     "preferences": "Preferences",
     "preferencesDesc": "Terminal themes, fonts & layout",

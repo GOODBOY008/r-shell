@@ -402,7 +402,7 @@
     "newConnection": "新建连接",
     "newConnectionDesc": "通过 SSH、SFTP、FTP 或 FTPS 连接",
     "connectionManager": "连接管理器",
-    "connectionManagerHighlight": "左侧栏 ⌘B",
+    "connectionManagerHighlight": "左侧栏",
     "connectionManagerDesc": "浏览和管理已保存的连接",
     "preferences": "偏好设置",
     "preferencesDesc": "终端主题、字体和布局",
