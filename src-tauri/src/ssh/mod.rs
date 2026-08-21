@@ -4,9 +4,11 @@ use russh::*;
 use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -89,6 +91,9 @@ pub struct SshConfig {
     pub keepalive_max: Option<u32>,
     /// Optional HTTP/SOCKS proxy tunnel. `None` connects directly.
     pub proxy: Option<ProxyConfig>,
+    /// Optional SSH jump host (bastion) to route the connection through.
+    /// `None` connects directly (or via the proxy when one is set).
+    pub tunnel: Option<TunnelConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +106,16 @@ pub enum AuthMethod {
         key_path: String,
         passphrase: Option<String>,
     },
+}
+
+/// An intermediate SSH server (jump host / bastion) used to tunnel the SSH
+/// connection to its final target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: AuthMethod,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +155,186 @@ impl client::Handler for Client {
     }
 }
 
+/// Authenticate a connected SSH session with the given credentials, returning
+/// an error when the server rejects them.
+async fn authenticate_session(
+    session: &mut client::Handle<Client>,
+    username: &str,
+    method: &AuthMethod,
+) -> Result<()> {
+    let authenticated = match method {
+        AuthMethod::Password { password } => session
+            .authenticate_password(username, password)
+            .await
+            .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?,
+        AuthMethod::PublicKey {
+            key_path,
+            passphrase,
+        } => {
+            // Expand tilde in path — use dirs::home_dir() for cross-platform
+            // support (HOME is not set on Windows; USERPROFILE is used instead).
+            let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
+                if let Some(home) = dirs::home_dir() {
+                    let home_str = home.to_string_lossy();
+                    key_path.replacen('~', &home_str, 1)
+                } else {
+                    key_path.clone()
+                }
+            } else {
+                key_path.clone()
+            };
+
+            // Check if file exists
+            if !std::path::Path::new(&expanded_path).exists() {
+                return Err(anyhow::anyhow!(
+                    "SSH key file not found: {}. Please check the file path and try again.",
+                    key_path
+                ));
+            }
+
+            // Read the key file and normalise CRLF line endings so that keys
+            // created or edited on Windows (which use \r\n) are parsed correctly
+            // by russh-keys' PEM / OpenSSH decoder.
+            let key_content = std::fs::read_to_string(&expanded_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e))?;
+            let key_content = key_content.replace("\r\n", "\n");
+
+            // decode_secret_key takes the key *content* as a &str.
+            let key = decode_secret_key(&key_content, passphrase.as_deref()).map_err(|e| {
+                if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
+                    anyhow::anyhow!(
+                        "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
+                    )
+                } else {
+                    anyhow::anyhow!(
+                        "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
+                        key_path, e
+                    )
+                }
+            })?;
+
+            session
+                .authenticate_publickey(username, Arc::new(key))
+                .await
+                .map_err(|e| anyhow::anyhow!("Public key authentication failed: {}. The key may not be authorized on the server.", e))?
+        }
+    };
+
+    if !authenticated {
+        return Err(anyhow::anyhow!(
+            "Authentication failed. Please check your credentials and try again."
+        ));
+    }
+    Ok(())
+}
+
+/// A byte stream that relays to the final target through an SSH jump host.
+///
+/// Owns both the jump-host SSH session and the direct-tcpip channel opened to
+/// the final target, so the relay stays alive for the lifetime of the tunneled
+/// connection. Implements `AsyncRead`/`AsyncWrite` by delegating to the channel
+/// so russh's `connect_stream` can run the target SSH handshake over it.
+pub struct SshTunnelStream {
+    _session: client::Handle<Client>,
+    stream: ChannelStream<client::Msg>,
+}
+
+impl AsyncRead for SshTunnelStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for SshTunnelStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+/// Establish an SSH session to the jump host, authenticate, and open a
+/// direct-tcpip channel to the final target. Returns a stream the target SSH
+/// handshake runs over.
+pub async fn connect_via_ssh_tunnel(
+    tunnel: &TunnelConfig,
+    host: &str,
+    port: u16,
+    timeout: Duration,
+) -> Result<SshTunnelStream> {
+    let ssh_config = client::Config {
+        preferred: russh::Preferred {
+            key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
+            ..russh::Preferred::DEFAULT
+        },
+        ..client::Config::default()
+    };
+
+    let mut session = tokio::time::timeout(
+        timeout,
+        client::connect(
+            Arc::new(ssh_config),
+            (&tunnel.host[..], tunnel.port),
+            Client,
+        ),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "SSH tunnel connection to {}:{} timed out after {}s. Please check the tunnel host and network connectivity.",
+            tunnel.host,
+            tunnel.port,
+            timeout.as_secs()
+        )
+    })?
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to connect to SSH tunnel host {}:{}: {}",
+            tunnel.host,
+            tunnel.port,
+            e
+        )
+    })?;
+
+    authenticate_session(&mut session, &tunnel.username, &tunnel.auth_method).await?;
+
+    // Open a direct-tcpip channel through the jump host to the final target.
+    // The originator is our local end and only reported to the server; the
+    // loopback address is the conventional placeholder (as OpenSSH does).
+    let channel = session
+        .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to open tunnel to {}:{} through {}:{}: {}",
+                host,
+                port,
+                tunnel.host,
+                tunnel.port,
+                e
+            )
+        })?;
+
+    Ok(SshTunnelStream {
+        _session: session,
+        stream: channel.into_stream(),
+    })
+}
+
 impl SshClient {
     pub fn new() -> Self {
         Self { session: None }
@@ -167,7 +362,23 @@ impl SshClient {
         // Connection timeout: 3 seconds
         let connection_timeout = Duration::from_secs(3);
 
-        let mut ssh_session = if let Some(proxy) = &config.proxy {
+        let mut ssh_session = if let Some(tunnel) = &config.tunnel {
+            // Route the connection through an SSH jump host: connect to the
+            // tunnel host, open a direct-tcpip channel to the final target,
+            // then hand that channel to russh so the target SSH handshake
+            // runs over the tunnel.
+            let stream =
+                connect_via_ssh_tunnel(tunnel, &config.host, config.port, connection_timeout)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("SSH tunnel failed: {e}"))?;
+            tokio::time::timeout(
+                connection_timeout,
+                client::connect_stream(Arc::new(ssh_config), stream, Client),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
+            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?
+        } else if let Some(proxy) = &config.proxy {
             // Tunnel through the proxy first, then hand the established stream
             // to russh so the SSH handshake runs over the tunnel.
             let stream = crate::proxy::connect_via_proxy(
@@ -195,71 +406,7 @@ impl SshClient {
             .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?
         };
 
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => ssh_session
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?,
-            AuthMethod::PublicKey {
-                key_path,
-                passphrase,
-            } => {
-                // Expand tilde in path — use dirs::home_dir() for cross-platform
-                // support (HOME is not set on Windows; USERPROFILE is used instead).
-                let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
-                    if let Some(home) = dirs::home_dir() {
-                        let home_str = home.to_string_lossy();
-                        key_path.replacen('~', &home_str, 1)
-                    } else {
-                        key_path.clone()
-                    }
-                } else {
-                    key_path.clone()
-                };
-
-                // Check if file exists
-                if !std::path::Path::new(&expanded_path).exists() {
-                    return Err(anyhow::anyhow!(
-                        "SSH key file not found: {}. Please check the file path and try again.",
-                        key_path
-                    ));
-                }
-
-                // Read the key file and normalise CRLF line endings so that keys
-                // created or edited on Windows (which use \r\n) are parsed correctly
-                // by russh-keys' PEM / OpenSSH decoder.
-                let key_content = std::fs::read_to_string(&expanded_path).map_err(|e| {
-                    anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e)
-                })?;
-                let key_content = key_content.replace("\r\n", "\n");
-
-                // decode_secret_key takes the key *content* as a &str.
-                let key = decode_secret_key(&key_content, passphrase.as_deref())
-                    .map_err(|e| {
-                        if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
-                            anyhow::anyhow!(
-                                "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
-                            )
-                        } else {
-                            anyhow::anyhow!(
-                                "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
-                                key_path, e
-                            )
-                        }
-                    })?;
-
-                ssh_session
-                    .authenticate_publickey(&config.username, Arc::new(key))
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Public key authentication failed: {}. The key may not be authorized on the server.", e))?
-            }
-        };
-
-        if !authenticated {
-            return Err(anyhow::anyhow!(
-                "Authentication failed. Please check your credentials and try again."
-            ));
-        }
+        authenticate_session(&mut ssh_session, &config.username, &config.auth_method).await?;
 
         self.session = Some(Arc::new(ssh_session));
         Ok(())

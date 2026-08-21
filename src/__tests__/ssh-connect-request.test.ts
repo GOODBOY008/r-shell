@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildSshConnectRequest, type SshConnectRequestSource } from '../lib/ssh-connect-request';
+import {
+  buildSftpConnectRequest,
+  buildSshConnectRequest,
+  type SshConnectRequestSource,
+} from '../lib/ssh-connect-request';
 
 const baseSource: SshConnectRequestSource = {
   host: 'example.com',
@@ -123,5 +127,108 @@ describe('buildSshConnectRequest', () => {
     expect(req.port).toBe(22);
     expect(req.auth_method).toBe('password');
     expect(req.username).toBe('');
+  });
+});
+
+describe('buildSshConnectRequest tunnel fields', () => {
+  it('sends null tunnel fields when the tunnel is disabled', () => {
+    const req = buildSshConnectRequest('conn-1', {
+      ...baseSource,
+      tunnelEnabled: false,
+      tunnelHost: 'bastion.example.com',
+      tunnelPort: 2222,
+    });
+
+    expect(req.tunnel_enabled).toBe(false);
+    expect(req.tunnel_host).toBeNull();
+    expect(req.tunnel_port).toBeNull();
+    expect(req.tunnel_username).toBeNull();
+    expect(req.tunnel_auth_method).toBeNull();
+    expect(req.tunnel_password).toBeNull();
+    expect(req.tunnel_key_path).toBeNull();
+    expect(req.tunnel_passphrase).toBeNull();
+  });
+
+  it('sends the tunnel fields when the tunnel is enabled (password auth)', () => {
+    const req = buildSshConnectRequest('conn-1', {
+      ...baseSource,
+      tunnelEnabled: true,
+      tunnelHost: 'bastion.example.com',
+      tunnelPort: 2222,
+      tunnelUsername: 'jumpuser',
+      tunnelPassword: 'jumppass',
+    });
+
+    expect(req.tunnel_enabled).toBe(true);
+    expect(req.tunnel_host).toBe('bastion.example.com');
+    expect(req.tunnel_port).toBe(2222);
+    expect(req.tunnel_username).toBe('jumpuser');
+    expect(req.tunnel_auth_method).toBe('password');
+    expect(req.tunnel_password).toBe('jumppass');
+    expect(req.tunnel_key_path).toBeNull();
+    expect(req.tunnel_passphrase).toBeNull();
+  });
+
+  it('sends key-path tunnel fields for publickey auth', () => {
+    const req = buildSshConnectRequest('conn-1', {
+      ...baseSource,
+      tunnelEnabled: true,
+      tunnelHost: 'bastion.example.com',
+      tunnelUsername: 'jumpuser',
+      tunnelAuthMethod: 'publickey',
+      tunnelKeyPath: '~/.ssh/id_ed25519',
+      tunnelPassphrase: 'secret',
+    });
+
+    expect(req.tunnel_auth_method).toBe('publickey');
+    expect(req.tunnel_key_path).toBe('~/.ssh/id_ed25519');
+    expect(req.tunnel_passphrase).toBe('secret');
+    expect(req.tunnel_password).toBeNull();
+  });
+
+  it('defaults the tunnel port to null when not provided', () => {
+    const req = buildSshConnectRequest('conn-1', {
+      ...baseSource,
+      tunnelEnabled: true,
+      tunnelHost: 'bastion.example.com',
+      tunnelUsername: 'jumpuser',
+    });
+
+    expect(req.tunnel_port).toBeNull();
+  });
+});
+
+describe('buildSftpConnectRequest', () => {
+  it('builds a basic SFTP request with defaults', () => {
+    const req = buildSftpConnectRequest('sftp-1', baseSource);
+
+    expect(req.connection_id).toBe('sftp-1');
+    expect(req.host).toBe('example.com');
+    expect(req.port).toBe(22);
+    expect(req.username).toBe('alice');
+    expect(req.auth_method).toBe('password');
+    expect(req.password).toBe('secret');
+    expect(req.key_path).toBeNull();
+    expect(req.tunnel_enabled).toBe(false);
+    expect(req.tunnel_host).toBeNull();
+    expect(req.tunnel_port).toBeNull();
+  });
+
+  it('carries tunnel fields into the SFTP request', () => {
+    const req = buildSftpConnectRequest('sftp-1', {
+      ...baseSource,
+      tunnelEnabled: true,
+      tunnelHost: 'bastion.example.com',
+      tunnelPort: 2222,
+      tunnelUsername: 'jumpuser',
+      tunnelPassword: 'jumppass',
+    });
+
+    expect(req.tunnel_enabled).toBe(true);
+    expect(req.tunnel_host).toBe('bastion.example.com');
+    expect(req.tunnel_port).toBe(2222);
+    expect(req.tunnel_username).toBe('jumpuser');
+    expect(req.tunnel_auth_method).toBe('password');
+    expect(req.tunnel_password).toBe('jumppass');
   });
 });

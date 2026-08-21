@@ -22,6 +22,7 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            tunnel: None,
         }
     }
 
@@ -32,6 +33,28 @@ mod tests {
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 22);
         assert_eq!(config.username, "testuser");
+        assert!(config.tunnel.is_none());
+    }
+
+    // Unit test - tunnel config carries the jump host credentials
+    #[test]
+    fn test_tunnel_config_creation() {
+        let config = SshConfig {
+            tunnel: Some(crate::ssh::TunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 2222,
+                username: "jumpuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "jumppass".to_string(),
+                },
+            }),
+            ..create_test_config()
+        };
+
+        let tunnel = config.tunnel.as_ref().unwrap();
+        assert_eq!(tunnel.host, "bastion.example.com");
+        assert_eq!(tunnel.port, 2222);
+        assert_eq!(tunnel.username, "jumpuser");
     }
 
     // Note: The following tests are integration tests that require a running SSH server.
@@ -103,6 +126,7 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            tunnel: None,
         };
 
         let result = client_write.connect(&config).await;
@@ -177,10 +201,35 @@ mod shell_integration_tests {
     use crate::sftp_client::list_sftp_dir;
     use crate::ssh::{
         bash_shell_integration_command, bash_version_from_probe, AuthMethod, BashVersion,
-        PtySession, SshClient, SshConfig,
+        PtySession, SshClient, SshConfig, TunnelConfig,
     };
     use std::time::Duration;
     use tokio::time::{timeout, Instant};
+
+    /// Test SSH server endpoint, overridable for local runs (e.g. a container
+    /// mapped to 127.0.0.1:2222). The tunnelled test uses the same server as
+    /// both jump host and final target.
+    fn test_server_endpoint() -> (String, u16) {
+        let host =
+            std::env::var("RSHELL_TEST_SSH_HOST").unwrap_or_else(|_| "rshell-test-ssh".to_string());
+        let port = std::env::var("RSHELL_TEST_SSH_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(22);
+        (host, port)
+    }
+
+    /// Final-target endpoint as seen *from inside the jump host*: the same
+    /// server, but on its internal SSH port. When the test server is reachable
+    /// from the host on a forwarded port (e.g. 127.0.0.1:2222 → container 22),
+    /// the tunnel target must still use the in-container port 22.
+    fn test_target_endpoint(jump_host: &str) -> (String, u16) {
+        let port = std::env::var("RSHELL_TEST_TARGET_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(22);
+        (jump_host.to_string(), port)
+    }
 
     #[test]
     fn parses_major_and_minor_from_bash_probe_results() {
@@ -299,6 +348,7 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                tunnel: None,
             })
             .await
             .expect("connect to Docker SSH server");
@@ -339,6 +389,67 @@ mod shell_integration_tests {
         assert!(nested_entries
             .iter()
             .any(|entry| entry.name == "report 1.txt"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn docker_ssh_tunnel_connects_terminal_and_sftp_through_jump_host() {
+        let (host, port) = test_server_endpoint();
+        let (target_host, target_port) = test_target_endpoint(&host);
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host: target_host,
+                port: target_port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "testpass".to_string(),
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                tunnel: Some(TunnelConfig {
+                    host,
+                    port,
+                    username: "testuser".to_string(),
+                    auth_method: AuthMethod::Password {
+                        password: "testpass".to_string(),
+                    },
+                }),
+            })
+            .await
+            .expect("connect through SSH tunnel to Docker SSH server");
+
+        // The terminal session must work over the tunnel (OSC 7 cwd report).
+        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let initial_output = read_until(&pty, b"\x1b\\").await;
+        assert!(
+            String::from_utf8_lossy(&initial_output).contains("/home/testuser"),
+            "initial OSC 7 should report the login directory over the tunnel"
+        );
+
+        // Create a marker file through the tunnelled shell (synchronised via
+        // `send_and_expect_cwd`, which only returns after the command ran),
+        // then verify it is visible over tunnelled SFTP. Data-independent so
+        // the test runs on any test server.
+        let marker = "/home/testuser/tunnel-e2e-marker.txt";
+        send_and_expect_cwd(&pty, &format!("touch {marker}; cd ~"), "/home/testuser").await;
+        let sftp = client
+            .open_sftp_session()
+            .await
+            .expect("open SFTP over tunnel");
+        let home_entries = list_sftp_dir(&sftp, "/home/testuser")
+            .await
+            .expect("list home directory over tunnelled SFTP");
+        assert!(
+            home_entries
+                .iter()
+                .any(|entry| entry.name == "tunnel-e2e-marker.txt"),
+            "marker file created over the tunnel should be visible over SFTP"
+        );
+
+        send_and_expect_cwd(&pty, &format!("rm {marker}; cd ~"), "/home/testuser").await;
     }
 }
 
@@ -432,6 +543,7 @@ mod key_loading_tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            tunnel: None,
         };
 
         let mut client = SshClient::new();

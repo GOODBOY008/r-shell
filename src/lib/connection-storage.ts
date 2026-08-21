@@ -31,6 +31,15 @@ export interface ConnectionData {
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
+  // SSH tunnel (jump host)
+  tunnelEnabled?: boolean;
+  tunnelHost?: string;
+  tunnelPort?: number;
+  tunnelUsername?: string;
+  tunnelAuthMethod?: 'password' | 'publickey';
+  tunnelPassword?: string;
+  tunnelKeyPath?: string;
+  tunnelPassphrase?: string;
   // SSH-specific advanced
   compression?: boolean;
   keepAlive?: boolean;

@@ -103,7 +103,8 @@
       "connection": "Connection",
       "auth": "Auth",
       "proxy": "Proxy",
-      "advanced": "Advanced"
+      "advanced": "Advanced",
+      "tunnel": "Tunnel"
     },
     "section": {
       "basicSettings": "Basic Connection Settings",
@@ -115,7 +116,10 @@
       "advancedSsh": "Advanced SSH Options",
       "advancedSshDesc": "Fine-tune SSH connection behavior and performance.",
       "advancedOptions": "Advanced Options",
-      "noAdvancedOptions": "No advanced options are available for {{protocol}} connections."
+      "noAdvancedOptions": "No advanced options are available for {{protocol}} connections.",
+      "tunnelSettings": "SSH Tunnel (Jump Host)",
+      "tunnelSettingsDesc": "Route the connection through an intermediate SSH server (jump host / bastion).",
+      "noTunnelForProtocol": "SSH tunnel is not available for {{protocol}} connections."
     },
     "label": {
       "connectionName": "Connection Name",
@@ -135,7 +139,14 @@
       "maxCount": "Max Count",
       "domain": "Domain (optional)",
       "displayResolution": "Display Resolution",
-      "colorDepth": "Color Depth"
+      "colorDepth": "Color Depth",
+      "tunnelHost": "Tunnel Host",
+      "tunnelPort": "Tunnel Port",
+      "tunnelUsername": "Tunnel Username",
+      "tunnelAuthMethod": "Tunnel Auth Method",
+      "tunnelPassword": "Tunnel Password",
+      "tunnelKeyPath": "Tunnel Private Key",
+      "tunnelPassphrase": "Tunnel Passphrase (optional)"
     },
     "placeholder": {
       "connectionName": "My Server",
@@ -149,7 +160,13 @@
       "proxyPort": "Proxy Port",
       "proxyUsername": "Optional",
       "proxyPassword": "Optional",
-      "domain": "WORKGROUP"
+      "domain": "WORKGROUP",
+      "tunnelHost": "bastion.example.com",
+      "tunnelPort": "Tunnel Port",
+      "tunnelUsername": "jumpuser",
+      "tunnelPassword": "Enter tunnel password",
+      "tunnelKeyPath": "~/.ssh/id_ed25519",
+      "tunnelPassphrase": "Enter passphrase if key is encrypted"
     },
     "authMethod": {
       "password": "Password",
@@ -225,6 +242,10 @@
       "connectionFailedDesc": "Unable to connect to the server. Please check your credentials and try again.",
       "connectionError": "Connection Error",
       "connectionErrorDesc": "An unexpected error occurred while connecting."
+    },
+    "tunnel": {
+      "enable": "Enable SSH Tunnel",
+      "enableDesc": "Forward the connection through a jump host (bastion) to reach the target."
     }
   },
   "settings": {
