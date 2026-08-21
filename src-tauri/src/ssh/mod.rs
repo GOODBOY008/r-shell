@@ -196,16 +196,7 @@ async fn authenticate_session(
         } => {
             // Expand tilde in path — use dirs::home_dir() for cross-platform
             // support (HOME is not set on Windows; USERPROFILE is used instead).
-            let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
-                if let Some(home) = dirs::home_dir() {
-                    let home_str = home.to_string_lossy();
-                    key_path.replacen('~', &home_str, 1)
-                } else {
-                    key_path.clone()
-                }
-            } else {
-                key_path.clone()
-            };
+            let expanded_path = crate::os_keypath::expand_tilde(key_path);
 
             // Check if file exists
             if !std::path::Path::new(&expanded_path).exists() {
@@ -236,10 +227,25 @@ async fn authenticate_session(
                 }
             })?;
 
-            session
+            // russh reports a rejected key as Ok(false) — no transport error —
+            // so the "not authorized" branch must name the key itself; the
+            // map_err above only sees real transport errors.
+            let authenticated = session
                 .authenticate_publickey(username, Arc::new(key))
                 .await
-                .map_err(|e| anyhow::anyhow!("Public key authentication failed: {}. The key may not be authorized on the server.", e))?
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Public key authentication failed with key {}: {}.",
+                        expanded_path, e
+                    )
+                })?;
+            if !authenticated {
+                return Err(anyhow::anyhow!(
+                    "Public key authentication failed with key {}. The key may not be authorized on the server.",
+                    expanded_path
+                ));
+            }
+            authenticated
         }
     };
 
