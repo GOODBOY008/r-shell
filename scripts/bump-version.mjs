@@ -281,7 +281,7 @@ function buildSection(version, date) {
  * newest release on top, directly after the Unreleased section when one
  * exists. Falls back to inserting before the first released section (or
  * appending to the title block) when there is no Unreleased section, so the
- * insertion never silently no-ops — the caller asserts the section exists.
+ * insertion never silently no-ops - the caller asserts the section exists.
  */
 export function insertSection(changelog, version, date) {
   const newSection = buildSection(version, date);
@@ -541,7 +541,7 @@ function main() {
     console.log(
       `  - Commit: ${noCommit ? 'skipped (--no-commit)' : 'chore: bump version to ' + newVersion}`
     );
-    log.info('Dry run — no files were modified.');
+    log.info('Dry run - no files were modified.');
     return;
   }
 
@@ -587,7 +587,7 @@ function performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVer
     tauriConf.version = newVersion;
     fs.writeFileSync(paths.tauriConf, JSON.stringify(tauriConf, null, 2) + '\n');
 
-    // Update Cargo.lock — rewrite the root package version directly (like
+    // Update Cargo.lock - rewrite the root package version directly (like
     // `cargo set-version`), falling back to `cargo build` only when the root
     // package entry cannot be found, and verify the result either way.
     log.info('Updating src-tauri/Cargo.lock...');
@@ -595,7 +595,7 @@ function performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVer
     try {
       cargoLock = updateCargoLock(cargoLock, newVersion);
     } catch {
-      log.warn('Root package entry not found in Cargo.lock; using cargo build fallback…');
+      log.warn('Root package entry not found in Cargo.lock; using cargo build fallback...');
       execSync('cargo build --quiet', {
         cwd: path.join(rootDir, 'src-tauri'),
         stdio: 'ignore'
@@ -623,7 +623,7 @@ function performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVer
         skipChangelog
       );
       fs.writeFileSync(paths.changelog, updated);
-      log.warn('⚠️  Please update CHANGELOG.md with actual changes before committing');
+      log.warn('! Please update CHANGELOG.md with actual changes before committing');
     }
 
     // Create git commit
@@ -634,14 +634,14 @@ function performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVer
         execSync('git add CHANGELOG.md');
       }
       execSync(`git commit -m "chore: bump version to ${newVersion}"`);
-      log.success(`✓ Version bumped to ${newVersion} and committed`);
+      log.success(`[OK] Version bumped to ${newVersion} and committed`);
       log.warn('Don\'t forget to:');
       console.log('  1. Update CHANGELOG.md with actual changes');
       console.log('  2. Run: git commit --amend (if needed)');
       console.log(`  3. Create a git tag: git tag v${newVersion}`);
       console.log('  4. Push changes: git push && git push --tags');
     } else {
-      log.success(`✓ Version bumped to ${newVersion}`);
+      log.success(`[OK] Version bumped to ${newVersion}`);
       log.warn('Files modified (not committed):');
       console.log('  - package.json');
       console.log('  - src-tauri/Cargo.toml');
