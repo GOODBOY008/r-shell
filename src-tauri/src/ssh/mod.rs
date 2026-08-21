@@ -204,18 +204,7 @@ impl SshClient {
                 key_path,
                 passphrase,
             } => {
-                // Expand tilde in path — use dirs::home_dir() for cross-platform
-                // support (HOME is not set on Windows; USERPROFILE is used instead).
-                let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
-                    if let Some(home) = dirs::home_dir() {
-                        let home_str = home.to_string_lossy();
-                        key_path.replacen('~', &home_str, 1)
-                    } else {
-                        key_path.clone()
-                    }
-                } else {
-                    key_path.clone()
-                };
+                let expanded_path = crate::os_keypath::expand_tilde(key_path);
 
                 // Check if file exists
                 if !std::path::Path::new(&expanded_path).exists() {

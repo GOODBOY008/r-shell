@@ -296,14 +296,6 @@ export function ConnectionDialog({
       return;
     }
 
-    if (config.authMethod === 'publickey' && !config.privateKeyPath) {
-      toast.error(t('connectionDialog.toast.privateKeyRequired'), {
-        description: t('connectionDialog.toast.privateKeyRequiredDesc'),
-      });
-      resetConnectionState();
-      return;
-    }
-
     // For SFTP/FTP/RDP/VNC protocols, delegate connection to App.tsx (via onConnect)
     // which calls the appropriate Tauri commands.
     const isSftpOrFtp = config.protocol === 'SFTP' || config.protocol === 'FTP';

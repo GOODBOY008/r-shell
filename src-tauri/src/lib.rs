@@ -4,6 +4,7 @@ mod desktop_protocol;
 mod ftp_client;
 mod ls_parser;
 mod os_detect;
+mod os_keypath;
 mod proxy;
 mod rdp_client;
 mod sftp_client;

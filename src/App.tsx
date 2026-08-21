@@ -328,7 +328,7 @@ function AppContent() {
           ? true // Desktop protocols can connect with or without credentials
           : connectionData.authMethod === 'password'
             ? !!connectionData.password
-            : (connectionData.authMethod === 'anonymous' ? true : !!connectionData.privateKeyPath);
+            : true; // Public-key auth can fallback to the default SSH key
 
         if (!hasCredentials) {
           console.log(`Connection ${connectionData.name} has no saved credentials, skipping restore`);
@@ -584,10 +584,10 @@ function AppContent() {
       const hasCredentials = isFileBrowser
         ? (connectionData.authMethod === 'anonymous' || connectionData.authMethod === 'password'
           ? (connectionData.authMethod === 'anonymous' || !!connectionData.password)
-          : !!connectionData.privateKeyPath)
-        : (connectionData.authMethod === 'password'
-          ? !!connectionData.password
-          : !!connectionData.privateKeyPath);
+        : true)
+      : (connectionData.authMethod === 'password'
+        ? !!connectionData.password
+        : true);
 
       if (!hasCredentials) {
         setEditingConnection(toConnectionConfig(connectionData));
