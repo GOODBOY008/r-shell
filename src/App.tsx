@@ -35,6 +35,7 @@ import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 import { dispatchTerminalCommand, type TerminalCommand } from './lib/terminal-commands';
+import { getRestoreTiming } from './lib/restore-timing';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
@@ -61,6 +62,14 @@ function AppContent() {
   // Terminal group state from context
   const { state, dispatch, activeGroup, activeTab, activeConnection } = useTerminalGroups();
   const workingDirectorySequenceRef = useRef(0);
+  // Fresh mirror of `state` for the mount-only restore effect (empty deps):
+  // the closure's `state` is a mount-time snapshot, but the restore loop may
+  // take minutes, during which the user can switch/split groups. Reading via
+  // this ref keeps the ADD_TAB target group current.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   const [terminalWorkingDirectories, setTerminalWorkingDirectories] = useState<
     Record<string, { path: string; sequence: number }>
   >({});
@@ -242,16 +251,30 @@ function AppContent() {
   useEffect(() => {
     /** Race a promise against a timeout; rejects with a clear message on expiry. */
     function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-      return Promise.race([
-        promise,
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(() => reject(new Error(`Timeout: ${label} did not complete within ${ms / 1000}s`)), ms),
-        ),
-      ]);
+      return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`Timeout: ${label} did not complete within ${ms / 1000}s`)),
+          ms,
+        );
+        promise.then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (err: unknown) => {
+            clearTimeout(timer);
+            reject(err instanceof Error ? err : new Error(String(err)));
+          },
+        );
+      });
     }
 
-    const CONNECT_TIMEOUT_MS = 15_000; // 15 s per backend connect call
-    const OVERALL_RESTORE_TIMEOUT_MS = 60_000; // 60 s for the entire restore
+    const { connectTimeoutMs: CONNECT_TIMEOUT_MS, overallTimeoutMs: OVERALL_RESTORE_TIMEOUT_MS } = getRestoreTiming();
+
+    // Soft-cancel flag: once the overall timeout fires, the restore loop stops
+    // initiating NEW connections. The connection currently in flight is allowed
+    // to finish naturally so a just-succeeding host is not killed mid-handshake.
+    let restoreCancelled = false;
 
     const restoreConnections = async () => {
       const activeConnections = ActiveConnectionsManager.getActiveConnections();
@@ -263,8 +286,9 @@ function AppContent() {
       // Collect tab IDs already present in the restored layout state to avoid duplicates.
       // The TerminalGroupProvider may have loaded tabs from localStorage, so we only need
       // to re-establish SSH connections for those tabs, not add them again.
+      // stateRef keeps the ADD_TAB target group fresh for long-running restores.
       const existingTabIds = new Set(
-        Object.values(state.groups).flatMap(g => g.tabs.map(t => t.id))
+        Object.values(stateRef.current.groups).flatMap(g => g.tabs.map(t => t.id))
       );
 
       console.log('Previous connections found:', activeConnections);
@@ -276,8 +300,17 @@ function AppContent() {
 
       let restoredCount = 0;
       let failedCount = 0;
+      let skippedByTimeout = 0;
 
       for (let i = 0; i < sortedConnections.length; i++) {
+        if (restoreCancelled) {
+          // Overall timeout fired: stop initiating new connections. Count the
+          // remaining entries as skipped so the summary reflects reality.
+          skippedByTimeout += sortedConnections.length - i;
+          console.warn(`Session restore cancelled at connection ${i + 1}/${sortedConnections.length}; ${skippedByTimeout} connection(s) skipped`);
+          break;
+        }
+
         const activeConn = sortedConnections[i];
         const connectionIdToLoad = activeConn.originalConnectionId || activeConn.connectionId;
         const connectionData = ConnectionStorageManager.getConnection(connectionIdToLoad);
@@ -356,7 +389,7 @@ function AppContent() {
                 connectionStatus: 'connected',
                 reconnectCount: 0,
               };
-              dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+              dispatch({ type: 'ADD_TAB', groupId: stateRef.current.activeGroupId, tab: newTab });
             }
 
             restoredCount++;
@@ -416,7 +449,7 @@ function AppContent() {
                 connectionStatus: 'connected',
                 reconnectCount: 0,
               };
-              dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+              dispatch({ type: 'ADD_TAB', groupId: stateRef.current.activeGroupId, tab: newTab });
             }
 
             restoredCount++;
@@ -452,7 +485,7 @@ function AppContent() {
                   connectionStatus: 'connecting',
                   reconnectCount: 0,
                 };
-                dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+                dispatch({ type: 'ADD_TAB', groupId: stateRef.current.activeGroupId, tab: newTab });
               }
 
               restoredCount++;
@@ -478,13 +511,22 @@ function AppContent() {
         }
       }
 
-      if (restoredCount > 0) {
+      const totalFailed = failedCount + skippedByTimeout;
+      if (restoreCancelled) {
+        // The overall timeout fired (possibly while the LAST connection was
+        // still in flight, so the loop never saw the flag at a loop head).
+        // The timeout toast below already told the user; keep the
+        // active-connections list intact so a manual reconnect of the skipped
+        // hosts is still possible, and do not emit a contradicting success or
+        // "all failed" toast here.
+      } else if (restoredCount > 0 && skippedByTimeout === 0) {
         toast.success(t('app.connectionsRestored'), {
-          description: failedCount > 0
-            ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
+          description: totalFailed > 0
+            ? t('app.connectionsRestoredDesc', { restoredCount, failedCount: totalFailed })
             : t('app.connectionsRestoredAllDesc', { restoredCount }),
         });
-      } else if (failedCount > 0) {
+      } else if (restoredCount === 0 && totalFailed > 0 && skippedByTimeout === 0) {
+        // All connections failed without a timeout: nothing left to restore.
         ActiveConnectionsManager.clearActiveConnections();
         toast.error(t('app.restoreFailed'), {
           description: t('app.restoreFailedDesc'),
@@ -498,10 +540,21 @@ function AppContent() {
     };
 
     withTimeout(restoreConnections(), OVERALL_RESTORE_TIMEOUT_MS, 'Session restore').catch((err) => {
-      console.error('Session restore timed out:', err);
-      toast.error(t('app.restoreTimedOut'), {
-        description: t('app.restoreTimedOutDesc'),
-      });
+      // Distinguish the overall-timeout rejection from an unexpected error
+      // thrown by restoreConnections itself (e.g. storage parse). Only the
+      // former should cancel the loop and show the timeout toast.
+      const isOverallTimeout = err instanceof Error && err.message.startsWith('Timeout:');
+      if (isOverallTimeout) {
+        console.error('Session restore timed out:', err);
+        // Soft-cancel: the in-flight connection may still complete, but the loop
+        // must not start any new connections after this point.
+        restoreCancelled = true;
+        toast.error(t('app.restoreTimedOut'), {
+          description: t('app.restoreTimedOutDesc'),
+        });
+      } else {
+        console.error('Session restore failed:', err);
+      }
       setCurrentRestoreTarget(null);
       setIsRestoring(false);
       setRestoringProgress({ current: 0, total: 0 });
