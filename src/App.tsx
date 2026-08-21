@@ -1623,11 +1623,11 @@ function AppContent() {
 
   const restoreHighlights = useMemo(() => (
     [
-      { icon: ShieldCheck, label: 'Secrets stay encrypted locally' },
-      { icon: PlugZap, label: 'Auto reconnect with retry' },
-      { icon: Activity, label: 'Live status monitoring' },
+      { icon: ShieldCheck, label: t('app.restoreHighlightSecrets') },
+      { icon: PlugZap, label: t('app.restoreHighlightAutoReconnect') },
+      { icon: Activity, label: t('app.restoreHighlightLiveMonitoring') },
     ]
-  ), []);
+  ), [t]);
 
   // Check if there are any tabs across all groups
   const hasAnyTabs = allTabs.length > 0;
@@ -1653,8 +1653,8 @@ function AppContent() {
                 <History className="h-6 w-6" />
               </div>
               <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">Workspace Restore</p>
-                <h3 className="mt-1 text-2xl font-semibold text-foreground">Bringing your connections back online</h3>
+                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">{t('app.restoreTitle')}</p>
+                <h3 className="mt-1 text-2xl font-semibold text-foreground">{t('app.restoreSubtitle')}</h3>
               </div>
             </div>
 
@@ -1662,8 +1662,8 @@ function AppContent() {
               <div className="flex items-center justify-between text-sm text-muted-foreground" aria-live="polite">
                 <span>
                   {currentRestoreTarget
-                    ? `Reconnecting ${currentRestoreTarget.name}`
-                    : 'Preparing saved connections'}
+                    ? t('app.restoreReconnecting', { name: currentRestoreTarget.name })
+                    : t('app.restorePreparing')}
                 </span>
                 <span className="font-semibold text-foreground">
                   {restoringProgress.current} / {restoringProgress.total}
@@ -1686,7 +1686,7 @@ function AppContent() {
                     <p className="text-sm font-medium text-foreground">{currentRestoreTarget.name}</p>
                     <p className="text-xs text-muted-foreground">
                       {currentRestoreTarget.username ? `${currentRestoreTarget.username}@` : ''}
-                      {currentRestoreTarget.host || 'unknown host'}
+                      {currentRestoreTarget.host || t('app.restoreUnknownHost')}
                     </p>
                   </div>
                 </div>

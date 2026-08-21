@@ -37,15 +37,15 @@ fn build_app_menu<F: Fn(&str) -> String>(
         "r-shell",
         true,
         &[
-            &PredefinedMenuItem::about(app, None, Some(AboutMetadata::default()))?,
+            &PredefinedMenuItem::about(app, Some(&t("menuBar.about")), Some(AboutMetadata::default()))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::services(app, Some(&t("menuBar.services")))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::hide(app, Some(&t("menuBar.hide")))?,
+            &PredefinedMenuItem::hide_others(app, Some(&t("menuBar.hideOthers")))?,
+            &PredefinedMenuItem::show_all(app, Some(&t("menuBar.showAll")))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
+            &PredefinedMenuItem::quit(app, Some(&t("menuBar.quit")))?,
         ],
     )?;
 
@@ -82,6 +82,12 @@ fn build_app_menu<F: Fn(&str) -> String>(
     )?;
 
     // ── Edit menu (mix of predefined + custom) ────────────────────────────────
+    // NOTE: macOS additionally injects system-managed items at the end of the
+    // Edit menu (AutoFill, Start Dictation, Emoji & Symbols). Those follow the
+    // app's *effective* language (system language ∩ declared CFBundleLocalizations),
+    // not the in-app language setting — accepted macOS behavior (see Tutanota
+    // issue #6221, marked wontfix "intended behaviour"). Everything below is
+    // app-controlled and follows the in-app language via update_menu_language.
     let edit_menu = Submenu::with_id_and_items(
         app,
         "m_edit",
@@ -204,6 +210,12 @@ fn default_menu_text(key: &str) -> String {
         "menuBar.tools" => "Tools",
         "menuBar.connection" => "Connection",
         "menuBar.window" => "Window",
+        "menuBar.about" => "About r-shell",
+        "menuBar.services" => "Services",
+        "menuBar.hide" => "Hide r-shell",
+        "menuBar.hideOthers" => "Hide Others",
+        "menuBar.showAll" => "Show All",
+        "menuBar.quit" => "Quit r-shell",
         "menuBar.newConnection" => "New Connection...",
         "menuBar.saveConnection" => "Save Connection",
         "menuBar.closeTab" => "Close Tab",

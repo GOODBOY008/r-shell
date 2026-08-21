@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
+import { formatKeyboardShortcut, DEFAULT_APP_KEYBOARD_SHORTCUTS, DEFAULT_LAYOUT_SHORTCUTS } from '@/lib/keyboard-shortcuts';
 
 interface WelcomeScreenProps {
   onNewConnection: () => void;
@@ -31,6 +32,8 @@ interface WelcomeScreenProps {
 
 export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
   const { t } = useTranslation();
+  const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+  const formatShortcut = (shortcut: string) => formatKeyboardShortcut(shortcut, isMac);
   const quickActions = [
     {
       icon: Plus,
@@ -38,7 +41,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       description: t('welcome.newConnectionDesc'),
       action: onNewConnection,
       variant: 'default' as const,
-      shortcut: '⌘N'
+      shortcut: formatShortcut(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession)
     },
     {
       icon: FolderTree,
@@ -46,7 +49,8 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       description: t('welcome.connectionManagerDesc'),
       action: () => {},
       variant: 'outline' as const,
-      highlight: 'Left sidebar ⌘B'
+      shortcut: formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar),
+      highlight: t('welcome.connectionManagerHighlight')
     },
     {
       icon: Settings,
@@ -54,7 +58,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       description: t('welcome.preferencesDesc'),
       action: onOpenSettings,
       variant: 'outline' as const,
-      shortcut: '⌘,'
+      shortcut: formatShortcut('Ctrl+,')
     }
   ];
 

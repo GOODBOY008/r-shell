@@ -171,7 +171,7 @@ export function ConnectionManager({
         const { id: _id, createdAt: _createdAt, ...rest } = connectionData;
         const duplicated = ConnectionStorageManager.saveConnection({
           ...rest,
-          name: `${connectionData.name} (Copy)`,
+          name: `${connectionData.name}${t('connectionManager.copySuffix')}`,
         });
         setConnections(loadConnections());
         toast.success(t('connectionManager.duplicated', { name: duplicated.name }));
