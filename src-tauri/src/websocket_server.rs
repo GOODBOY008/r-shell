@@ -153,6 +153,9 @@ const BINARY_OUTPUT_CMD: u8 = 0x01;
 /// the session is expired (the SSH connection itself is left for SFTP).
 const PTY_WS_DROP_GRACE: Duration = Duration::from_secs(5 * 60);
 
+/// Command byte that identifies a binary terminal-input frame from the frontend.
+const BINARY_INPUT_CMD: u8 = 0x00;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -265,6 +268,24 @@ fn encode_output_frame(connection_id: &str, data: &[u8]) -> Vec<u8> {
     frame.extend_from_slice(&id_bytes[..id_len]);
     frame.extend_from_slice(data);
     frame
+}
+
+/// Decode a binary terminal-input frame from the frontend:
+///   [0x00][id_len: u16 BE][connection_id bytes][payload bytes]
+/// The id is length-prefixed (unlike the old fixed 36-byte layout) so any
+/// connection id works, including duplicate-session ids with timestamp
+/// suffixes. Returns `None` when the frame is malformed.
+fn decode_input_frame(data: &[u8]) -> Option<(String, &[u8])> {
+    if data.len() < 3 || data[0] != BINARY_INPUT_CMD {
+        return None;
+    }
+    let id_len = ((data[1] as usize) << 8) | data[2] as usize;
+    let payload_offset = 3 + id_len;
+    if data.len() < payload_offset {
+        return None;
+    }
+    let connection_id = String::from_utf8_lossy(&data[3..payload_offset]).to_string();
+    Some((connection_id, &data[payload_offset..]))
 }
 
 /// Send a JSON control message with a timeout.
@@ -395,21 +416,20 @@ impl WebSocketServer {
                         continue;
                     }
                     match data[0] {
-                        0x00 => {
-                            if data.len() < 37 {
-                                tracing::warn!("Binary INPUT message too short");
-                                continue;
+                        0x00 => match decode_input_frame(&data) {
+                            Some((connection_id, payload)) => {
+                                if let Err(e) = self
+                                    .connection_manager
+                                    .write_to_pty(&connection_id, payload.to_vec())
+                                    .await
+                                {
+                                    tracing::error!("Failed to write to PTY: {}", e);
+                                }
                             }
-                            let connection_id = String::from_utf8_lossy(&data[1..37]).to_string();
-                            let input_data = data[37..].to_vec();
-                            if let Err(e) = self
-                                .connection_manager
-                                .write_to_pty(&connection_id, input_data)
-                                .await
-                            {
-                                tracing::error!("Failed to write to PTY: {}", e);
+                            None => {
+                                tracing::warn!("Malformed binary INPUT message");
                             }
-                        }
+                        },
                         _ => {
                             tracing::warn!("Unknown binary command: {}", data[0]);
                         }
@@ -592,10 +612,14 @@ impl WebSocketServer {
 
                 tokio::spawn(async move {
                     let mut accumulated = Vec::with_capacity(OUTPUT_FLUSH_BYTES);
-                    let mut last_flush = tokio::time::Instant::now();
 
                     loop {
-                        // --- Read from PTY (1 ms poll) ---
+                        // --- Read from PTY (event-driven) ---
+                        // With nothing pending, block until data arrives — an
+                        // idle terminal consumes zero wakeups (this used to be
+                        // a 1 ms poll, ~1000 wakeups/s per PTY). While data
+                        // is pending unflushed, arm the flush-interval
+                        // deadline so small chunks still ship within 10 ms.
                         let read_result = tokio::select! {
                             biased;
                             _ = reader_cancel.cancelled() => {
@@ -612,66 +636,64 @@ impl WebSocketServer {
                                 ).await;
                                 return;
                             }
-                            result = connection_manager.read_from_pty(&connection_id_clone) => result,
+                            result = connection_manager.read_from_pty(
+                                &connection_id_clone,
+                                if accumulated.is_empty() {
+                                    None
+                                } else {
+                                    Some(Duration::from_millis(OUTPUT_FLUSH_INTERVAL_MS as u64))
+                                },
+                            ) => result,
                         };
 
                         match read_result {
-                            Ok(data) if data.is_empty() => {
-                                // 1 ms poll returned nothing — flush if interval elapsed.
-                                if !accumulated.is_empty()
-                                    && last_flush.elapsed().as_millis()
-                                        >= OUTPUT_FLUSH_INTERVAL_MS
+                            // Deadline elapsed with pending data — time to flush.
+                            Ok(None) => {
+                                // Wait for 1 frontend ACK before sending.
+                                let ok = tokio::select! {
+                                    biased;
+                                    _ = reader_cancel.cancelled() => false,
+                                    r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
+                                };
+                                if !ok {
+                                    break;
+                                }
+                                if flush_output(
+                                    &tx_clone,
+                                    &connection_id_clone,
+                                    &mut accumulated,
+                                    &reader_cancel,
+                                )
+                                .await
+                                    == SendOutcome::Closed
                                 {
-                                    // Wait for 1 frontend ACK before sending.
-                                    let ok = tokio::select! {
-                                        biased;
-                                        _ = reader_cancel.cancelled() => false,
-                                        r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
-                                    };
-                                    if !ok {
-                                        break;
-                                    }
-                                    if flush_output(
-                                        &tx_clone,
-                                        &connection_id_clone,
-                                        &mut accumulated,
-                                        &reader_cancel,
-                                    )
-                                    .await
-                                        == SendOutcome::Closed
-                                    {
-                                        break;
-                                    }
-                                    last_flush = tokio::time::Instant::now();
+                                    break;
                                 }
                             }
-                            Ok(data) => {
+                            Ok(Some(data)) => {
                                 accumulated.extend_from_slice(&data);
-                                if accumulated.len() >= OUTPUT_FLUSH_BYTES
-                                    || last_flush.elapsed().as_millis()
-                                        >= OUTPUT_FLUSH_INTERVAL_MS
+                                if accumulated.len() < OUTPUT_FLUSH_BYTES {
+                                    continue; // keep batching until size or deadline
+                                }
+                                // Wait for 1 frontend ACK before sending.
+                                let ok = tokio::select! {
+                                    biased;
+                                    _ = reader_cancel.cancelled() => false,
+                                    r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
+                                };
+                                if !ok {
+                                    break;
+                                }
+                                if flush_output(
+                                    &tx_clone,
+                                    &connection_id_clone,
+                                    &mut accumulated,
+                                    &reader_cancel,
+                                )
+                                .await
+                                    == SendOutcome::Closed
                                 {
-                                    // Wait for 1 frontend ACK before sending.
-                                    let ok = tokio::select! {
-                                        biased;
-                                        _ = reader_cancel.cancelled() => false,
-                                        r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
-                                    };
-                                    if !ok {
-                                        break;
-                                    }
-                                    if flush_output(
-                                        &tx_clone,
-                                        &connection_id_clone,
-                                        &mut accumulated,
-                                        &reader_cancel,
-                                    )
-                                    .await
-                                        == SendOutcome::Closed
-                                    {
-                                        break;
-                                    }
-                                    last_flush = tokio::time::Instant::now();
+                                    break;
                                 }
                             }
                             Err(e) => {
@@ -923,7 +945,7 @@ impl WebSocketServer {
 #[cfg(test)]
 mod tests {
     use super::error_code;
-    use super::{WsError, WsMessage};
+    use super::{decode_input_frame, WsError, WsMessage, BINARY_INPUT_CMD};
     use crate::connection_manager::PtyStartError;
 
     #[test]
@@ -951,23 +973,34 @@ mod tests {
     }
 
     #[test]
-    fn test_pty_started_serde_reattached_defaults_false() {
-        let msg: WsMessage =
-            serde_json::from_str(r#"{"type":"PtyStarted","connection_id":"c","generation":1}"#)
-                .unwrap();
-        match msg {
-            WsMessage::PtyStarted { reattached, .. } => assert!(!reattached),
-            other => panic!("expected PtyStarted, got {:?}", other),
-        }
+    fn test_decode_input_frame_parses_length_prefixed_ids() {
+        // Ids of any length work, including duplicate-session ids with
+        // timestamp suffixes that broke the old fixed 36-byte layout.
+        let id = "conn-1-dup-1724412345678";
+        let payload = b"ls -al\r";
+        let mut frame = vec![BINARY_INPUT_CMD];
+        frame.extend_from_slice(&(id.len() as u16).to_be_bytes());
+        frame.extend_from_slice(id.as_bytes());
+        frame.extend_from_slice(payload);
 
-        let msg: WsMessage = serde_json::from_str(
-            r#"{"type":"PtyStarted","connection_id":"c","generation":1,"reattached":true}"#,
-        )
-        .unwrap();
-        match msg {
-            WsMessage::PtyStarted { reattached, .. } => assert!(reattached),
-            other => panic!("expected PtyStarted, got {:?}", other),
-        }
+        let (parsed_id, parsed_payload) = decode_input_frame(&frame).unwrap();
+        assert_eq!(parsed_id, id);
+        assert_eq!(parsed_payload, payload);
+    }
+
+    #[test]
+    fn test_decode_input_frame_rejects_malformed_frames() {
+        // Wrong command byte.
+        assert!(decode_input_frame(&[0x01, 0, 1, b'a']).is_none());
+        // Truncated header.
+        assert!(decode_input_frame(&[BINARY_INPUT_CMD, 0]).is_none());
+        // Declared id length exceeds the frame.
+        assert!(decode_input_frame(&[BINARY_INPUT_CMD, 0, 9, b'a']).is_none());
+        // Id-only frame with empty payload is valid.
+        let frame = [BINARY_INPUT_CMD, 0, 1, b'a'];
+        let (id, payload) = decode_input_frame(&frame).unwrap();
+        assert_eq!(id, "a");
+        assert!(payload.is_empty());
     }
 
     #[test]

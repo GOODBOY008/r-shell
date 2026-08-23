@@ -160,6 +160,12 @@ export function PtyTerminal({
   const MAX_AUTO_RECONNECT_AFTER_DROP = 5;
 
   const inputEncoderRef = React.useRef(new TextEncoder());
+  // Encoded connection id for the binary input fast path — computed once per
+  // connection, not per keystroke (hot path: must stay allocation-light).
+  const connectionIdBytes = React.useMemo(
+    () => inputEncoderRef.current.encode(connectionId),
+    [connectionId],
+  );
 
   // Xshell-style Ctrl+A prefix: after Ctrl+A, a following 'd' detaches the
   // session into the background. Any other key flushes the buffered Ctrl+A
@@ -183,14 +189,21 @@ export function PtyTerminal({
       return false;
     }
 
-    const dataBytes = Array.from(inputEncoderRef.current.encode(data));
-    ws.send(JSON.stringify({
-      type: 'Input',
-      connection_id: connectionId,
-      data: dataBytes,
-    }));
+    // Binary fast path — frame format mirrors the backend's decoder:
+    //   [0x00][id_len: u16 BE][connection_id bytes][payload bytes]
+    // One TypedArray per keystroke instead of a boxed number array plus a
+    // JSON string; the backend skips JSON parsing entirely.
+    const payload = inputEncoderRef.current.encode(data);
+    const idBytes = connectionIdBytes;
+    const frame = new Uint8Array(3 + idBytes.length + payload.length);
+    frame[0] = 0x00;
+    frame[1] = idBytes.length >> 8;
+    frame[2] = idBytes.length & 0xff;
+    frame.set(idBytes, 3);
+    frame.set(payload, 3 + idBytes.length);
+    ws.send(frame);
     return true;
-  }, [connectionId]);
+  }, [connectionIdBytes]);
 
   const flushPrefixCtrlA = React.useCallback(() => {
     if (prefixArmedRef.current) {

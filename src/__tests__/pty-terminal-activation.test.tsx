@@ -406,6 +406,23 @@ describe('PtyTerminal activation', () => {
     });
   });
 
+  it('sends terminal input as a binary frame with a length-prefixed id', async () => {
+    const webSocket = await mountTerminalWithPty();
+    const terminal = mocks.terminals[0];
+    const onData = terminal.onData.mock.calls[0][0] as (data: string) => void;
+
+    onData('ls\r');
+
+    const sent = webSocket.send.mock.calls[webSocket.send.mock.calls.length - 1][0];
+    expect(sent).toBeInstanceOf(Uint8Array);
+    const view = sent as Uint8Array;
+    expect(view[0]).toBe(0x00);
+    const idLen = (view[1] << 8) | view[2];
+    const decoder = new TextDecoder();
+    expect(decoder.decode(view.subarray(3, 3 + idLen))).toBe('connection-1');
+    expect(decoder.decode(view.subarray(3 + idLen))).toBe('ls\r');
+  });
+
   it('returns exactly one credit after xterm processes one output frame', async () => {
     const webSocket = await mountTerminalWithPty();
     const terminal = mocks.terminals[0];
