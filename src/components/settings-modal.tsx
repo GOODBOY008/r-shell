@@ -60,8 +60,31 @@ import {
 } from '@/lib/config-export-import';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
 import { isTauri } from '@tauri-apps/api/core';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { readFile } from '@tauri-apps/plugin-fs';
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Checkbox } from './ui/checkbox';
+
+// Background image picker: MIME type for the data URL derived from the file extension.
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+};
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const CHUNK = 0x8000; // avoid call-stack limits on large arrays with spread
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
 
 interface SettingsModalProps {
   open: boolean;
@@ -225,6 +248,32 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   ) => {
     setTerminalAppearance(prev => ({ ...prev, [key]: value }));
   };
+
+  // Pick a background image via the native OS dialog (Tauri builds) or fall
+  // back to the hidden HTML input in browser dev mode.
+  const handlePickBackgroundImage = useCallback(async () => {
+    if (!isTauri()) {
+      document.getElementById('background-image-upload')?.click();
+      return;
+    }
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: t('settings.terminal.images'), extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] }],
+      });
+      if (!selected) return; // dialog dismissed
+      const bytes = await readFile(selected);
+      if (bytes.length > 5 * 1024 * 1024) {
+        toast.error(t('settings.terminal.imageSizeWarning'));
+        return;
+      }
+      const ext = selected.split('.').pop()?.toLowerCase() ?? '';
+      const mime = IMAGE_MIME[ext] ?? 'image/png';
+      updateTerminalAppearance('backgroundImage', `data:${mime};base64,${bytesToBase64(bytes)}`);
+    } catch (err) {
+      toast.error(t('settings.terminal.imageLoadError'), { description: String(err) });
+    }
+  }, [t]);
 
   const updateSetting = (key: keyof typeof settings, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
@@ -664,7 +713,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => document.getElementById('background-image-upload')?.click()}
+                      onClick={() => { void handlePickBackgroundImage(); }}
                       className="gap-2"
                     >
                       <Upload className="h-4 w-4" />

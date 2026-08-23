@@ -270,7 +270,9 @@
       "imageOpacity": "Image Opacity: {{opacity}}%",
       "imageBlur": "Image Blur: {{blur}}px",
       "imagePosition": "Image Position",
-      "imageSizeWarning": "Image must be less than 5MB"
+      "imageSizeWarning": "Image must be less than 5MB",
+      "images": "Images",
+      "imageLoadError": "Failed to load image"
     },
     "editor": {
       "title": "Code Editor",

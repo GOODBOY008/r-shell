@@ -265,6 +265,9 @@ pub fn run() {
         // Global shortcuts are registered at runtime from the frontend
         // (src/lib/keyboard-shortcuts.ts) via the plugin's JS API.
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_positioner::init())
+>>>>>>> fc9d9d6 (feat(window): persist window layout via window-state + center popups via positioner)
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
