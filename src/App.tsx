@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
+import { reconcileSessionHealth } from './lib/session-health';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
@@ -170,6 +171,29 @@ function AppContent() {
       window.removeEventListener('storage', refreshKeyboardShortcutSettings);
     };
   }, []);
+
+  // Latest tabs snapshot for the health poll below — kept in a ref so the
+  // interval isn't torn down and recreated on every group-state change.
+  const allTabsRef = useRef(allTabs);
+  useEffect(() => {
+    allTabsRef.current = allTabs;
+  }, [allTabs]);
+
+  // Periodically reconcile terminal tab status against backend session
+  // health (issue #87 backstop: SFTP/monitor can keep the SSH session alive
+  // while the PTY pipeline is gone, leaving a lying "Connected" badge).
+  useEffect(() => {
+    const HEALTH_POLL_INTERVAL_MS = 30_000;
+    const interval = window.setInterval(() => {
+      void reconcileSessionHealth(
+        allTabsRef.current,
+        (connectionId) =>
+          invoke('get_session_health', { connectionId }),
+        (tabId) => dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' }),
+      );
+    }, HEALTH_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [dispatch]);
 
   const handleCloseActiveTab = useCallback(() => {
     if (!activeGroup?.activeTabId) {

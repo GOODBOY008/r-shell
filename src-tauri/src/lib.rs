@@ -294,6 +294,7 @@ pub fn run() {
             commands::ssh_connect,
             commands::ssh_cancel_connect,
             commands::ssh_disconnect,
+            commands::get_session_health,
             commands::list_detached_sessions,
             commands::has_detached_session,
             commands::close_detached_session,

@@ -6,6 +6,7 @@ use crate::sftp_client::StandaloneSftpClient;
 use crate::ssh::{PtySession, SshClient, SshConfig};
 use crate::vnc_client::VncClient;
 use anyhow::Result;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,6 +73,26 @@ pub struct DetachedSession {
     /// against this so a session reattached and parked again isn't killed by
     /// a timer left over from an earlier park.
     pub parked_at: tokio::time::Instant,
+}
+
+/// Point-in-time health of one connection's terminal pipeline, with each
+/// subsystem reported separately so the UI can't show "Connected" while the
+/// terminal path is dead (issue #87: SFTP and the monitor can stay alive on
+/// the same SSH session after the PTY pipeline died).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHealth {
+    /// The SSH connection exists in the connection map.
+    pub ssh_connected: bool,
+    /// An interactive PTY session is currently attached to a WebSocket.
+    pub has_pty: bool,
+    /// Current PTY generation counter, if any session was ever started.
+    pub pty_generation: Option<u64>,
+    /// The PTY is parked in the detached registry (Ctrl+A+D or a WebSocket
+    /// drop inside the grace window) — alive, just not streaming.
+    pub detached: bool,
+    /// Protocol type recorded for the connection ("SSH", "SFTP", ...).
+    pub connection_type: Option<String>,
 }
 
 pub struct ConnectionManager {
@@ -417,6 +438,32 @@ impl ConnectionManager {
             true
         } else {
             false
+        }
+    }
+
+    /// Snapshot of each subsystem's state for a connection. Locks are taken
+    /// sequentially (never nested) and unknown ids simply report all-false.
+    pub async fn session_health(&self, connection_id: &str) -> SessionHealth {
+        let ssh_connected = self.connections.read().await.contains_key(connection_id);
+        let has_pty = self.pty_sessions.read().await.contains_key(connection_id);
+        let pty_generation = self
+            .pty_generations
+            .read()
+            .await
+            .get(connection_id)
+            .copied();
+        let detached = self
+            .detached_sessions
+            .read()
+            .await
+            .contains_key(connection_id);
+        let connection_type = self.get_connection_type(connection_id).await;
+        SessionHealth {
+            ssh_connected,
+            has_pty,
+            pty_generation,
+            detached,
+            connection_type,
         }
     }
 
@@ -897,6 +944,37 @@ mod tests {
 
         // Unknown connection → Err.
         assert!(mgr.read_from_pty("ghost", None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_session_health_reflects_each_subsystem() {
+        let mgr = ConnectionManager::new();
+
+        // Unknown connection: everything false / None.
+        let h = mgr.session_health("ghost").await;
+        assert!(!h.ssh_connected);
+        assert!(!h.has_pty);
+        assert!(!h.detached);
+        assert_eq!(h.pty_generation, None);
+        assert_eq!(h.connection_type, None);
+
+        // Populate the subsystem maps one by one.
+        {
+            let mut connections = mgr.connections.write().await;
+            connections.insert(
+                "c-1".to_string(),
+                Arc::new(RwLock::new(SshClient::new())),
+            );
+        }
+        {
+            let mut generations = mgr.pty_generations.write().await;
+            generations.insert("c-1".to_string(), 7);
+        }
+        let h = mgr.session_health("c-1").await;
+        assert!(h.ssh_connected);
+        assert!(!h.has_pty);
+        assert!(!h.detached);
+        assert_eq!(h.pty_generation, Some(7));
     }
 
     #[test]
