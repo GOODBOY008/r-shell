@@ -333,7 +333,8 @@
       "closeSession": "关闭会话",
       "nextTab": "下一个标签页",
       "previousTab": "上一个标签页",
-      "note": "键盘快捷键更改将在保存后生效。"
+      "note": "键盘快捷键更改将在保存后生效。",
+      "registerFailed": "快捷键 {{shortcut}} 注册失败"
     },
     "advanced": {
       "title": "高级设置",

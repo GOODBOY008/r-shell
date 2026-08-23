@@ -94,6 +94,9 @@ vi.mock('@/lib/connection-storage', async (importOriginal) => {
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: unknown[]) => lifecycle.invoke(...args),
+  // App's keyboard-shortcut hook branches on this; the restore path runs in
+  // browser mode where there is no Tauri backend.
+  isTauri: () => false,
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({

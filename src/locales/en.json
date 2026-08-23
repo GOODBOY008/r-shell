@@ -333,7 +333,8 @@
       "closeSession": "Close Session",
       "nextTab": "Next Tab",
       "previousTab": "Previous Tab",
-      "note": "Changes to keyboard shortcuts take effect after saving."
+      "note": "Changes to keyboard shortcuts take effect after saving.",
+      "registerFailed": "Failed to register shortcut {{shortcut}}"
     },
     "advanced": {
       "title": "Advanced Settings",
