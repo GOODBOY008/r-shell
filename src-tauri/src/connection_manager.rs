@@ -8,6 +8,7 @@ use crate::vnc_client::VncClient;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -58,14 +59,19 @@ fn is_session_dead_error(e: &anyhow::Error) -> bool {
 }
 
 /// A PTY session that was detached from its WebSocket consumer (Xshell-style
-/// Ctrl+A+D). The SSH connection and PTY channel stay alive so the remote
-/// shell keeps running; only the streaming reader is stopped.
+/// Ctrl+A+D, or a WebSocket drop within the reattach grace period). The SSH
+/// connection and PTY channel stay alive so the remote shell keeps running;
+/// only the streaming reader is stopped.
 pub struct DetachedSession {
     pub session: Arc<PtySession>,
     pub generation: u64,
     /// Cancelled when the session is re-attached or terminated — stops the
     /// background output drain task.
     pub drain_cancel: CancellationToken,
+    /// When this session was (re-)parked. Grace-expiry timers compare
+    /// against this so a session reattached and parked again isn't killed by
+    /// a timer left over from an earlier park.
+    pub parked_at: tokio::time::Instant,
 }
 
 pub struct ConnectionManager {
@@ -198,7 +204,7 @@ impl ConnectionManager {
         connection_id: &str,
         cols: u32,
         rows: u32,
-    ) -> Result<u64, PtyStartError> {
+    ) -> Result<(u64, bool), PtyStartError> {
         // First try to re-attach a detached session.
         if let Some(detached) = self.take_detached_session(connection_id).await {
             tracing::info!("Re-attaching detached PTY session for {}", connection_id);
@@ -212,7 +218,7 @@ impl ConnectionManager {
                 tracing::warn!("Failed to resize re-attached PTY: {}", e);
             }
 
-            return Ok(detached.generation);
+            return Ok((detached.generation, true));
         }
 
         // Get the SSH client. A missing entry means the SSH session is gone
@@ -265,7 +271,7 @@ impl ConnectionManager {
         let mut pty_sessions = self.pty_sessions.write().await;
         pty_sessions.insert(connection_id.to_string(), Arc::new(pty));
 
-        Ok(current_gen)
+        Ok((current_gen, false))
     }
 
     /// Evict a dead SSH connection, guarded by `Arc` identity so a
@@ -373,11 +379,45 @@ impl ConnectionManager {
             let mut detached = self.detached_sessions.write().await;
             detached.insert(
                 connection_id.to_string(),
-                DetachedSession { session, generation, drain_cancel },
+                DetachedSession {
+                    session,
+                    generation,
+                    drain_cancel,
+                    parked_at: tokio::time::Instant::now(),
+                },
             );
             tracing::info!("Detached PTY session for {}", connection_id);
         }
         Ok(())
+    }
+
+    /// Expire a parked session whose reattach grace period elapsed: cancel
+    /// the PTY and remove it from the registry. The SSH connection itself is
+    /// left alone — SFTP/monitoring may still be using it, mirroring the
+    /// semantics of an explicit terminal Close.
+    ///
+    /// Guarded by `parked_at`: if the session was reattached and parked again
+    /// after this expiry timer was created, its `parked_at` is newer than the
+    /// grace window and the timer must leave it alone. Returns whether a
+    /// session was actually expired.
+    pub async fn expire_detached_session(&self, connection_id: &str, grace: Duration) -> bool {
+        let mut detached = self.detached_sessions.write().await;
+        let Some(info) = detached.get(connection_id) else {
+            return false;
+        };
+        if info.parked_at.elapsed() < grace {
+            return false; // reattached and re-parked after this timer started
+        }
+        let info = detached.remove(connection_id);
+        drop(detached);
+        if let Some(info) = info {
+            info.drain_cancel.cancel();
+            info.session.cancel.cancel();
+            tracing::info!("Expired parked PTY session for {}", connection_id);
+            true
+        } else {
+            false
+        }
     }
 
     /// List connection IDs that currently have a detached (background) session.
@@ -766,6 +806,55 @@ mod tests {
 
     // ===== PTY start error classification / stale-session eviction =====
 
+    #[tokio::test]
+    async fn test_expire_detached_session_respects_park_age() {
+        let mgr = ConnectionManager::new();
+        let (tx, _rx) = mpsc::channel::<Vec<u8>>(1);
+        let (rtx, _rrx) = mpsc::channel::<(u32, u32)>(1);
+        let session = PtySession {
+            input_tx: tx,
+            output_rx: Arc::new(tokio::sync::Mutex::new(mpsc::channel::<Vec<u8>>(1).1)),
+            channel_id: unsafe { std::mem::transmute(0u32) },
+            resize_tx: rtx,
+            cancel: CancellationToken::new(),
+        };
+        {
+            let mut detached = mgr.detached_sessions.write().await;
+            detached.insert(
+                "park-1".to_string(),
+                DetachedSession {
+                    session: Arc::new(session),
+                    generation: 1,
+                    drain_cancel: CancellationToken::new(),
+                    parked_at: tokio::time::Instant::now() - Duration::from_secs(600),
+                },
+            );
+        }
+
+        const GRACE: Duration = Duration::from_secs(300);
+
+        // A freshly re-parked session is left alone — this is the stale-timer
+        // guard (reattach + repark must not be killed by an older timer).
+        {
+            let mut detached = mgr.detached_sessions.write().await;
+            detached.get_mut("park-1").unwrap().parked_at = tokio::time::Instant::now();
+        }
+        assert!(!mgr.expire_detached_session("park-1", GRACE).await);
+        assert!(mgr.has_detached_session("park-1").await);
+
+        // A park older than the grace period is expired and removed.
+        {
+            let mut detached = mgr.detached_sessions.write().await;
+            detached.get_mut("park-1").unwrap().parked_at =
+                tokio::time::Instant::now() - Duration::from_secs(600);
+        }
+        assert!(mgr.expire_detached_session("park-1", GRACE).await);
+        assert!(!mgr.has_detached_session("park-1").await);
+
+        // Unknown id → nothing to expire.
+        assert!(!mgr.expire_detached_session("ghost", GRACE).await);
+    }
+
     #[test]
     fn test_session_dead_error_classification() {
         // Transport-gone errors indicate the SSH session itself is dead.
@@ -869,6 +958,7 @@ mod tests {
                     session: Arc::new(session),
                     generation: 1,
                     drain_cancel: CancellationToken::new(),
+                    parked_at: tokio::time::Instant::now(),
                 },
             );
         }
@@ -897,6 +987,7 @@ mod tests {
                     session: Arc::new(session),
                     generation: 1,
                     drain_cancel: CancellationToken::new(),
+                    parked_at: tokio::time::Instant::now(),
                 },
             );
         }
