@@ -471,9 +471,18 @@ impl ConnectionManager {
         }
     }
 
-    /// Read data from PTY (output for display)
-    /// OPTIMIZED: Use try_recv first for immediate data, then short timeout
-    pub async fn read_from_pty(&self, connection_id: &str) -> Result<Vec<u8>> {
+    /// Read data from PTY (output for display).
+    ///
+    /// Event-driven, no polling: with `max_wait: None` this blocks until data
+    /// arrives (or the session's output channel closes), so an idle terminal
+    /// consumes zero wakeups. With `Some(duration)` it waits at most that
+    /// long and returns `Ok(None)` on deadline — the caller uses this while
+    /// it has accumulated unflushed data to keep the flush cadence.
+    pub async fn read_from_pty(
+        &self,
+        connection_id: &str,
+        max_wait: Option<std::time::Duration>,
+    ) -> Result<Option<Vec<u8>>> {
         let pty_sessions = self.pty_sessions.read().await;
         let pty = pty_sessions
             .get(connection_id)
@@ -481,22 +490,16 @@ impl ConnectionManager {
 
         let mut rx = pty.output_rx.lock().await;
 
-        // Try immediate read first (non-blocking)
-        match rx.try_recv() {
-            Ok(data) => return Ok(data),
-            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
-                // No immediate data, use short timeout
-            }
-            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                return Err(anyhow::anyhow!("PTY connection closed"));
-            }
-        }
-
-        // Fall back to short timeout wait (1ms for ultra-low latency)
-        match tokio::time::timeout(tokio::time::Duration::from_millis(1), rx.recv()).await {
-            Ok(Some(data)) => Ok(data),
-            Ok(None) => Err(anyhow::anyhow!("PTY connection closed")),
-            Err(_) => Ok(Vec::new()), // Timeout - no data available
+        match max_wait {
+            None => match rx.recv().await {
+                Some(data) => Ok(Some(data)),
+                None => Err(anyhow::anyhow!("PTY connection closed")),
+            },
+            Some(duration) => match tokio::time::timeout(duration, rx.recv()).await {
+                Ok(Some(data)) => Ok(Some(data)),
+                Ok(None) => Err(anyhow::anyhow!("PTY connection closed")),
+                Err(_) => Ok(None), // deadline elapsed — caller should flush
+            },
         }
     }
 
@@ -853,6 +856,47 @@ mod tests {
 
         // Unknown id → nothing to expire.
         assert!(!mgr.expire_detached_session("ghost", GRACE).await);
+    }
+
+    #[tokio::test]
+    async fn test_read_from_pty_blocking_and_deadline_semantics() {
+        let mgr = ConnectionManager::new();
+        let (input_tx, _input_rx) = mpsc::channel::<Vec<u8>>(1);
+        let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (resize_tx, _resize_rx) = mpsc::channel::<(u32, u32)>(1);
+        let session = PtySession {
+            input_tx,
+            output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
+            // ChannelId's field is private; tests can't construct it safely.
+            channel_id: unsafe { std::mem::transmute(0u32) },
+            resize_tx,
+            cancel: CancellationToken::new(),
+        };
+        {
+            let mut sessions = mgr.pty_sessions.write().await;
+            sessions.insert("r-1".to_string(), Arc::new(session));
+        }
+
+        // Blocking read returns already-queued data immediately.
+        output_tx.send(b"hello".to_vec()).await.unwrap();
+        let data = mgr.read_from_pty("r-1", None).await.unwrap().unwrap();
+        assert_eq!(data, b"hello");
+
+        // No data + deadline → Ok(None) so the caller can flush pending output.
+        let start = std::time::Instant::now();
+        let result = mgr
+            .read_from_pty("r-1", Some(std::time::Duration::from_millis(10)))
+            .await
+            .unwrap();
+        assert!(result.is_none());
+        assert!(start.elapsed() >= std::time::Duration::from_millis(10));
+
+        // Dropping the sender closes the output channel → Err on both paths.
+        drop(output_tx);
+        assert!(mgr.read_from_pty("r-1", None).await.is_err());
+
+        // Unknown connection → Err.
+        assert!(mgr.read_from_pty("ghost", None).await.is_err());
     }
 
     #[test]
