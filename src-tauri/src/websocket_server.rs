@@ -77,6 +77,10 @@ pub enum WsMessage {
     PtyStarted {
         connection_id: String,
         generation: u64,
+        /// True when an existing parked/detached session was re-attached
+        /// (same remote shell continues) rather than a fresh shell started.
+        #[serde(default)]
+        reattached: bool,
     },
 
     // ===== Desktop (RDP/VNC) messages =====
@@ -142,6 +146,12 @@ const CONTROL_SEND_TIMEOUT_MS: u64 = 100;
 
 /// Command byte that identifies a binary PTY output frame sent to the frontend.
 const BINARY_OUTPUT_CMD: u8 = 0x01;
+
+/// How long a PTY stays parked after its WebSocket drops, waiting for the
+/// frontend to reconnect and re-attach (issue #95 asked for 1–5 minutes).
+/// Within this window a StartPty resumes the same remote shell; after it,
+/// the session is expired (the SSH connection itself is left for SFTP).
+const PTY_WS_DROP_GRACE: Duration = Duration::from_secs(5 * 60);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -462,20 +472,39 @@ impl WebSocketServer {
             }
         }
 
-        // Clean up all active PTY sessions so the SSH channel and reader task
-        // are torn down promptly when the browser tab closes.
+        // A WebSocket drop is usually transient (the frontend reconnects and
+        // re-issues StartPty), so park each PTY in the detached registry
+        // instead of killing it: the remote shell keeps running and a
+        // reconnect within the grace period re-attaches to the same session.
+        // An explicit Close (or a Detach) was already handled per-message;
+        // anything still active here only lost its transport. If nothing
+        // reattaches before the grace timer fires, the session is expired.
         for (connection_id, generation) in active_pty_generations {
+            // Stop this socket's streaming reader without killing the
+            // underlying SSH/PTY session.
+            if let Some(reader_cancel) = reader_tokens.lock().await.get(&connection_id) {
+                reader_cancel.cancel();
+            }
             if let Err(e) = self
                 .connection_manager
-                .close_pty_connection(&connection_id, Some(generation))
+                .detach_pty_connection(&connection_id, Some(generation))
                 .await
             {
                 tracing::warn!(
-                    "Failed to close PTY session {} on WebSocket cleanup: {}",
+                    "Failed to park PTY session {} on WebSocket cleanup: {}",
                     connection_id,
                     e
                 );
+                continue;
             }
+            let connection_manager = self.connection_manager.clone();
+            let id = connection_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(PTY_WS_DROP_GRACE).await;
+                if connection_manager.expire_detached_session(&id, PTY_WS_DROP_GRACE).await {
+                    tracing::info!("Grace period expired for parked PTY {}", id);
+                }
+            });
         }
         output_controls.lock().await.clear();
         reader_tokens.lock().await.clear();
@@ -505,7 +534,7 @@ impl WebSocketServer {
                     rows
                 );
 
-                let generation = self
+                let (generation, reattached) = self
                     .connection_manager
                     .start_pty_connection(&connection_id, cols, rows)
                     .await?;
@@ -550,6 +579,7 @@ impl WebSocketServer {
                 let started = WsMessage::PtyStarted {
                     connection_id: connection_id.clone(),
                     generation,
+                    reattached,
                 };
                 send_control(&tx, &started).await?;
 
@@ -917,6 +947,26 @@ mod tests {
         match msg {
             WsMessage::Error { code, .. } => assert_eq!(code, None),
             other => panic!("expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_pty_started_serde_reattached_defaults_false() {
+        let msg: WsMessage =
+            serde_json::from_str(r#"{"type":"PtyStarted","connection_id":"c","generation":1}"#)
+                .unwrap();
+        match msg {
+            WsMessage::PtyStarted { reattached, .. } => assert!(!reattached),
+            other => panic!("expected PtyStarted, got {:?}", other),
+        }
+
+        let msg: WsMessage = serde_json::from_str(
+            r#"{"type":"PtyStarted","connection_id":"c","generation":1,"reattached":true}"#,
+        )
+        .unwrap();
+        match msg {
+            WsMessage::PtyStarted { reattached, .. } => assert!(reattached),
+            other => panic!("expected PtyStarted, got {:?}", other),
         }
     }
 

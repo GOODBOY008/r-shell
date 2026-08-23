@@ -299,6 +299,34 @@ describe('PtyTerminal ssh_session_dead escalation', () => {
     );
   });
 
+  it('prints the session-restored banner when the backend re-attaches a parked session', async () => {
+    const onStatusChange = vi.fn();
+    const webSocket = await mountTerminalWithPty('reattach-1', onStatusChange);
+    const terminal = lastTerminal();
+    terminal.writeln.mockClear();
+
+    // Simulate the reconnect flow: Success first (resets counters, flags the
+    // reconnect), then PtyStarted with reattached: true.
+    webSocket.onmessage({
+      data: JSON.stringify({ type: 'Success', message: 'PTY connection started: reattach-1' }),
+    } as MessageEvent);
+    webSocket.onmessage({
+      data: JSON.stringify({
+        type: 'PtyStarted',
+        connection_id: 'reattach-1',
+        generation: 2,
+        reattached: true,
+      }),
+    } as MessageEvent);
+
+    expect(terminal.writeln).toHaveBeenCalledWith(
+      expect.stringContaining(i18n.t('ptyTerminal.sessionRestored')),
+    );
+    expect(terminal.writeln).not.toHaveBeenCalledWith(
+      expect.stringContaining(i18n.t('ptyTerminal.previousSessionLost')),
+    );
+  });
+
   it('escalates only once per mount even if more coded errors arrive', async () => {
     const onStatusChange = vi.fn();
     const webSocket = await mountTerminalWithPty('ssh-dead-2', onStatusChange);

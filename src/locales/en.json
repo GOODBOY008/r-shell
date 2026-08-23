@@ -1108,6 +1108,7 @@
     "reconnectFailedPermanently": "[Connection failed permanently. Use right-click → Reconnect to retry.]",
     "reconnectingAfterClose": "[Connection closed. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]",
     "sshSessionLost": "[SSH session lost. Reconnecting with full authentication...]",
+    "sessionRestored": "[Session restored — reconnected to the same shell]",
     "sshSessionDeadPermanent": "[SSH session lost and automatic recovery limit reached. Use right-click → Reconnect to retry.]"
   },
   "systemMonitor": {

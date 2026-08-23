@@ -562,6 +562,10 @@ export function PtyTerminal({
     // Set when a drop triggers auto-reconnect, so the Success message can
     // warn the user that a fresh shell was started.
     let isReconnectAfterDrop = false;
+    // Captured by Success ('PTY connection started') and consumed by
+    // PtyStarted, which is the only message that knows whether the backend
+    // re-attached a parked session (reattached: true) or started fresh.
+    let startedAfterReconnect = false;
 
     // RAF write batching state — lifted to effect scope so cleanup can cancel.
     let writeBuffer = '';
@@ -736,12 +740,14 @@ export function PtyTerminal({
             case 'Success':
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
               if (msg.message.includes('PTY connection started')) {
+                // Captured for PtyStarted: at that point these flags have
+                // already been reset, but only PtyStarted knows whether the
+                // backend re-attached a parked session or started a fresh
+                // shell.
+                startedAfterReconnect = hasEverConnected || isReconnectAfterDrop;
                 reconnectAttemptsRef.current = 0;
                 autoReconnectAfterDropRef.current = 0; // Reset drop-reconnect counter on success
-                if (hasEverConnected || isReconnectAfterDrop) {
-                  // Reconnected after a drop — warn that a fresh shell was started
-                  term.writeln(`\x1b[33m${i18n.t('ptyTerminal.previousSessionLost')}\x1b[0m`);
-                } else {
+                if (!startedAfterReconnect) {
                   term.writeln(`\x1b[32m${i18n.t('ptyTerminal.ptyStarted')}\x1b[0m`);
                   term.writeln(`\x1b[90m${i18n.t('ptyTerminal.interactiveHint')}\x1b[0m`);
                 }
@@ -754,7 +760,7 @@ export function PtyTerminal({
                 }
               }
               break;
-            
+
             case 'PtyStarted': {
               if (msg.connection_id === connectionId && typeof msg.generation === 'number') {
                 ptyGenerationRef.current = msg.generation;
@@ -765,6 +771,15 @@ export function PtyTerminal({
                 // Ongoing credits are returned by the flush callback above.
                 const INITIAL_WINDOW = 2;
                 grantCredits(INITIAL_WINDOW);
+                if (msg.reattached) {
+                  // The backend re-attached a parked session — the same
+                  // remote shell continues (transient WebSocket drop).
+                  term.writeln(`\x1b[32m${i18n.t('ptyTerminal.sessionRestored')}\x1b[0m`);
+                } else if (startedAfterReconnect) {
+                  // A fresh shell was started after a drop — the previous
+                  // session's state is gone.
+                  term.writeln(`\x1b[33m${i18n.t('ptyTerminal.previousSessionLost')}\x1b[0m`);
+                }
               }
               break;
             }
