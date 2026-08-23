@@ -99,10 +99,24 @@ export function PtyTerminal({
   const wsRef = React.useRef<WebSocket | null>(null);
   const rendererRef = React.useRef<string>('canvas');
   const webglAddonRef = React.useRef<WebglAddon | null>(null);
+  // Lazy WebGL controls, populated by the terminal-creation effect so the
+  // activation effect can load/release the renderer without re-running the
+  // whole session setup.
+  const webglControlsRef = React.useRef<{ ensure: () => void; release: () => void } | null>(null);
+  // Mirrors the latest `isActive` prop for non-effect code paths (the
+  // ResizeObserver completing a pending activation).
+  const isActiveStateRef = React.useRef(isActive);
+  // Set by the activation effect while an activation is pending; lets the
+  // ResizeObserver finish an activation on a 0×0 → non-zero transition.
+  const activateTerminalRef = React.useRef<(() => void) | null>(null);
   const clipboardAddonRef = React.useRef<ClipboardAddon | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const initialIsActiveRef = React.useRef(isActive);
-  const wasActiveRef = React.useRef(isActive);
+  // Starts false even for active mounts: every pane — including one that
+  // mounts active behind a still-0×0 container — must pass through the
+  // activation effect's measured fit + refresh + focus before the latch is
+  // consumed (issue #87).
+  const wasActiveRef = React.useRef(false);
   
   // Search bar state
   const [searchVisible, setSearchVisible] = React.useState(false);
@@ -216,18 +230,33 @@ export function PtyTerminal({
     clipboardAddonRef.current = clipboardAddon;
     
     term.open(terminalRef.current);
-    
-    // Load WebGL renderer for better performance
-    // NOTE: WebGL doesn't support transparency, so skip it when background image is set
-    if (!appearance.backgroundImage) {
+
+    // --- Lazy WebGL renderer lifecycle ---
+    // Every mounted terminal used to create a WebGL context at mount and
+    // hold it for its whole life — including hidden panes. With many tabs
+    // the live contexts exceeded Chromium's budget and the oldest (hidden)
+    // ones were evicted overnight, leaving permanently black "input-dead"
+    // panes: under WebGL, text exists only as pixels on the GL canvas. The
+    // addon is now loaded only while the pane is visible; hidden panes use
+    // the DOM renderer, whose text survives in the DOM.
+    const ensureWebglRenderer = () => {
+      if (webglAddonRef.current) return;
+      // WebGL can't render transparency, so background images stay on canvas.
+      if (hadBackgroundImageRef.current) return;
       try {
         const webglAddon = new WebglAddon();
-        // Dispose listener — xterm calls this when the addon is disposed
         webglAddon.onContextLoss(() => {
-          webglAddon.dispose();
+          // Disposing restores xterm's DOM renderer, but that path is
+          // best-effort — force a full repaint so the pane can never stay
+          // black after losing its context.
+          try { webglAddon.dispose(); } catch { /* already disposed */ }
           webglAddonRef.current = null;
           rendererRef.current = 'canvas';
-          console.warn('[PTY Terminal] WebGL context lost, falling back to canvas');
+          console.warn('[PTY Terminal] WebGL context lost, fell back to canvas');
+          fitRef.current?.fit();
+          if (term.rows > 0) {
+            term.refresh(0, term.rows - 1);
+          }
         });
         term.loadAddon(webglAddon);
         webglAddonRef.current = webglAddon;
@@ -237,11 +266,22 @@ export function PtyTerminal({
         rendererRef.current = 'canvas';
         console.warn('[PTY Terminal] WebGL not supported, falling back to canvas:', e);
       }
-    } else {
+    };
+    const releaseWebglRenderer = () => {
+      const addon = webglAddonRef.current;
+      if (!addon) return;
+      webglAddonRef.current = null;
       rendererRef.current = 'canvas';
-      console.log('[PTY Terminal] Using canvas renderer (background image requires transparency)');
+      try { addon.dispose(); } catch { /* already disposed */ }
+      console.log('[PTY Terminal] WebGL renderer released (tab hidden)');
+    };
+    webglControlsRef.current = { ensure: ensureWebglRenderer, release: releaseWebglRenderer };
+    if (initialIsActiveRef.current) {
+      ensureWebglRenderer();
+    } else {
+      console.log('[PTY Terminal] Using canvas renderer (hidden tab; WebGL loads on activation)');
     }
-    
+
     fitAddon.fit();
 
     // Store refs
@@ -849,6 +889,13 @@ export function PtyTerminal({
         // Only refit if the container has a reasonable size
         if (entry.contentRect.width > 100 && entry.contentRect.height > 100) {
           debouncedFit();
+          // A 0×0 → non-zero transition can be the first reliable visibility
+          // signal (e.g. after display sleep/wake). If an activation is still
+          // pending — its rAF retry budget may have expired while the pane
+          // was hidden — finish it now.
+          if (isActiveStateRef.current && !wasActiveRef.current) {
+            activateTerminalRef.current?.();
+          }
         }
       }
     });
@@ -922,6 +969,7 @@ export function PtyTerminal({
         try { webglAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
         webglAddonRef.current = null;
       }
+      webglControlsRef.current = null;
       if (clipboardAddonRef.current) {
         try { clipboardAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
         clipboardAddonRef.current = null;
@@ -957,30 +1005,58 @@ export function PtyTerminal({
   React.useEffect(() => {
     if (!isActive) {
       wasActiveRef.current = false;
+      isActiveStateRef.current = false;
+      // Release this pane's WebGL context while hidden — visible panes get
+      // the GPU; hidden panes keep their text via the DOM renderer.
+      webglControlsRef.current?.release();
       return;
     }
 
     if (wasActiveRef.current) {
+      isActiveStateRef.current = true;
       return;
     }
+    isActiveStateRef.current = true;
 
-    wasActiveRef.current = true;
-
-    const frameId = window.requestAnimationFrame(() => {
+    // Retry until the container has a real size, then fit + full refresh +
+    // focus — and only then consume the activation latch. A single rAF was
+    // not enough: after display sleep/wake or slow layout the portal host
+    // can still be 0×0 in the first frame(s), and the old code consumed the
+    // latch before checking, leaving the pane blank and unfocused forever.
+    let attempts = 0;
+    const MAX_ACTIVATE_ATTEMPTS = 120; // ~2s at 60fps
+    let rafId = 0;
+    const tryActivate = () => {
       const term = xtermRef.current;
       const fitAddon = fitRef.current;
       const container = containerRef.current;
       if (!term || !fitAddon || !container) return;
-      if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
 
+      if (container.offsetWidth <= 0 || container.offsetHeight <= 0) {
+        attempts += 1;
+        if (attempts < MAX_ACTIVATE_ATTEMPTS) {
+          rafId = window.requestAnimationFrame(tryActivate);
+        }
+        return;
+      }
+
+      wasActiveRef.current = true;
+      // Make sure a working renderer is in place before repainting — this
+      // loads WebGL for a pane that just became visible.
+      webglControlsRef.current?.ensure();
       fitAddon.fit();
       if (term.rows > 0) {
         term.refresh(0, term.rows - 1);
       }
       term.focus();
-    });
+    };
+    activateTerminalRef.current = tryActivate;
+    rafId = window.requestAnimationFrame(tryActivate);
 
-    return () => window.cancelAnimationFrame(frameId);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      activateTerminalRef.current = null;
+    };
   }, [isActive]);
 
   // Context menu handlers
