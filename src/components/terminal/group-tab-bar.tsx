@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode } from 'lucide-react';
+import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode, MonitorOff } from 'lucide-react';
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
 import { getTabDisplayName } from '../../lib/terminal-group-utils';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
@@ -70,6 +70,7 @@ interface GroupTabBarProps {
   /** Backend-aware close-all: disconnects SFTP/FTP sessions before emptying the group. */
   onCloseAllTabs?: (groupId: string) => void | Promise<void>;
   closeTabShortcut?: string;
+  onDetachTab?: (tabId: string) => void;
 }
 
 export function GroupTabBar({
@@ -82,6 +83,7 @@ export function GroupTabBar({
   onCloseTab,
   onCloseAllTabs,
   closeTabShortcut,
+  onDetachTab,
 }: GroupTabBarProps) {
   const { t } = useTranslation();
   const duplicateTabShortcut = formatKeyboardShortcut(
@@ -368,6 +370,16 @@ export function GroupTabBar({
                         <Copy className="mr-2 h-4 w-4" />
                         {t('contextMenu.duplicateTab')}
                         <ContextMenuShortcut>{duplicateTabShortcut}</ContextMenuShortcut>
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                    </>
+                  )}
+                  {/* Detach into background (SSH terminal tabs only) */}
+                  {onDetachTab && tab.tabType !== 'file-browser' && tab.tabType !== 'desktop' && tab.tabType !== 'editor' && (
+                    <>
+                      <ContextMenuItem onClick={() => onDetachTab(tab.id)}>
+                        <MonitorOff className="mr-2 h-4 w-4" />
+                        {t('contextMenu.detach')}
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                     </>

@@ -42,6 +42,16 @@ pub enum WsMessage {
     Pause { connection_id: String },
     /// Resume output (flow control - like ttyd)
     Resume { connection_id: String },
+    /// Detach the session into the background (Xshell-style Ctrl+A+D).
+    /// The SSH connection and PTY channel stay alive; only streaming stops.
+    /// A later StartPty re-attaches to the same session.
+    Detach {
+        connection_id: String,
+        /// If provided, the detach is only applied when the generation matches
+        /// the current session (mirrors Close semantics).
+        #[serde(default)]
+        generation: Option<u64>,
+    },
     /// Close PTY connection
     Close {
         connection_id: String,
@@ -144,6 +154,10 @@ type WsTx = mpsc::Sender<Message>;
 /// ready, bounding the WKWebView message queue to INITIAL_WINDOW frames.
 type OutputCredits = Arc<Semaphore>;
 type OutputControls = Arc<Mutex<HashMap<String, OutputCredits>>>;
+/// Per-connection reader-cancellation tokens. Cancelling a token stops the
+/// PTY reader task without killing the underlying SSH/PTY session — this is
+/// what makes Xshell-style Detach possible.
+type ReaderTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 
 #[derive(Debug, PartialEq, Eq)]
 enum SendOutcome {
@@ -349,6 +363,7 @@ impl WebSocketServer {
         // all the way back to the SSH channel and the remote process.
         let (tx, mut rx) = mpsc::channel::<Message>(WS_OUTPUT_QUEUE_CAPACITY);
         let output_controls: OutputControls = Arc::new(Mutex::new(HashMap::new()));
+        let reader_tokens: ReaderTokens = Arc::new(Mutex::new(HashMap::new()));
         let mut active_pty_generations: HashMap<String, u64> = HashMap::new();
 
         // Forward messages from the bounded channel to the WebSocket.
@@ -404,7 +419,12 @@ impl WebSocketServer {
                         }
                     };
                     match self
-                        .handle_message(ws_msg, tx.clone(), output_controls.clone())
+                        .handle_message(
+                            ws_msg,
+                            tx.clone(),
+                            output_controls.clone(),
+                            reader_tokens.clone(),
+                        )
                         .await
                     {
                         Ok(PtyLifecycleEvent::Started { connection_id, generation }) => {
@@ -417,6 +437,7 @@ impl WebSocketServer {
                             ) {
                                 active_pty_generations.remove(&connection_id);
                                 output_controls.lock().await.remove(&connection_id);
+                                reader_tokens.lock().await.remove(&connection_id);
                             }
                         }
                         Ok(PtyLifecycleEvent::None) => {}
@@ -457,6 +478,7 @@ impl WebSocketServer {
             }
         }
         output_controls.lock().await.clear();
+        reader_tokens.lock().await.clear();
         ws_sender_task.abort();
 
         Ok(())
@@ -468,6 +490,7 @@ impl WebSocketServer {
         msg: WsMessage,
         tx: WsTx,
         output_controls: OutputControls,
+        reader_tokens: ReaderTokens,
     ) -> Result<PtyLifecycleEvent, WsError> {
         match msg {
             WsMessage::StartPty {
@@ -494,6 +517,24 @@ impl WebSocketServer {
                     .ok_or_else(|| {
                         anyhow::anyhow!("PTY session disappeared immediately after creation")
                     })?;
+
+                // Per-reader cancellation token. The PTY reader task selects on
+                // this token so it can be stopped without killing the SSH/PTY
+                // session — required for Xshell-style Detach (Ctrl+A+D).
+                let reader_cancel = CancellationToken::new();
+                reader_tokens
+                    .lock()
+                    .await
+                    .insert(connection_id.clone(), reader_cancel.clone());
+
+                // When the *session* is cancelled (normal close), also cancel
+                // the reader so the task stops promptly.
+                let session_cancel = cancel_token.clone();
+                let reader_cancel_link = reader_cancel.clone();
+                tokio::spawn(async move {
+                    session_cancel.cancelled().await;
+                    reader_cancel_link.cancel();
+                });
 
                 // Credit semaphore: 0 initial permits.  The PTY reader acquires
                 // 1 permit before each flush; the frontend grants permits via
@@ -527,7 +568,7 @@ impl WebSocketServer {
                         // --- Read from PTY (1 ms poll) ---
                         let read_result = tokio::select! {
                             biased;
-                            _ = cancel_token.cancelled() => {
+                            _ = reader_cancel.cancelled() => {
                                 tracing::info!(
                                     "PTY reader task cancelled for {}",
                                     connection_id_clone
@@ -537,7 +578,7 @@ impl WebSocketServer {
                                     &tx_clone,
                                     &connection_id_clone,
                                     &mut accumulated,
-                                    &cancel_token,
+                                    &reader_cancel,
                                 ).await;
                                 return;
                             }
@@ -554,7 +595,7 @@ impl WebSocketServer {
                                     // Wait for 1 frontend ACK before sending.
                                     let ok = tokio::select! {
                                         biased;
-                                        _ = cancel_token.cancelled() => false,
+                                        _ = reader_cancel.cancelled() => false,
                                         r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
                                     };
                                     if !ok {
@@ -564,7 +605,7 @@ impl WebSocketServer {
                                         &tx_clone,
                                         &connection_id_clone,
                                         &mut accumulated,
-                                        &cancel_token,
+                                        &reader_cancel,
                                     )
                                     .await
                                         == SendOutcome::Closed
@@ -583,7 +624,7 @@ impl WebSocketServer {
                                     // Wait for 1 frontend ACK before sending.
                                     let ok = tokio::select! {
                                         biased;
-                                        _ = cancel_token.cancelled() => false,
+                                        _ = reader_cancel.cancelled() => false,
                                         r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
                                     };
                                     if !ok {
@@ -593,7 +634,7 @@ impl WebSocketServer {
                                         &tx_clone,
                                         &connection_id_clone,
                                         &mut accumulated,
-                                        &cancel_token,
+                                        &reader_cancel,
                                     )
                                     .await
                                         == SendOutcome::Closed
@@ -689,6 +730,36 @@ impl WebSocketServer {
                     message: format!("PTY connection closed: {}", connection_id),
                 };
                 send_control(&tx, &response).await?;
+                Ok(PtyLifecycleEvent::Closed {
+                    connection_id,
+                    generation,
+                })
+            }
+
+            WsMessage::Detach {
+                connection_id,
+                generation,
+            } => {
+                tracing::info!(
+                    "Detaching PTY connection: {} (gen: {:?})",
+                    connection_id,
+                    generation
+                );
+                // Stop the reader task so it no longer streams to this WS.
+                // The session itself is NOT cancelled — it stays alive in the
+                // backend so a later StartPty can re-attach to it.
+                if let Some(reader_cancel) = reader_tokens.lock().await.get(&connection_id) {
+                    reader_cancel.cancel();
+                }
+                self.connection_manager
+                    .detach_pty_connection(&connection_id, generation)
+                    .await?;
+                let response = WsMessage::Success {
+                    message: format!("PTY connection detached: {}", connection_id),
+                };
+                send_control(&tx, &response).await?;
+                // Treat like Closed so the WS-local bookkeeping (active
+                // generation, credits, reader token) is removed.
                 Ok(PtyLifecycleEvent::Closed {
                     connection_id,
                     generation,

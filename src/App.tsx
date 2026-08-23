@@ -15,9 +15,11 @@ import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
+import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { buildSshConnectRequest } from './lib/ssh-connect-request';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
+import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -98,6 +100,11 @@ function AppContent() {
   const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
     () => loadKeyboardShortcutSettings(),
   );
+
+  // Xshell-style detached (background) sessions. Tabs that were detached via
+  // Ctrl+A+D keep their SSH connection + PTY alive in the backend; this list
+  // lets the user re-attach or terminate them.
+  const [detachedSessions, setDetachedSessions] = useState<DetachedSession[]>([]);
 
   // Right sidebar tab & log monitor integration
   const [rightSidebarTab, setRightSidebarTab] = useState("monitor");
@@ -1022,6 +1029,93 @@ function AppContent() {
     }
   }, [allTabs, dispatch, t]);
 
+  // Handler: Xshell-style detach (Ctrl+A+D). The PtyTerminal already sent the
+  // Detach WS message to the backend; here we remove the tab and record the
+  // session so the user can re-attach to it later.
+  const handleDetachTab = useCallback((tabId: string) => {
+    const tab = allTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    // If the tab-bar context menu initiated this, the PtyTerminal itself hasn't
+    // sent the Detach WS message yet — ask the mounted terminal to do so.
+    requestDetach(tabId);
+
+    // Record the detached session for the sidebar.
+    setDetachedSessions(prev => {
+      if (prev.some(s => s.connectionId === tabId)) return prev;
+      return [...prev, {
+        connectionId: tabId,
+        name: tab.name,
+        host: tab.host,
+        username: tab.username,
+        protocol: tab.protocol || 'SSH',
+        originalConnectionId: tab.originalConnectionId,
+        detachedAt: Date.now(),
+      }];
+    });
+
+    // Remove the tab from its group.
+    for (const group of Object.values(state.groups)) {
+      if (group.tabs.some(t => t.id === tabId)) {
+        dispatch({ type: 'REMOVE_TAB', groupId: group.id, tabId });
+        break;
+      }
+    }
+
+    toast.success(t('app.sessionDetached'), {
+      description: t('app.sessionDetachedDesc', { name: tab.name }),
+    });
+  }, [allTabs, state.groups, dispatch, t]);
+
+  // Handler: re-attach a detached background session by opening a new tab that
+  // reuses the same connection ID (the backend re-attaches to the live PTY).
+  const handleReattachSession = useCallback(async (session: DetachedSession) => {
+    // Verify the backend still has the session alive.
+    try {
+      const alive = await invoke<boolean>('has_detached_session', {
+        connection_id: session.connectionId,
+      });
+      if (!alive) {
+        setDetachedSessions(prev => prev.filter(s => s.connectionId !== session.connectionId));
+        toast.error(t('app.detachedSessionExpired'), {
+          description: t('app.detachedSessionExpiredDesc', { name: session.name }),
+        });
+        return;
+      }
+    } catch {
+      // Assume alive if the check fails.
+    }
+
+    const newTab: TerminalTab = {
+      id: session.connectionId,
+      name: session.name,
+      protocol: session.protocol || 'SSH',
+      host: session.host,
+      username: session.username,
+      originalConnectionId: session.originalConnectionId,
+      connectionStatus: 'connecting',
+      reconnectCount: 0,
+    };
+    dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+    setDetachedSessions(prev => prev.filter(s => s.connectionId !== session.connectionId));
+    toast.success(t('app.sessionReattached'), {
+      description: t('app.sessionReattachedDesc', { name: session.name }),
+    });
+  }, [state.activeGroupId, dispatch, t]);
+
+  // Handler: terminate a detached background session (PTY + SSH connection).
+  const handleCloseDetachedSession = useCallback(async (connectionId: string) => {
+    setDetachedSessions(prev => prev.filter(s => s.connectionId !== connectionId));
+    try {
+      await invoke('close_detached_session', { connection_id: connectionId });
+      toast.success(t('app.detachedSessionClosed'));
+    } catch (error) {
+      toast.error(t('app.detachedSessionCloseFailed'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [t]);
+
   // Handler: open a remote file in the Log Monitor panel
   const handleOpenInLogMonitor = useCallback((filePath: string) => {
     setExternalLogPath(filePath);
@@ -1785,6 +1879,9 @@ function AppContent() {
                   onEditConnection={handleEditConnection}
                   recentConnections={recentConnections}
                   onQuickConnect={handleQuickConnect}
+                  detachedSessions={detachedSessions}
+                  onReattachSession={handleReattachSession}
+                  onCloseDetachedSession={handleCloseDetachedSession}
                 />
               </ResizablePanel>
 
@@ -1817,6 +1914,7 @@ function AppContent() {
                       onWorkingDirectoryChange: handleWorkingDirectoryChange,
                       onCloseTab: handleCloseTab,
                       onCloseAllTabs: handleCloseAllTabs,
+                      onDetachTab: handleDetachTab,
                     }}>
                       <ErrorBoundary label={t('app.terminal')}>
                         <GridRenderer node={state.gridLayout} path={[]} />

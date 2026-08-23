@@ -15,6 +15,7 @@ import {
   Trash2,
   FileText,
   RefreshCw,
+  MonitorOff,
 } from 'lucide-react';
 
 interface TerminalContextMenuProps {
@@ -29,6 +30,7 @@ interface TerminalContextMenuProps {
   onSelectAll: () => void;
   onSaveToFile: () => void;
   onReconnect?: () => void;
+  onDetach?: () => void;
   hasSelection: boolean;
   searchActive?: boolean;
 }
@@ -56,6 +58,7 @@ export function TerminalContextMenu({
   onSelectAll,
   onSaveToFile,
   onReconnect,
+  onDetach,
   hasSelection,
   searchActive = false,
 }: TerminalContextMenuProps) {
@@ -130,6 +133,17 @@ export function TerminalContextMenu({
             <ContextMenuItem onClick={onReconnect}>
               <RefreshCw className="mr-2 h-4 w-4" />
               <span>{t('contextMenu.reconnect')}</span>
+            </ContextMenuItem>
+          </>
+        )}
+        
+        {onDetach && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onClick={onDetach}>
+              <MonitorOff className="mr-2 h-4 w-4" />
+              <span>{t('contextMenu.detach')}</span>
+              <ContextMenuShortcut>Ctrl+A D</ContextMenuShortcut>
             </ContextMenuItem>
           </>
         )}
