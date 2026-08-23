@@ -50,6 +50,16 @@ const sshDeadEscalations = new Map<string, { count: number; windowStart: number 
  *  the budget is exhausted (caller should surface a manual-reconnect hint). */
 function claimSshDeadEscalation(connectionId: string): boolean {
   const now = Date.now();
+  // Opportunistic pruning: tab ids include unique suffixes (e.g.
+  // `${id}-dup-${Date.now()}`), so stale entries would otherwise accumulate
+  // for the app's lifetime. Only paid once the map grows past a small bound.
+  if (sshDeadEscalations.size > 64) {
+    for (const [key, entry] of sshDeadEscalations) {
+      if (now - entry.windowStart > SSH_DEAD_ESCALATION_WINDOW_MS) {
+        sshDeadEscalations.delete(key);
+      }
+    }
+  }
   const entry = sshDeadEscalations.get(connectionId);
   if (!entry || now - entry.windowStart > SSH_DEAD_ESCALATION_WINDOW_MS) {
     sshDeadEscalations.set(connectionId, { count: 1, windowStart: now });
@@ -695,6 +705,12 @@ export function PtyTerminal({
 
       ws.onclose = () => {
         console.log('[PTY Terminal] WebSocket closed');
+        // Closed as part of a ssh_session_dead escalation — App.tsx owns
+        // recovery now. Don't print auto-reconnect banners on top of the
+        // escalation message or schedule WS retries next to it.
+        if (sshDeadEscalatedRef.current) {
+          return;
+        }
         if (isRunning) {
           // If a session was successfully established, a WS drop means the
           // remote shell is gone (e.g. sleep/wake cycle, server timeout).

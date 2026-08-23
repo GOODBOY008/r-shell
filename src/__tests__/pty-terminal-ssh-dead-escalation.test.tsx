@@ -199,6 +199,14 @@ async function mountTerminalWithPty(connectionId: string, onStatusChange: (id: s
 
   const webSocket = mocks.webSockets[mocks.webSockets.length - 1];
   expect(webSocket?.onmessage).toBeTypeOf('function');
+  // Real backend flow: Success arrives first (marks the session established
+  // and sets hasEverConnected), then PtyStarted.
+  webSocket.onmessage({
+    data: JSON.stringify({
+      type: 'Success',
+      message: `PTY connection started: ${connectionId}`,
+    }),
+  } as MessageEvent);
   webSocket.onmessage({
     data: JSON.stringify({
       type: 'PtyStarted',
@@ -276,6 +284,18 @@ describe('PtyTerminal ssh_session_dead escalation', () => {
     // The user sees an actionable message rather than a raw error.
     expect(lastTerminal().write).toHaveBeenCalledWith(
       expect.stringContaining(i18n.t('ptyTerminal.sshSessionLost')),
+    );
+
+    // The close() above fires onclose in a real browser — it must NOT print
+    // auto-reconnect banners next to the escalation message or schedule
+    // further WS retries (App.tsx owns recovery now).
+    webSocket.onclose?.();
+    expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledTimes(1);
+    expect(lastTerminal().write).not.toHaveBeenCalledWith(
+      expect.stringContaining(i18n.t('ptyTerminal.autoReconnectFailed', { attempts: 5 })),
+    );
+    expect(lastTerminal().write).not.toHaveBeenCalledWith(
+      expect.stringContaining(i18n.t('ptyTerminal.reconnectFailedPermanently')),
     );
   });
 
