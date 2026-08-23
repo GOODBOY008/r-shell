@@ -238,7 +238,9 @@ export function PtyTerminal({
     // ones were evicted overnight, leaving permanently black "input-dead"
     // panes: under WebGL, text exists only as pixels on the GL canvas. The
     // addon is now loaded only while the pane is visible; hidden panes use
-    // the DOM renderer, whose text survives in the DOM.
+    // the DOM renderer (xterm v6 core's `_createRenderer()` builds
+    // `DomRenderer` — the same renderer the WebglAddon restores on dispose),
+    // whose text lives as DOM rows and survives the pane being hidden.
     const ensureWebglRenderer = () => {
       if (webglAddonRef.current) return;
       // WebGL can't render transparency, so background images stay on canvas.
@@ -889,13 +891,20 @@ export function PtyTerminal({
         // Only refit if the container has a reasonable size
         if (entry.contentRect.width > 100 && entry.contentRect.height > 100) {
           debouncedFit();
-          // A 0×0 → non-zero transition can be the first reliable visibility
-          // signal (e.g. after display sleep/wake). If an activation is still
-          // pending — its rAF retry budget may have expired while the pane
-          // was hidden — finish it now.
-          if (isActiveStateRef.current && !wasActiveRef.current) {
-            activateTerminalRef.current?.();
-          }
+        }
+        // A 0×0 → non-zero transition can be the first reliable visibility
+        // signal (e.g. after display sleep/wake). If an activation is still
+        // pending — its rAF retry budget may have expired while the pane was
+        // hidden — finish it now. Any non-zero size counts: deeply split
+        // panes can legitimately be narrower than debouncedFit's 100px
+        // threshold, and activation must not inherit it.
+        if (
+          isActiveStateRef.current &&
+          !wasActiveRef.current &&
+          entry.contentRect.width > 0 &&
+          entry.contentRect.height > 0
+        ) {
+          activateTerminalRef.current?.();
         }
       }
     });
@@ -1007,7 +1016,8 @@ export function PtyTerminal({
       wasActiveRef.current = false;
       isActiveStateRef.current = false;
       // Release this pane's WebGL context while hidden — visible panes get
-      // the GPU; hidden panes keep their text via the DOM renderer.
+      // the GPU; hidden panes keep their text via the DOM renderer (xterm
+      // v6 core's `_createRenderer()` → `DomRenderer`, restored on dispose).
       webglControlsRef.current?.release();
       return;
     }

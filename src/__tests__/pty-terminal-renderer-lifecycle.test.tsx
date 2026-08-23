@@ -86,7 +86,11 @@ const mocks = vi.hoisted(() => {
     return instance;
   });
 
-  return { terminals, webSockets, webglInstances, terminalCallbacks, Terminal, FitAddon, WebglAddon, MockWebSocket };
+  const resizeObservers: Array<{
+    callback: (entries: Array<{ contentRect: { width: number; height: number } }>) => void;
+  }> = [];
+
+  return { terminals, webSockets, webglInstances, resizeObservers, terminalCallbacks, Terminal, FitAddon, WebglAddon, MockWebSocket };
 });
 
 vi.mock('@xterm/xterm', () => ({
@@ -209,6 +213,7 @@ describe('PtyTerminal renderer lifecycle (issue #87)', () => {
     mocks.terminals.length = 0;
     mocks.webSockets.length = 0;
     mocks.webglInstances.length = 0;
+    mocks.resizeObservers.length = 0;
     containerSize = 800;
     stubContainerSize();
 
@@ -216,6 +221,9 @@ describe('PtyTerminal renderer lifecycle (issue #87)', () => {
     vi.stubGlobal(
       'ResizeObserver',
       class {
+        constructor(callback: (entries: Array<{ contentRect: { width: number; height: number } }>) => void) {
+          mocks.resizeObservers.push({ callback });
+        }
         observe = vi.fn();
         disconnect = vi.fn();
       },
@@ -375,5 +383,38 @@ describe('PtyTerminal renderer lifecycle (issue #87)', () => {
     expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
     expect(terminal.focus).toHaveBeenCalledTimes(2);
     expect(mocks.webglInstances).toHaveLength(1);
+  });
+
+  it('completes a pending activation via ResizeObserver even below the fit threshold', async () => {
+    // Regression: activation completion was gated behind debouncedFit's
+    // ">100px" check. A pane that stayed 0×0 past the rAF retry budget and
+    // then became visible at a small (sub-100px) size would never activate.
+    containerSize = 0;
+    render(
+      <PtyTerminal
+        connectionId="smallsplit-1"
+        connectionName="SmallSplit"
+        host="127.0.0.1"
+        username="root"
+        isActive
+      />,
+    );
+
+    // Exhaust the rAF retry budget (~120 frames) while still 0×0.
+    await flushFrames(130);
+    const terminal = mocks.terminals[0];
+    expect(terminal.refresh).not.toHaveBeenCalled();
+
+    // The pane appears at 30px — too small for debouncedFit, but a valid
+    // non-zero size that must complete the activation.
+    containerSize = 30;
+    const observer = mocks.resizeObservers[0];
+    expect(observer).toBeDefined();
+    act(() => {
+      observer.callback([{ contentRect: { width: 30, height: 30 } }]);
+    });
+
+    expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
+    expect(terminal.focus).toHaveBeenCalledTimes(2);
   });
 });
