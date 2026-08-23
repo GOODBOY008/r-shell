@@ -191,6 +191,17 @@ pub async fn ssh_disconnect(
     }
 }
 
+/// Per-subsystem health snapshot for a connection's terminal pipeline
+/// (SSH alive / PTY attached / generation / detached). Used by the frontend
+/// to reconcile tab status so "Connected" can't outlive a dead PTY.
+#[tauri::command]
+pub async fn get_session_health(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<crate::connection_manager::SessionHealth, String> {
+    Ok(state.session_health(&connection_id).await)
+}
+
 /// List connection IDs that currently have a detached (background) session.
 #[tauri::command]
 pub async fn list_detached_sessions(
