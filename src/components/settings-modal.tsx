@@ -59,6 +59,8 @@ import {
   importAllConfig,
 } from '@/lib/config-export-import';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
+import { isTauri } from '@tauri-apps/api/core';
+import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Checkbox } from './ui/checkbox';
 
 interface SettingsModalProps {
@@ -114,7 +116,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     maxLogSize: 100,
     checkUpdates: true,
     updateProxy: '',
-    telemetry: false
+    telemetry: false,
+
+    // System settings
+    autostart: false
   });
 
   // Load settings when modal opens
@@ -140,6 +145,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         }
       } catch {
         // Ignore parsing errors
+      }
+
+      // Load the real autostart state from the OS so the toggle reflects
+      // the actual launch-at-login configuration, not a cached value.
+      // Skip in browser dev mode where the Tauri backend is absent.
+      if (isTauri()) {
+        isAutostartEnabled()
+          .then((enabled) => setSettings(prev => ({ ...prev, autostart: enabled })))
+          .catch(() => {
+            // Plugin unavailable — keep stored/default value
+          });
       }
     }
   }, [open]);
@@ -212,6 +228,26 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
       return false;
     }
 
+    // Apply the launch-at-login preference to the OS (best effort — revert
+    // the toggle and warn if the plugin call fails so the UI stays truthful).
+    // Skipped in browser dev mode where the Tauri backend is absent.
+    void (async () => {
+      if (!isTauri()) return;
+      try {
+        if (settings.autostart) {
+          await enableAutostart();
+        } else {
+          await disableAutostart();
+        }
+      } catch (error) {
+        const actual = await isAutostartEnabled().catch(() => undefined);
+        setSettings(prev => ({ ...prev, autostart: actual ?? !settings.autostart }));
+        toast.error(t('settings.interface.autostartFailed'), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+
     // Save terminal appearance settings
     saveAppearanceSettings(terminalAppearance);
     
@@ -270,7 +306,8 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         maxLogSize: 100,
         checkUpdates: true,
         updateProxy: '',
-        telemetry: false
+        telemetry: false,
+        autostart: false
       });
       
       // Apply default theme
@@ -1076,6 +1113,21 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   <Switch
                     checked={settings.enableNotifications}
                     onCheckedChange={(checked) => updateSetting('enableNotifications', checked)}
+                  />
+                </div>
+
+                <Separator />
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.interface.autostart')}</Label>
+                    <p className="text-sm text-muted-foreground">
+                      {t('settings.interface.autostartDesc')}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.autostart}
+                    onCheckedChange={(checked) => updateSetting('autostart', checked)}
                   />
                 </div>
               </CardContent>
