@@ -1094,7 +1094,9 @@
     "autoReconnectFailed": "[连接丢失。自动重连 {{attempts}} 次后失败，请使用右键 → 重新连接。]",
     "reconnectingAfterDrop": "[连接丢失。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]",
     "reconnectFailedPermanently": "[连接永久失败，请使用右键 → 重新连接以重试。]",
-    "reconnectingAfterClose": "[连接已关闭。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]"
+    "reconnectingAfterClose": "[连接已关闭。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]",
+    "sshSessionLost": "[SSH 会话已丢失。正在重新进行完整认证并重连...]",
+    "sshSessionDeadPermanent": "[SSH 会话已丢失且已达自动恢复上限，请使用右键 → 重新连接重试。]"
   },
   "systemMonitor": {
     "systemOverview": "系统概览",

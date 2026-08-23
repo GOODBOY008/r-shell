@@ -12,6 +12,51 @@ use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+/// Error from starting a PTY session, distinguishing a dead/unusable SSH
+/// session (the frontend must re-authenticate — a WebSocket retry cannot
+/// recover) from other failures that leave the session intact.
+#[derive(Debug)]
+pub enum PtyStartError {
+    /// The SSH session is gone or unusable. Any stale client has already
+    /// been evicted from the connection map.
+    SshSessionDead(String),
+    /// Any other failure; the session is left as-is.
+    Other(anyhow::Error),
+}
+
+impl std::fmt::Display for PtyStartError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PtyStartError::SshSessionDead(msg) => write!(f, "{}", msg),
+            PtyStartError::Other(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for PtyStartError {}
+
+impl From<anyhow::Error> for PtyStartError {
+    fn from(e: anyhow::Error) -> Self {
+        PtyStartError::Other(e)
+    }
+}
+
+/// Whether an error raised while opening a channel indicates the underlying
+/// SSH session itself is dead (transport gone), as opposed to recoverable
+/// conditions like the server temporarily refusing more channels
+/// (`ChannelOpenFailure`, e.g. MaxSessions exhaustion).
+fn is_session_dead_error(e: &anyhow::Error) -> bool {
+    matches!(
+        e.downcast_ref::<russh::Error>(),
+        Some(russh::Error::SendError)
+            | Some(russh::Error::Disconnect)
+            | Some(russh::Error::HUP)
+            | Some(russh::Error::ConnectionTimeout)
+            | Some(russh::Error::KeepaliveTimeout)
+            | Some(russh::Error::InactivityTimeout)
+    )
+}
+
 pub struct ConnectionManager {
     connections: Arc<RwLock<HashMap<String, Arc<RwLock<SshClient>>>>>,
     pty_sessions: Arc<RwLock<HashMap<String, Arc<PtySession>>>>,
@@ -117,19 +162,44 @@ impl ConnectionManager {
 
     /// Start a PTY shell connection (like ttyd does)
     /// Enables interactive commands: vim, less, more, top, htop, etc.
+    ///
+    /// If the stored SSH session turns out to be dead (e.g. the transport
+    /// dropped while a terminal was idle), the stale client is evicted and
+    /// `PtyStartError::SshSessionDead` is returned so the frontend can
+    /// escalate to a full reconnect instead of retrying the WebSocket.
     pub async fn start_pty_connection(
         &self,
         connection_id: &str,
         cols: u32,
         rows: u32,
-    ) -> Result<u64> {
-        // Get the SSH client
-        let connections = self.connections.read().await;
-        let client = connections
-            .get(connection_id)
-            .ok_or_else(|| anyhow::anyhow!("Connection not found"))?;
+    ) -> Result<u64, PtyStartError> {
+        // Get the SSH client. A missing entry means the SSH session is gone
+        // entirely — same escalation as a dead transport.
+        let client = {
+            let connections = self.connections.read().await;
+            connections.get(connection_id).cloned().ok_or_else(|| {
+                PtyStartError::SshSessionDead(format!(
+                    "SSH session not found for {} (connection closed); reconnect required",
+                    connection_id
+                ))
+            })?
+        };
 
-        let client = client.read().await;
+        // Create PTY session. The map lock is released first so a slow or
+        // failing handshake can't block unrelated connections.
+        let pty = match client.read().await.create_pty_session(cols, rows).await {
+            Ok(pty) => pty,
+            Err(e) => {
+                if is_session_dead_error(&e) {
+                    self.evict_dead_connection(connection_id, &client).await;
+                    return Err(PtyStartError::SshSessionDead(format!(
+                        "SSH session for {} is no longer responsive: {}",
+                        connection_id, e
+                    )));
+                }
+                return Err(PtyStartError::Other(e));
+            }
+        };
 
         // Cancel and remove any existing PTY session for this connection first.
         // This ensures the old SSH channel and reader task are torn down before
@@ -141,9 +211,6 @@ impl ConnectionManager {
                 tracing::info!("Cancelled old PTY session for {}", connection_id);
             }
         }
-
-        // Create PTY session
-        let pty = client.create_pty_session(cols, rows).await?;
 
         // Bump generation so any in-flight Close for the old session is ignored
         let mut generations = self.pty_generations.write().await;
@@ -157,6 +224,36 @@ impl ConnectionManager {
         pty_sessions.insert(connection_id.to_string(), Arc::new(pty));
 
         Ok(current_gen)
+    }
+
+    /// Evict a dead SSH connection, guarded by `Arc` identity so a
+    /// concurrently recreated connection (fresh `ssh_connect` under the same
+    /// id) is never removed. Also tears down the dead PTY session and cached
+    /// OS info so dependent subsystems stop probing the stale handle.
+    async fn evict_dead_connection(&self, connection_id: &str, expected: &Arc<RwLock<SshClient>>) {
+        {
+            let mut connections = self.connections.write().await;
+            let is_same = connections
+                .get(connection_id)
+                .map(|current| Arc::ptr_eq(current, expected))
+                .unwrap_or(false);
+            if !is_same {
+                return;
+            }
+            connections.remove(connection_id);
+        }
+        tracing::info!("Evicted dead SSH session for {}", connection_id);
+
+        // Best-effort DISCONNECT so the server can clean up promptly.
+        let mut client = expected.write().await;
+        let _ = client.disconnect().await;
+
+        // The PTY channel on a dead session is dead too — stop its reader.
+        let mut pty_sessions = self.pty_sessions.write().await;
+        if let Some(session) = pty_sessions.remove(connection_id) {
+            session.cancel.cancel();
+        }
+        self.os_info_cache.remove(connection_id).await;
     }
 
     /// Send data to PTY (user input)
@@ -508,12 +605,66 @@ mod tests {
 
         // Simulate dispatch logic from list_remote_files command
         let sftp_type = mgr.get_connection_type("conn-sftp").await.unwrap();
-        assert_eq!(sftp_type, "SFTP");
+        assert_eq!(sftp_type, "SFTP".to_string());
 
         let ftp_type = mgr.get_connection_type("conn-ftp").await.unwrap();
-        assert_eq!(ftp_type, "FTP");
+        assert_eq!(ftp_type, "FTP".to_string());
 
         // Unknown connection returns None
         assert!(mgr.get_connection_type("conn-unknown").await.is_none());
+    }
+
+    // ===== PTY start error classification / stale-session eviction =====
+
+    #[test]
+    fn test_session_dead_error_classification() {
+        // Transport-gone errors indicate the SSH session itself is dead.
+        assert!(is_session_dead_error(&anyhow::anyhow!(
+            russh::Error::SendError
+        )));
+        assert!(is_session_dead_error(&anyhow::anyhow!(
+            russh::Error::Disconnect
+        )));
+        assert!(is_session_dead_error(&anyhow::anyhow!(russh::Error::HUP)));
+        assert!(is_session_dead_error(&anyhow::anyhow!(
+            russh::Error::KeepaliveTimeout
+        )));
+        // Server refusing another channel (e.g. MaxSessions) is transient —
+        // the session must NOT be evicted for it.
+        assert!(!is_session_dead_error(&anyhow::anyhow!(
+            russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::AdministrativelyProhibited)
+        )));
+        // Unrelated failures stay unclassified.
+        assert!(!is_session_dead_error(&anyhow::anyhow!(
+            "some other failure"
+        )));
+    }
+
+    #[tokio::test]
+    async fn test_start_pty_missing_connection_reports_session_dead() {
+        let mgr = ConnectionManager::new();
+        let err = mgr.start_pty_connection("ghost", 80, 24).await.unwrap_err();
+        assert!(matches!(err, PtyStartError::SshSessionDead(_)));
+    }
+
+    #[tokio::test]
+    async fn test_evict_dead_connection_guarded_by_arc_identity() {
+        let mgr = ConnectionManager::new();
+        let stale_client = Arc::new(RwLock::new(SshClient::new()));
+        let live_client = Arc::new(RwLock::new(SshClient::new()));
+
+        // A newer connection was recreated under the same id.
+        {
+            let mut connections = mgr.connections.write().await;
+            connections.insert("conn-1".to_string(), live_client.clone());
+        }
+
+        // Evicting via the stale Arc must leave the newer connection alive.
+        mgr.evict_dead_connection("conn-1", &stale_client).await;
+        assert!(mgr.get_connection("conn-1").await.is_some());
+
+        // Evicting with the matching Arc removes it.
+        mgr.evict_dead_connection("conn-1", &live_client).await;
+        assert!(mgr.get_connection("conn-1").await.is_none());
     }
 }

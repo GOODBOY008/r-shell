@@ -29,6 +29,39 @@ interface PtyTerminalProps {
   onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => void;
 }
 
+// ---------------------------------------------------------------------------
+// ssh_session_dead escalation budget
+//
+// When the backend reports the SSH session itself died (backend error code
+// `ssh_session_dead`), a WebSocket-only retry cannot recover — the correct
+// response is a full reconnect (disconnect + re-authenticate), which runs in
+// App.tsx via onReconnectTab and remounts this component. Because each
+// escalation remounts PtyTerminal (resetting its refs), the attempt budget
+// must live at module level: auto-escalate at most ESCALATION_LIMIT times per
+// connection per window, then fall back to asking the user to reconnect
+// manually. Each failed re-auth leaves the tab disconnected (no remount), so
+// this guard mainly protects against pathological remount loops.
+// ---------------------------------------------------------------------------
+const SSH_DEAD_ESCALATION_LIMIT = 2;
+const SSH_DEAD_ESCALATION_WINDOW_MS = 10 * 60 * 1000;
+const sshDeadEscalations = new Map<string, { count: number; windowStart: number }>();
+
+/** Claim one auto-escalation attempt for this connection. Returns false when
+ *  the budget is exhausted (caller should surface a manual-reconnect hint). */
+function claimSshDeadEscalation(connectionId: string): boolean {
+  const now = Date.now();
+  const entry = sshDeadEscalations.get(connectionId);
+  if (!entry || now - entry.windowStart > SSH_DEAD_ESCALATION_WINDOW_MS) {
+    sshDeadEscalations.set(connectionId, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= SSH_DEAD_ESCALATION_LIMIT) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
+}
+
 /**
  * PTY-based Interactive Terminal Component
  * 
@@ -81,6 +114,11 @@ export function PtyTerminal({
   
   // PTY session generation — used in Close to avoid stale-close races
   const ptyGenerationRef = React.useRef<number | null>(null);
+
+  // Set once this mount has already escalated a `ssh_session_dead` error to a
+  // full reconnect — prevents duplicate App-level reconnects if more coded
+  // errors arrive before the component remounts.
+  const sshDeadEscalatedRef = React.useRef(false);
   
   // Reconnect key — incrementing this forces the main effect to tear down and rebuild
   const [reconnectKey, setReconnectKey] = React.useState(0);
@@ -582,6 +620,36 @@ export function PtyTerminal({
               
             case 'Error': {
               console.error('[PTY Terminal] Error:', msg.message);
+              const errorCode: string | undefined = msg.code;
+
+              // The backend detected the SSH session itself is dead (stale
+              // client already evicted server-side). Retrying the WebSocket
+              // can never recover this — escalate once to a full reconnect
+              // (disconnect + re-authenticate) via the App-level handler,
+              // within the module-level budget.
+              if (errorCode === 'ssh_session_dead') {
+                // Stop both frontend retry loops; recovery is App-driven now.
+                reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
+                autoReconnectAfterDropRef.current = MAX_AUTO_RECONNECT_AFTER_DROP;
+                if (connectionStatusRef.current !== 'disconnected') {
+                  connectionStatusRef.current = 'disconnected';
+                  onConnectionStatusChange?.(connectionId, 'disconnected');
+                }
+                if (!sshDeadEscalatedRef.current) {
+                  sshDeadEscalatedRef.current = true;
+                  if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
+                    term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
+                    void onReconnectTab(connectionId);
+                  } else {
+                    term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
+                  }
+                }
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.close();
+                }
+                break;
+              }
+
               term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.error', { message: msg.message })}\x1b[0m\r\n`);
               const errorMsgLower = msg.message.toLowerCase();
               // Permanent failures (SSH session gone on the backend) — stop the

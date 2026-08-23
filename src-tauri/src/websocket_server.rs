@@ -52,7 +52,14 @@ pub enum WsMessage {
         generation: Option<u64>,
     },
     /// Error message
-    Error { message: String },
+    Error {
+        message: String,
+        /// Machine-readable classification (see [`error_code`]) so the
+        /// frontend can react without string-matching human messages.
+        /// Absent for legacy/unclassified errors.
+        #[serde(default)]
+        code: Option<String>,
+    },
     /// Success confirmation
     Success { message: String },
     /// PTY session started — includes the generation counter so the frontend
@@ -158,6 +165,65 @@ enum PtyLifecycleEvent {
         connection_id: String,
         generation: Option<u64>,
     },
+}
+
+/// Machine-readable error codes carried on `WsMessage::Error` so the frontend
+/// can classify failures deterministically instead of matching message text.
+pub mod error_code {
+    /// The SSH session itself is dead (transport dropped / stale client
+    /// evicted). A WebSocket-only retry cannot recover; the frontend should
+    /// escalate to a full reconnect (re-authentication).
+    pub const SSH_SESSION_DEAD: &str = "ssh_session_dead";
+}
+
+/// Error returned to the frontend over the WebSocket, optionally carrying a
+/// machine-readable [`error_code`].
+#[derive(Debug)]
+struct WsError {
+    code: Option<&'static str>,
+    message: String,
+}
+
+impl WsError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    fn coded(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code: Some(code),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for WsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            Some(code) => write!(f, "[{}] {}", code, self.message),
+            None => write!(f, "{}", self.message),
+        }
+    }
+}
+
+impl From<anyhow::Error> for WsError {
+    fn from(e: anyhow::Error) -> Self {
+        WsError::new(e.to_string())
+    }
+}
+
+impl From<crate::connection_manager::PtyStartError> for WsError {
+    fn from(e: crate::connection_manager::PtyStartError) -> Self {
+        match e {
+            crate::connection_manager::PtyStartError::SshSessionDead(msg) => {
+                WsError::coded(error_code::SSH_SESSION_DEAD, msg)
+            }
+            crate::connection_manager::PtyStartError::Other(e) => WsError::new(e.to_string()),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +397,7 @@ impl WebSocketServer {
                         Err(e) => {
                             let error = WsMessage::Error {
                                 message: format!("Invalid message format: {}", e),
+                                code: None,
                             };
                             let _ = send_control(&tx, &error).await?;
                             continue;
@@ -355,7 +422,8 @@ impl WebSocketServer {
                         Ok(PtyLifecycleEvent::None) => {}
                         Err(e) => {
                             let error = WsMessage::Error {
-                                message: format!("Error handling message: {}", e),
+                                message: format!("Error handling message: {}", e.message),
+                                code: e.code.map(|code| code.to_string()),
                             };
                             let _ = send_control(&tx, &error).await?;
                         }
@@ -400,7 +468,7 @@ impl WebSocketServer {
         msg: WsMessage,
         tx: WsTx,
         output_controls: OutputControls,
-    ) -> Result<PtyLifecycleEvent> {
+    ) -> Result<PtyLifecycleEvent, WsError> {
         match msg {
             WsMessage::StartPty {
                 connection_id,
@@ -543,6 +611,7 @@ impl WebSocketServer {
                                 );
                                 let error_msg = WsMessage::Error {
                                     message: format!("Connection lost: {}", e),
+                                    code: None,
                                 };
                                 let _ = send_control(&tx_clone, &error_msg).await;
                                 break;
@@ -651,6 +720,7 @@ impl WebSocketServer {
                 } else {
                     let error = WsMessage::Error {
                         message: format!("Desktop connection not found: {}", connection_id),
+                        code: None,
                     };
                     send_control(&tx, &error).await?;
                 }
@@ -746,5 +816,47 @@ impl WebSocketServer {
                 Ok(PtyLifecycleEvent::None)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_code;
+    use super::{WsError, WsMessage};
+    use crate::connection_manager::PtyStartError;
+
+    #[test]
+    fn test_error_message_serde_round_trips_code() {
+        let msg: WsMessage = serde_json::from_str(
+            r#"{"type":"Error","message":"SSH session dead","code":"ssh_session_dead"}"#,
+        )
+        .unwrap();
+        match msg {
+            WsMessage::Error { message, code } => {
+                assert_eq!(message, "SSH session dead");
+                assert_eq!(code.as_deref(), Some(error_code::SSH_SESSION_DEAD));
+            }
+            other => panic!("expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_error_message_serde_without_code_is_backward_compatible() {
+        let msg: WsMessage = serde_json::from_str(r#"{"type":"Error","message":"boom"}"#).unwrap();
+        match msg {
+            WsMessage::Error { code, .. } => assert_eq!(code, None),
+            other => panic!("expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_ws_error_from_pty_start_error_maps_codes() {
+        let coded = WsError::from(PtyStartError::SshSessionDead("dead".to_string()));
+        assert_eq!(coded.code, Some(error_code::SSH_SESSION_DEAD));
+        assert_eq!(coded.message, "dead");
+
+        let uncoded = WsError::from(PtyStartError::Other(anyhow::anyhow!("misc")));
+        assert_eq!(uncoded.code, None);
+        assert_eq!(uncoded.message, "misc");
     }
 }
