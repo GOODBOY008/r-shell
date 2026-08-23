@@ -1094,7 +1094,9 @@
     "autoReconnectFailed": "[Connection lost. Auto-reconnect failed after {{attempts}} attempts. Use right-click → Reconnect.]",
     "reconnectingAfterDrop": "[Connection lost. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]",
     "reconnectFailedPermanently": "[Connection failed permanently. Use right-click → Reconnect to retry.]",
-    "reconnectingAfterClose": "[Connection closed. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]"
+    "reconnectingAfterClose": "[Connection closed. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]",
+    "sshSessionLost": "[SSH session lost. Reconnecting with full authentication...]",
+    "sshSessionDeadPermanent": "[SSH session lost and automatic recovery limit reached. Use right-click → Reconnect to retry.]"
   },
   "systemMonitor": {
     "systemOverview": "System Overview",
