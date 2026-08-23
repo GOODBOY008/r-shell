@@ -1086,7 +1086,6 @@
     "renderer": "Renderer: {{renderer}}",
     "startingShell": "🚀 Starting interactive shell (WebSocket + PTY mode)...",
     "webSocketConnected": "✓ WebSocket connected",
-    "outputLimitReached": "[Output limit reached — scrollback cleared to free memory]",
     "previousSessionLost": "⚠ Previous session lost. New shell session started.",
     "ptyStarted": "✓ PTY connection started",
     "interactiveHint": "You can now use interactive commands: vim, less, more, top, etc.",
