@@ -32,20 +32,29 @@ export interface HealthCheckedTab {
   connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'pending';
 }
 
-/** Only SSH terminal tabs have a PTY pipeline to health-check. */
+/** Only SSH terminal tabs have a PTY pipeline to health-check. Desktop
+ *  protocols (RDP/VNC) are excluded here even though their tabs may be
+ *  terminal-typed, so the check is explicit rather than "anything that isn't
+ *  SFTP/FTP". */
 export function isSshTerminalTab(tab: HealthCheckedTab): boolean {
   return (
     (tab.tabType === undefined || tab.tabType === 'terminal') &&
-    tab.protocol !== 'SFTP' &&
-    tab.protocol !== 'FTP'
+    (tab.protocol === undefined || tab.protocol === 'SSH')
   );
 }
+
+/** True while a reconciliation pass is in flight — prevents overlapping
+ *  polls when a pass takes longer than the polling interval (many tabs or
+ *  slow IPC), which would otherwise stack concurrent invokes. */
+let reconcileInFlight = false;
 
 /**
  * Poll health for every connected SSH terminal tab and downgrade the ones
  * whose terminal pipeline is dead (SSH gone, or no PTY and nothing parked).
  * Fetch failures are skipped — the next poll retries — so a momentarily
  * unreachable backend can't flap tabs to disconnected.
+ *
+ * No-op (returns an empty list) if a previous pass is still running.
  *
  * @returns the ids that were reported unhealthy.
  */
@@ -54,21 +63,29 @@ export async function reconcileSessionHealth(
   fetchHealth: (connectionId: string) => Promise<SessionHealth>,
   markDisconnected: (tabId: string) => void,
 ): Promise<string[]> {
-  const unhealthy: string[] = [];
-  for (const tab of tabs) {
-    if (!isSshTerminalTab(tab) || tab.connectionStatus !== 'connected') {
-      continue;
-    }
-    let health: SessionHealth;
-    try {
-      health = await fetchHealth(tab.id);
-    } catch {
-      continue;
-    }
-    if (!health.sshConnected || (!health.hasPty && !health.detached)) {
-      markDisconnected(tab.id);
-      unhealthy.push(tab.id);
-    }
+  if (reconcileInFlight) {
+    return [];
   }
-  return unhealthy;
+  reconcileInFlight = true;
+  try {
+    const unhealthy: string[] = [];
+    for (const tab of tabs) {
+      if (!isSshTerminalTab(tab) || tab.connectionStatus !== 'connected') {
+        continue;
+      }
+      let health: SessionHealth;
+      try {
+        health = await fetchHealth(tab.id);
+      } catch {
+        continue;
+      }
+      if (!health.sshConnected || (!health.hasPty && !health.detached)) {
+        markDisconnected(tab.id);
+        unhealthy.push(tab.id);
+      }
+    }
+    return unhealthy;
+  } finally {
+    reconcileInFlight = false;
+  }
 }

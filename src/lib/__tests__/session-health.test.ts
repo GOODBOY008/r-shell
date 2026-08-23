@@ -36,6 +36,12 @@ describe('isSshTerminalTab', () => {
     expect(isSshTerminalTab(tab({ protocol: 'SFTP' }))).toBe(false);
     expect(isSshTerminalTab(tab({ protocol: 'FTP' }))).toBe(false);
   });
+
+  it('rejects non-SSH protocols such as RDP and VNC', () => {
+    expect(isSshTerminalTab(tab({ protocol: 'RDP' }))).toBe(false);
+    expect(isSshTerminalTab(tab({ protocol: 'VNC' }))).toBe(false);
+    expect(isSshTerminalTab(tab({ protocol: 'SSH' }))).toBe(true);
+  });
 });
 
 describe('reconcileSessionHealth', () => {
@@ -99,5 +105,24 @@ describe('reconcileSessionHealth', () => {
     );
     expect(unhealthy).toEqual([]);
     expect(markDisconnected).not.toHaveBeenCalled();
+  });
+
+  it('does not start a second pass while one is still in flight', async () => {
+    let release: (value: SessionHealth) => void = () => {};
+    const gate = new Promise<SessionHealth>((resolve) => {
+      release = resolve;
+    });
+    const fetchHealth = vi.fn(() => gate);
+    const markDisconnected = vi.fn();
+
+    const first = reconcileSessionHealth([tab({ id: 'a' })], fetchHealth, markDisconnected);
+    // Second tick of a slow poll: skipped entirely, no extra invoke queued.
+    const second = await reconcileSessionHealth([tab({ id: 'a' })], fetchHealth, markDisconnected);
+    expect(second).toEqual([]);
+    expect(fetchHealth).toHaveBeenCalledTimes(1);
+
+    release(health({ sshConnected: false, hasPty: false }));
+    expect(await first).toEqual(['a']);
+    expect(markDisconnected).toHaveBeenCalledWith('a');
   });
 });
