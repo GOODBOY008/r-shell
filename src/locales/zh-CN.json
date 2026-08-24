@@ -321,7 +321,10 @@
       "systemMonitor": "系统监视器",
       "statusBar": "状态栏",
       "enableNotifications": "启用通知",
-      "enableNotificationsDesc": "显示重要事件的系统通知"
+      "enableNotificationsDesc": "显示重要事件的系统通知",
+      "autostart": "登录时自动启动",
+      "autostartDesc": "登录系统时自动启动 r-shell",
+      "autostartFailed": "无法更新自动启动设置"
     },
     "keyboard": {
       "title": "键盘快捷键",

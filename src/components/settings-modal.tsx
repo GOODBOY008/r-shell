@@ -59,6 +59,8 @@ import {
   importAllConfig,
 } from '@/lib/config-export-import';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
+import { isTauri } from '@tauri-apps/api/core';
+import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Checkbox } from './ui/checkbox';
 
 interface SettingsModalProps {
@@ -114,8 +116,15 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     maxLogSize: 100,
     checkUpdates: true,
     updateProxy: '',
-    telemetry: false
+    telemetry: false,
+
+    // System settings
+    autostart: false
   });
+
+  // True once the user has manually changed the autostart toggle (or reset
+  // settings) while the modal is open — the OS state query must not clobber it.
+  const autostartTouchedRef = useRef(false);
 
   // Load settings when modal opens
   useEffect(() => {
@@ -140,6 +149,24 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         }
       } catch {
         // Ignore parsing errors
+      }
+
+      // Load the real autostart state from the OS so the toggle reflects
+      // the actual launch-at-login configuration, not a cached value.
+      // Skip in browser dev mode where the Tauri backend is absent.
+      if (isTauri()) {
+        // Each open re-reads the OS state; discard any prior touch flag
+        autostartTouchedRef.current = false;
+        isAutostartEnabled()
+          .then((enabled) => {
+            // A manual toggle made while the query was in flight wins
+            if (!autostartTouchedRef.current) {
+              setSettings(prev => ({ ...prev, autostart: enabled }));
+            }
+          })
+          .catch(() => {
+            // Plugin unavailable — keep stored/default value
+          });
       }
     }
   }, [open]);
@@ -212,6 +239,38 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
       return false;
     }
 
+    // Apply the launch-at-login preference to the OS (best effort — revert
+    // the toggle and warn if the plugin call fails so the UI stays truthful).
+    // Skipped in browser dev mode where the Tauri backend is absent.
+    void (async () => {
+      if (!isTauri()) return;
+      try {
+        if (settings.autostart) {
+          await enableAutostart();
+        } else {
+          await disableAutostart();
+        }
+      } catch (error) {
+        const actual = await isAutostartEnabled().catch(() => undefined);
+        const corrected = actual ?? !settings.autostart;
+        setSettings(prev => ({ ...prev, autostart: corrected }));
+        // Keep the persisted config truthful when the OS update failed
+        try {
+          const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+          localStorage.setItem(
+            APP_SETTINGS_STORAGE_KEY,
+            JSON.stringify({ ...saved, autostart: corrected }),
+          );
+          window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+        } catch {
+          // Ignore storage errors — the toggle and toast already reflect reality
+        }
+        toast.error(t('settings.interface.autostartFailed'), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
+
     // Save terminal appearance settings
     saveAppearanceSettings(terminalAppearance);
     
@@ -270,9 +329,15 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         maxLogSize: 100,
         checkUpdates: true,
         updateProxy: '',
-        telemetry: false
+        telemetry: false,
+        autostart: false
       });
-      
+
+      // Resetting is a deliberate change — don't let a pending OS query undo it
+      if (settings.autostart) {
+        autostartTouchedRef.current = true;
+      }
+
       // Apply default theme
       applyTheme('dark');
     }
@@ -1076,6 +1141,24 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   <Switch
                     checked={settings.enableNotifications}
                     onCheckedChange={(checked) => updateSetting('enableNotifications', checked)}
+                  />
+                </div>
+
+                <Separator />
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.interface.autostart')}</Label>
+                    <p className="text-sm text-muted-foreground">
+                      {t('settings.interface.autostartDesc')}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.autostart}
+                    onCheckedChange={(checked) => {
+                      autostartTouchedRef.current = true;
+                      updateSetting('autostart', checked);
+                    }}
                   />
                 </div>
               </CardContent>

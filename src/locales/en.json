@@ -321,7 +321,10 @@
       "systemMonitor": "System Monitor",
       "statusBar": "Status Bar",
       "enableNotifications": "Enable Notifications",
-      "enableNotificationsDesc": "Show system notifications for important events"
+      "enableNotificationsDesc": "Show system notifications for important events",
+      "autostart": "Launch at Login",
+      "autostartDesc": "Start r-shell automatically when you log in",
+      "autostartFailed": "Failed to update launch-at-login setting"
     },
     "keyboard": {
       "title": "Keyboard Shortcuts",
