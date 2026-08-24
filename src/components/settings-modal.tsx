@@ -250,8 +250,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   };
 
   // Pick a background image via the native OS dialog (Tauri builds) or fall
-  // back to the hidden HTML input in browser dev mode.
-  const handlePickBackgroundImage = useCallback(async () => {
+  // back to the hidden HTML input in browser dev mode. Plain function: only
+  // invoked from the button's onClick, so useCallback buys nothing.
+  const handlePickBackgroundImage = async () => {
     if (!isTauri()) {
       document.getElementById('background-image-upload')?.click();
       return;
@@ -273,7 +274,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     } catch (err) {
       toast.error(t('settings.terminal.imageLoadError'), { description: String(err) });
     }
-  }, [t]);
+  };
 
   const updateSetting = (key: keyof typeof settings, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
