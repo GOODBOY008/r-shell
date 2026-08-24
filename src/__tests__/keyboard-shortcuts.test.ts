@@ -4,12 +4,14 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   createLayoutShortcuts,
   createSplitViewShortcuts,
+  DEFAULT_APP_KEYBOARD_SHORTCUTS,
   DEFAULT_LAYOUT_SHORTCUTS,
   DEFAULT_SPLIT_VIEW_SHORTCUTS,
   formatKeyboardShortcut,
   KeyboardShortcut,
   loadKeyboardShortcutSettings,
   parseKeyboardShortcut,
+  toAccelerator,
   useKeyboardShortcuts,
 } from '../lib/keyboard-shortcuts';
 
@@ -311,5 +313,65 @@ describe('formatKeyboardShortcut', () => {
     expect(formatKeyboardShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar, false)).toBe('Ctrl+B');
     expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘+⇧+→');
     expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥+W');
+  });
+});
+
+describe('toAccelerator', () => {
+  it('converts ctrl to CommandOrControl', () => {
+    expect(toAccelerator('Ctrl+N')).toBe('CommandOrControl+N');
+    expect(toAccelerator('ctrl+n')).toBe('CommandOrControl+N');
+  });
+
+  it('converts every default shortcut to a plugin accelerator', () => {
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession)).toBe('CommandOrControl+N');
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession)).toBe('CommandOrControl+W');
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab)).toBe('CommandOrControl+Tab');
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab)).toBe('CommandOrControl+Shift+Tab');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar)).toBe('CommandOrControl+B');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel)).toBe('CommandOrControl+J');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar)).toBe('CommandOrControl+M');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode)).toBe('CommandOrControl+Z');
+  });
+
+  it('maps symbol keys to their accelerator names', () => {
+    expect(toAccelerator('Ctrl+\\')).toBe('CommandOrControl+Backslash');
+    expect(toAccelerator('Ctrl+Space')).toBe('CommandOrControl+Space');
+    expect(toAccelerator('Alt+`')).toBe('Option+Backquote');
+    expect(toAccelerator('Ctrl+-')).toBe('CommandOrControl+Minus');
+    expect(toAccelerator('Ctrl+=')).toBe('CommandOrControl+Equal');
+    expect(toAccelerator('Ctrl+,')).toBe('CommandOrControl+Comma');
+    expect(toAccelerator('Ctrl+.')).toBe('CommandOrControl+Period');
+    expect(toAccelerator('Ctrl+/')).toBe('CommandOrControl+Slash');
+    expect(toAccelerator('Ctrl+;')).toBe('CommandOrControl+Semicolon');
+    expect(toAccelerator('Ctrl+\'')).toBe('CommandOrControl+Quote');
+    expect(toAccelerator('Ctrl+[')).toBe('CommandOrControl+BracketLeft');
+    expect(toAccelerator('Ctrl+]')).toBe('CommandOrControl+BracketRight');
+  });
+
+  it('maps digits and named keys verbatim (uppercased)', () => {
+    expect(toAccelerator('Ctrl+1')).toBe('CommandOrControl+1');
+    expect(toAccelerator('Ctrl+9')).toBe('CommandOrControl+9');
+    expect(toAccelerator('Ctrl+Enter')).toBe('CommandOrControl+Enter');
+    expect(toAccelerator('Ctrl+Escape')).toBe('CommandOrControl+Escape');
+    expect(toAccelerator('Ctrl+PageUp')).toBe('CommandOrControl+PageUp');
+    expect(toAccelerator('Ctrl+ArrowDown')).toBe('CommandOrControl+ArrowDown');
+    expect(toAccelerator('Ctrl+F13')).toBe('CommandOrControl+F13');
+    expect(toAccelerator('Ctrl+Backspace')).toBe('CommandOrControl+Backspace');
+  });
+
+  it('converts global (Meta/Cmd) to Command', () => {
+    expect(toAccelerator('Cmd+X')).toBe('Command+X');
+    expect(toAccelerator('Meta+Shift+X')).toBe('Shift+Command+X');
+  });
+
+  it('keeps modifier order fixed regardless of input order', () => {
+    expect(toAccelerator('Shift+Ctrl+Alt+X')).toBe('CommandOrControl+Shift+Option+X');
+  });
+
+  it('returns null for shortcuts without any modifier', () => {
+    expect(toAccelerator('N')).toBeNull();
+    expect(toAccelerator('F5')).toBeNull();
+    expect(toAccelerator('')).toBeNull();
+    expect(toAccelerator('Nonsense+Input')).toBeNull();
   });
 });

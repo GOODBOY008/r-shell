@@ -262,6 +262,9 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        // Global shortcuts are registered at runtime from the frontend
+        // (src/lib/keyboard-shortcuts.ts) via the plugin's JS API.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
@@ -371,4 +374,53 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod shortcut_accelerator_tests {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    /// Every accelerator string the frontend can emit (toAccelerator in
+    /// src/lib/keyboard-shortcuts.ts) must parse on all platforms; the plugin
+    /// rejects unparseable registrations at runtime.
+    #[test]
+    fn frontend_accelerators_parse() {
+        let mut accelerators: Vec<String> = vec![
+            // Default app/layout/split shortcuts
+            "CommandOrControl+N".to_string(),
+            "CommandOrControl+W".to_string(),
+            "CommandOrControl+Tab".to_string(),
+            "CommandOrControl+Shift+Tab".to_string(),
+            "CommandOrControl+B".to_string(),
+            "CommandOrControl+J".to_string(),
+            "CommandOrControl+M".to_string(),
+            "CommandOrControl+Z".to_string(),
+            "CommandOrControl+Backslash".to_string(),
+            "CommandOrControl+Shift+Backslash".to_string(),
+        ];
+        for i in 1..=9 {
+            accelerators.push(format!("CommandOrControl+{i}"));
+        }
+
+        // Named keys and symbols that customizable bindings can produce
+        let keys = [
+            "Escape", "Enter", "Space", "Backspace", "Delete", "Insert", "PageUp", "PageDown",
+            "Home", "End", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Pause",
+            "CapsLock", "PrintScreen", "ScrollLock", "NumLock", "F1", "F5", "F13", "F24",
+            "Backquote", "BracketLeft", "BracketRight", "Comma", "Equal", "Minus", "Period",
+            "Quote", "Semicolon", "Slash", "1", "9", "0",
+        ];
+        for key in keys {
+            accelerators.push(format!("CommandOrControl+{key}"));
+            accelerators.push(format!("Option+Shift+{key}"));
+        }
+
+        for accelerator in accelerators {
+            assert!(
+                Shortcut::from_str(&accelerator).is_ok(),
+                "accelerator failed to parse: {accelerator}"
+            );
+        }
+    }
 }

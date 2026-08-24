@@ -129,6 +129,9 @@ vi.mock('@xterm/addon-clipboard', () => ({
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string) => (command === 'get_websocket_port' ? 9001 : undefined)),
+  // App's keyboard-shortcut hook branches on this; these tests run in
+  // browser mode where there is no Tauri backend.
+  isTauri: () => false,
 }));
 
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
