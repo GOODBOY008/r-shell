@@ -4,8 +4,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useKeyboardShortcuts, type KeyboardShortcut } from '../lib/keyboard-shortcuts';
 import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
 
+const focusChangedCaptured: { handler?: (payload: boolean) => void } = {};
+
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => true,
+}));
+
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    onFocusChanged: vi.fn(async (handler: (event: { payload: boolean }) => void) => {
+      focusChangedCaptured.handler = (payload: boolean) => handler({ payload });
+      return vi.fn();
+    }),
+  }),
 }));
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
@@ -182,6 +193,53 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     await act(async () => {});
 
     expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+  });
+
+  it('registers everything while the window is blurred, then re-applies the element context on focus', async () => {
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
+    });
+
+    // Element context: terminal focused → terminal-critical shortcut dropped.
+    focusElement(document.querySelector<HTMLElement>('[data-testid="terminal-textarea"]')!);
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    mockedUnregister.mockClear();
+
+    // App goes to the background → everything stays registered (global
+    // semantics), even with a terminal still focused inside the webview.
+    window.dispatchEvent(new Event('blur'));
+    expect(mockedUnregister).not.toHaveBeenCalled();
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+
+    // App returns to the foreground → element context applies again.
+    window.dispatchEvent(new Event('focus'));
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    expect(mockedUnregister).not.toHaveBeenCalledWith('CommandOrControl+W');
+  });
+
+  it('re-syncs on the Tauri onFocusChanged signal', async () => {
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
+    });
+
+    focusElement(document.querySelector<HTMLElement>('[data-testid="terminal-textarea"]')!);
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    mockedUnregister.mockClear();
+
+    // Window focus lost (authoritative webview signal) → register everything.
+    expect(focusChangedCaptured.handler).toBeTypeOf('function');
+    act(() => {
+      focusChangedCaptured.handler!(false);
+    });
+    expect(mockedUnregister).not.toHaveBeenCalled();
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+
+    // Window focused again while the terminal is still focused → drop the
+    // terminal-critical shortcut again.
+    act(() => {
+      focusChangedCaptured.handler!(true);
+    });
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
   });
 
   it('unregisters all shortcuts on unmount', async () => {

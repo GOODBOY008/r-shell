@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
 import { toast } from 'sonner';
 import i18n from '@/lib/i18n';
@@ -367,14 +368,22 @@ function currentFocusContext(): FocusContext {
  * semantics) and so editable fields (settings inputs, dialogs) keep receiving
  * their keystrokes: while such an element has focus no shortcut is
  * registered, and while a terminal has focus only shortcuts without
- * `ignoreInTerminal` are. Accelerator duplicates are resolved in array order
- * — the first shortcut wins, on both registration and `ignoreInTerminal`
- * exclusion — which reproduces the DOM handler's first-match-wins behavior.
+ * `ignoreInTerminal` are. Element focus only applies while the app window is
+ * focused — when the app is in the background everything is registered so
+ * the shortcuts keep firing globally. Accelerator duplicates are resolved in
+ * array order — the first shortcut wins, on both registration and
+ * `ignoreInTerminal` exclusion — which reproduces the DOM handler's
+ * first-match-wins behavior.
  */
 function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   const registered = new Map<string, KeyboardShortcut>();
   const failed = new Set<string>();
   const isMac = navigator.platform.toUpperCase().includes('MAC');
+  // Element focus (terminal/editable) only matters while the app window is
+  // focused; when another app is in the foreground the shortcuts must stay
+  // registered so they keep firing globally.
+  let appFocused = true;
+  let unlistenFocusChanged: (() => void) | undefined;
 
   const desiredAccelerators = (): Map<string, KeyboardShortcut> => {
     const byAccelerator = new Map<string, KeyboardShortcut>();
@@ -391,7 +400,7 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       }
     }
 
-    const focus = currentFocusContext();
+    const focus = appFocused ? currentFocusContext() : 'app';
     if (focus === 'editable') {
       return new Map();
     }
@@ -440,6 +449,41 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     }
   };
 
+  const handleWindowBlur = () => {
+    appFocused = false;
+    sync();
+  };
+  const handleWindowFocus = () => {
+    appFocused = true;
+    sync();
+  };
+  const handleVisibilityChange = () => {
+    appFocused = !document.hidden;
+    sync();
+  };
+
+  window.addEventListener('blur', handleWindowBlur);
+  window.addEventListener('focus', handleWindowFocus);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+
+  // Authoritative focus signal for the webview window: some webview
+  // runtimes do not translate OS window focus changes into DOM
+  // focus/blur/visibility events.
+  try {
+    getCurrentWindow()
+      .onFocusChanged(({ payload }) => {
+        appFocused = payload;
+        sync();
+      })
+      .then((unlisten) => {
+        unlistenFocusChanged = unlisten;
+      })
+      .catch(() => {});
+  } catch {
+    // Not running inside a Tauri webview (e.g. tests): the DOM window
+    // focus/blur and visibilitychange listeners above still track app focus.
+  }
+
   sync();
   document.addEventListener('focusin', sync);
   document.addEventListener('focusout', sync);
@@ -447,6 +491,10 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   return () => {
     document.removeEventListener('focusin', sync);
     document.removeEventListener('focusout', sync);
+    window.removeEventListener('blur', handleWindowBlur);
+    window.removeEventListener('focus', handleWindowFocus);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+    unlistenFocusChanged?.();
     void unregisterAll().catch(() => {});
   };
 }
