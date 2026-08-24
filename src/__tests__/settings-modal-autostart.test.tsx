@@ -43,6 +43,7 @@ vi.mock('../components/ui/tabs', () => ({
 }));
 
 import { SettingsModal } from '../components/settings-modal';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 
 // jsdom has no ResizeObserver; the modal's scrollable tab bar needs one
 class MockResizeObserver {
@@ -115,6 +116,22 @@ describe('SettingsModal launch-at-login', () => {
     expect(mockEnable).not.toHaveBeenCalled();
   });
 
+  it('keeps a manual toggle made while the OS state is still loading', async () => {
+    let resolveIsEnabled!: (value: boolean) => void;
+    mockIsEnabled.mockImplementation(
+      () => new Promise<boolean>((resolve) => { resolveIsEnabled = resolve; }),
+    );
+
+    renderModal();
+    await waitFor(() => expect(mockIsEnabled).toHaveBeenCalled());
+
+    // The user flips the toggle before the OS query resolves
+    fireEvent.click(getAutostartSwitch());
+    resolveIsEnabled(false); // OS says "not enabled" — arrives too late
+
+    await waitFor(() => expect(getAutostartSwitch().getAttribute('aria-checked')).toBe('true'));
+  });
+
   it('reverts the toggle and shows an error when updating the OS fails', async () => {
     mockEnable.mockRejectedValue(new Error('autostart failed'));
 
@@ -131,5 +148,8 @@ describe('SettingsModal launch-at-login', () => {
     );
     // The toggle must reflect the real (unchanged) OS state
     await waitFor(() => expect(getAutostartSwitch().getAttribute('aria-checked')).toBe('false'));
+    // The persisted config must stay truthful even though Save ran first
+    const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+    expect(saved.autostart).toBe(false);
   });
 });

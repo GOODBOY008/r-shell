@@ -122,6 +122,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     autostart: false
   });
 
+  // True once the user has manually changed the autostart toggle (or reset
+  // settings) while the modal is open — the OS state query must not clobber it.
+  const autostartTouchedRef = useRef(false);
+
   // Load settings when modal opens
   useEffect(() => {
     if (open) {
@@ -151,8 +155,15 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
       // the actual launch-at-login configuration, not a cached value.
       // Skip in browser dev mode where the Tauri backend is absent.
       if (isTauri()) {
+        // Each open re-reads the OS state; discard any prior touch flag
+        autostartTouchedRef.current = false;
         isAutostartEnabled()
-          .then((enabled) => setSettings(prev => ({ ...prev, autostart: enabled })))
+          .then((enabled) => {
+            // A manual toggle made while the query was in flight wins
+            if (!autostartTouchedRef.current) {
+              setSettings(prev => ({ ...prev, autostart: enabled }));
+            }
+          })
           .catch(() => {
             // Plugin unavailable — keep stored/default value
           });
@@ -241,7 +252,19 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         }
       } catch (error) {
         const actual = await isAutostartEnabled().catch(() => undefined);
-        setSettings(prev => ({ ...prev, autostart: actual ?? !settings.autostart }));
+        const corrected = actual ?? !settings.autostart;
+        setSettings(prev => ({ ...prev, autostart: corrected }));
+        // Keep the persisted config truthful when the OS update failed
+        try {
+          const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+          localStorage.setItem(
+            APP_SETTINGS_STORAGE_KEY,
+            JSON.stringify({ ...saved, autostart: corrected }),
+          );
+          window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+        } catch {
+          // Ignore storage errors — the toggle and toast already reflect reality
+        }
         toast.error(t('settings.interface.autostartFailed'), {
           description: error instanceof Error ? error.message : String(error),
         });
@@ -309,7 +332,12 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         telemetry: false,
         autostart: false
       });
-      
+
+      // Resetting is a deliberate change — don't let a pending OS query undo it
+      if (settings.autostart) {
+        autostartTouchedRef.current = true;
+      }
+
       // Apply default theme
       applyTheme('dark');
     }
@@ -1127,7 +1155,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   </div>
                   <Switch
                     checked={settings.autostart}
-                    onCheckedChange={(checked) => updateSetting('autostart', checked)}
+                    onCheckedChange={(checked) => {
+                      autostartTouchedRef.current = true;
+                      updateSetting('autostart', checked);
+                    }}
                   />
                 </div>
               </CardContent>
