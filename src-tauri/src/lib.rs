@@ -14,11 +14,50 @@ mod websocket_server;
 use connection_manager::ConnectionManager;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use websocket_server::WebSocketServer;
 
 // Global atomic to store the WebSocket port (shared between backend and frontend)
 pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// Applies the saved top-left position of the "main" window on startup.
+///
+/// The window-state plugin restores size and maximized state, but its position
+/// restore is gated behind a monitor-intersects check backed by
+/// `CGDisplay::active_displays`, which can come back empty and silently drop
+/// the saved position (window relaunches at the OS default placement). Read
+/// the plugin's own state file (public `DEFAULT_FILENAME` schema) and apply
+/// the position directly. Skipped while the saved state is maximized — the
+/// plugin handles maximizing, and a position is meaningless for a zoomed
+/// window.
+fn restore_main_window_position(window: &tauri::WebviewWindow, app: &tauri::AppHandle) {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct SavedPosition {
+        x: i32,
+        y: i32,
+        maximized: bool,
+    }
+
+    let Ok(config_dir) = app.path().app_config_dir() else {
+        return;
+    };
+    let state_path = config_dir.join(tauri_plugin_window_state::DEFAULT_FILENAME);
+    let Ok(contents) = std::fs::read_to_string(state_path) else {
+        return;
+    };
+    let Ok(states) =
+        serde_json::from_str::<std::collections::HashMap<String, SavedPosition>>(&contents)
+    else {
+        return;
+    };
+    if let Some(state) = states.get("main") {
+        if !state.maximized {
+            let _ = window.set_position(tauri::PhysicalPosition::new(state.x, state.y));
+        }
+    }
+}
 
 /// Build the native macOS menu bar (File / Edit / Tools / Connection / Window).
 /// Only compiled on macOS; other platforms keep the web-based MenuBar component.
@@ -267,7 +306,6 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_positioner::init())
->>>>>>> fc9d9d6 (feat(window): persist window layout via window-state + center popups via positioner)
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
@@ -282,6 +320,13 @@ pub fn run() {
                         }
                         Err(e) => tracing::warn!("Failed to build native menu: {}", e),
                     }
+                }
+
+                // Restore the main window's saved position (see
+                // restore_main_window_position: the plugin's position restore
+                // is gated and can silently no-op).
+                if let Some(main_window) = app.get_webview_window("main") {
+                    restore_main_window_position(&main_window, app.handle());
                 }
 
                 // Start WebSocket server for terminal I/O
