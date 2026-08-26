@@ -3559,6 +3559,110 @@ pub fn editor_dirty_changed(app: tauri::AppHandle, label: String, dirty: bool) {
     crate::quit_guard::set_dirty(&app, &label, dirty);
 }
 
+// ========== Credential Encryption (master key + AES-256-GCM) ==========
+
+/// Keychain entry holding the app's data-protection master key. One entry for
+/// the whole app — the OS keychain is touched once (on first use), never per
+/// credential, keeping authorization prompts to a minimum.
+const MASTER_KEY_SERVICE: &str = "com.aiden.r-shell.dataprotection";
+const MASTER_KEY_USER: &str = "connection-secrets";
+
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use std::sync::Mutex;
+
+/// Cached master key so we hit the keychain once per app run, not per call.
+static MASTER_KEY_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
+/// Load (or first-use create) the 32-byte master key from the OS keychain.
+fn master_key() -> Result<Vec<u8>, String> {
+    if let Some(key) = MASTER_KEY_CACHE
+        .lock()
+        .map_err(|e| format!("Key cache lock poisoned: {e}"))?
+        .as_ref()
+    {
+        return Ok(key.clone());
+    }
+
+    let entry = keyring::Entry::new(MASTER_KEY_SERVICE, MASTER_KEY_USER)
+        .map_err(|e| format!("Failed to open keychain entry: {e}"))?;
+
+    let key = match entry.get_password() {
+        Ok(stored) => BASE64
+            .decode(stored)
+            .map_err(|e| format!("Stored master key is corrupt: {e}"))?,
+        Err(keyring::Error::NoEntry) => {
+            // First use: generate a random 32-byte key and persist it.
+            use rand::RngCore;
+            let mut fresh = vec![0u8; 32];
+            rand::thread_rng().fill_bytes(&mut fresh);
+            entry
+                .set_password(&BASE64.encode(&fresh))
+                .map_err(|e| format!("Failed to store master key: {e}"))?;
+            fresh
+        }
+        Err(e) => return Err(format!("Failed to read master key: {e}")),
+    };
+
+    if key.len() != 32 {
+        return Err("Stored master key has wrong length".to_string());
+    }
+
+    if let Ok(mut cache) = MASTER_KEY_CACHE.lock() {
+        *cache = Some(key.clone());
+    }
+    Ok(key)
+}
+
+/// Encrypt a secret with the app master key (AES-256-GCM).
+/// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
+#[tauri::command]
+pub fn credential_seal(secret: String) -> Result<String, String> {
+    let key = master_key()?;
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| format!("Failed to init cipher: {e}"))?;
+
+    use rand::RngCore;
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), secret.as_bytes())
+        .map_err(|e| format!("Failed to encrypt secret: {e}"))?;
+
+    Ok(format!(
+        "v1:{}:{}",
+        BASE64.encode(nonce_bytes),
+        BASE64.encode(ciphertext)
+    ))
+}
+
+/// Decrypt a value produced by `credential_seal`.
+#[tauri::command]
+pub fn credential_open(sealed: String) -> Result<String, String> {
+    let key = master_key()?;
+    let parts: Vec<&str> = sealed.splitn(3, ':').collect();
+    if parts.len() != 3 || parts[0] != "v1" {
+        return Err("Unrecognized sealed secret format".to_string());
+    }
+    let nonce_bytes = BASE64
+        .decode(parts[1])
+        .map_err(|e| format!("Corrupt nonce: {e}"))?;
+    let ciphertext = BASE64
+        .decode(parts[2])
+        .map_err(|e| format!("Corrupt ciphertext: {e}"))?;
+
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| format!("Failed to init cipher: {e}"))?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
+        .map_err(|e| format!("Failed to decrypt secret: {e}"))?;
+
+    String::from_utf8(plaintext).map_err(|e| format!("Decrypted secret is not UTF-8: {e}"))
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]

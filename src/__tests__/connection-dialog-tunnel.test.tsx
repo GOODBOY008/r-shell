@@ -4,7 +4,7 @@
  * configured on a connection is useless if it is dropped on save or reconnect.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConnectionDialog } from '../components/connection-dialog';
 import { ConnectionStorageManager } from '../lib/connection-storage';
 
@@ -75,7 +75,7 @@ beforeEach(() => {
 });
 
 describe('ConnectionDialog SSH tunnel persistence', () => {
-  it('persists tunnel config when the edited connection is saved', () => {
+  it('persists tunnel config when the edited connection is saved', async () => {
     // Seed a connection without a tunnel (realistic: legacy connection)
     ConnectionStorageManager.saveConnectionWithId('conn-1', baseConnection);
 
@@ -84,6 +84,11 @@ describe('ConnectionDialog SSH tunnel persistence', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // handleSave is async (seals secrets via IPC) — wait for the persist.
+    await waitFor(() => {
+      expect(ConnectionStorageManager.getConnection('conn-1')?.tunnelEnabled).toBe(true);
+    });
 
     const stored = ConnectionStorageManager.getConnection('conn-1');
     expect(stored?.tunnelEnabled).toBe(true);

@@ -175,7 +175,8 @@
       "tunnelUsername": "jumpuser",
       "tunnelPassword": "Enter tunnel password",
       "tunnelKeyPath": "~/.ssh/id_ed25519",
-      "tunnelPassphrase": "Enter passphrase if key is encrypted"
+      "tunnelPassphrase": "Enter passphrase if key is encrypted",
+      "savedPassword": "Leave blank to keep saved password"
     },
     "authMethod": {
       "password": "Password",
@@ -250,11 +251,15 @@
       "connectionFailed": "Connection Failed",
       "connectionFailedDesc": "Unable to connect to the server. Please check your credentials and try again.",
       "connectionError": "Connection Error",
-      "connectionErrorDesc": "An unexpected error occurred while connecting."
+      "connectionErrorDesc": "An unexpected error occurred while connecting.",
+      "credentialSyncFailed": "Failed to encrypt and save the credentials"
     },
     "tunnel": {
       "enable": "Enable SSH Tunnel",
       "enableDesc": "Forward the connection through a jump host (bastion) to reach the target."
+    },
+    "hint": {
+      "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it."
     }
   },
   "settings": {
