@@ -4,6 +4,7 @@
   "description": "Capability for file viewer popup windows",
   "windows": ["file-viewer-*"],
   "permissions": [
-    "core:default"
+    "core:default",
+    "positioner:default"
   ]
 }
