@@ -359,38 +359,53 @@ impl SshClient {
             .and_then(Result::ok)
             .and_then(|output| bash_version_from_probe(&output));
 
-            // Open a new SSH channel
-            let mut channel = session.channel_open_session().await?;
+            // Open a new SSH channel. The transport can stall *after* a
+            // successful `ssh_connect` (e.g. the server stops ACKing the
+            // channel request, or the session dies while idle). Without a
+            // bound here the frontend waits forever on "starting interactive
+            // shell" and its input never flows — a frozen terminal. Bound the
+            // channel request + PTY/shell setup so a dead transport surfaces
+            // as an error the WebSocket layer maps to a reconnect, instead of
+            // blocking the dispatch task indefinitely.
+            const PTY_CHANNEL_TIMEOUT: Duration = Duration::from_secs(8);
             let bash_terminal_modes = [(Pty::ECHO, 0), (Pty::ECHONL, 0)];
             let terminal_modes = if bash_version.is_some() {
                 bash_terminal_modes.as_slice()
             } else {
                 &[]
             };
+            let setup = async {
+                let mut channel = session.channel_open_session().await?;
+                // Request PTY with terminal type and dimensions (ttyd-style).
+                channel
+                    .request_pty(
+                        true,             // want_reply
+                        "xterm-256color", // terminal type (like ttyd)
+                        cols,             // columns
+                        rows,             // rows
+                        0,                // pixel_width (not used)
+                        0,                // pixel_height (not used)
+                        terminal_modes,
+                    )
+                    .await?;
+                // Start interactive shell
+                channel.request_shell(true).await?;
+                Ok::<_, anyhow::Error>(channel)
+            };
+            let mut channel = tokio::time::timeout(PTY_CHANNEL_TIMEOUT, setup)
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "Timed out opening the PTY channel after {PTY_CHANNEL_TIMEOUT:?}; the SSH transport may be unresponsive"
+                    )
+                })??;
 
-            // Request PTY with terminal type and dimensions
-            // Similar to ttyd's approach: xterm-256color terminal
-            channel
-                .request_pty(
-                    true,             // want_reply
-                    "xterm-256color", // terminal type (like ttyd)
-                    cols,             // columns
-                    rows,             // rows
-                    0,                // pixel_width (not used)
-                    0,                // pixel_height (not used)
-                    terminal_modes,
-                )
-                .await?;
-
-            // Start interactive shell
-            channel.request_shell(true).await?;
+            let channel_id = channel.id();
 
             // Create channels for bidirectional communication (like ttyd's pty_buf)
             // Increased capacity for better buffering during fast input
             let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1000); // Increased from 100
             let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(128); // Bounded: back-pressure to SSH window
-
-            let channel_id = channel.id();
 
             // Clone channel for input task
             let mut input_channel = channel.make_writer();

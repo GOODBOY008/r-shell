@@ -738,6 +738,56 @@ impl ConnectionManager {
 mod tests {
     use super::*;
 
+    /// Live check that `start_pty_connection` opens a working PTY within the new
+    /// channel-setup timeout (i.e. the timeout doesn't false-positive on a healthy
+    /// session) and that input/output round-trips. Run explicitly:
+    /// `cargo test live_pty_opens_within_timeout -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_pty_opens_within_timeout() {
+        let key_path = format!(
+            "{}/.ssh/id_rsa",
+            std::env::var("HOME").unwrap_or_else(|_| "/Users/daydream".into())
+        );
+        let username = std::env::var("USER").unwrap_or_else(|_| "daydream".into());
+        let config = SshConfig {
+            host: "127.0.0.1".to_string(),
+            port: 22222,
+            username,
+            auth_method: crate::ssh::AuthMethod::PublicKey {
+                key_path,
+                passphrase: None,
+            },
+            compression: true,
+            keepalive_interval: Some(60),
+            keepalive_max: Some(3),
+            proxy: None,
+        };
+        let mgr = ConnectionManager::new();
+        let id = "live-pty".to_string();
+        mgr.create_connection(id.clone(), config).await.expect("connect");
+        // Must return within the 8s channel-setup timeout on a healthy host.
+        let start = std::time::Instant::now();
+        let (_gen, _reattach) = mgr.start_pty_connection(&id, 120, 40).await.expect("start_pty");
+        assert!(start.elapsed() < std::time::Duration::from_secs(8), "healthy PTY took too long");
+
+        mgr.write_to_pty(&id, b"echo LIVE_OK\r".to_vec()).await.expect("write");
+        let mut out = Vec::new();
+        let deadline = std::time::Duration::from_secs(5);
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < deadline {
+            match mgr.read_from_pty(&id, Some(std::time::Duration::from_millis(100))).await {
+                Ok(Some(chunk)) => {
+                    out.extend_from_slice(&chunk);
+                    if String::from_utf8_lossy(&out).contains("LIVE_OK") { break; }
+                }
+                Ok(None) => {}
+                Err(e) => panic!("read error: {e}"),
+            }
+        }
+        assert!(String::from_utf8_lossy(&out).contains("LIVE_OK"), "PTY did not echo input: {:?}", String::from_utf8_lossy(&out));
+    }
+
     #[tokio::test]
     async fn test_new_manager_has_no_connections() {
         let mgr = ConnectionManager::new();
