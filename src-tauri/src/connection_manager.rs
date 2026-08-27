@@ -530,12 +530,21 @@ impl ConnectionManager {
         connection_id: &str,
         max_wait: Option<std::time::Duration>,
     ) -> Result<Option<Vec<u8>>> {
-        let pty_sessions = self.pty_sessions.read().await;
-        let pty = pty_sessions
-            .get(connection_id)
-            .ok_or_else(|| anyhow::anyhow!("PTY connection not found"))?;
+        // Clone the receiver handle out and drop the map read guard BEFORE
+        // blocking in recv(). An idle terminal parks here for an unbounded
+        // time; holding the pty_sessions read guard across that await
+        // deadlocks every later start_pty_connection / close_pty_connection
+        // (write lock) process-wide — new connections stall after the first
+        // one goes idle.
+        let output_rx = {
+            let pty_sessions = self.pty_sessions.read().await;
+            let pty = pty_sessions
+                .get(connection_id)
+                .ok_or_else(|| anyhow::anyhow!("PTY connection not found"))?;
+            pty.output_rx.clone()
+        };
 
-        let mut rx = pty.output_rx.lock().await;
+        let mut rx = output_rx.lock().await;
 
         match max_wait {
             None => match rx.recv().await {
@@ -587,12 +596,17 @@ impl ConnectionManager {
 
     /// Resize PTY terminal (send window-change to remote SSH channel)
     pub async fn resize_pty(&self, connection_id: &str, cols: u32, rows: u32) -> Result<()> {
-        let pty_sessions = self.pty_sessions.read().await;
-        let pty = pty_sessions
-            .get(connection_id)
-            .ok_or_else(|| anyhow::anyhow!("PTY connection not found"))?;
+        // Same clone-out pattern as read_from_pty: never hold the map read
+        // guard across a blocking send.
+        let resize_tx = {
+            let pty_sessions = self.pty_sessions.read().await;
+            let pty = pty_sessions
+                .get(connection_id)
+                .ok_or_else(|| anyhow::anyhow!("PTY connection not found"))?;
+            pty.resize_tx.clone()
+        };
 
-        pty.resize_tx
+        resize_tx
             .send((cols, rows))
             .await
             .map_err(|_| anyhow::anyhow!("PTY resize channel closed"))
@@ -999,6 +1013,61 @@ mod tests {
         assert!(!is_session_dead_error(&anyhow::anyhow!(
             "some other failure"
         )));
+    }
+
+    #[tokio::test]
+    async fn test_read_from_pty_does_not_hold_map_lock_while_idle() {
+        // Regression test for the new-connection stall: an idle WebSocket
+        // reader parks in read_from_pty(_, None) until output arrives. It
+        // must NOT hold the pty_sessions read lock while parked, or every
+        // later start_pty_connection / close_pty_connection (write lock)
+        // deadlocks — the frontend sees "WebSocket connected" and then
+        // nothing, because StartPty never returns.
+        let mgr = Arc::new(ConnectionManager::new());
+
+        // An idle session: the output sender is alive but never sends, so a
+        // blocking read parks forever (exactly an idle remote shell).
+        let (input_tx, _input_rx) = mpsc::channel::<Vec<u8>>(1);
+        let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (resize_tx, _resize_rx) = mpsc::channel::<(u32, u32)>(1);
+        let session = PtySession {
+            input_tx,
+            output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
+            channel_id: unsafe { std::mem::transmute(0u32) },
+            resize_tx,
+            cancel: CancellationToken::new(),
+        };
+        {
+            let mut sessions = mgr.pty_sessions.write().await;
+            sessions.insert("idle-1".to_string(), Arc::new(session));
+        }
+
+        // The parked reader — this is what the WebSocket reader task does on
+        // every idle terminal.
+        let reader_mgr = mgr.clone();
+        let reader = tokio::spawn(async move {
+            let _ = reader_mgr.read_from_pty("idle-1", None).await;
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // close_pty_connection takes the same pty_sessions write lock that
+        // start_pty_connection acquires when any OTHER connection starts a
+        // PTY, so it stands in for a fresh StartPty here. It must complete
+        // while the idle reader is parked.
+        let close = tokio::time::timeout(
+            Duration::from_millis(500),
+            mgr.close_pty_connection("idle-1", None),
+        )
+        .await;
+        assert!(
+            close.is_ok(),
+            "pty_sessions write lock deadlocked by an idle reader parked in read_from_pty"
+        );
+
+        // Let the parked reader finish: dropping the sender closes its
+        // (already-removed) session's output channel → recv → None → Err.
+        drop(output_tx);
+        let _ = reader.await;
     }
 
     #[tokio::test]
