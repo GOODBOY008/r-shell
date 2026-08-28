@@ -206,6 +206,16 @@ function AppContent() {
 
   const handleCloseActiveTab = useCallback(() => {
     if (!activeGroup?.activeTabId) {
+      // No terminal tabs left: close the main window itself (Terminal.app /
+      // VS Code close their window when Cmd+W hits an empty session list).
+      // On macOS the app keeps running afterwards — the RunEvent::
+      // ExitRequested handler in lib.rs prevents the last-window exit; on
+      // Windows/Linux the process exits with the last window per platform
+      // convention. Every Ctrl+W entry point (DOM shortcut, global
+      // shortcut, macOS menu close_connection) converges here.
+      import('@tauri-apps/api/window')
+        .then(({ getCurrentWindow }) => getCurrentWindow().close())
+        .catch(() => {});
       return;
     }
 
@@ -1164,7 +1174,11 @@ function AppContent() {
   // Opens (or focuses) the dedicated Tauri window editing a remote file.
   // One window per (connection, file) — reopening a file reuses the existing
   // window with its state instead of duplicating it.
-  const openEditorWindow = useCallback(async (connectionId: string, filePath: string, fileName: string) => {
+  // `focus: false` (used by the launch/reopen restore) skips focusing an
+  // already-open editor so restored windows don't steal focus from the main
+  // window the user just opened (Dock reopen / app launch).
+  const openEditorWindow = useCallback(async (connectionId: string, filePath: string, fileName: string, options?: { focus?: boolean }) => {
+    const focus = options?.focus !== false;
     const label = editorWindowLabel(connectionId, filePath);
 
     // Reuse an already-open editor for this file: bring it to the front and
@@ -1177,7 +1191,9 @@ function AppContent() {
         try {
           await existing.show();
           await existing.unminimize();
-          await existing.setFocus();
+          if (focus) {
+            await existing.setFocus();
+          }
         } catch (err: unknown) {
           // Surface unexpected failures (e.g. an ACL denial); a window that
           // is already visible/focused resolves these calls fine, so an
@@ -1277,7 +1293,7 @@ function AppContent() {
     restoredEditorsRef.current = true;
     const persistedEditors = loadOpenEditors();
     for (const entry of persistedEditors) {
-      void openEditorWindow(entry.connectionId, entry.filePath, entry.fileName);
+      void openEditorWindow(entry.connectionId, entry.filePath, entry.fileName, { focus: false });
     }
   }, [openEditorWindow]);
 

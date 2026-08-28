@@ -51,4 +51,9 @@ describe('window capabilities cover the IPC the frontend performs', () => {
     expect(perms).toContain('core:window:allow-unminimize');
     expect(perms).toContain('core:window:allow-set-focus');
   });
+
+  it('the main window may close itself (Ctrl+W with no terminal tabs)', () => {
+    const perms = permissionIdentifiers(loadCapability('default'));
+    expect(perms).toContain('core:window:allow-close');
+  });
 });
