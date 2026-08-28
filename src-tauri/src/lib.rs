@@ -5,6 +5,7 @@ mod ftp_client;
 mod ls_parser;
 mod os_detect;
 mod proxy;
+mod quit_guard;
 mod rdp_client;
 mod sftp_client;
 mod ssh;
@@ -84,7 +85,19 @@ fn build_app_menu<F: Fn(&str) -> String>(
             &PredefinedMenuItem::hide_others(app, Some(&t("menuBar.hideOthers")))?,
             &PredefinedMenuItem::show_all(app, Some(&t("menuBar.showAll")))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, Some(&t("menuBar.quit")))?,
+            // Custom quit item instead of PredefinedMenuItem::quit: a
+            // predefined item calls NSApp.terminate directly, which never
+            // surfaces as RunEvent::ExitRequested (see quit_guard.rs), so a
+            // dirty file-editor window could not be prompted on Cmd+Q. The
+            // custom item routes through quit_guard::request_quit; with no
+            // dirty editors it is a plain app.exit(0).
+            &MenuItem::with_id(
+                app,
+                "quit_app",
+                &t("menuBar.quit"),
+                true,
+                Some("CmdOrCtrl+Q"),
+            )?,
         ],
     )?;
 
@@ -341,10 +354,24 @@ pub fn run() {
             }
         })
         .on_menu_event(|app, event| {
-            // Forward custom menu item IDs to the frontend so React can handle them
+            // Quit goes through the dirty-editor guard; everything else is
+            // forwarded to the frontend as before.
+            if event.id().0 == "quit_app" {
+                quit_guard::request_quit(app);
+                return;
+            }
             let _ = app.emit("menu-action", event.id().0.as_str());
         })
+        .on_window_event(|window, event| {
+            // Keep the quit guard's dirty/pending registries free of stale
+            // window labels (also resolves a pending quit when the last
+            // dirty editor is discarded during quit confirmation).
+            if matches!(event, tauri::WindowEvent::Destroyed { .. }) {
+                quit_guard::window_destroyed(window.app_handle(), window.label());
+            }
+        })
         .manage(connection_manager)
+        .manage(quit_guard::QuitGuard::default())
         .invoke_handler(tauri::generate_handler![
             commands::ssh_connect,
             commands::ssh_cancel_connect,
@@ -417,6 +444,10 @@ pub fn run() {
             commands::desktop_resize,
             commands::update_menu_language,
             commands::get_system_locale,
+            // App quit guard (dirty file-editor windows)
+            commands::request_app_quit,
+            commands::cancel_app_quit,
+            commands::editor_dirty_changed,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])

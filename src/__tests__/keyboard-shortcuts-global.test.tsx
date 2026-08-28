@@ -3,6 +3,7 @@ import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useKeyboardShortcuts, type KeyboardShortcut } from '../lib/keyboard-shortcuts';
 import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
+import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 
 const focusChangedCaptured: { handler?: (payload: boolean) => void } = {};
 
@@ -12,11 +13,16 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
+    label: 'main',
     onFocusChanged: vi.fn(async (handler: (event: { payload: boolean }) => void) => {
       focusChangedCaptured.handler = (payload: boolean) => handler({ payload });
       return vi.fn();
     }),
   }),
+}));
+
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  getAllWebviewWindows: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
@@ -32,6 +38,7 @@ vi.mock('sonner', () => ({
 const mockedRegister = vi.mocked(register);
 const mockedUnregister = vi.mocked(unregister);
 const mockedUnregisterAll = vi.mocked(unregisterAll);
+const mockedGetAllWebviewWindows = vi.mocked(getAllWebviewWindows);
 
 function GlobalShortcutHarness({ shortcuts }: { shortcuts: KeyboardShortcut[] }) {
   useKeyboardShortcuts(shortcuts);
@@ -68,7 +75,16 @@ function focusBody() {
   document.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
 }
 
+// Default: no sibling windows exist (single-window app / tests).
+beforeEach(() => {
+  mockedGetAllWebviewWindows.mockReset();
+  mockedGetAllWebviewWindows.mockResolvedValue([]);
+});
+
 afterEach(() => {
+  // Dispatching focus while the harness is still mounted stops the blur-time
+  // sibling polling interval (if any) so it cannot leak into the next test.
+  window.dispatchEvent(new Event('focus'));
   cleanup();
   focusBody();
   vi.clearAllMocks();
@@ -240,6 +256,91 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
       focusChangedCaptured.handler!(true);
     });
     expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+  });
+
+  it('keeps shortcuts registered while blurred when no sibling window of the app is focused', async () => {
+    mockedGetAllWebviewWindows.mockResolvedValue([
+      { label: 'main', isFocused: vi.fn(async () => false) },
+    ]);
+
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
+    });
+
+    // Element context: terminal focused → terminal-critical shortcut dropped.
+    focusElement(document.querySelector<HTMLElement>('[data-testid="terminal-textarea"]')!);
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    mockedUnregister.mockClear();
+
+    // App goes to the background (another app, not a sibling window) →
+    // everything stays registered so the shortcuts keep firing globally.
+    window.dispatchEvent(new Event('blur'));
+    await act(async () => {});
+
+    expect(mockedUnregister).not.toHaveBeenCalled();
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+  });
+
+  it('unregisters every shortcut while a sibling window (e.g. the file-viewer editor) has focus', async () => {
+    mockedGetAllWebviewWindows.mockResolvedValue([
+      { label: 'main', isFocused: vi.fn(async () => false) },
+      { label: 'file-viewer-1', isFocused: vi.fn(async () => true) },
+    ]);
+
+    const onW = vi.fn();
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(onW)]} />);
+    });
+
+    // The file-viewer editor window takes focus → this window must drop its
+    // OS-level shortcuts so Ctrl+W reaches the editor instead of closing the
+    // active terminal tab here.
+    window.dispatchEvent(new Event('blur'));
+    await act(async () => {});
+
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
+
+    // Focus returns to this window → shortcuts are registered again.
+    window.dispatchEvent(new Event('focus'));
+    await act(async () => {});
+    expect(mockedRegister).toHaveBeenLastCalledWith('CommandOrControl+W', expect.any(Function));
+
+    // The OS-level registration is gone while the editor window is focused,
+    // so no handler can be invoked on this window at all.
+    const handlerCalls = mockedRegister.mock.calls.filter(([accel]) => accel === 'CommandOrControl+W');
+    expect(handlerCalls).toHaveLength(2); // mount + refocus; each holds a fresh handler
+  });
+
+  it('re-registers shortcuts when a sibling window closes while the app is backgrounded', async () => {
+    vi.useFakeTimers();
+    try {
+      mockedGetAllWebviewWindows.mockResolvedValue([
+        { label: 'main', isFocused: vi.fn(async () => false) },
+        { label: 'file-viewer-1', isFocused: vi.fn(async () => true) },
+      ]);
+
+      await act(async () => {
+        render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
+      });
+
+      window.dispatchEvent(new Event('blur'));
+      await act(async () => {});
+      expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
+
+      // The file-viewer window closes while another app stays foreground. The
+      // blur-time polling notices and restores the background semantics.
+      mockedGetAllWebviewWindows.mockResolvedValue([
+        { label: 'main', isFocused: vi.fn(async () => false) },
+      ]);
+      vi.advanceTimersByTime(2000);
+      await act(async () => {});
+
+      expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('unregisters all shortcuts on unmount', async () => {

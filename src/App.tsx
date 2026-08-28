@@ -38,6 +38,15 @@ import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
 import { toast } from 'sonner';
 import { dispatchTerminalCommand, type TerminalCommand } from './lib/terminal-commands';
+import {
+  addOpenEditor,
+  EDITOR_WINDOW_CHANGED_EVENT,
+  editorWindowLabel,
+  loadOpenEditors,
+  removeOpenEditor,
+  type EditorWindowEventPayload,
+} from './lib/editor-windows-store';
+import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { getRestoreTiming } from './lib/restore-timing';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
@@ -1152,24 +1161,48 @@ function AppContent() {
     toast.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
   }, [layout.rightSidebarVisible, toggleRightSidebar, t]);
 
-  // Handler: open a remote file in a new Tauri window.
-  // The window is centered on whichever monitor the parent window currently
-  // occupies, matching the behaviour of VS Code, Chrome, Figma, etc.
-  const handleOpenInEditor = useCallback((filePath: string, fileName: string) => {
-    if (!activeConnection) return;
-    const label = `file-viewer-${Date.now()}`;
+  // Opens (or focuses) the dedicated Tauri window editing a remote file.
+  // One window per (connection, file) — reopening a file reuses the existing
+  // window with its state instead of duplicating it.
+  const openEditorWindow = useCallback(async (connectionId: string, filePath: string, fileName: string) => {
+    const label = editorWindowLabel(connectionId, filePath);
+
+    // Reuse an already-open editor for this file: bring it to the front and
+    // restore it if minimized. Its content state is maintained in its own
+    // webview, so nothing needs reloading here.
+    try {
+      const windows = await getAllWebviewWindows();
+      const existing = windows.find((win) => win.label === label);
+      if (existing) {
+        try {
+          await existing.show();
+          await existing.unminimize();
+          await existing.setFocus();
+        } catch (err: unknown) {
+          // Surface unexpected failures (e.g. an ACL denial); a window that
+          // is already visible/focused resolves these calls fine, so an
+          // error here means the reuse path silently no-opped.
+          console.warn('Failed to focus existing editor window', err);
+        }
+        return;
+      }
+    } catch {
+      // Window plugin unavailable — fall through and try to create below.
+    }
+
     const url = `${window.location.origin}/?mode=file-viewer`
-      + `&connectionId=${encodeURIComponent(activeConnection.connectionId)}`
+      + `&connectionId=${encodeURIComponent(connectionId)}`
       + `&filePath=${encodeURIComponent(filePath)}`
       + `&fileName=${encodeURIComponent(fileName)}`;
 
     const WIN_W = 900;
     const WIN_H = 700;
 
-    Promise.all([
-      import('@tauri-apps/api/webviewWindow'),
-      import('@tauri-apps/api/window'),
-    ]).then(async ([{ WebviewWindow }, { getCurrentWindow, currentMonitor }]) => {
+    try {
+      const [{ WebviewWindow }, { getCurrentWindow, currentMonitor }] = await Promise.all([
+        import('@tauri-apps/api/webviewWindow'),
+        import('@tauri-apps/api/window'),
+      ]);
       const parentWin = getCurrentWindow();
       const [monitor, scaleFactor] = await Promise.all([
         currentMonitor(),          // standalone function, not a method on Window
@@ -1203,10 +1236,50 @@ function AppContent() {
       win.once('tauri://error', (e) => {
         toast.error(t('app.failedToOpenWindow'), { description: String(e.payload) });
       });
-    }).catch((err: unknown) => {
-      toast.error(t('app.couldNotOpenWindow'), { description: String(err) });
+    } catch (err: unknown) {
+      toast.error(t('app.couldNotOpenWindow'), { description: err instanceof Error ? err.message : String(err) });
+    }
+  }, [t]);
+
+  // Handler: open a remote file in a dedicated Tauri window.
+  // The window is centered on whichever monitor the parent window currently
+  // occupies, matching the behaviour of VS Code, Chrome, Figma, etc.
+  const handleOpenInEditor = useCallback((filePath: string, fileName: string) => {
+    if (!activeConnection) return;
+    void openEditorWindow(activeConnection.connectionId, filePath, fileName);
+  }, [activeConnection, openEditorWindow]);
+
+  // Track open editor windows (persisted so they can be restored on next
+  // launch) via events emitted by the viewer windows themselves.
+  useEffect(() => {
+    const unlistenPromise = listen<EditorWindowEventPayload>(EDITOR_WINDOW_CHANGED_EVENT, (event) => {
+      const { event: kind, connectionId, filePath, fileName } = event.payload;
+      const entry = { connectionId, filePath, fileName };
+      if (kind === 'opened') {
+        addOpenEditor(entry);
+      } else {
+        removeOpenEditor(entry);
+      }
     });
-  }, [activeConnection, t]);
+    return () => { unlistenPromise.then(fn => fn()); };
+  }, []);
+
+  // Reopen file-editor windows that were open when the app last quit. The
+  // viewer windows poll session health, so they load their files as soon as
+  // the backend reconnects or show the error/retry view when the connection
+  // is gone.
+  // Run-once by intent (on launch): the effect depends on openEditorWindow,
+  // whose identity changes with `t` (e.g. a language switch) — re-running
+  // would show/focus every editor window and steal focus mid-use.
+  const restoredEditorsRef = useRef(false);
+  useEffect(() => {
+    if (restoredEditorsRef.current) return;
+    restoredEditorsRef.current = true;
+    const persistedEditors = loadOpenEditors();
+    for (const entry of persistedEditors) {
+      void openEditorWindow(entry.connectionId, entry.filePath, entry.fileName);
+    }
+  }, [openEditorWindow]);
 
   const handleConnectionDialogConnect = useCallback(async (config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
@@ -1406,6 +1479,14 @@ function AppContent() {
   // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
   useEffect(() => {
     const unlistenPromise = listen<string>('menu-action', (event) => {
+      // The native macOS menu belongs to the whole app: its key equivalents
+      // (Cmd+W → "Close Tab", Cmd+N, ...) fire even while a secondary window
+      // of this app — such as the file-viewer editor — has focus. Only act on
+      // main-window state when this window actually has focus, otherwise the
+      // shortcut closes a tab here instead of acting on the focused window.
+      if (!document.hasFocus()) {
+        return;
+      }
       switch (event.payload) {
         case 'new_connection':
         case 'new_tab':

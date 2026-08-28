@@ -1242,7 +1242,10 @@
     "downloadAndOpen": "Download & Open with Local App",
     "downloading": "Downloading…",
     "openedWithOs": "{{fileName}} opened with local application",
-    "failedToOpenWithOs": "Failed to open file with local application"
+    "failedToOpenWithOs": "Failed to open file with local application",
+    "unsavedTitle": "Unsaved changes",
+    "unsavedDescription": "Save your changes to \"{{fileName}}\" before closing?",
+    "discardAndClose": "Don't Save"
   },
   "desktopViewer": {
     "clipboardAccessDenied": "Clipboard access denied",
