@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { 
@@ -222,7 +223,9 @@ export function MenuBar({
             {t('menuBar.closeConnection')}
             <DropdownMenuShortcut>{formatShortcut(closeConnectionShortcutLabel ?? 'Ctrl+W')}</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem>
+          {/* Route Exit through the backend quit guard so dirty file-editor
+              windows are prompted before the app quits (quit_guard.rs). */}
+          <DropdownMenuItem onClick={() => { void invoke('request_app_quit').catch(() => {}); }}>
             <X className="mr-2 h-4 w-4" />
             {t('menuBar.exit')}
             <DropdownMenuShortcut>{formatShortcut('Ctrl+Q')}</DropdownMenuShortcut>

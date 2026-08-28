@@ -5,6 +5,7 @@
   "windows": ["file-viewer-*"],
   "permissions": [
     "core:default",
-    "positioner:default"
+    "core:window:allow-close",
+    "core:window:allow-destroy"
   ]
 }

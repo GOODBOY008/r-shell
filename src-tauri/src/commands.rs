@@ -3438,6 +3438,31 @@ pub fn get_system_locale() -> Result<String, String> {
     sys_locale::get_locale().ok_or_else(|| "Failed to detect system locale".to_string())
 }
 
+// ========== App Quit Guard (dirty file-editor windows) ==========
+
+/// Request an app quit through the dirty-editor guard (quit_guard module).
+/// Quits immediately when no editor has unsaved changes; otherwise each
+/// dirty editor window receives a `confirm-quit` event and shows its
+/// unsaved-changes prompt before the quit may proceed.
+#[tauri::command]
+pub fn request_app_quit(app: tauri::AppHandle) {
+    crate::quit_guard::request_quit(&app);
+}
+
+/// Cancel an in-flight guarded quit (user chose Cancel in an editor's
+/// unsaved-changes prompt).
+#[tauri::command]
+pub fn cancel_app_quit(app: tauri::AppHandle) {
+    crate::quit_guard::cancel_quit(&app);
+}
+
+/// Report whether a file-editor window has unsaved changes. Called by
+/// FileEditorView whenever its dirty flag flips.
+#[tauri::command]
+pub fn editor_dirty_changed(app: tauri::AppHandle, label: String, dirty: bool) {
+    crate::quit_guard::set_dirty(&app, &label, dirty);
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]

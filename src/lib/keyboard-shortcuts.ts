@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
 import { toast } from 'sonner';
 import i18n from '@/lib/i18n';
@@ -347,6 +348,13 @@ const MACOS_NATIVE_MENU_ACCELERATORS = new Set([
   'F5',
 ]);
 
+/**
+ * How often a blurred window re-checks whether a sibling window of the app
+ * has focus. Keeps the global-shortcut registrations in sync when sibling
+ * windows open/close while another application is in the foreground.
+ */
+const SIBLING_FOCUS_POLL_INTERVAL_MS = 2000;
+
 type FocusContext = 'app' | 'terminal' | 'editable';
 
 function currentFocusContext(): FocusContext {
@@ -370,10 +378,14 @@ function currentFocusContext(): FocusContext {
  * registered, and while a terminal has focus only shortcuts without
  * `ignoreInTerminal` are. Element focus only applies while the app window is
  * focused — when the app is in the background everything is registered so
- * the shortcuts keep firing globally. Accelerator duplicates are resolved in
- * array order — the first shortcut wins, on both registration and
- * `ignoreInTerminal` exclusion — which reproduces the DOM handler's
- * first-match-wins behavior.
+ * the shortcuts keep firing globally. The one exception is another window of
+ * this same app (e.g. the file-viewer editor window): when such a sibling
+ * window has focus the keyboard belongs to that window, so nothing is
+ * registered here and OS-level shortcuts can't steal keystrokes from it
+ * (Ctrl+W while typing in the editor must not close a terminal tab).
+ * Accelerator duplicates are resolved in array order — the first shortcut
+ * wins, on both registration and `ignoreInTerminal` exclusion — which
+ * reproduces the DOM handler's first-match-wins behavior.
  */
 function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   const registered = new Map<string, KeyboardShortcut>();
@@ -383,7 +395,73 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   // focused; when another app is in the foreground the shortcuts must stay
   // registered so they keep firing globally.
   let appFocused = true;
+  // True while another window of this app (e.g. the file-viewer editor
+  // window) has focus. The keyboard then belongs to that window — acting on
+  // shortcuts here (Ctrl+W closing a terminal tab, ...) would steal keys the
+  // user is pressing in the other window.
+  let siblingWindowFocused = false;
+  let siblingCheckTimer: number | undefined;
+  let disposed = false;
   let unlistenFocusChanged: (() => void) | undefined;
+
+  const checkSiblingWindowFocused = async (): Promise<boolean> => {
+    try {
+      const selfLabel = getCurrentWindow().label;
+      const windows = await getAllWebviewWindows();
+      for (const win of windows) {
+        if (win.label !== selfLabel && (await win.isFocused())) {
+          return true;
+        }
+      }
+    } catch {
+      // Not running inside a Tauri webview (e.g. tests) or the window/
+      // webview plugin is unavailable: assume no sibling window is focused.
+    }
+    return false;
+  };
+
+  const refreshSiblingFocus = async () => {
+    const sibling = await checkSiblingWindowFocused();
+    if (disposed) {
+      return;
+    }
+    // Always re-sync once the check resolves: losing window focus is itself
+    // a context change (element focus no longer applies), so even an
+    // unchanged sibling flag needs a sync pass.
+    siblingWindowFocused = sibling;
+    sync();
+    // While this window stays blurred, keep polling so the registrations
+    // follow sibling windows that open or close while another app is in the
+    // foreground (e.g. the file viewer closes while the app is backgrounded).
+    if (!appFocused && siblingCheckTimer === undefined) {
+      siblingCheckTimer = window.setInterval(() => {
+        void refreshSiblingFocus();
+      }, SIBLING_FOCUS_POLL_INTERVAL_MS);
+    }
+  };
+
+  const stopSiblingPolling = () => {
+    if (siblingCheckTimer !== undefined) {
+      window.clearInterval(siblingCheckTimer);
+      siblingCheckTimer = undefined;
+    }
+  };
+
+  const applyWindowFocus = (focused: boolean) => {
+    appFocused = focused;
+    if (focused) {
+      stopSiblingPolling();
+      siblingWindowFocused = false;
+      sync();
+      return;
+    }
+    // This window lost focus: element focus no longer applies, so apply the
+    // "blurred" semantics (full registration — background operation) right
+    // away, then refine with an async sibling check. If a sibling window of
+    // this app owns the keyboard, everything gets unregistered on that check.
+    sync();
+    void refreshSiblingFocus();
+  };
 
   const desiredAccelerators = (): Map<string, KeyboardShortcut> => {
     const byAccelerator = new Map<string, KeyboardShortcut>();
@@ -398,6 +476,13 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       if (!byAccelerator.has(accel)) {
         byAccelerator.set(accel, shortcut);
       }
+    }
+
+    if (!appFocused && siblingWindowFocused) {
+      // A sibling window of this app owns the keyboard — unregister
+      // everything here so shortcuts like Ctrl+W don't act on this window
+      // while the user is interacting with the other one.
+      return new Map();
     }
 
     const focus = appFocused ? currentFocusContext() : 'app';
@@ -449,18 +534,9 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     }
   };
 
-  const handleWindowBlur = () => {
-    appFocused = false;
-    sync();
-  };
-  const handleWindowFocus = () => {
-    appFocused = true;
-    sync();
-  };
-  const handleVisibilityChange = () => {
-    appFocused = !document.hidden;
-    sync();
-  };
+  const handleWindowBlur = () => applyWindowFocus(false);
+  const handleWindowFocus = () => applyWindowFocus(true);
+  const handleVisibilityChange = () => applyWindowFocus(!document.hidden);
 
   window.addEventListener('blur', handleWindowBlur);
   window.addEventListener('focus', handleWindowFocus);
@@ -472,8 +548,7 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   try {
     getCurrentWindow()
       .onFocusChanged(({ payload }) => {
-        appFocused = payload;
-        sync();
+        applyWindowFocus(payload);
       })
       .then((unlisten) => {
         unlistenFocusChanged = unlisten;
@@ -489,6 +564,8 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   document.addEventListener('focusout', sync);
 
   return () => {
+    disposed = true;
+    stopSiblingPolling();
     document.removeEventListener('focusin', sync);
     document.removeEventListener('focusout', sync);
     window.removeEventListener('blur', handleWindowBlur);

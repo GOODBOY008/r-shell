@@ -1242,7 +1242,10 @@
     "downloadAndOpen": "下载并用本地应用打开",
     "downloading": "正在下载…",
     "openedWithOs": "{{fileName}} 已用本地应用打开",
-    "failedToOpenWithOs": "无法用本地应用打开文件"
+    "failedToOpenWithOs": "无法用本地应用打开文件",
+    "unsavedTitle": "未保存的更改",
+    "unsavedDescription": "关闭前要保存对“{{fileName}}”的更改吗？",
+    "discardAndClose": "不保存"
   },
   "desktopViewer": {
     "clipboardAccessDenied": "剪贴板访问被拒绝",
