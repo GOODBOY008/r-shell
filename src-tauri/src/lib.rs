@@ -368,6 +368,27 @@ pub fn run() {
             // dirty editor is discarded during quit confirmation).
             if matches!(event, tauri::WindowEvent::Destroyed { .. }) {
                 quit_guard::window_destroyed(window.app_handle(), window.label());
+
+                // Global shortcuts are registered from the main window's JS
+                // runtime; when that webview is torn down with the window,
+                // its unregisterAll cleanup never runs. The OS hotkeys would
+                // stay registered with handlers pointing at the dead webview
+                // (keystrokes swallowed while the app runs window-less), and
+                // the window recreated by RunEvent::Reopen would then fail
+                // to re-register every accelerator ("already registered"
+                // toast). Unregister everything here so the recreated
+                // window starts from a clean slate. Only the main window
+                // registers global shortcuts today.
+                if window.label() == "main" {
+                    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                    if let Err(e) =
+                        window.app_handle().global_shortcut().unregister_all()
+                    {
+                        tracing::warn!(
+                            "Failed to unregister global shortcuts on window destroy: {e}"
+                        );
+                    }
+                }
             }
         })
         .manage(connection_manager)
@@ -451,8 +472,43 @@ pub fn run() {
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            // The last window was destroyed. On macOS the app keeps running
+            // window-less (Terminal.app / VS Code behaviour: the red X and
+            // Ctrl+W-with-no-tabs close the window, quitting goes through
+            // the quit_app menu item / quit_guard). On Windows/Linux the
+            // process exits with the last window per platform convention.
+            // code: None means user-initiated window closure — explicit
+            // exits (quit_guard app.exit(0), updater restart) arrive as
+            // code: Some(_) and fall through unprevented.
+            tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+                #[cfg(target_os = "macos")]
+                api.prevent_exit();
+                #[cfg(not(target_os = "macos"))]
+                let _ = api;
+            }
+            // Dock icon clicked while no window is visible (macOS): recreate
+            // the main window from its tauri.conf.json definition. The
+            // window-state plugin restores size/position when the window
+            // becomes ready (its cache keeps entries across destroy/create).
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => {
+                if app.get_webview_window("main").is_none() {
+                    if let Some(window_config) = app.config().app.windows.first() {
+                        let builder = tauri::WebviewWindowBuilder::from_config(app, window_config);
+                        if let Err(e) = builder.map_err(tauri::Error::from).and_then(|b| b.build()) {
+                            tracing::warn!("Failed to recreate main window: {e}");
+                        }
+                    }
+                }
+            }
+            _ => {}
+        });
 }
 
 #[cfg(test)]
