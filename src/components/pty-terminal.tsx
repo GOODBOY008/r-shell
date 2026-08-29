@@ -1283,9 +1283,30 @@ export function PtyTerminal({
     searchStateRef.current = state;
   }, []);
 
+  // Quick Commands panel: type snippet text into this terminal. Uses
+  // term.paste() so multi-line commands get the same newline normalization
+  // and bracketed-paste wrapping as a real clipboard paste; `execute`
+  // appends Enter so the command runs immediately.
+  const handleSendText = React.useCallback((text: string, execute: boolean) => {
+    if (!text) return;
+    const term = xtermRef.current;
+    const ws = wsRef.current;
+    if (!term || !ws || ws.readyState !== WebSocket.OPEN) {
+      toast.error(i18n.t('ptyTerminal.terminalNotConnected'));
+      return;
+    }
+    // Flush a pending Xshell-style Ctrl+A prefix so the buffered \x01 reaches
+    // the remote instead of being swallowed by (or merged into) the snippet.
+    flushPrefixCtrlA();
+    term.paste(text);
+    if (execute) {
+      sendInputToPty('\r');
+    }
+  }, [flushPrefixCtrlA, sendInputToPty]);
+
   React.useEffect(() => {
     const handleTerminalCommand = (event: Event) => {
-      const { tabId, command } = (event as CustomEvent<TerminalCommandDetail>).detail;
+      const { tabId, command, text, execute } = (event as CustomEvent<TerminalCommandDetail>).detail;
       if (tabId !== connectionId) return;
 
       switch (command) {
@@ -1296,12 +1317,13 @@ export function PtyTerminal({
         case 'find-next': handleFindNext(); break;
         case 'find-previous': handleFindPrevious(); break;
         case 'clear-screen': handleClear(); break;
+        case 'send-text': handleSendText(text ?? '', execute !== false); break;
       }
     };
 
     window.addEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
     return () => window.removeEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
-  }, [connectionId, handleClear, handleCopy, handleFindNext, handleFindPrevious, handlePaste, handleSearch, handleSelectAll]);
+  }, [connectionId, handleClear, handleCopy, handleFindNext, handleFindPrevious, handlePaste, handleSearch, handleSelectAll, handleSendText]);
 
   const handleReconnect = React.useCallback(() => {
     if (onReconnectTab) {

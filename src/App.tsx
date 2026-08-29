@@ -12,6 +12,7 @@ import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
+import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
@@ -2092,6 +2093,7 @@ function AppContent() {
                   <TabsList className="inline-flex w-auto mx-1 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
+                    <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
@@ -2115,6 +2117,14 @@ function AppContent() {
                           />
                         </ErrorBoundary>
                       ) : null}
+                    </TabsContent>
+
+                    <TabsContent value="commands" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      <div className="h-full overflow-hidden px-1 py-2">
+                        <ErrorBoundary label={t('app.quickCommands')}>
+                          <QuickCommandsPanel activeTerminalId={activeTerminalId} />
+                        </ErrorBoundary>
+                      </div>
                     </TabsContent>
                   </div>
                 </Tabs>

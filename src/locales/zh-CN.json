@@ -89,6 +89,7 @@
     "noEditorHandler": "无法打开 {{name}}：没有可用的编辑器",
     "monitor": "监视器",
     "logs": "日志",
+    "quickCommands": "命令",
     "systemMonitor": "系统监视器",
     "logMonitor": "日志监视器",
     "quickConnected": "快速连接成功",
@@ -1276,5 +1277,58 @@
     "noConnection": "无活动连接，连接后即可查看网络统计。",
     "comingSoon": "高级网络监控功能即将推出",
     "disabledNotice": "网络接口和活动连接监控当前已禁用。请查看「监控」选项卡中的网络使用率和网络延迟图表以获取当前网络指标。"
+  },
+  "quickCommands": {
+    "title": "快捷命令",
+    "searchPlaceholder": "搜索命令片段…",
+    "newSnippet": "新建命令片段",
+    "noActiveTerminal": "没有活动终端——请先连接主机才能执行",
+    "emptyTitle": "还没有命令片段",
+    "emptyDescription": "保存常用命令，一键发送到当前终端执行。",
+    "emptyCreate": "创建命令片段",
+    "emptySearch": "没有匹配的命令片段",
+    "snippetCount_one": "{{count}} 个命令片段",
+    "snippetCount_other": "{{count}} 个命令片段",
+    "sort": {
+      "ariaLabel": "排序方式",
+      "mostUsed": "最常用",
+      "recentlyUsed": "最近使用",
+      "name": "按名称"
+    },
+    "actions": {
+      "run": "在当前终端执行",
+      "insert": "仅输入不执行",
+      "copy": "复制到剪贴板",
+      "edit": "编辑",
+      "delete": "删除"
+    },
+    "deleteConfirm": {
+      "title": "删除命令片段",
+      "description": "确定删除“{{name}}”吗？此操作无法撤销。"
+    },
+    "dialog": {
+      "newTitle": "新建命令片段",
+      "editTitle": "编辑命令片段",
+      "name": "名称",
+      "namePlaceholder": "例如：重启 nginx",
+      "nameRequired": "请输入名称",
+      "command": "命令",
+      "commandPlaceholder": "例如：sudo systemctl restart nginx",
+      "commandRequired": "请输入命令",
+      "commandHint": "以粘贴方式发送到终端，换行会被保留。",
+      "description": "描述",
+      "descriptionPlaceholder": "可选备注",
+      "tags": "标签",
+      "tagsPlaceholder": "逗号分隔，例如 docker, logs",
+      "saveFailed": "保存命令片段失败"
+    },
+    "toast": {
+      "noActiveTerminal": "没有活动终端",
+      "copied": "已复制到剪贴板",
+      "copyFailed": "复制到剪贴板失败",
+      "created": "命令片段已创建",
+      "updated": "命令片段已更新",
+      "deleted": "命令片段已删除"
+    }
   }
 }
