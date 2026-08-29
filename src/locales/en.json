@@ -89,6 +89,7 @@
     "noEditorHandler": "Cannot open {{name}}: no editor handler available",
     "monitor": "Monitor",
     "logs": "Logs",
+    "quickCommands": "Commands",
     "systemMonitor": "System Monitor",
     "logMonitor": "Log Monitor",
     "quickConnected": "Quick Connected",
@@ -1276,5 +1277,58 @@
     "noConnection": "No active connection. Connect to view network statistics.",
     "comingSoon": "Advanced network monitoring features coming soon",
     "disabledNotice": "Network Interfaces and Active Connections monitoring is currently disabled. Check the Network Usage and Network Latency charts in the Monitor tab for current network metrics."
+  },
+  "quickCommands": {
+    "title": "Quick Commands",
+    "searchPlaceholder": "Search snippets…",
+    "newSnippet": "New snippet",
+    "noActiveTerminal": "No active terminal — connect to a host to run snippets",
+    "emptyTitle": "No snippets yet",
+    "emptyDescription": "Save frequently used commands and run them in the active terminal with one click.",
+    "emptyCreate": "Create snippet",
+    "emptySearch": "No snippets match your search",
+    "snippetCount_one": "{{count}} snippet",
+    "snippetCount_other": "{{count}} snippets",
+    "sort": {
+      "ariaLabel": "Sort snippets",
+      "mostUsed": "Most used",
+      "recentlyUsed": "Recently used",
+      "name": "Name"
+    },
+    "actions": {
+      "run": "Run in active terminal",
+      "insert": "Insert without running",
+      "copy": "Copy to clipboard",
+      "edit": "Edit",
+      "delete": "Delete"
+    },
+    "deleteConfirm": {
+      "title": "Delete snippet",
+      "description": "Delete \"{{name}}\"? This cannot be undone."
+    },
+    "dialog": {
+      "newTitle": "New snippet",
+      "editTitle": "Edit snippet",
+      "name": "Name",
+      "namePlaceholder": "e.g. Restart nginx",
+      "nameRequired": "Name is required",
+      "command": "Command",
+      "commandPlaceholder": "e.g. sudo systemctl restart nginx",
+      "commandRequired": "Command is required",
+      "commandHint": "Sent to the terminal as a paste; line breaks are preserved.",
+      "description": "Description",
+      "descriptionPlaceholder": "Optional note",
+      "tags": "Tags",
+      "tagsPlaceholder": "Comma-separated, e.g. docker, logs",
+      "saveFailed": "Could not save the snippet"
+    },
+    "toast": {
+      "noActiveTerminal": "No active terminal",
+      "copied": "Copied to clipboard",
+      "copyFailed": "Failed to copy to clipboard",
+      "created": "Snippet created",
+      "updated": "Snippet updated",
+      "deleted": "Snippet deleted"
+    }
   }
 }
