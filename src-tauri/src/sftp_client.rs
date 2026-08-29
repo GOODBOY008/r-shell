@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::ssh::Client;
+use crate::ssh::{Client, TunnelConfig};
 
 /// Configuration for a standalone SFTP connection (SSH transport, no PTY).
 #[derive(Debug, Clone, Deserialize)]
@@ -16,6 +16,8 @@ pub struct SftpConfig {
     pub port: u16,
     pub username: String,
     pub auth_method: SftpAuthMethod,
+    /// Optional SSH jump host (bastion) to route the connection through.
+    pub tunnel: Option<TunnelConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -128,28 +130,59 @@ impl StandaloneSftpClient {
         };
         let connection_timeout = Duration::from_secs(10);
 
-        let mut ssh_session = tokio::time::timeout(
-            connection_timeout,
-            client::connect(
-                Arc::new(ssh_config),
-                (&config.host[..], config.port),
-                Client,
-            ),
-        )
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "SFTP connection timed out after 10 seconds. Please check the host and network."
-            )
-        })?
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to connect to {}:{}: {}",
-                config.host,
+        let mut ssh_session = if let Some(tunnel) = &config.tunnel {
+            // Route through an SSH jump host, then run the target handshake
+            // over the tunneled channel.
+            let stream = crate::ssh::connect_via_ssh_tunnel(
+                tunnel,
+                &config.host,
                 config.port,
-                e
+                connection_timeout,
             )
-        })?;
+            .await
+            .map_err(|e| anyhow::anyhow!("SFTP SSH tunnel failed: {e}"))?;
+            tokio::time::timeout(
+                connection_timeout,
+                client::connect_stream(Arc::new(ssh_config), stream, Client),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "SFTP connection timed out after 10 seconds. Please check the host and network."
+                )
+            })?
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to connect to {}:{}: {}",
+                    config.host,
+                    config.port,
+                    e
+                )
+            })?
+        } else {
+            tokio::time::timeout(
+                connection_timeout,
+                client::connect(
+                    Arc::new(ssh_config),
+                    (&config.host[..], config.port),
+                    Client,
+                ),
+            )
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "SFTP connection timed out after 10 seconds. Please check the host and network."
+                )
+            })?
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to connect to {}:{}: {}",
+                    config.host,
+                    config.port,
+                    e
+                )
+            })?
+        };
 
         // Authenticate
         let authenticated = match &config.auth_method {
