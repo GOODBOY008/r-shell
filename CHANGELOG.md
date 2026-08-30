@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.0] - 2026-08-30
+
+### 🚀 R-Shell 2.9 — SSH Jump Hosts, Quick Commands & Terminal Stability
+
+This release adds SSH tunneling through jump hosts and a Quick Commands / Snippets panel in the right sidebar, replaces DOM keydown shortcuts with OS-level global shortcuts, and adds launch-at-login. The terminal gets a series of stability fixes: PTY resize sync with xterm, recovery of SSH-dead sessions, WebGL rendering recovery, bounded output flow control, and deadlock fixes. Window management gains layout persistence and Ctrl+W behavior, and the file browser supports multi-select and batch delete.
+
+### New Features 🎉
+
+- feat(ssh-tunnel): support SSH tunnel (jump host) when creating a connection by @GOODBOY008 in #79
+- feat(quick-commands): Quick Commands / Snippets panel in the right sidebar by @GOODBOY008 in #120
+- feat(window): Ctrl+W with no tabs closes the main window; app stays running on macOS by @GOODBOY008 in #119
+- feat(window): window layout persistence + positioner-centered popups + native image picker by @GOODBOY008 in #111
+- feat(shortcuts): replace DOM keydown shortcuts with tauri-plugin-global-shortcut by @GOODBOY008 in #110
+- feat(settings): launch at login via tauri-plugin-autostart by @GOODBOY008 in #109
+- feat(terminal): per-subsystem session health tracking by @GOODBOY008 in #108
+- feat(terminal): park PTYs through transient WebSocket drops with reattach by @GOODBOY008 in #107
+- feat(terminal): add Xshell-style Ctrl+A+D session detach with background keep-alive by @GOODBOY008 in #76
+- feat(i18n): localize remaining hardcoded user-facing strings by @sunxiaobin89 in #101
+
+### Bug Fixes 🐛
+
+- fix(terminal): keep PTY size in sync with xterm to prevent silent display/input divergence by @GOODBOY008 in #121
+- fix(file-viewer): focus-aware Ctrl+W, single-window reuse and persistent editors by @GOODBOY008 in #119
+- fix(terminal): deadlock on new PTY connections after first session idles by @GOODBOY008 in #118
+- fix(terminal): lazy WebGL per visible pane + deterministic activation repair by @GOODBOY008 in #105
+- fix(terminal): recover SSH-dead sessions via typed errors and auto re-auth by @GOODBOY008 in #104
+- fix(terminal): keep PTY output flow control bounded by @htazq in #66
+- fix(restore): cancel session restore when the 60s overall timeout fires by @sunxiaobin89 in #99
+- fix(file-browser): support intuitive multi-select and batch delete by @sunxiaobin89 in #96
+
+### Performance Improvements 🚀
+
+- perf(terminal): event-driven PTY reads and binary input fast path by @GOODBOY008 in #106
+
+### Contributors
+
+Thanks to [@htazq](https://github.com/htazq), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.8.0...v2.9.0
+
 ## [2.8.0] - 2026-08-17
 
 ### 🌐 R-Shell 2.8 — Close All Tabs, Internationalization & Connection Fixes
