@@ -612,6 +612,41 @@ impl ConnectionManager {
             .map_err(|_| anyhow::anyhow!("PTY resize channel closed"))
     }
 
+    /// Resize PTY, tolerating a session that is still being (re)started.
+    ///
+    /// `StartPty` inserts the session only after the SSH channel setup (which
+    /// includes a shell probe that can take seconds), so a `Resize` racing
+    /// that window used to fail with "PTY connection not found" — the size was
+    /// lost permanently and the remote shell kept redrawing wrapped lines with
+    /// a stale width model, silently hiding characters from the display while
+    /// they remained in the input buffer (issue #88). While the session is
+    /// absent we retry briefly; once it appears the resize is applied. A
+    /// session that never appears still fails after the bounded window.
+    pub async fn resize_pty_with_retry(
+        &self,
+        connection_id: &str,
+        cols: u32,
+        rows: u32,
+    ) -> Result<()> {
+        const RETRY_INTERVAL: Duration = Duration::from_millis(100);
+        const RETRY_BUDGET: u32 = 12;
+
+        for attempt in 0..RETRY_BUDGET {
+            match self.resize_pty(connection_id, cols, rows).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let session_absent =
+                        !self.pty_sessions.read().await.contains_key(connection_id);
+                    if !session_absent || attempt + 1 >= RETRY_BUDGET {
+                        return Err(e);
+                    }
+                    tokio::time::sleep(RETRY_INTERVAL).await;
+                }
+            }
+        }
+        unreachable!("retry loop always returns within RETRY_BUDGET attempts")
+    }
+
     // ===== Standalone SFTP Connection Management =====
 
     pub async fn create_sftp_connection(
@@ -1077,6 +1112,71 @@ mod tests {
         assert!(matches!(err, PtyStartError::SshSessionDead(_)));
     }
 
+    // ===== Resize retry (issue #88: resize racing session start) =====
+
+    fn fake_pty_session(resize_tx: mpsc::Sender<(u32, u32)>) -> PtySession {
+        let (input_tx, _input_rx) = mpsc::channel::<Vec<u8>>(1);
+        let (_output_tx, output_rx) = mpsc::channel::<Vec<u8>>(8);
+        PtySession {
+            input_tx,
+            output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
+            // ChannelId's field is private; tests can't construct it safely.
+            channel_id: unsafe { std::mem::transmute(0u32) },
+            resize_tx,
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resize_pty_with_retry_tolerates_session_starting_late() {
+        let mgr = Arc::new(ConnectionManager::new());
+
+        // The session appears 300 ms later — simulating the StartPty SSH
+        // channel setup window during which `pty_sessions` has no entry yet.
+        let late_mgr = mgr.clone();
+        let (resize_tx, mut resize_rx) = mpsc::channel::<(u32, u32)>(16);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let mut sessions = late_mgr.pty_sessions.write().await;
+            sessions.insert("late-1".to_string(), Arc::new(fake_pty_session(resize_tx)));
+        });
+
+        let start = std::time::Instant::now();
+        mgr.resize_pty_with_retry("late-1", 120, 40).await.unwrap();
+        assert!(start.elapsed() >= Duration::from_millis(300));
+        let (cols, rows) = resize_rx.recv().await.unwrap();
+        assert_eq!((cols, rows), (120, 40));
+    }
+
+    #[tokio::test]
+    async fn test_resize_pty_with_retry_immediate_when_session_present() {
+        let mgr = ConnectionManager::new();
+        let (resize_tx, mut resize_rx) = mpsc::channel::<(u32, u32)>(16);
+        {
+            let mut sessions = mgr.pty_sessions.write().await;
+            sessions.insert("live-1".to_string(), Arc::new(fake_pty_session(resize_tx)));
+        }
+
+        let start = std::time::Instant::now();
+        mgr.resize_pty_with_retry("live-1", 100, 30).await.unwrap();
+        assert!(start.elapsed() < Duration::from_millis(100));
+        let (cols, rows) = resize_rx.recv().await.unwrap();
+        assert_eq!((cols, rows), (100, 30));
+    }
+
+    #[tokio::test]
+    async fn test_resize_pty_with_retry_bounded_when_session_never_appears() {
+        let mgr = ConnectionManager::new();
+
+        let start = std::time::Instant::now();
+        assert!(mgr.resize_pty_with_retry("ghost", 80, 24).await.is_err());
+        let elapsed = start.elapsed();
+        // Waited out the bounded retry budget instead of failing instantly or
+        // hanging forever.
+        assert!(elapsed >= Duration::from_millis(1000));
+        assert!(elapsed < Duration::from_secs(5));
+    }
+
     #[tokio::test]
     async fn test_evict_dead_connection_guarded_by_arc_identity() {
         let mgr = ConnectionManager::new();
@@ -1155,7 +1255,10 @@ mod tests {
         }
         assert!(mgr.has_detached_session("det-1").await);
         assert!(!mgr.has_detached_session("det-2").await);
-        assert_eq!(mgr.list_detached_sessions().await, vec!["det-1".to_string()]);
+        assert_eq!(
+            mgr.list_detached_sessions().await,
+            vec!["det-1".to_string()]
+        );
     }
 
     #[tokio::test]

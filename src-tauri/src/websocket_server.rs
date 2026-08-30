@@ -740,8 +740,12 @@ impl WebSocketServer {
                 rows,
             } => {
                 tracing::info!("Resizing terminal {}: {}x{}", connection_id, cols, rows);
+                // Retry while the session is still being (re)started — a resize
+                // racing StartPty's channel setup must not be lost, or the
+                // remote shell redraws wrapped lines with a stale width and the
+                // display diverges from the input buffer (issue #88).
                 self.connection_manager
-                    .resize_pty(&connection_id, cols, rows)
+                    .resize_pty_with_retry(&connection_id, cols, rows)
                     .await?;
                 let response = WsMessage::Success {
                     message: format!("Terminal resized: {}x{}", cols, rows),
