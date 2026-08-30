@@ -568,6 +568,17 @@ export function PtyTerminal({
     term.write('\r\n');
 
     let isRunning = true;
+    // Last dims known to have been delivered to the PTY. The onResize handler
+    // only forwards actual changes, so a resize must always update this —
+    // otherwise every subsequent fit would re-send the same size (issue #88).
+    let lastSentCols = term.cols;
+    let lastSentRows = term.rows;
+    // A resize observed while the WebSocket was not OPEN (reconnect backoff,
+    // initial CONNECTING window). It must be flushed on the next open instead
+    // of being dropped — a PTY left at the old size makes bash redraw wrapped
+    // lines with a stale width model and the display silently loses characters
+    // while the remote input buffer keeps them (issue #88).
+    let pendingResize: { cols: number; rows: number } | null = null;
     // Tracks whether a PTY session has been successfully established in this
     // effect run. Reset to false when we initiate an auto-reconnect after a
     // drop so the reconnect loop can function normally.
@@ -621,6 +632,10 @@ export function PtyTerminal({
 
     // Connect to WebSocket server
     const connectWebSocket = async () => {
+      // Dims carried by the StartPty currently in flight — PtyStarted compares
+      // them against the terminal's dims to detect a fit that raced the
+      // handshake and re-syncs the PTY (issue #88).
+      let startPtyDims: { cols: number; rows: number } | null = null;
       // CRITICAL: Wait for terminal to be properly sized before starting PTY
       await waitForProperSize();
       
@@ -653,16 +668,39 @@ export function PtyTerminal({
       ws.onopen = () => {
         console.log(`[PTY Terminal] [${connectionId}] WebSocket connected`);
         term.writeln(`\x1b[32m${i18n.t('ptyTerminal.webSocketConnected')}\x1b[0m`);
-        
-        // Start PTY session
+
+        // Start PTY session.
+        // Capture the dims the PTY is created with — PtyStarted compares them
+        // against the current terminal dims to detect a fit that raced this
+        // handshake (issue #88).
+        const startCols = term.cols;
+        const startRows = term.rows;
+        startPtyDims = { cols: startCols, rows: startRows };
         const startMsg = {
           type: 'StartPty',
           connection_id: connectionId,
-          cols: term.cols,
-          rows: term.rows,
+          cols: startCols,
+          rows: startRows,
         };
-        console.log(`[PTY Terminal] [${connectionId}] Starting PTY connection with ${term.cols}x${term.rows}`);
+        console.log(`[PTY Terminal] [${connectionId}] Starting PTY connection with ${startCols}x${startRows}`);
         ws.send(JSON.stringify(startMsg));
+
+        // Flush a resize that was observed while this socket was not OPEN yet
+        // (issue #88): dropping it would leave the PTY at a stale size, and
+        // bash keeps redrawing wrapped lines with the old width — characters
+        // then silently disappear from the display while they remain in the
+        // remote input buffer. When the pending dims match the StartPty dims
+        // there is nothing to do — StartPty already created the session at
+        // that size.
+        if (pendingResize) {
+          const { cols, rows } = pendingResize;
+          pendingResize = null;
+          if (cols !== startCols || rows !== startRows) {
+            ws.send(JSON.stringify({ type: 'Resize', connection_id: connectionId, cols, rows }));
+          }
+          lastSentCols = cols;
+          lastSentRows = rows;
+        }
       };
 
       // =========================================================================
@@ -784,6 +822,33 @@ export function PtyTerminal({
                 // Ongoing credits are returned by the flush callback above.
                 const INITIAL_WINDOW = 2;
                 grantCredits(INITIAL_WINDOW);
+                // Issue #88 self-heal: if the terminal was refitted while the
+                // StartPty handshake was in flight (backend applies StartPty
+                // only after the SSH channel setup, which includes a shell
+                // probe), the PTY was created with stale dims. Re-sync now —
+                // otherwise bash redraws wrapped lines with the stale width
+                // and the display diverges from the remote input buffer.
+                // The lastSent guard skips resizes that were already delivered
+                // (directly or via the pending-resize flush) so we never emit
+                // a redundant SIGWINCH here.
+                const needsResizeSync =
+                  startPtyDims !== null &&
+                  (term.cols !== startPtyDims.cols || term.rows !== startPtyDims.rows) &&
+                  (term.cols !== lastSentCols || term.rows !== lastSentRows);
+                if (needsResizeSync) {
+                  const ws = wsRef.current;
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                      type: 'Resize',
+                      connection_id: connectionId,
+                      cols: term.cols,
+                      rows: term.rows,
+                    }));
+                    lastSentCols = term.cols;
+                    lastSentRows = term.rows;
+                  }
+                }
+                startPtyDims = null;
                 if (msg.reattached) {
                   // The backend re-attached a parked session — the same
                   // remote shell continues (transient WebSocket drop).
@@ -971,16 +1036,17 @@ export function PtyTerminal({
     // identical resize signals when the layout is settling (e.g. after closing
     // an adjacent terminal group). Each redundant SIGWINCH causes the remote
     // shell to redraw its prompt, producing the repeated "root@host:~#" lines.
-    let lastSentCols = term.cols;
-    let lastSentRows = term.rows;
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       if (cols === lastSentCols && rows === lastSentRows) return;
-      lastSentCols = cols;
-      lastSentRows = rows;
       checkScrollability(); // row count changed — re-evaluate scrollability
 
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
+        lastSentCols = cols;
+        lastSentRows = rows;
+        // A direct send supersedes anything stashed for the next open — the
+        // newest dims have already been delivered.
+        pendingResize = null;
         const resizeMsg = {
           type: 'Resize',
           connection_id: connectionId,
@@ -989,6 +1055,14 @@ export function PtyTerminal({
         };
         ws.send(JSON.stringify(resizeMsg));
         console.log(`[PTY Terminal] Terminal resized to ${cols}x${rows}`);
+      } else {
+        // The socket is down (reconnect backoff, CONNECTING window). Stash the
+        // dims — `ws.onopen` flushes them after StartPty. Updating the
+        // lastSent bookkeeping here would make the resize unrecoverable: the
+        // PTY keeps the old size and bash redraws wrapped lines with a stale
+        // width model, so characters silently vanish from the display while
+        // they remain in the remote input buffer (issue #88).
+        pendingResize = { cols, rows };
       }
     });
 

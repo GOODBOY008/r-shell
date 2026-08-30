@@ -333,6 +333,54 @@ mod shell_integration_tests {
 
     #[tokio::test]
     #[ignore]
+    async fn docker_ssh_resize_propagates_to_remote_shell() {
+        // Issue #88: the PTY size must track the terminal's size at all
+        // times. A resize that never reaches the remote tty leaves bash
+        // redrawing wrapped command lines with a stale width model — the
+        // display then silently diverges from the remote input buffer (the
+        // user sees one command but executes another). This guards the
+        // end-to-end resize path: window_change must reach the remote shell
+        // and `stty size` must report the new geometry.
+        let (host, port) = test_server_endpoint();
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "testpass".to_string(),
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                tunnel: None,
+            })
+            .await
+            .expect("connect to Docker SSH server");
+
+        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let _ = read_until(&pty, b"\x1b\\").await; // first prompt is up
+
+        pty.resize_tx
+            .send((120, 40))
+            .await
+            .expect("send resize request");
+
+        // `stty size` prints "<rows> <cols>" — expect the new geometry.
+        let mut input = b"stty size".to_vec();
+        input.push(b'\n');
+        pty.input_tx.send(input).await.expect("send stty command");
+        let output = read_until(&pty, b"40 120").await;
+        assert!(
+            String::from_utf8_lossy(&output).contains("40 120"),
+            "remote tty should report the resized geometry"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
     async fn docker_ssh_reports_cwd_and_lists_sftp_directories() {
         let mut client = SshClient::new();
         client
