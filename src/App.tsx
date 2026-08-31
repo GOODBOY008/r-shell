@@ -68,6 +68,12 @@ interface ConnectionNode {
   isExpanded?: boolean;
 }
 
+/**
+ * Backoff delays (ms) for the automatic full-reconnect retry (`handleReconnect`).
+ * Module-scope so the callback's dependency identity stays stable.
+ */
+const FULL_RECONNECT_BACKOFF_MS = [2000, 4000, 8000, 16000, 30000];
+
 function AppContent() {
   const { t } = useTranslation();
   const [selectedConnection, setSelectedConnection] = useState<ConnectionNode | null>(null);
@@ -922,13 +928,49 @@ function AppContent() {
     }
   }, [allTabs, state.activeGroupId, dispatch, t]);
 
+  // Automatic full-reconnect retry
+  //
+  // A single-shot ssh_connect (the backend uses a 3s connect timeout) can fail
+  // right after a network blip — previously the tab then sat in a dead
+  // 'disconnected' state until the user clicked Reconnect. Retry with bounded
+  // exponential backoff so a transient outage heals on its own; permanent
+  // failures (bad credentials) skip retrying. Retry state is keyed by tab id
+  // and survives component remounts of the terminal (RECONNECT_TAB).
+  const reconnectRetryState = useRef<Record<string, { failures: number; timer?: ReturnType<typeof setTimeout> }>>({});
+  // Reconnect retry timers re-invoke the callback via this ref: the callback's
+  // own body can't reference `handleReconnect` directly (TDZ before the const
+  // binding exists).
+  const handleReconnectRef = useRef<((tabId: string) => Promise<void>) | null>(null);
+  const clearReconnectRetry = useCallback((tabId: string) => {
+    const entry = reconnectRetryState.current[tabId];
+    if (entry?.timer) clearTimeout(entry.timer);
+    const next = { ...reconnectRetryState.current };
+    delete next[tabId];
+    reconnectRetryState.current = next;
+  }, []);
+
   const handleReconnect = useCallback(async (tabId: string) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
-    if (!tabToReconnect) return;
+    if (!tabToReconnect) {
+      clearReconnectRetry(tabId);
+      return;
+    }
+
+    // A pending retry timer is superseded by this invocation (manual click or
+    // timer re-entry); keep the failure count so the backoff stays bounded.
+    const pendingRetry = reconnectRetryState.current[tabId];
+    if (pendingRetry?.timer) {
+      clearTimeout(pendingRetry.timer);
+      reconnectRetryState.current = {
+        ...reconnectRetryState.current,
+        [tabId]: { failures: pendingRetry.failures },
+      };
+    }
 
     const originalConnectionId = tabToReconnect.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
+      clearReconnectRetry(tabId);
       toast.error(t('app.cannotReconnect'), {
         description: t('app.cannotReconnectDesc'),
       });
@@ -946,6 +988,7 @@ function AppContent() {
         : !!connectionData.privateKeyPath);
 
     if (!hasCredentials) {
+      clearReconnectRetry(tabId);
       toast.error(t('app.cannotReconnect'), {
         description: t('app.noCredentialsDesc'),
       });
@@ -1012,6 +1055,7 @@ function AppContent() {
         );
 
         if (result.success) {
+          clearReconnectRetry(tabId);
           if (!tabToReconnect.originalConnectionId) {
             ConnectionStorageManager.updateLastConnected(originalConnectionId);
           }
@@ -1022,20 +1066,43 @@ function AppContent() {
             description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
           });
         } else {
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error(t('app.reconnectionFailed'), {
-            description: result.error || t('app.reconnectionFailedDesc'),
-          });
+          // A transient network outage can outlast one connect attempt: keep
+          // retrying with bounded backoff instead of dropping to a dead
+          // 'disconnected' tab. Permanent auth failures are not retried.
+          const permanent = /authentication|credential|password/i.test(result.error || '');
+          const failures = (reconnectRetryState.current[tabId]?.failures ?? 0) + 1;
+          if (!permanent && failures <= FULL_RECONNECT_BACKOFF_MS.length) {
+            const delay = FULL_RECONNECT_BACKOFF_MS[failures - 1];
+            const timer = setTimeout(() => {
+              void handleReconnectRef.current?.(tabId);
+            }, delay);
+            reconnectRetryState.current = {
+              ...reconnectRetryState.current,
+              [tabId]: { failures, timer },
+            };
+            // Stay 'connecting' — the next attempt is already scheduled.
+          } else {
+            clearReconnectRetry(tabId);
+            dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+            toast.error(t('app.reconnectionFailed'), {
+              description: result.error || t('app.reconnectionFailedDesc'),
+            });
+          }
         }
       }
     } catch (error) {
       console.error('Error reconnecting:', error);
+      clearReconnectRetry(tabId);
       dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
       toast.error(t('app.reconnectionError'), {
         description: error instanceof Error ? error.message : t('app.reconnectionErrorDesc'),
       });
     }
-  }, [allTabs, dispatch, t]);
+  }, [allTabs, dispatch, t, clearReconnectRetry]);
+
+  useEffect(() => {
+    handleReconnectRef.current = handleReconnect;
+  }, [handleReconnect]);
 
   // Handler: Xshell-style detach (Ctrl+A+D). The PtyTerminal already sent the
   // Detach WS message to the backend; here we remove the tab and record the
