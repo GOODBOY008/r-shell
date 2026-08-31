@@ -8,6 +8,9 @@ use crate::vnc_client::VncClient;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+#[cfg(test)]
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -327,11 +330,24 @@ impl ConnectionManager {
 
     /// Remove a detached session from the registry (without cancelling the
     /// session itself), stopping its background drain task.
+    ///
+    /// A session whose PTY output channel has closed (`dead`) is torn down
+    /// instead of returned: re-attaching it would immediately error again and
+    /// lock the tab into an endless reconnect → reattach → error loop (the
+    /// re-park on each WS drop keeps refreshing the 5-minute expiry timer, so
+    /// the zombie never self-expires). Returning `None` lets
+    /// `start_pty_connection` fall through to the SSH session, which reports
+    /// `SshSessionDead` and lets the frontend escalate to a full reconnect.
     async fn take_detached_session(&self, connection_id: &str) -> Option<DetachedSession> {
         let mut detached = self.detached_sessions.write().await;
         let session = detached.remove(connection_id)?;
         // Stop the drain so the re-attached reader gets the output stream.
         session.drain_cancel.cancel();
+        if session.session.dead.load(Ordering::SeqCst) {
+            session.session.cancel.cancel();
+            tracing::info!("Dropped dead detached PTY session for {}", connection_id);
+            return None;
+        }
         Some(session)
     }
 
@@ -368,6 +384,13 @@ impl ConnectionManager {
         };
 
         if let Some(session) = session {
+            if session.dead.load(Ordering::SeqCst) {
+                // The SSH channel is already gone — parking would only keep a
+                // zombie around for StartPty to re-attach and fail again.
+                session.cancel.cancel();
+                tracing::info!("Skipped parking dead PTY session for {}", connection_id);
+                return Ok(());
+            }
             let generation = {
                 let generations = self.pty_generations.read().await;
                 generations.get(connection_id).copied().unwrap_or(0)
@@ -379,6 +402,7 @@ impl ConnectionManager {
             // process — defeating "keep running in the background".
             let drain_cancel = CancellationToken::new();
             let output_rx = session.output_rx.clone();
+            let dead = session.dead.clone();
             let drain_cancel_clone = drain_cancel.clone();
             tokio::spawn(async move {
                 loop {
@@ -390,7 +414,13 @@ impl ConnectionManager {
                         } => {
                             match result {
                                 Some(_) => {} // discard output while detached
-                                None => break, // channel closed → session gone
+                                None => {
+                                    // Channel closed while parked — the SSH
+                                    // channel is gone; mark dead so a later
+                                    // StartPty drops it instead of reattaching.
+                                    dead.store(true, Ordering::SeqCst);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -536,24 +566,33 @@ impl ConnectionManager {
         // deadlocks every later start_pty_connection / close_pty_connection
         // (write lock) process-wide — new connections stall after the first
         // one goes idle.
-        let output_rx = {
+        let (output_rx, dead) = {
             let pty_sessions = self.pty_sessions.read().await;
             let pty = pty_sessions
                 .get(connection_id)
                 .ok_or_else(|| anyhow::anyhow!("PTY connection not found"))?;
-            pty.output_rx.clone()
+            (pty.output_rx.clone(), pty.dead.clone())
         };
 
         let mut rx = output_rx.lock().await;
 
+        // Recv returning None means the output sender was dropped — the SSH
+        // channel is gone. Mark the session dead so it can never be
+        // re-attached from the detached registry (issue: infinite
+        // "Connection lost: PTY connection closed" reconnect loop).
+        let channel_closed = || {
+            dead.store(true, Ordering::SeqCst);
+            anyhow::anyhow!("PTY connection closed")
+        };
+
         match max_wait {
             None => match rx.recv().await {
                 Some(data) => Ok(Some(data)),
-                None => Err(anyhow::anyhow!("PTY connection closed")),
+                None => Err(channel_closed()),
             },
             Some(duration) => match tokio::time::timeout(duration, rx.recv()).await {
                 Ok(Some(data)) => Ok(Some(data)),
-                Ok(None) => Err(anyhow::anyhow!("PTY connection closed")),
+                Ok(None) => Err(channel_closed()),
                 Err(_) => Ok(None), // deadline elapsed — caller should flush
             },
         }
@@ -916,6 +955,7 @@ mod tests {
             channel_id: unsafe { std::mem::transmute(0u32) },
             resize_tx: rtx,
             cancel: CancellationToken::new(),
+            dead: Arc::new(AtomicBool::new(false)),
         };
         {
             let mut detached = mgr.detached_sessions.write().await;
@@ -967,6 +1007,7 @@ mod tests {
             channel_id: unsafe { std::mem::transmute(0u32) },
             resize_tx,
             cancel: CancellationToken::new(),
+            dead: Arc::new(AtomicBool::new(false)),
         };
         {
             let mut sessions = mgr.pty_sessions.write().await;
@@ -1071,6 +1112,7 @@ mod tests {
             channel_id: unsafe { std::mem::transmute(0u32) },
             resize_tx,
             cancel: CancellationToken::new(),
+            dead: Arc::new(AtomicBool::new(false)),
         };
         {
             let mut sessions = mgr.pty_sessions.write().await;
@@ -1124,6 +1166,7 @@ mod tests {
             channel_id: unsafe { std::mem::transmute(0u32) },
             resize_tx,
             cancel: CancellationToken::new(),
+            dead: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1241,6 +1284,7 @@ mod tests {
                 channel_id: unsafe { std::mem::transmute(0u32) },
                 resize_tx: rtx,
                 cancel: CancellationToken::new(),
+                dead: Arc::new(AtomicBool::new(false)),
             };
             let mut detached = mgr.detached_sessions.write().await;
             detached.insert(
@@ -1274,6 +1318,7 @@ mod tests {
                 channel_id: unsafe { std::mem::transmute(0u32) },
                 resize_tx: rtx,
                 cancel: CancellationToken::new(),
+                dead: Arc::new(AtomicBool::new(false)),
             };
             detached.insert(
                 "det-1".to_string(),
@@ -1290,5 +1335,95 @@ mod tests {
         // entry even if disconnect reports nothing to disconnect.
         let _ = mgr.close_detached_session("det-1").await;
         assert!(!mgr.has_detached_session("det-1").await);
+    }
+
+    // ===== Dead-session handling (reconnect-loop regression) =====
+    //
+    // When the SSH transport dies, the PTY output channel closes. A dead
+    // session must never be re-attached from the detached registry, or the
+    // tab loops forever: reconnect → StartPty reattaches the zombie → its
+    // reader errors "PTY connection closed" → WS drops and re-parks the
+    // zombie (refreshing the 5-minute expiry) → repeat.
+
+    fn dead_pty_session() -> PtySession {
+        let (input_tx, _input_rx) = mpsc::channel::<Vec<u8>>(1);
+        let (resize_tx, _resize_rx) = mpsc::channel::<(u32, u32)>(1);
+        PtySession {
+            input_tx,
+            output_rx: Arc::new(tokio::sync::Mutex::new(mpsc::channel::<Vec<u8>>(1).1)),
+            channel_id: unsafe { std::mem::transmute(0u32) },
+            resize_tx,
+            cancel: CancellationToken::new(),
+            dead: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dead_detached_session_is_dropped_not_reattached() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut detached = mgr.detached_sessions.write().await;
+            detached.insert(
+                "zombie-1".to_string(),
+                DetachedSession {
+                    session: Arc::new(dead_pty_session()),
+                    generation: 1,
+                    drain_cancel: CancellationToken::new(),
+                    parked_at: tokio::time::Instant::now(),
+                },
+            );
+        }
+
+        // No SSH session exists, so after the zombie is dropped the start must
+        // escalate to SshSessionDead (frontend then does a full reconnect)
+        // instead of reattaching the dead shell.
+        let err = mgr.start_pty_connection("zombie-1", 80, 24).await.unwrap_err();
+        assert!(matches!(err, PtyStartError::SshSessionDead(_)));
+        // The zombie was removed and must not be parked/reattachable again.
+        assert!(!mgr.has_detached_session("zombie-1").await);
+        assert!(!mgr.pty_sessions.read().await.contains_key("zombie-1"));
+    }
+
+    #[tokio::test]
+    async fn test_read_from_pty_marks_session_dead_on_channel_close() {
+        let mgr = ConnectionManager::new();
+        let (input_tx, _input_rx) = mpsc::channel::<Vec<u8>>(1);
+        let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(8);
+        let (resize_tx, _resize_rx) = mpsc::channel::<(u32, u32)>(1);
+        let session = PtySession {
+            input_tx,
+            output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
+            channel_id: unsafe { std::mem::transmute(0u32) },
+            resize_tx,
+            cancel: CancellationToken::new(),
+            dead: Arc::new(AtomicBool::new(false)),
+        };
+        {
+            let mut sessions = mgr.pty_sessions.write().await;
+            sessions.insert("r-dead-1".to_string(), Arc::new(session));
+        }
+
+        // Data flows while the channel is open.
+        output_tx.send(b"hello".to_vec()).await.unwrap();
+        assert_eq!(mgr.read_from_pty("r-dead-1", None).await.unwrap().unwrap(), b"hello");
+
+        // Dropping the sender (SSH channel gone) → next read errors AND marks dead.
+        drop(output_tx);
+        assert!(mgr.read_from_pty("r-dead-1", None).await.is_err());
+        assert!(mgr.pty_sessions.read().await.get("r-dead-1").unwrap().dead.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_detach_skips_parking_dead_session() {
+        let mgr = ConnectionManager::new();
+        {
+            let mut sessions = mgr.pty_sessions.write().await;
+            sessions.insert("dead-act-1".to_string(), Arc::new(dead_pty_session()));
+        }
+        mgr.detach_pty_connection("dead-act-1", None).await.unwrap();
+        // A dead session must not be parked — parking would let a later
+        // StartPty reattach it and re-enter the error loop.
+        assert!(!mgr.has_detached_session("dead-act-1").await);
+        assert!(!mgr.pty_sessions.read().await.contains_key("dead-act-1"));
     }
 }

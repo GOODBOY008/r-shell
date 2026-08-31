@@ -595,6 +595,16 @@ export function PtyTerminal({
     let writeBuffer = '';
     let bufferedFrameCount = 0;
     let rafId: number | null = null;
+
+    // StartPty handshake watchdog. If the backend never confirms the PTY
+    // (Success/PtyStarted) within this window — e.g. the ssh_session_dead
+    // error frame was lost, or the socket silently stalled — trigger the same
+    // full-reconnect escalation the coded error would have, instead of
+    // waiting for the WS retry loop to burn out and leaving the tab unusable
+    // until a manual reconnect.
+    const START_PTY_WATCHDOG_MS = 8000;
+    let startPtyWatchdog: ReturnType<typeof setTimeout> | null = null;
+    let ptyHandshakeDone = false;
     
     // CRITICAL: Wait for terminal to have proper dimensions before connecting
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
@@ -684,6 +694,34 @@ export function PtyTerminal({
         };
         console.log(`[PTY Terminal] [${connectionId}] Starting PTY connection with ${startCols}x${startRows}`);
         ws.send(JSON.stringify(startMsg));
+
+        ptyHandshakeDone = false;
+        if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
+        startPtyWatchdog = setTimeout(() => {
+          startPtyWatchdog = null;
+          if (ptyHandshakeDone) return;
+          console.warn(
+            `[PTY Terminal] [${connectionId}] StartPty handshake watchdog fired (no Success/PtyStarted within ${START_PTY_WATCHDOG_MS}ms) — escalating to full reconnect`,
+          );
+          reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
+          autoReconnectAfterDropRef.current = MAX_AUTO_RECONNECT_AFTER_DROP;
+          if (connectionStatusRef.current !== 'disconnected') {
+            connectionStatusRef.current = 'disconnected';
+            onConnectionStatusChange?.(connectionId, 'disconnected');
+          }
+          if (!sshDeadEscalatedRef.current) {
+            sshDeadEscalatedRef.current = true;
+            if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
+              term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
+              void onReconnectTab(connectionId);
+            } else {
+              term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
+            }
+          }
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close();
+          }
+        }, START_PTY_WATCHDOG_MS);
 
         // Flush a resize that was observed while this socket was not OPEN yet
         // (issue #88): dropping it would leave the PTY at a stale size, and
@@ -791,6 +829,11 @@ export function PtyTerminal({
             case 'Success':
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
               if (msg.message.includes('PTY connection started')) {
+                ptyHandshakeDone = true;
+                if (startPtyWatchdog) {
+                  clearTimeout(startPtyWatchdog);
+                  startPtyWatchdog = null;
+                }
                 // Captured for PtyStarted: at that point these flags have
                 // already been reset, but only PtyStarted knows whether the
                 // backend re-attached a parked session or started a fresh
@@ -814,6 +857,11 @@ export function PtyTerminal({
 
             case 'PtyStarted': {
               if (msg.connection_id === connectionId && typeof msg.generation === 'number') {
+                ptyHandshakeDone = true;
+                if (startPtyWatchdog) {
+                  clearTimeout(startPtyWatchdog);
+                  startPtyWatchdog = null;
+                }
                 ptyGenerationRef.current = msg.generation;
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
                 signalReady(connectionId);
@@ -1133,6 +1181,12 @@ export function PtyTerminal({
     return () => {
       console.log(`[PTY Terminal] [${connectionId}] Cleaning up`);
       isRunning = false;
+
+      // Cancel the pending StartPty handshake watchdog, if any.
+      if (startPtyWatchdog) {
+        clearTimeout(startPtyWatchdog);
+        startPtyWatchdog = null;
+      }
 
       // Cancel any pending RAF write batch and discard queued data so no
       // stale writes reach a terminal that is about to be disposed.

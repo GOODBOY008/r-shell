@@ -5,6 +5,7 @@ use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -139,6 +140,11 @@ pub struct PtySession {
     /// Cancellation token — cancelled when this session is torn down.
     /// The WebSocket reader task should select on this to stop promptly.
     pub cancel: CancellationToken,
+    /// Set once the PTY output channel has closed because the SSH channel is
+    /// gone (transport dropped). A dead session must never be re-attached:
+    /// its reader errors instantly with "PTY connection closed" and the tab
+    /// would otherwise loop reconnect → reattach → error forever.
+    pub dead: Arc<AtomicBool>,
 }
 
 pub struct Client;
@@ -356,6 +362,15 @@ impl SshClient {
             // preventing the server from silently dropping idle sessions.
             keepalive_interval,
             keepalive_max: config.keepalive_max.unwrap_or(3) as usize,
+            // russh's default time-based rekey (Limits::default rekeys every
+            // 3600s) reliably kills long-idle connections in russh 0.44.x:
+            // in the multi-hour soak test every idle terminal died at the
+            // ~1-hour mark, right at the rekey exchange, while active
+            // sessions rekeyed fine. Keep the spec's 1 GiB data limits but
+            // lift the time limit so idle terminals never enter the broken
+            // path. OpenSSH servers don't time-rekey by default, so no
+            // server-initiated rekey replaces it.
+            limits: Limits::new(1 << 30, 1 << 30, Duration::from_secs(7 * 24 * 60 * 60)),
             ..client::Config::default()
         };
 
@@ -625,6 +640,7 @@ impl SshClient {
                 channel_id,
                 resize_tx,
                 cancel: CancellationToken::new(),
+                dead: Arc::new(AtomicBool::new(false)),
             })
         } else {
             Err(anyhow::anyhow!("Not connected"))
