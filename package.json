@@ -14,7 +14,10 @@
     "tauri": "tauri",
     "version:patch": "node scripts/bump-version.mjs patch",
     "version:minor": "node scripts/bump-version.mjs minor",
-    "version:major": "node scripts/bump-version.mjs major"
+    "version:major": "node scripts/bump-version.mjs major",
+    "version:prerelease": "node scripts/bump-version.mjs prerelease",
+    "version:stable": "node scripts/bump-version.mjs stable",
+    "version:verify": "node scripts/verify-release-tag.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
