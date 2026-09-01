@@ -108,7 +108,7 @@ describe('connection-storage advanced & proxy field persistence', () => {
     expectSealed(loaded?.proxyPassword, 'pass');
   });
 
-  it('round-trips SSH tunnel fields through saveConnectionWithId', () => {
+  it('round-trips SSH tunnel fields through saveConnectionWithId', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-4', {
       name: 'My Server',
       host: 'example.com',
@@ -123,7 +123,7 @@ describe('connection-storage advanced & proxy field persistence', () => {
       tunnelAuthMethod: 'publickey',
       tunnelPassword: '',
       tunnelKeyPath: '~/.ssh/id_ed25519',
-      tunnelPassphrase: 'secret',
+      tunnelPassphrase: await sealSecret('secret'),
     });
 
     const loaded = ConnectionStorageManager.getConnection('conn-4');
@@ -133,6 +133,6 @@ describe('connection-storage advanced & proxy field persistence', () => {
     expect(loaded?.tunnelUsername).toBe('jumpuser');
     expect(loaded?.tunnelAuthMethod).toBe('publickey');
     expect(loaded?.tunnelKeyPath).toBe('~/.ssh/id_ed25519');
-    expect(loaded?.tunnelPassphrase).toBe('secret');
+    expectSealed(loaded?.tunnelPassphrase, 'secret');
   });
 });

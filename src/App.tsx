@@ -1620,15 +1620,18 @@ function AppContent() {
   const handleSaveConnection = useCallback(async (config: ConnectionConfig) => {
     if (!config.id) return;
 
-    // A blank password on a saved connection means "keep the stored secret" —
-    // decrypt it from storage so the connect requests below carry the real value.
-    if (!config.password) {
+    // A blank secret on a saved connection means "keep the stored secret" —
+    // decrypt the stored values so the connect requests below carry the real
+    // values (covers the password, tunnel credentials, etc.).
+    if (SECRET_FIELDS.some((f) => !config[f])) {
       const stored = ConnectionStorageManager.getConnection(config.id);
       if (stored) {
         const withSecrets: Record<string, unknown> = { ...stored };
         await openConnectionSecrets(withSecrets);
-        if (typeof withSecrets.password === 'string' && withSecrets.password) {
-          config.password = withSecrets.password;
+        for (const f of SECRET_FIELDS) {
+          if (!config[f] && typeof withSecrets[f] === 'string' && withSecrets[f]) {
+            (config as unknown as Record<string, unknown>)[f] = withSecrets[f];
+          }
         }
       }
     }

@@ -38,7 +38,9 @@ const tunnelConfig = {
   tunnelPort: 2222,
   tunnelUsername: 'jumpuser',
   tunnelAuthMethod: 'password' as const,
-  tunnelPassword: 'jumppass',
+  // Stored connections hold ciphertext, not plaintext (the dialog never
+  // echoes secrets back into the form).
+  tunnelPassword: 'v1:test:anVtcGFzcw==',
 };
 
 const baseConnection = {
@@ -95,10 +97,17 @@ describe('ConnectionDialog SSH tunnel persistence', () => {
     expect(stored?.tunnelHost).toBe('bastion.example.com');
     expect(stored?.tunnelPort).toBe(2222);
     expect(stored?.tunnelUsername).toBe('jumpuser');
-    expect(stored?.tunnelPassword).toBe('jumppass');
+    // Blank field on save keeps the stored (sealed) tunnel password.
+    expect(stored?.tunnelPassword).toBe('v1:test:anVtcGFzcw==');
   });
 
   it('keeps tunnel config when a new connection fails to connect', async () => {
+    mockInvoke.mockImplementation(async (command: string, args?: { secret?: string }) => {
+      if (command === 'credential_seal') {
+        return `v1:test:${btoa(encodeURIComponent(args?.secret ?? ''))}`;
+      }
+      return undefined;
+    });
     mockInvoke.mockResolvedValueOnce({ success: false, error: 'connection refused' });
 
     renderDialog();
@@ -149,7 +158,9 @@ describe('ConnectionDialog SSH tunnel persistence', () => {
     expect(connections[0].tunnelHost).toBe('bastion.example.com');
     expect(connections[0].tunnelPort).toBe(2222);
     expect(connections[0].tunnelUsername).toBe('jumpuser');
-    expect(connections[0].tunnelPassword).toBe('jumppass');
+    // The typed tunnel password is persisted sealed, never as plaintext.
+    expect(connections[0].tunnelPassword).toMatch(/^v1:/);
+    expect(connections[0].tunnelPassword).not.toContain('jumppass');
   });
 
   it('shows saved tunnel values when editing', () => {
@@ -162,7 +173,8 @@ describe('ConnectionDialog SSH tunnel persistence', () => {
     expect((screen.getByLabelText('Tunnel Host') as HTMLInputElement).value).toBe('bastion.example.com');
     expect((screen.getByLabelText('Tunnel Port') as HTMLInputElement).value).toBe('2222');
     expect((screen.getByLabelText('Tunnel Username') as HTMLInputElement).value).toBe('jumpuser');
-    expect((screen.getByLabelText('Tunnel Password') as HTMLInputElement).value).toBe('jumppass');
+    // Stored secrets are never echoed back — the field stays blank.
+    expect((screen.getByLabelText('Tunnel Password') as HTMLInputElement).value).toBe('');
     expect(screen.getByRole('switch', { name: 'Enable SSH Tunnel' }).getAttribute('data-state')).toBe('checked');
   });
 
