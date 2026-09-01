@@ -194,6 +194,71 @@ mod tests {
         // Disconnect
         client_write.disconnect().await.ok();
     }
+
+    // ============ Passwordless-host integration tests (issue #122) ============
+    // These need a local SSH server that accepts empty passwords. Start one with:
+    //   docker build -t rshell-empty-pass-sshd .   (Alpine + PermitEmptyPasswords)
+    //   docker run -d --name rshell-sshd-empty -p 2222:22 rshell-empty-pass-sshd
+    // The container config: PasswordAuthentication=yes, PermitEmptyPasswords=yes,
+    // user 'pi' with an EMPTY password — mirrors the embedded devices users report.
+    const EMPTY_PASS_HOST: &str = "localhost";
+    const EMPTY_PASS_PORT: u16 = 2222;
+    const EMPTY_PASS_USER: &str = "pi";
+
+    fn empty_password_config(password: &str) -> SshConfig {
+        SshConfig {
+            host: EMPTY_PASS_HOST.to_string(),
+            port: EMPTY_PASS_PORT,
+            username: EMPTY_PASS_USER.to_string(),
+            auth_method: AuthMethod::Password {
+                password: password.to_string(),
+            },
+            compression: true,
+            keepalive_interval: None,
+            keepalive_max: None,
+            proxy: None,
+            tunnel: None,
+        }
+    }
+
+    // The exact path r-shell takes for a stored connection with a blank
+    // password: authenticate_session tries "none" first (hosts that need no
+    // credentials grant it), then falls back to the empty-password request
+    // (hosts with PermitEmptyPasswords). Both must succeed end-to-end.
+    #[tokio::test]
+    #[ignore]
+    async fn test_empty_password_connect() {
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        let mut client_write = client.write().await;
+
+        let result = client_write.connect(&empty_password_config("")).await;
+
+        assert!(
+            result.is_ok(),
+            "Blank-password connect should succeed: {:?}",
+            result.err()
+        );
+
+        client_write.disconnect().await.ok();
+    }
+
+    // Control group: a wrong password must still be rejected by the server,
+    // proving the empty-password success above is meaningful.
+    #[tokio::test]
+    #[ignore]
+    async fn test_empty_password_host_rejects_wrong_password() {
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        let mut client_write = client.write().await;
+
+        let result = client_write
+            .connect(&empty_password_config("definitely-wrong"))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Wrong password should not authenticate on an empty-password host"
+        );
+    }
 }
 
 #[cfg(test)]

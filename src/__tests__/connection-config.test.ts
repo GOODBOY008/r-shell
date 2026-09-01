@@ -1,13 +1,11 @@
 /**
  * Unit tests for toConnectionConfig — the mapping from persisted
- * ConnectionData to the dialog form's ConnectionConfig.
- *
- * Covers the proxy round-trip: saved proxy settings must be carried into
- * the edit dialog, and legacy connections without proxy must not show a
- * phantom proxy.
+ * ConnectionData to the dialog form's ConnectionConfig — and for
+ * connectionHasCredentials, which decides whether a saved connection may
+ * attempt a connect directly or must open the edit dialog first.
  */
 import { describe, expect, it } from 'vitest';
-import { toConnectionConfig } from '../lib/connection-config';
+import { connectionHasCredentials, toConnectionConfig } from '../lib/connection-config';
 
 describe('toConnectionConfig', () => {
   const base = {
@@ -75,5 +73,50 @@ describe('toConnectionConfig', () => {
     const config = toConnectionConfig({ ...base, authMethod: undefined });
 
     expect(config.authMethod).toBe('password');
+  });
+});
+
+describe('connectionHasCredentials', () => {
+  const base = {
+    id: 'conn-1',
+    name: 'My Server',
+    host: '192.168.1.1',
+    port: 22,
+    username: 'admin',
+    protocol: 'SSH',
+    authMethod: 'password' as const,
+    password: 'secret',
+  };
+
+  // Regression for issue #122: hosts that allow passwordless login store a
+  // blank password, which used to be treated as "no credentials" and blocked
+  // connecting entirely.
+  it('treats a password-auth connection with a blank password as connectable', () => {
+    expect(connectionHasCredentials({ ...base, password: '' })).toBe(true);
+  });
+
+  it('treats a password-auth connection with a password as connectable', () => {
+    expect(connectionHasCredentials(base)).toBe(true);
+  });
+
+  it('requires a key path for publickey auth', () => {
+    expect(connectionHasCredentials({ ...base, authMethod: 'publickey' as const })).toBe(false);
+    expect(
+      connectionHasCredentials({
+        ...base,
+        authMethod: 'publickey' as const,
+        privateKeyPath: '~/.ssh/id_ed25519',
+      })
+    ).toBe(true);
+  });
+
+  it('lets anonymous FTP connect without any credentials', () => {
+    expect(
+      connectionHasCredentials({ ...base, protocol: 'FTP', authMethod: 'anonymous' as const, password: '' })
+    ).toBe(true);
+  });
+
+  it('requires a key path when storage omits authMethod (legacy rows)', () => {
+    expect(connectionHasCredentials({ ...base, authMethod: undefined })).toBe(false);
   });
 });

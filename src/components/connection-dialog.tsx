@@ -308,15 +308,10 @@ export function ConnectionDialog({
       return;
     }
 
-    // Validate authentication method specific fields
-    if (config.authMethod === 'password' && !config.password) {
-      toast.error(t('connectionDialog.toast.passwordRequired'), {
-        description: t('connectionDialog.toast.passwordRequiredDesc'),
-      });
-      resetConnectionState();
-      return;
-    }
-
+    // Validate authentication method specific fields.
+    // A blank password is allowed — it is a valid credential for hosts that
+    // allow passwordless login (e.g. PermitEmptyPasswords / "none"-auth
+    // devices). If it is wrong, the backend reports a specific auth error.
     if (config.authMethod === 'publickey' && !config.privateKeyPath) {
       toast.error(t('connectionDialog.toast.privateKeyRequired'), {
         description: t('connectionDialog.toast.privateKeyRequiredDesc'),
@@ -515,7 +510,11 @@ export function ConnectionDialog({
         toast.info(t('connectionDialog.toast.connectionCancelled'));
       } else {
         toast.error(t('connectionDialog.toast.connectionError'), {
-          description: error instanceof Error ? error.message : t('connectionDialog.toast.connectionErrorDesc'),
+          description: typeof error === 'string'
+            ? error
+            : error instanceof Error
+              ? error.message
+              : t('connectionDialog.toast.connectionErrorDesc'),
           duration: 5000,
         });
       }

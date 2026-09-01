@@ -169,10 +169,28 @@ async fn authenticate_session(
     method: &AuthMethod,
 ) -> Result<()> {
     let authenticated = match method {
-        AuthMethod::Password { password } => session
-            .authenticate_password(username, password)
-            .await
-            .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?,
+        AuthMethod::Password { password } => {
+            // A blank password means the host may require no credentials at
+            // all (it grants the SSH "none" method) or have an empty-password
+            // account (PermitEmptyPasswords). Try "none" first for blank
+            // passwords — non-blank passwords go straight to password auth.
+            let granted = if password.is_empty() {
+                session
+                    .authenticate_none(username)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?
+            } else {
+                false
+            };
+            if granted {
+                true
+            } else {
+                session
+                    .authenticate_password(username, password)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?
+            }
+        }
         AuthMethod::PublicKey {
             key_path,
             passphrase,
