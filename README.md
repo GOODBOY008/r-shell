@@ -14,7 +14,7 @@ A modern SSH/SFTP/FTP/RDP/VNC client built with Rust and Tauri 2. **~98% less me
 
 **Low memory** · **Native speed** · **Multi-protocol** · **Remote desktop** · **Split terminals** · **SFTP file manager** · **GPU monitoring** · **Log viewer** · **Directory sync**
 
-[Features](#-features) · [Install](#-installation) · [Screenshots](#-screenshots) · [Development](#-development) · [Contributing](#-contributing)
+[Features](#-features) · [Installation](#-installation) · [Screenshots](#-screenshots) · [Contributing](#-contributing)
 
 </div>
 
@@ -58,9 +58,8 @@ Measured on macOS (Apple Silicon, 16 GB RAM) using `footprint`:
 R-Shell combines an interactive terminal, dual-panel file manager, remote desktop viewer (RDP/VNC), real-time system/GPU monitoring, and log viewing in a single VS Code-like workspace. Built with Rust for native performance and minimal resource usage.
 
 - **Native Performance** — Tauri 2 + Rust backend, not Electron or Java
-- **AI-Generated Frontend** — UI generated from [Figma designs](https://www.figma.com/make/uUd7WO54vPnv03SmioKWqj/SSH-Client-Application)
-- **AI-Assisted Development** — Entire codebase built with **GitHub Copilot**
 - **Cross-Platform** — macOS, Windows, and Linux
+- **Multilingual UI** — English and Simplified Chinese, with more languages welcome
 
 ---
 
@@ -77,7 +76,8 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 | **RDP** | Password | Remote Desktop Protocol |
 | **VNC** | Password | Virtual Network Computing |
 
-- **Connection Manager** — Tree-view sidebar with folders, favorites, tags, and drag-and-drop
+- **Connection Manager** — Tree-view sidebar with folders, favorites, tags, and drag-and-drop reordering
+- **SSH Tunnel (Jump Host)** — Route connections through a bastion or jump server
 - **Connection Profiles** — Save, import/export (JSON), duplicate, and edit connections
 - **Session Restore** — Automatically reconnects your workspace on launch
 - **Quick Connect** — Toolbar dropdown with recent connections
@@ -85,19 +85,20 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 
 ### 💻 Interactive PTY Terminal
 
-- **Full terminal emulation** — xterm.js v5 with support for vim, htop, top, less, and all interactive programs
-- **WebSocket streaming** — Low-latency bidirectional I/O with flow control
-- **WebGL renderer** — Hardware-accelerated rendering with automatic canvas fallback
+- **Full terminal emulation** — xterm.js 6 with support for vim, htop, top, less, and all interactive programs
+- **WebSocket streaming** — Low-latency bidirectional I/O with bounded flow control
+- **WebGL renderer** — Hardware-accelerated rendering with automatic canvas fallback and recovery
 - **Terminal search** — Regex and case-sensitive search with F3 navigation
 - **Context menu** — Copy, paste, select all, clear, save to file, reconnect
 - **IME / CJK input** — Full support for Chinese, Japanese, Korean input methods
+- **Session detach** — Xshell-style `Ctrl+A, D` parks a session in the background with keep-alive; reattach anytime
 - **Working-directory follow** — Keep the remote file browser aligned with the active Bash terminal
 
 ### 🪟 Split Panes & Tab Groups
 
 - **Split in 4 directions** — Up, Down, Left, Right
 - **Recursive grid layout** — Unlimited nested splits with resizable panels
-- **Tab management** — Add, close, duplicate, reorder (drag-and-drop), move between groups
+- **Tab management** — Add, close, close all, duplicate, reorder (drag-and-drop), move between groups
 - **Drop zone overlay** — Drag tabs onto 5 drop zones (up/down/left/right/center)
 - **Keyboard shortcuts** — `Ctrl+\` split, `Ctrl+1-9` focus group, `Ctrl+Tab` cycle tabs
 
@@ -106,9 +107,10 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Local + Remote panels** — Side-by-side browsing with upload/download buttons
 - **Multi-protocol** — Works over SSH, SFTP, FTP, and FTPS
 - **File operations** — Create, rename, delete, copy files and directories
+- **Built-in code editor** — Open files in an embedded editor with syntax highlighting for common languages
 - **Breadcrumb navigation** — Editable address bar with click-to-navigate
 - **Sort & filter** — By name, size, date, permissions, owner (ascending/descending)
-- **Multi-select** — Select multiple files for batch operations
+- **Multi-select** — Select multiple files for batch operations and batch delete
 - **Transfer queue** — Queued transfers with progress, speed, ETA, cancel, and retry
 - **Recursive directory transfer** — Upload/download entire directory trees
 
@@ -162,6 +164,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Configurable** — Font size, line height, letter spacing, cursor style (block/underline/bar), scrollback (1K–100K lines)
 - **Background images** — Custom image with opacity, blur, and position controls
 - **Terminal transparency** — Configurable opacity
+- **Config backup** — Export and import your full configuration
 
 ### ⌨️ Keyboard Shortcuts
 
@@ -174,43 +177,24 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 | `Ctrl+\` | Split terminal right |
 | `Ctrl+Shift+\` | Split terminal down |
 | `Ctrl+1` – `Ctrl+9` | Focus terminal group |
-| `Ctrl+Shift+W` | Close active tab |
-| `Ctrl+Tab` | Next tab |
+| `Ctrl+W` | Close active tab |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
+| `Ctrl+A, D` | Detach session to background (Xshell-style) |
 | `Cmd/Ctrl+V` | Paste into terminal |
 | `Cmd/Ctrl+F` | Search in terminal |
 | `F3` / `Shift+F3` | Find next / previous |
 
-> Layout shortcuts are ignored while the terminal input is focused, so terminal-native bindings (e.g. tmux `Ctrl+B`) still reach the shell.
+> Layout shortcuts are registered at the OS level but ignored while terminal input is focused, so terminal-native bindings (e.g. tmux `Ctrl+B`) still reach the shell.
 
 ### 🔧 Additional Features
 
-- **VS Code-like layout** — Resizable left/right sidebars + bottom panel with 5 layout presets (Default, Minimal, Focus, Full Stack, Zen)
+- **Quick Commands** — Right-sidebar panel for saving and running reusable command snippets
+- **VS Code-like layout** — Resizable left/right sidebars + bottom panel with 5 layout presets (Default, Minimal, Focus, Full Stack, Zen) and layout persistence
 - **Remote Desktop** — Built-in RDP and VNC viewer with clipboard sync and dynamic resizing
+- **Launch at login** — Start R-Shell automatically when you sign in
 - **Auto-update** — Check for updates with download progress and install-and-relaunch
 - **Menu bar** — File, Edit, Tools, Connection menus with full keyboard shortcuts
 - **Status bar** — Active connection name, protocol badge, connection status indicator
-
----
-
-## 🛠 Tech Stack
-
-### Backend
-- **Tauri 2** — Native desktop framework using the OS webview (no bundled Chromium)
-- **Rust** — Zero-cost abstractions, no GC, no JVM — ~34 MB vs ~1.7 GB
-- **russh / russh-sftp** — Pure Rust SSH & SFTP implementation
-- **suppaftp** — FTP/FTPS client
-- **tokio** — Async runtime with minimal overhead
-- **tokio-tungstenite** — WebSocket server for PTY streaming
-- **sysinfo** — System stats collection
-
-### Frontend
-- **React 19** + **TypeScript** — Type-safe modern React
-- **Tailwind CSS** — Utility-first styling
-- **Radix UI / shadcn/ui** — 48+ accessible component primitives
-- **xterm.js v5** — Terminal emulation with WebGL, search, web-links, fit, and overlay addons
-- **Recharts** — Data visualization for monitoring
-- **React Hook Form** — Form handling
-- **Lucide Icons** — Icon set
 
 ---
 
@@ -242,81 +226,26 @@ Download from the [Releases](https://github.com/GOODBOY008/r-shell/releases) pag
 
 ---
 
-## 🚀 Development
+## 🛠 Tech Stack
 
-### Prerequisites
+### Backend
+- **Tauri 2** — Native desktop framework using the OS webview (no bundled Chromium)
+- **Rust** — Zero-cost abstractions, no GC, no JVM — ~34 MB vs ~1.7 GB
+- **russh / russh-sftp** — Pure Rust SSH & SFTP implementation
+- **suppaftp** — FTP/FTPS client
+- **tokio** — Async runtime with minimal overhead
+- **tokio-tungstenite** — WebSocket server for PTY streaming
+- **sysinfo** — System stats collection
 
-- Node.js ≥ 18
-- pnpm
-- Rust & Cargo
-
-### Quick Start
-
-```bash
-git clone https://github.com/GOODBOY008/r-shell.git
-cd r-shell
-pnpm install
-
-# Web only
-pnpm dev
-
-# Desktop with Tauri
-pnpm tauri dev
-```
-
-### Build for Production
-
-```bash
-pnpm build && pnpm tauri build
-```
-
-### Testing
-
-```bash
-pnpm test          # Frontend (Vitest)
-cd src-tauri && cargo test  # Rust
-pnpm test:e2e      # E2E
-```
-
-### Version Bumping
-
-```bash
-pnpm run version:patch   # 2.2.0 → 2.2.1
-pnpm run version:minor   # 2.2.0 → 2.3.0
-pnpm run version:major   # 2.2.0 → 3.0.0
-```
-
----
-
-## 📁 Project Structure
-
-```
-r-shell/
-├── src/
-│   ├── components/           # React components
-│   │   ├── ui/               # 48+ shadcn/ui primitives
-│   │   ├── terminal/         # Split panes, tab groups, grid renderer
-│   │   ├── pty-terminal.tsx   # PTY terminal (WebSocket + xterm.js)
-│   │   ├── connection-*.tsx   # Connection dialog, manager, tabs
-│   │   ├── file-*.tsx         # File browser, panels
-│   │   ├── sftp-panel.tsx     # Dual-panel SFTP manager
-│   │   ├── sync-dialog.tsx    # Directory synchronization
-│   │   ├── transfer-*.tsx     # Transfer queue & controls
-│   │   ├── system-monitor.tsx # CPU/MEM/Disk/GPU monitor
-│   │   ├── network-monitor.tsx # Network stats
-│   │   ├── log-monitor.tsx    # Multi-source log viewer
-│   │   └── settings-modal.tsx # 6-tab settings
-│   ├── lib/                   # State management & utilities
-│   └── styles/                # Global CSS
-├── src-tauri/                 # Tauri / Rust backend
-│   └── src/
-│       ├── ssh/               # SSH/SFTP implementation
-│       ├── ftp_client.rs      # FTP/FTPS client
-│       ├── commands.rs        # 54 Tauri commands
-│       ├── websocket_server.rs # PTY WebSocket streaming
-│       └── connection_manager.rs # Thread-safe session lifecycle
-└── scripts/                   # Version bump and build scripts
-```
+### Frontend
+- **React 19** + **TypeScript** — Type-safe modern React
+- **Tailwind CSS** — Utility-first styling
+- **Radix UI / shadcn/ui** — 45+ accessible component primitives
+- **xterm.js 6** — Terminal emulation with WebGL, search, web-links, fit, and overlay addons
+- **CodeMirror 6** — Embedded code editor with syntax highlighting
+- **Recharts** — Data visualization for monitoring
+- **i18next** — Internationalization (English, Simplified Chinese)
+- **Lucide Icons** — Icon set
 
 ---
 
@@ -351,10 +280,6 @@ We welcome contributions! This project is an experiment in AI-assisted developme
 
 MIT — see [LICENSE](LICENSE).
 
-## 🌟 Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=GOODBOY008/r-shell&type=Date)](https://star-history.com/#GOODBOY008/r-shell&Date)
-
 ## 💬 Community
 
 - [Issues](https://github.com/GOODBOY008/r-shell/issues)
@@ -377,4 +302,3 @@ MIT — see [LICENSE](LICENSE).
 If you like this project, please give it a ⭐!
 
 </div>
-
