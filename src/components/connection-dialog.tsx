@@ -148,7 +148,9 @@ export function ConnectionDialog({
     passphrase: string;
     proxyPassword: string;
     vncPassword: string;
-  }>({ password: '', passphrase: '', proxyPassword: '', vncPassword: '' });
+    tunnelPassword: string;
+    tunnelPassphrase: string;
+  }>({ password: '', passphrase: '', proxyPassword: '', vncPassword: '', tunnelPassword: '', tunnelPassphrase: '' });
 
   // Track number input display values separately from config to allow
   // the field to be empty while editing — React controlled inputs need
@@ -225,6 +227,8 @@ export function ConnectionDialog({
           passphrase: editingConnection.passphrase ?? '',
           proxyPassword: editingConnection.proxyPassword ?? '',
           vncPassword: editingConnection.vncPassword ?? '',
+          tunnelPassword: editingConnection.tunnelPassword ?? '',
+          tunnelPassphrase: editingConnection.tunnelPassphrase ?? '',
         });
         const merged = mergeWithDefaults(defaultConfig, editingConnection);
         // Stored secrets are never echoed back into the form: the fields stay
@@ -233,6 +237,8 @@ export function ConnectionDialog({
         merged.passphrase = '';
         merged.proxyPassword = '';
         merged.vncPassword = '';
+        merged.tunnelPassword = '';
+        merged.tunnelPassphrase = '';
         setConfig(merged);
         syncDisplayValues({
           port: editingConnection.port ?? 22,
@@ -318,12 +324,14 @@ export function ConnectionDialog({
    * "replace". Returns the secret values ready for persistence — already
    * encrypted (sealed) so plaintext never reaches localStorage.
    */
-  const resolveSecretsForSave = async (): Promise<Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword'>> => {
-    const result: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword'> = {
+  const resolveSecretsForSave = async (): Promise<Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>> => {
+    const result: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'> = {
       password: '',
       passphrase: '',
       proxyPassword: '',
       vncPassword: '',
+      tunnelPassword: '',
+      tunnelPassphrase: '',
     };
     for (const field of SECRET_FIELDS) {
       const typed = (config[field] ?? '').trim();
@@ -377,7 +385,7 @@ export function ConnectionDialog({
     // Encrypt secrets for persistence (blank field = keep stored value).
     // The connect request below uses the plaintext `config` as before — only
     // the saved payload carries ciphertext.
-    let sealedSecrets: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword'>;
+    let sealedSecrets: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>;
     try {
       sealedSecrets = await resolveSecretsForSave();
     } catch {
@@ -415,9 +423,9 @@ export function ConnectionDialog({
             tunnelPort: config.tunnelPort,
             tunnelUsername: config.tunnelUsername,
             tunnelAuthMethod: config.tunnelAuthMethod,
-            tunnelPassword: config.tunnelPassword,
+            tunnelPassword: sealedSecrets.tunnelPassword,
             tunnelKeyPath: config.tunnelKeyPath,
-            tunnelPassphrase: config.tunnelPassphrase,
+            tunnelPassphrase: sealedSecrets.tunnelPassphrase,
             proxyPassword: sealedSecrets.proxyPassword,
             compression: config.compression,
             keepAlive: config.keepAlive,
@@ -450,9 +458,9 @@ export function ConnectionDialog({
             tunnelPort: config.tunnelPort,
             tunnelUsername: config.tunnelUsername,
             tunnelAuthMethod: config.tunnelAuthMethod,
-            tunnelPassword: config.tunnelPassword,
+            tunnelPassword: sealedSecrets.tunnelPassword,
             tunnelKeyPath: config.tunnelKeyPath,
-            tunnelPassphrase: config.tunnelPassphrase,
+            tunnelPassphrase: sealedSecrets.tunnelPassphrase,
             proxyPassword: sealedSecrets.proxyPassword,
             compression: config.compression,
             keepAlive: config.keepAlive,
@@ -500,9 +508,9 @@ export function ConnectionDialog({
         tunnelPort: config.tunnelPort,
         tunnelUsername: config.tunnelUsername,
         tunnelAuthMethod: config.tunnelAuthMethod,
-        tunnelPassword: config.tunnelPassword,
+        tunnelPassword: sealedSecrets.tunnelPassword,
         tunnelKeyPath: config.tunnelKeyPath,
-        tunnelPassphrase: config.tunnelPassphrase,
+        tunnelPassphrase: sealedSecrets.tunnelPassphrase,
         proxyPassword: sealedSecrets.proxyPassword,
         compression: config.compression,
         keepAlive: config.keepAlive,
@@ -531,9 +539,9 @@ export function ConnectionDialog({
         tunnelPort: config.tunnelPort,
         tunnelUsername: config.tunnelUsername,
         tunnelAuthMethod: config.tunnelAuthMethod,
-        tunnelPassword: config.tunnelPassword,
+        tunnelPassword: sealedSecrets.tunnelPassword,
         tunnelKeyPath: config.tunnelKeyPath,
-        tunnelPassphrase: config.tunnelPassphrase,
+        tunnelPassphrase: sealedSecrets.tunnelPassphrase,
         proxyPassword: sealedSecrets.proxyPassword,
         compression: config.compression,
         keepAlive: config.keepAlive,
@@ -636,7 +644,7 @@ const handleCancelConnectionAttempt = async () => {
     if (!editingConnection?.id) return;
 
     // Encrypt secrets for persistence (blank field = keep stored value).
-    let sealed: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword'>;
+    let sealed: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>;
     try {
       sealed = await resolveSecretsForSave();
     } catch {
@@ -665,9 +673,9 @@ const handleCancelConnectionAttempt = async () => {
       tunnelPort: config.tunnelPort,
       tunnelUsername: config.tunnelUsername,
       tunnelAuthMethod: config.tunnelAuthMethod,
-      tunnelPassword: config.tunnelPassword,
+      tunnelPassword: sealed.tunnelPassword,
       tunnelKeyPath: config.tunnelKeyPath,
-      tunnelPassphrase: config.tunnelPassphrase,
+      tunnelPassphrase: sealed.tunnelPassphrase,
       proxyPassword: sealed.proxyPassword,
       compression: config.compression,
       keepAlive: config.keepAlive,
@@ -1231,6 +1239,11 @@ const handleCancelConnectionAttempt = async () => {
                               value={config.tunnelPassword}
                               onChange={(e) => updateConfig({ tunnelPassword: e.target.value })}
                             />
+                            {previousSecrets.tunnelPassword && (
+                              <p className="text-xs text-muted-foreground">
+                                {t('connectionDialog.hint.savedPasswordKept')}
+                              </p>
+                            )}
                           </div>
                         )}
 
@@ -1253,6 +1266,11 @@ const handleCancelConnectionAttempt = async () => {
                                 value={config.tunnelPassphrase}
                                 onChange={(e) => updateConfig({ tunnelPassphrase: e.target.value })}
                               />
+                              {previousSecrets.tunnelPassphrase && (
+                                <p className="text-xs text-muted-foreground">
+                                  {t('connectionDialog.hint.savedPasswordKept')}
+                                </p>
+                              )}
                             </div>
                           </>
                         )}

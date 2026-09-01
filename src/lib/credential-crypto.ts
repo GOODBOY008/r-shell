@@ -18,6 +18,8 @@ export const SECRET_FIELDS = [
   'passphrase',
   'proxyPassword',
   'vncPassword',
+  'tunnelPassword',
+  'tunnelPassphrase',
 ] as const;
 
 export type SecretField = (typeof SECRET_FIELDS)[number];
