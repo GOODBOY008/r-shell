@@ -15,7 +15,7 @@ import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
-import { toConnectionConfig } from './lib/connection-config';
+import { connectionHasCredentials, toConnectionConfig } from './lib/connection-config';
 import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
@@ -381,11 +381,9 @@ function AppContent() {
         }
 
         const isDesktopProto = connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
-        const hasCredentials = isDesktopProto
-          ? true // Desktop protocols can connect with or without credentials
-          : connectionData.authMethod === 'password'
-            ? !!connectionData.password
-            : (connectionData.authMethod === 'anonymous' ? true : !!connectionData.privateKeyPath);
+        // Desktop protocols can connect with or without credentials; for the
+        // rest, a blank password is still a valid credential (passwordless SSH).
+        const hasCredentials = isDesktopProto || connectionHasCredentials(connectionData);
 
         if (!hasCredentials) {
           console.log(`Connection ${connectionData.name} has no saved credentials, skipping restore`);
@@ -629,13 +627,9 @@ function AppContent() {
       const isFtp = connectionData.protocol === 'FTP';
       const isFileBrowser = isSftp || isFtp;
 
-      const hasCredentials = isFileBrowser
-        ? (connectionData.authMethod === 'anonymous' || connectionData.authMethod === 'password'
-          ? (connectionData.authMethod === 'anonymous' || !!connectionData.password)
-          : !!connectionData.privateKeyPath)
-        : (connectionData.authMethod === 'password'
-          ? !!connectionData.password
-          : !!connectionData.privateKeyPath);
+      // A blank password is still a valid credential — hosts that allow
+      // passwordless login must connect directly instead of opening the dialog.
+      const hasCredentials = connectionHasCredentials(connectionData);
 
       if (!hasCredentials) {
         setEditingConnection(toConnectionConfig(connectionData));
@@ -738,7 +732,11 @@ function AppContent() {
           console.error('Error connecting to SSH:', error);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
           toast.error(t('app.connectionError'), {
-            description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
+            description: typeof error === 'string'
+              ? error
+              : error instanceof Error
+                ? error.message
+                : t('app.connectionErrorDesc'),
           });
           setEditingConnection(toConnectionConfig(connectionData));
           setPendingConnectionId(connection.id);
@@ -829,11 +827,8 @@ function AppContent() {
     const isFtp = tabToDuplicate.protocol === 'FTP' || connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
 
-    const hasCredentials = isFileBrowser
-      ? (connectionData.authMethod === 'anonymous' || !!connectionData.password || !!connectionData.privateKeyPath)
-      : (connectionData.authMethod === 'password'
-        ? !!connectionData.password
-        : !!connectionData.privateKeyPath);
+    // A blank password is still a valid credential (passwordless SSH hosts).
+    const hasCredentials = connectionHasCredentials(connectionData);
 
     if (!hasCredentials) {
       toast.error(t('app.cannotDuplicate'), {
@@ -981,11 +976,8 @@ function AppContent() {
     const isFtp = tabToReconnect.protocol === 'FTP' || connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
 
-    const hasCredentials = isFileBrowser
-      ? (connectionData.authMethod === 'anonymous' || !!connectionData.password || !!connectionData.privateKeyPath)
-      : (connectionData.authMethod === 'password'
-        ? !!connectionData.password
-        : !!connectionData.privateKeyPath);
+    // A blank password is still a valid credential (passwordless SSH hosts).
+    const hasCredentials = connectionHasCredentials(connectionData);
 
     if (!hasCredentials) {
       clearReconnectRetry(tabId);
@@ -1729,7 +1721,11 @@ function AppContent() {
           }
         } catch (error) {
           toast.error(t('app.connectionError'), {
-            description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
+            description: typeof error === 'string'
+              ? error
+              : error instanceof Error
+                ? error.message
+                : t('app.connectionErrorDesc'),
           });
         }
       }
@@ -1771,11 +1767,8 @@ function AppContent() {
     const isFtp = connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
 
-    const hasCredentials = isFileBrowser
-      ? (connectionData.authMethod === 'anonymous' || !!connectionData.password || !!connectionData.privateKeyPath)
-      : (connectionData.authMethod === 'password'
-        ? !!connectionData.password
-        : !!connectionData.privateKeyPath);
+    // A blank password is still a valid credential (passwordless SSH hosts).
+    const hasCredentials = connectionHasCredentials(connectionData);
 
     if (!hasCredentials) {
       setEditingConnection(toConnectionConfig(connectionData));
@@ -1823,7 +1816,11 @@ function AppContent() {
       } catch (error) {
         console.error('Quick connect error:', error);
         toast.error(t('app.connectionError'), {
-          description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
+          description: typeof error === 'string'
+              ? error
+              : error instanceof Error
+                ? error.message
+                : t('app.connectionErrorDesc'),
         });
       }
     }

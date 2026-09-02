@@ -6,6 +6,23 @@ import type { ConnectionData } from './connection-storage';
 import type { ConnectionConfig } from '../components/connection-dialog';
 
 /**
+ * Whether a persisted connection carries enough to attempt a connect.
+ *
+ * A password-auth connection qualifies when the password field is present —
+ * an intentionally blank password ("") is a valid credential for hosts that
+ * allow passwordless login (e.g. embedded devices with PermitEmptyPasswords,
+ * or hosts accepting the SSH "none" method) — but an *absent* field
+ * (undefined/null in hand-edited or imported records) is not: those stay
+ * "unconfigured" so the dialog opens instead of a guaranteed failed connect.
+ * Publickey auth still needs a key path and anonymous FTP needs nothing.
+ */
+export function connectionHasCredentials(data: ConnectionData): boolean {
+  if (data.authMethod === 'anonymous') return true;
+  if (data.authMethod === 'password') return data.password != null;
+  return !!data.privateKeyPath;
+}
+
+/**
  * Build a ConnectionConfig from a persisted ConnectionData.
  *
  * Carries every field the edit dialog can display — including the proxy
