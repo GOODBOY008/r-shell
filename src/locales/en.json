@@ -51,6 +51,11 @@
     "connectionError": "Connection Error",
     "connectionErrorDesc": "An unexpected error occurred while connecting.",
     "waitingForConnection": "Waiting for connection...",
+    "restoreDeferred": "Sessions Not Reconnected",
+    "restoreDeferredDesc_one": "{{count}} tab from your last session was restored without connecting. Use Connect on the tab to reconnect it, or enable 'Reconnect Sessions on Startup' in Settings.",
+    "restoreDeferredDesc_other": "{{count}} tabs from your last session were restored without connecting. Use Connect on a tab to reconnect it, or enable 'Reconnect Sessions on Startup' in Settings.",
+    "restoreDeferredHint": "Automatic reconnect at startup is disabled",
+    "connectNow": "Connect",
     "restoreTitle": "Workspace Restore",
     "restoreSubtitle": "Bringing your connections back online",
     "restoreReconnecting": "Reconnecting {{name}}",
@@ -324,7 +329,9 @@
       "connectionTimeout": "Connection Timeout: {{timeout}}s",
       "keepAliveInterval": "Keep Alive Interval: {{interval}}s",
       "autoReconnect": "Auto Reconnect",
-      "autoReconnectDesc": "Automatically reconnect when connection is lost"
+      "autoReconnectDesc": "Automatically reconnect when connection is lost",
+      "restoreSessionsOnStartup": "Reconnect Sessions on Startup",
+      "restoreSessionsOnStartupDesc": "Automatically reconnect the tabs left open in the previous session when the app starts. When off, the tabs are restored but stay disconnected until you connect them manually."
     },
     "security": {
       "title": "Security Settings",

@@ -49,6 +49,7 @@ import {
 } from './lib/editor-windows-store';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { getRestoreTiming } from './lib/restore-timing';
+import { isRestoreSessionsOnStartupEnabled } from './lib/startup-restore';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
@@ -132,6 +133,10 @@ function AppContent() {
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoringProgress, setRestoringProgress] = useState({ current: 0, total: 0 });
   const [currentRestoreTarget, setCurrentRestoreTarget] = useState<{ name: string; host?: string; username?: string } | null>(null);
+  // Tabs restored from the previous session whose automatic reconnect was
+  // skipped because "Reconnect sessions on startup" is disabled. They stay
+  // `pending` and show a Connect action until the user reconnects them.
+  const [deferredRestoreTabIds, setDeferredRestoreTabIds] = useState<ReadonlySet<string>>(() => new Set());
 
   // Layout management
   const {
@@ -337,6 +342,30 @@ function AppContent() {
       const activeConnections = ActiveConnectionsManager.getActiveConnections();
 
       if (activeConnections.length === 0) {
+        return;
+      }
+
+      if (!isRestoreSessionsOnStartupEnabled()) {
+        // The user opted out of automatic reconnect at startup (issue #126).
+        // TerminalGroupProvider already restored the tab layout with every tab
+        // in the `pending` state; leave them there and start no backend
+        // connection. The active-connections list is intentionally kept so
+        // the tabs are persisted again for the next launch.
+        const restoredTabIds = new Set(
+          Object.values(stateRef.current.groups).flatMap(g => g.tabs.map(t => t.id))
+        );
+        const deferred = new Set(
+          activeConnections
+            .map(conn => conn.connectionId)
+            .filter(id => restoredTabIds.has(id))
+        );
+        console.log(`Session restore skipped by setting: ${deferred.size} tab(s) left pending`);
+        if (deferred.size > 0) {
+          setDeferredRestoreTabIds(deferred);
+          toast.info(t('app.restoreDeferred'), {
+            description: t('app.restoreDeferredDesc', { count: deferred.size }),
+          });
+        }
         return;
       }
 
@@ -986,6 +1015,14 @@ function AppContent() {
       setConnectionDialogOpen(true);
       return;
     }
+
+    // A deferred startup-restore tab is now being connected explicitly.
+    setDeferredRestoreTabIds(prev => {
+      if (!prev.has(tabId)) return prev;
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
 
     // Update tab status to connecting
     dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
@@ -2035,6 +2072,7 @@ function AppContent() {
                       onCloseTab: handleCloseTab,
                       onCloseAllTabs: handleCloseAllTabs,
                       onDetachTab: handleDetachTab,
+                      deferredRestoreTabIds,
                     }}>
                       <ErrorBoundary label={t('app.terminal')}>
                         <GridRenderer node={state.gridLayout} path={[]} />
