@@ -99,6 +99,16 @@ describe('connectionHasCredentials', () => {
     expect(connectionHasCredentials(base)).toBe(true);
   });
 
+  // A password-auth record whose password FIELD is absent (hand-edited or
+  // imported rows) is unconfigured, not "blank password": buildSshConnectRequest
+  // would serialize it to null and the backend would reject it outright, so it
+  // must open the dialog instead of making a guaranteed failed connect.
+  it('treats an absent password field as unconfigured, unlike a blank string', () => {
+    expect(connectionHasCredentials({ ...base, password: undefined })).toBe(false);
+    expect(connectionHasCredentials({ ...base, password: null })).toBe(false);
+    expect(connectionHasCredentials({ ...base, password: '' })).toBe(true);
+  });
+
   it('requires a key path for publickey auth', () => {
     expect(connectionHasCredentials({ ...base, authMethod: 'publickey' as const })).toBe(false);
     expect(

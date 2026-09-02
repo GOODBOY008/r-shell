@@ -170,26 +170,25 @@ async fn authenticate_session(
 ) -> Result<()> {
     let authenticated = match method {
         AuthMethod::Password { password } => {
-            // A blank password means the host may require no credentials at
-            // all (it grants the SSH "none" method) or have an empty-password
-            // account (PermitEmptyPasswords). Try "none" first for blank
-            // passwords — non-blank passwords go straight to password auth.
-            let granted = if password.is_empty() {
-                session
+            // A blank password can mean two things: the host has an
+            // empty-password account (PermitEmptyPasswords) or the host needs
+            // no credentials at all (it grants the SSH "none" method). Send
+            // the password request FIRST — servers with an explicit
+            // AuthenticationMethods list disconnect on a "none" probe, and
+            // PermitEmptyPasswords is the common case — then fall back to
+            // "none" only when the blank password is rejected. Non-blank
+            // passwords never send "none".
+            let mut authenticated = session
+                .authenticate_password(username, password)
+                .await
+                .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?;
+            if !authenticated && password.is_empty() {
+                authenticated = session
                     .authenticate_none(username)
                     .await
-                    .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?
-            } else {
-                false
-            };
-            if granted {
-                true
-            } else {
-                session
-                    .authenticate_password(username, password)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?
+                    .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?;
             }
+            authenticated
         }
         AuthMethod::PublicKey {
             key_path,

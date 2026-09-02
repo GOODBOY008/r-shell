@@ -196,19 +196,39 @@ mod tests {
     }
 
     // ============ Passwordless-host integration tests (issue #122) ============
-    // These need a local SSH server that accepts empty passwords. Start one with:
-    //   docker build -t rshell-empty-pass-sshd .   (Alpine + PermitEmptyPasswords)
+    // Fixture: src-tauri/docker/empty-password-sshd/Dockerfile — an Alpine
+    // OpenSSH server with user 'pi' whose password is EMPTY and
+    // PermitEmptyPasswords enabled, mirroring the Raspberry Pi style devices
+    // users report. Build & run:
+    //   docker build -t rshell-empty-pass-sshd src-tauri/docker/empty-password-sshd
     //   docker run -d --name rshell-sshd-empty -p 2222:22 rshell-empty-pass-sshd
-    // The container config: PasswordAuthentication=yes, PermitEmptyPasswords=yes,
-    // user 'pi' with an EMPTY password — mirrors the embedded devices users report.
-    const EMPTY_PASS_HOST: &str = "localhost";
-    const EMPTY_PASS_PORT: u16 = 2222;
+    // The endpoint is overridable via RSHELL_EMPTY_PASS_HOST /
+    // RSHELL_EMPTY_PASS_PORT (mirrors the RSHELL_TEST_SSH_* pattern).
+    //
+    // Note on coverage: authenticate_session sends the blank password request
+    // first (PermitEmptyPasswords hosts accept it directly), then falls back
+    // to the SSH "none" method for hosts that need no credentials at all.
+    // OpenSSH cannot be configured to reject a blank password while GRANTING
+    // "none" — empty-password accounts grant "none" together with
+    // PermitEmptyPasswords, and an explicit AuthenticationMethods list makes
+    // sshd disconnect on the blank password itself — so the "none" fallback
+    // branch has no OpenSSH fixture and is kept deliberately simple.
+    fn empty_password_endpoint() -> (String, u16) {
+        let host = std::env::var("RSHELL_EMPTY_PASS_HOST")
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("RSHELL_EMPTY_PASS_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(2222);
+        (host, port)
+    }
+
     const EMPTY_PASS_USER: &str = "pi";
 
-    fn empty_password_config(password: &str) -> SshConfig {
+    fn empty_password_config(host: &str, port: u16, password: &str) -> SshConfig {
         SshConfig {
-            host: EMPTY_PASS_HOST.to_string(),
-            port: EMPTY_PASS_PORT,
+            host: host.to_string(),
+            port,
             username: EMPTY_PASS_USER.to_string(),
             auth_method: AuthMethod::Password {
                 password: password.to_string(),
@@ -222,16 +242,18 @@ mod tests {
     }
 
     // The exact path r-shell takes for a stored connection with a blank
-    // password: authenticate_session tries "none" first (hosts that need no
-    // credentials grant it), then falls back to the empty-password request
-    // (hosts with PermitEmptyPasswords). Both must succeed end-to-end.
+    // password: authenticate_session sends the empty-password request first;
+    // hosts with PermitEmptyPasswords accept it directly.
     #[tokio::test]
     #[ignore]
     async fn test_empty_password_connect() {
+        let (host, port) = empty_password_endpoint();
         let client = Arc::new(RwLock::new(SshClient::new()));
         let mut client_write = client.write().await;
 
-        let result = client_write.connect(&empty_password_config("")).await;
+        let result = client_write
+            .connect(&empty_password_config(&host, port, ""))
+            .await;
 
         assert!(
             result.is_ok(),
@@ -247,11 +269,12 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_empty_password_host_rejects_wrong_password() {
+        let (host, port) = empty_password_endpoint();
         let client = Arc::new(RwLock::new(SshClient::new()));
         let mut client_write = client.write().await;
 
         let result = client_write
-            .connect(&empty_password_config("definitely-wrong"))
+            .connect(&empty_password_config(&host, port, "definitely-wrong"))
             .await;
 
         assert!(
