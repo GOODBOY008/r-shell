@@ -587,6 +587,151 @@ mod shell_integration_tests {
 
         send_and_expect_cwd(&pty, &format!("rm {marker}; cd ~"), "/home/testuser").await;
     }
+
+    // ── Default-key fallback (issue #103) ─────────────────────────────────────
+    // Fixture: src-tauri/docker/default-key-sshd/Dockerfile — an Alpine OpenSSH
+    // server with user 'testuser' whose ONLY credential is the committed E2E
+    // keypair (PasswordAuthentication no). Build & run:
+    //   docker build -t rshell-default-key-sshd src-tauri/docker/default-key-sshd
+    //   docker run -d --name rshell-sshd-default-key -p 2224:22 rshell-default-key-sshd
+    // The endpoint is overridable via RSHELL_DEFAULT_KEY_HOST /
+    // RSHELL_DEFAULT_KEY_PORT. Targets Unix hosts: $HOME repointing is how the
+    // default-key resolution (dirs::home_dir) picks up the temp key.
+    fn default_key_endpoint() -> (String, u16) {
+        let host = std::env::var("RSHELL_DEFAULT_KEY_HOST")
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("RSHELL_DEFAULT_KEY_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(2224);
+        (host, port)
+    }
+
+    /// Serialises ignored docker tests that repoint $HOME — a process-wide env
+    /// var other tests could otherwise observe while running in parallel.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // The exact path a user hits when creating a connection with publickey auth
+    // and no key path: commands.rs resolves the empty key path via
+    // resolve_private_key_path(None), which falls back to $HOME/.ssh/id_rsa.
+    // The fallback target here matches the server's authorized_keys, so the
+    // connection must authenticate end-to-end with the default key.
+    #[tokio::test]
+    #[ignore]
+    async fn docker_ssh_default_keypath_fallback() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().expect("tempdir for fake HOME");
+        let ssh_dir = home.path().join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).expect("create $HOME/.ssh");
+        let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docker/default-key-sshd/id_rsa");
+        std::fs::copy(&fixture_key, ssh_dir.join("id_rsa")).expect("copy fixture key to fake HOME");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(ssh_dir.join("id_rsa"), std::fs::Permissions::from_mode(0o600))
+                .expect("chmod 600 the fixture key");
+        }
+
+        struct RestoreHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreHome {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(home) => std::env::set_var("HOME", home),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let _restore = RestoreHome(previous_home);
+
+        // The exact production resolution for an empty key path.
+        let resolved =
+            crate::os_keypath::resolve_private_key_path(None).expect("default key resolves");
+        assert_eq!(
+            resolved,
+            ssh_dir.join("id_rsa").to_string_lossy(),
+            "fallback must pick $HOME/.ssh/id_rsa"
+        );
+
+        let (host, port) = default_key_endpoint();
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::PublicKey {
+                    key_path: resolved,
+                    passphrase: None,
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                tunnel: None,
+            })
+            .await
+            .expect("connect using the default-key fallback");
+
+        let output = client
+            .execute_command("echo default-keypath-e2e-ok")
+            .await
+            .expect("run command over the fallback connection");
+        assert!(
+            output.contains("default-keypath-e2e-ok"),
+            "command output: {output}"
+        );
+
+        client.disconnect().await.ok();
+    }
+
+    // Regression for the review comment on the default-key fallback: when a
+    // real key is rejected by the server, the error must name the key file
+    // that was attempted — otherwise a user whose default key is not
+    // authorized cannot tell which of their identities the server rejected.
+    #[tokio::test]
+    #[ignore]
+    async fn docker_ssh_auth_failure_names_attempted_key() {
+        use russh_keys::{encode_pkcs8_pem, key::KeyPair};
+        use std::io::Write;
+
+        let (host, port) = default_key_endpoint();
+
+        // A fresh key the fixture server does NOT authorize.
+        let key = KeyPair::generate_ed25519().expect("generate unauthorized key");
+        let mut pem = Vec::new();
+        encode_pkcs8_pem(&key, &mut pem).expect("encode unauthorized key");
+        let mut wrong_key = tempfile::NamedTempFile::new().expect("temp unauthorized key");
+        wrong_key.write_all(&pem).expect("write unauthorized key");
+        let wrong_key_path = wrong_key.path().to_string_lossy().into_owned();
+
+        let mut client = SshClient::new();
+        let err = client
+            .connect(&SshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::PublicKey {
+                    key_path: wrong_key_path.clone(),
+                    passphrase: None,
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                tunnel: None,
+            })
+            .await
+            .expect_err("an unauthorized key must be rejected");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&wrong_key_path) && msg.contains("authorized"),
+            "error should name the attempted key file, got: {msg}"
+        );
+    }
 }
 
 // ── Key-loading unit tests (no SSH server required) ──────────────────────────

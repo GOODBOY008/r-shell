@@ -312,13 +312,8 @@ export function ConnectionDialog({
     // A blank password is allowed — it is a valid credential for hosts that
     // allow passwordless login (e.g. PermitEmptyPasswords / "none"-auth
     // devices). If it is wrong, the backend reports a specific auth error.
-    if (config.authMethod === 'publickey' && !config.privateKeyPath) {
-      toast.error(t('connectionDialog.toast.privateKeyRequired'), {
-        description: t('connectionDialog.toast.privateKeyRequiredDesc'),
-      });
-      resetConnectionState();
-      return;
-    }
+    // An empty public key path is allowed too: the backend falls back to the
+    // user's default key (~/.ssh/id_rsa, then id_ed25519).
 
     // For SFTP/FTP/RDP/VNC protocols, delegate connection to App.tsx (via onConnect)
     // which calls the appropriate Tauri commands.

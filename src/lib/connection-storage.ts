@@ -64,6 +64,33 @@ export interface ConnectionFolder {
   sortOrder?: number;
 }
 
+export function connectionHasCredentials(data: ConnectionData): boolean {
+  const authMethod = data.authMethod || 'password';
+
+  // Desktop protocols connect without stored credentials.
+  if (data.protocol === 'RDP' || data.protocol === 'VNC') {
+    return true;
+  }
+
+  // File browsers (SFTP/FTP) support anonymous auth.
+  const isFileBrowser = data.protocol === 'SFTP' || data.protocol === 'FTP';
+  if (isFileBrowser && authMethod === 'anonymous') {
+    return true;
+  }
+
+  // Password auth: a present password field counts as a credential even when
+  // blank — hosts that allow passwordless login (PermitEmptyPasswords or the
+  // SSH "none" method) store an empty string. An *absent* field (undefined or
+  // null in hand-edited or imported records) is unconfigured: connecting would
+  // serialize it to null and the backend would reject it outright.
+  if (authMethod === 'password') {
+    return data.password != null;
+  }
+
+  // Public-key auth can fall back to the user's default SSH key.
+  return authMethod === 'publickey';
+}
+
 const CONNECTIONS_STORAGE_KEY = 'r-shell-connections';
 const FOLDERS_STORAGE_KEY = 'r-shell-connection-folders';
 

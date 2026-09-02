@@ -15,8 +15,8 @@ import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
-import { connectionHasCredentials, toConnectionConfig } from './lib/connection-config';
-import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
+import { toConnectionConfig } from './lib/connection-config';
+import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials } from './lib/connection-storage';
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { buildSftpConnectRequest, buildSshConnectRequest } from './lib/ssh-connect-request';
@@ -380,10 +380,7 @@ function AppContent() {
           continue;
         }
 
-        const isDesktopProto = connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
-        // Desktop protocols can connect with or without credentials; for the
-        // rest, a blank password is still a valid credential (passwordless SSH).
-        const hasCredentials = isDesktopProto || connectionHasCredentials(connectionData);
+        const hasCredentials = connectionHasCredentials(connectionData);
 
         if (!hasCredentials) {
           console.log(`Connection ${connectionData.name} has no saved credentials, skipping restore`);
