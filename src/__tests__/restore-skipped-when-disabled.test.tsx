@@ -15,7 +15,7 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
 import App from '../App';
 import { setRestoreTimingForTests } from '../lib/restore-timing';
@@ -27,6 +27,7 @@ const lifecycle = vi.hoisted(() => ({
   activeConnections: [] as Array<{ tabId: string; connectionId: string; order: number; tabType: string; protocol: string }>,
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
   clearActiveConnectionsCalls: 0,
+  dialogProps: null as Record<string, unknown> | null,
 }));
 
 let mockState: TerminalGroupState;
@@ -115,9 +116,16 @@ vi.mock('@/lib/restoration-manager', () => ({
 
 vi.mock('sonner', () => ({ toast: lifecycle.toast }));
 
+// Capture the dialog props so a test can drive the "save credentials" path
+// (onSave) exactly as the real dialog would.
 vi.mock('@/components/connection-dialog', async () => {
   const ReactModule = await import('react');
-  return { ConnectionDialog: () => ReactModule.createElement('div') };
+  return {
+    ConnectionDialog: (props: Record<string, unknown>) => {
+      lifecycle.dialogProps = props;
+      return ReactModule.createElement('div');
+    },
+  };
 });
 vi.mock('@/components/system-monitor', async () => {
   const ReactModule = await import('react');
@@ -299,5 +307,165 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       { timeout: 5000, interval: 50 },
     );
     expect(sshConnectCalls()).toHaveLength(1);
+  }, 15_000);
+
+  it('keeps a deferred tab pending (no terminal mounted) while its connect is in flight', async () => {
+    localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
+    );
+    let settle: ((value: { success: boolean }) => void) | undefined;
+    lifecycle.invoke.mockImplementation((command: string) => {
+      if (command === 'ssh_connect') {
+        return new Promise<{ success: boolean }>((resolve) => {
+          settle = resolve;
+        });
+      }
+      if (command === 'get_system_locale') return Promise.resolve('en-US');
+      return Promise.resolve({});
+    });
+
+    render(<App />);
+    await vi.waitFor(
+      () => {
+        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+
+    const firstPlaceholder = screen.getAllByText(DEFERRED_HINT)[0].parentElement as HTMLElement;
+    fireEvent.click(within(firstPlaceholder).getByRole('button', { name: 'Connect' }));
+    await vi.waitFor(
+      () => {
+        expect(sshConnectCalls()).toHaveLength(1);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+
+    // In flight: the pulsing placeholder replaces the Connect action and no
+    // PtyTerminal is mounted yet (it would send StartPty to a backend session
+    // that does not exist until ssh_connect succeeds).
+    expect(screen.getByText('Waiting for connection...')).toBeTruthy();
+    expect(screen.queryByTestId('pty')).toBeNull();
+    expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length - 1);
+
+    // Success remounts the tab as a terminal (RECONNECT_TAB).
+    await act(async () => {
+      settle?.({ success: true });
+    });
+    await vi.waitFor(
+      () => {
+        expect(screen.getByTestId('pty')).toBeTruthy();
+      },
+      { timeout: 5000, interval: 50 },
+    );
+    expect(screen.queryByText('Waiting for connection...')).toBeNull();
+  }, 15_000);
+
+  it('offers Connect again when the on-demand connect fails, without mounting a dead terminal', async () => {
+    localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
+    );
+    lifecycle.invoke.mockImplementation((command: string) => {
+      // "Authentication" marks the failure as permanent: no backoff retry.
+      if (command === 'ssh_connect') return Promise.resolve({ success: false, error: 'Authentication failed' });
+      if (command === 'get_system_locale') return Promise.resolve('en-US');
+      return Promise.resolve({});
+    });
+
+    render(<App />);
+    await vi.waitFor(
+      () => {
+        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+
+    const firstPlaceholder = screen.getAllByText(DEFERRED_HINT)[0].parentElement as HTMLElement;
+    fireEvent.click(within(firstPlaceholder).getByRole('button', { name: 'Connect' }));
+    await vi.waitFor(
+      () => {
+        expect(lifecycle.toast.error).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+
+    // The tab is back to the deferred state: Connect is offered again and no
+    // terminal was mounted for a session that never existed.
+    await vi.waitFor(
+      () => {
+        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+    expect(screen.queryByTestId('pty')).toBeNull();
+    expect(sshConnectCalls()).toHaveLength(1);
+  }, 15_000);
+
+  it('reconnects the exact clicked tab after credentials are supplied in the dialog', async () => {
+    localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
+    );
+    // conn-1 is saved without a password: Connect must open the credentials
+    // dialog instead of connecting.
+    const saved = JSON.parse(localStorage.getItem('r-shell-connections') ?? '[]') as Array<Record<string, unknown>>;
+    delete saved[0].password;
+    localStorage.setItem('r-shell-connections', JSON.stringify(saved));
+    lifecycle.dialogProps = null;
+
+    render(<App />);
+    await vi.waitFor(
+      () => {
+        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+
+    const firstPlaceholder = screen.getAllByText(DEFERRED_HINT)[0].parentElement as HTMLElement;
+    fireEvent.click(within(firstPlaceholder).getByRole('button', { name: 'Connect' }));
+    await vi.waitFor(
+      () => {
+        expect(lifecycle.dialogProps?.open).toBe(true);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+    expect(sshConnectCalls()).toHaveLength(0);
+    expect((lifecycle.dialogProps?.editingConnection as { id: string }).id).toBe(TAB_IDS[0]);
+
+    // Saving credentials from the dialog must reconnect the clicked (primary)
+    // tab itself, not spawn a "-dup-" tab or pick another duplicate.
+    const onSave = lifecycle.dialogProps?.onSave as (config: unknown) => Promise<void>;
+    await act(async () => {
+      await onSave({
+        id: TAB_IDS[0],
+        name: 'Server 1',
+        host: 'example.com',
+        port: 22,
+        username: 'root',
+        password: 'secret',
+        protocol: 'SSH',
+        authMethod: 'password',
+      });
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(sshConnectCalls()).toHaveLength(1);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+    const [, args] = sshConnectCalls()[0] as [string, { request: { connection_id: string } }];
+    expect(args.request.connection_id).toBe(TAB_IDS[0]);
+
+    await vi.waitFor(
+      () => {
+        expect(screen.getByTestId('pty')).toBeTruthy();
+      },
+      { timeout: 5000, interval: 50 },
+    );
+    // Still three tabs: the two untouched ones remain deferred, none was added.
+    expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length - 1);
   }, 15_000);
 });
