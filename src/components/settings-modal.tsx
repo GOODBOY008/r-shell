@@ -1042,12 +1042,13 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>{t('settings.connection.restoreSessionsOnStartup')}</Label>
+                    <Label htmlFor="restore-sessions-on-startup">{t('settings.connection.restoreSessionsOnStartup')}</Label>
                     <p className="text-sm text-muted-foreground">
                       {t('settings.connection.restoreSessionsOnStartupDesc')}
                     </p>
                   </div>
                   <Switch
+                    id="restore-sessions-on-startup"
                     checked={settings.restoreSessionsOnStartup}
                     onCheckedChange={(checked) => updateSetting('restoreSessionsOnStartup', checked)}
                   />
