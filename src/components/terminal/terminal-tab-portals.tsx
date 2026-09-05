@@ -10,6 +10,8 @@ import React, {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
+import { RefreshCw } from 'lucide-react';
+import { Button } from '../ui/button';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import type { TerminalTab } from '../../lib/terminal-group-types';
@@ -51,7 +53,7 @@ function useThemeKey(): number {
 function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: number }) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onReconnectTab, onDetachTab } = useTerminalCallbacks();
+  const { onReconnectTab, onDetachTab, deferredRestoreTabIds } = useTerminalCallbacks();
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
@@ -122,10 +124,24 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
       />
     );
   } else if (tab.connectionStatus === 'pending') {
+    // A tab restored from the previous session whose automatic reconnect was
+    // skipped ("Reconnect sessions on startup" off) is not waiting for anything:
+    // offer an explicit Connect action instead of the pulsing placeholder.
+    const isDeferredRestore = deferredRestoreTabIds?.has(tab.id) ?? false;
     content = (
       <div className="h-full w-full flex items-center justify-center bg-muted/30">
-        <div className="text-center text-muted-foreground">
-          <div className="animate-pulse">{t('app.waitingForConnection')}</div>
+        <div className="text-center text-muted-foreground space-y-3">
+          {isDeferredRestore ? (
+            <>
+              <div>{t('app.restoreDeferredHint')}</div>
+              <Button size="sm" variant="outline" onClick={handleReconnect}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                {t('app.connectNow')}
+              </Button>
+            </>
+          ) : (
+            <div className="animate-pulse">{t('app.waitingForConnection')}</div>
+          )}
         </div>
       </div>
     );

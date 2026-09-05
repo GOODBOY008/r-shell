@@ -51,6 +51,11 @@
     "connectionError": "连接错误",
     "connectionErrorDesc": "连接时发生意外错误。",
     "waitingForConnection": "等待连接...",
+    "restoreDeferred": "会话未重新连接",
+    "restoreDeferredDesc_one": "上次会话的 {{count}} 个标签页已恢复但未连接。点击标签页上的“连接”以重新连接，或在设置中启用“启动时重新连接会话”。",
+    "restoreDeferredDesc_other": "上次会话的 {{count}} 个标签页已恢复但未连接。点击标签页上的“连接”以重新连接，或在设置中启用“启动时重新连接会话”。",
+    "restoreDeferredHint": "启动时自动重新连接已关闭",
+    "connectNow": "连接",
     "restoreTitle": "工作区恢复",
     "restoreSubtitle": "正在将您的连接恢复上线",
     "restoreReconnecting": "正在重新连接 {{name}}",
@@ -324,7 +329,9 @@
       "connectionTimeout": "连接超时：{{timeout}}秒",
       "keepAliveInterval": "保持连接间隔：{{interval}}秒",
       "autoReconnect": "自动重新连接",
-      "autoReconnectDesc": "连接断开时自动重新连接"
+      "autoReconnectDesc": "连接断开时自动重新连接",
+      "restoreSessionsOnStartup": "启动时重新连接会话",
+      "restoreSessionsOnStartupDesc": "应用启动时自动重新连接上次会话中打开的标签页。关闭后标签页仍会恢复，但保持未连接状态，直到您手动连接。"
     },
     "security": {
       "title": "安全设置",

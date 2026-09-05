@@ -115,6 +115,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     connectionTimeout: 30,
     keepAliveInterval: 60,
     autoReconnect: true,
+    restoreSessionsOnStartup: true,
     
     // Security settings
     hostKeyVerification: true,
@@ -363,6 +364,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         connectionTimeout: 30,
         keepAliveInterval: 60,
         autoReconnect: true,
+        restoreSessionsOnStartup: true,
         hostKeyVerification: true,
         savePasswords: false,
         autoLockTimeout: 30,
@@ -1033,6 +1035,22 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   <Switch
                     checked={settings.autoReconnect}
                     onCheckedChange={(checked) => updateSetting('autoReconnect', checked)}
+                  />
+                </div>
+
+                <Separator />
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="restore-sessions-on-startup">{t('settings.connection.restoreSessionsOnStartup')}</Label>
+                    <p className="text-sm text-muted-foreground">
+                      {t('settings.connection.restoreSessionsOnStartupDesc')}
+                    </p>
+                  </div>
+                  <Switch
+                    id="restore-sessions-on-startup"
+                    checked={settings.restoreSessionsOnStartup}
+                    onCheckedChange={(checked) => updateSetting('restoreSessionsOnStartup', checked)}
                   />
                 </div>
               </CardContent>

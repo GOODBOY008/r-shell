@@ -49,6 +49,7 @@ import {
 } from './lib/editor-windows-store';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { getRestoreTiming } from './lib/restore-timing';
+import { isRestoreSessionsOnStartupEnabled } from './lib/startup-restore';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
@@ -132,6 +133,15 @@ function AppContent() {
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoringProgress, setRestoringProgress] = useState({ current: 0, total: 0 });
   const [currentRestoreTarget, setCurrentRestoreTarget] = useState<{ name: string; host?: string; username?: string } | null>(null);
+  // Tabs restored from the previous session whose automatic reconnect was
+  // skipped because "Reconnect sessions on startup" is disabled. They stay
+  // `pending` and show a Connect action until the user reconnects them.
+  const [deferredRestoreTabIds, setDeferredRestoreTabIds] = useState<ReadonlySet<string>>(() => new Set());
+  // The exact tab whose Connect/Reconnect opened the credentials dialog, so
+  // handleSaveConnection reconnects that tab. Matching by connection id alone
+  // misses primary tabs (no originalConnectionId) and is ambiguous for
+  // duplicates.
+  const [pendingReconnectTabId, setPendingReconnectTabId] = useState<string | null>(null);
 
   // Layout management
   const {
@@ -337,6 +347,30 @@ function AppContent() {
       const activeConnections = ActiveConnectionsManager.getActiveConnections();
 
       if (activeConnections.length === 0) {
+        return;
+      }
+
+      if (!isRestoreSessionsOnStartupEnabled()) {
+        // The user opted out of automatic reconnect at startup (issue #126).
+        // TerminalGroupProvider already restored the tab layout with every tab
+        // in the `pending` state; leave them there and start no backend
+        // connection. The active-connections list is intentionally kept so
+        // the tabs are persisted again for the next launch.
+        const restoredTabIds = new Set(
+          Object.values(stateRef.current.groups).flatMap(g => g.tabs.map(t => t.id))
+        );
+        const deferred = new Set(
+          activeConnections
+            .map(conn => conn.connectionId)
+            .filter(id => restoredTabIds.has(id))
+        );
+        console.log(`Session restore skipped by setting: ${deferred.size} tab(s) left pending`);
+        if (deferred.size > 0) {
+          setDeferredRestoreTabIds(deferred);
+          toast.info(t('app.restoreDeferred'), {
+            description: t('app.restoreDeferredDesc', { count: deferred.size }),
+          });
+        }
         return;
       }
 
@@ -805,6 +839,7 @@ function AppContent() {
     setConnectionDialogOpen(true);
     setEditingConnection(null);
     setPendingConnectionId(null);
+    setPendingReconnectTabId(null);
   }, []);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
@@ -983,15 +1018,74 @@ function AppContent() {
       });
       setEditingConnection(toConnectionConfig(connectionData));
       setPendingConnectionId(originalConnectionId);
+      setPendingReconnectTabId(tabId);
       setConnectionDialogOpen(true);
       return;
     }
 
-    // Update tab status to connecting
-    dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
+    const isDesktop = tabToReconnect.tabType === 'desktop' ||
+      connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
+
+    // A `pending` tab has no terminal mounted (deferred startup restore, or a
+    // connect still in flight). Keep it pending while the backend session is
+    // established: dispatching `connecting` now would mount PtyTerminal, which
+    // sends StartPty against a session that does not exist yet and can race a
+    // dead-session reconnect with this one. RECONNECT_TAB on success is what
+    // mounts the terminal.
+    const wasPending = tabToReconnect.connectionStatus === 'pending';
+    // Swap the Connect action for the in-flight placeholder while connecting.
+    setDeferredRestoreTabIds(prev => {
+      if (!prev.has(tabId)) return prev;
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
+    /**
+     * Failed while still pending: offer Connect again instead of a dead
+     * terminal. Applies to backoff retries too (they re-enter with the marker
+     * already cleared), so the final failure never strands the tab.
+     */
+    const failPending = () => {
+      setDeferredRestoreTabIds(prev => new Set(prev).add(tabId));
+    };
+
+    if (!wasPending) {
+      dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
+    }
 
     try {
-      if (isFileBrowser) {
+      if (isDesktop) {
+        // RDP/VNC reconnect: same request as the startup restore path.
+        try {
+          await invoke('desktop_disconnect', { connectionId: tabId });
+        } catch {
+          // Ignore errors when disconnecting
+        }
+
+        const proto = connectionData.protocol;
+        await invoke('desktop_connect', {
+          request: {
+            connection_id: tabId,
+            host: connectionData.host,
+            port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
+            protocol: proto.toLowerCase(),
+            username: connectionData.username || '',
+            password: connectionData.password || '',
+            domain: connectionData.domain || null,
+            resolution: connectionData.rdpResolution || '1920x1080',
+            color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
+          }
+        });
+
+        clearReconnectRetry(tabId);
+        if (!tabToReconnect.originalConnectionId) {
+          ConnectionStorageManager.updateLastConnected(originalConnectionId);
+        }
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
+        toast.success(t('app.reconnected'), {
+          description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
+        });
+      } else if (isFileBrowser) {
         // SFTP/FTP reconnect
         try {
           if (isSftp) {
@@ -1072,7 +1166,11 @@ function AppContent() {
             // Stay 'connecting' — the next attempt is already scheduled.
           } else {
             clearReconnectRetry(tabId);
-            dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+            if (wasPending) {
+              failPending();
+            } else {
+              dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+            }
             toast.error(t('app.reconnectionFailed'), {
               description: result.error || t('app.reconnectionFailedDesc'),
             });
@@ -1082,7 +1180,11 @@ function AppContent() {
     } catch (error) {
       console.error('Error reconnecting:', error);
       clearReconnectRetry(tabId);
-      dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+      if (wasPending) {
+        failPending();
+      } else {
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+      }
       toast.error(t('app.reconnectionError'), {
         description: error instanceof Error ? error.message : t('app.reconnectionErrorDesc'),
       });
@@ -1557,6 +1659,7 @@ function AppContent() {
         setEditingConnection(toConnectionConfig(connectionData));
         setConnectionDialogOpen(true);
         setPendingConnectionId(null);
+        setPendingReconnectTabId(null);
       } else {
         toast.error(t('app.connectionNotFound'), {
           description: t('app.connectionNotFoundDesc1'),
@@ -1580,14 +1683,20 @@ function AppContent() {
     const wasPendingConnect = pendingConnectionId === config.id;
     if (wasPendingConnect) {
       setPendingConnectionId(null);
+      const targetTabId = pendingReconnectTabId;
+      setPendingReconnectTabId(null);
 
       // Reuse the existing disconnected/pending tab (created by the initial failed
       // connection attempt) instead of creating a new one. This avoids leaving a
-      // dead tab behind after the user saves a fix and auto-connects.
-      const pendingTab = allTabs.find(tab =>
-        tab.originalConnectionId === config.id &&
-        (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
-      );
+      // dead tab behind after the user saves a fix and auto-connects. Prefer the
+      // exact tab that opened the dialog: a primary tab has no
+      // originalConnectionId, and several duplicates would be ambiguous.
+      const pendingTab =
+        (targetTabId ? allTabs.find(tab => tab.id === targetTabId) : undefined) ??
+        allTabs.find(tab =>
+          tab.originalConnectionId === config.id &&
+          (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
+        );
       const sessionId = pendingTab ? pendingTab.id : `${config.id}-dup-${Date.now()}`;
 
       const isSftp = config.protocol === 'SFTP';
@@ -1697,6 +1806,13 @@ function AppContent() {
               // the old terminal content showing.)
               dispatch({ type: 'UPDATE_TAB_NAME', tabId: sessionId, name: config.name });
               dispatch({ type: 'RECONNECT_TAB', tabId: sessionId });
+              // A deferred startup-restore tab is connected now.
+              setDeferredRestoreTabIds(prev => {
+                if (!prev.has(sessionId)) return prev;
+                const next = new Set(prev);
+                next.delete(sessionId);
+                return next;
+              });
             } else {
               // No existing tab — create a new one
               const newTab: TerminalTab = {
@@ -1727,7 +1843,7 @@ function AppContent() {
         }
       }
     }
-  }, [state.groups, state.activeGroupId, allTabs, dispatch, t, pendingConnectionId]);
+  }, [state.groups, state.activeGroupId, allTabs, dispatch, t, pendingConnectionId, pendingReconnectTabId]);
 
   // Get recent connections for quick connect
   const recentConnections = useMemo(() => {
@@ -2035,6 +2151,7 @@ function AppContent() {
                       onCloseTab: handleCloseTab,
                       onCloseAllTabs: handleCloseAllTabs,
                       onDetachTab: handleDetachTab,
+                      deferredRestoreTabIds,
                     }}>
                       <ErrorBoundary label={t('app.terminal')}>
                         <GridRenderer node={state.gridLayout} path={[]} />
