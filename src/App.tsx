@@ -17,6 +17,7 @@ import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
 import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials } from './lib/connection-storage';
+import { openConnectionSecrets, sealLegacySecrets, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { buildSftpConnectRequest, buildSshConnectRequest } from './lib/ssh-connect-request';
@@ -314,6 +315,36 @@ function AppContent() {
     }
   }, [allTabs]);
 
+  // One-time migration: encrypt any legacy plaintext secrets still sitting in
+  // localStorage (from app versions before encrypted-at-rest storage). The
+  // restore effect awaits this so restored connections can decrypt them.
+  const legacyMigrationRef = useRef<Promise<void> | null>(null);
+
+  // Kick off the legacy-secret migration on mount.
+  useEffect(() => {
+    legacyMigrationRef.current = (async () => {
+      const connections = ConnectionStorageManager.getConnections();
+      const withPlaintext = connections.filter((c) =>
+        SECRET_FIELDS.some((f) => isLegacyPlaintext(c[f])),
+      );
+      for (const conn of withPlaintext) {
+        try {
+          const migrated = await sealLegacySecrets(conn as unknown as Record<string, unknown> & { id: string });
+          if (migrated) {
+            ConnectionStorageManager.updateConnection(conn.id, conn);
+            console.log(`[Credential] Encrypted stored secrets for ${conn.id}`);
+          }
+        } catch (error) {
+          // Keep the legacy plaintext on failure — never destroy the only copy.
+          console.error(`[Credential] Migration failed for ${conn.id}; keeping plaintext:`, error);
+        }
+      }
+      if (withPlaintext.length > 0) {
+        console.log(`[Credential] Legacy secret encryption checked ${withPlaintext.length} connection(s)`);
+      }
+    })();
+  }, []);
+
   // Restore connections on mount
   useEffect(() => {
     /** Race a promise against a timeout; rejects with a clear message on expiry. */
@@ -344,6 +375,14 @@ function AppContent() {
     let restoreCancelled = false;
 
     const restoreConnections = async () => {
+      // Wait for the one-time legacy-secret encryption so restored
+      // connections can decrypt their stored credentials.
+      try {
+        await legacyMigrationRef.current;
+      } catch (error) {
+        console.error('[Credential] Legacy migration did not complete cleanly; continuing restore:', error);
+      }
+
       const activeConnections = ActiveConnectionsManager.getActiveConnections();
 
       if (activeConnections.length === 0) {
@@ -413,6 +452,10 @@ function AppContent() {
           failedCount++;
           continue;
         }
+
+        // Decrypt stored secrets for the connect requests below (tunnel
+        // credentials included) so the credential check sees plaintext.
+        await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
 
         const hasCredentials = connectionHasCredentials(connectionData);
 
@@ -654,6 +697,9 @@ function AppContent() {
       const connectionData = ConnectionStorageManager.getConnection(connection.id);
       if (!connectionData) return;
 
+      // Decrypt stored secrets for the connect requests below.
+      await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
+
       const isSftp = connectionData.protocol === 'SFTP';
       const isFtp = connectionData.protocol === 'FTP';
       const isFileBrowser = isSftp || isFtp;
@@ -855,6 +901,9 @@ function AppContent() {
       return;
     }
 
+    // Decrypt stored secrets for the connect requests below.
+    await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
+
     const isSftp = tabToDuplicate.protocol === 'SFTP' || connectionData.protocol === 'SFTP';
     const isFtp = tabToDuplicate.protocol === 'FTP' || connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
@@ -1003,6 +1052,9 @@ function AppContent() {
       });
       return;
     }
+
+    // Decrypt stored secrets for the connect requests below.
+    await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
 
     const isSftp = tabToReconnect.protocol === 'SFTP' || connectionData.protocol === 'SFTP';
     const isFtp = tabToReconnect.protocol === 'FTP' || connectionData.protocol === 'FTP';
@@ -1671,6 +1723,22 @@ function AppContent() {
   const handleSaveConnection = useCallback(async (config: ConnectionConfig) => {
     if (!config.id) return;
 
+    // A blank secret on a saved connection means "keep the stored secret" —
+    // decrypt the stored values so the connect requests below carry the real
+    // values (covers the password, tunnel credentials, etc.).
+    if (SECRET_FIELDS.some((f) => !config[f])) {
+      const stored = ConnectionStorageManager.getConnection(config.id);
+      if (stored) {
+        const withSecrets: Record<string, unknown> = { ...stored };
+        await openConnectionSecrets(withSecrets);
+        for (const f of SECRET_FIELDS) {
+          if (!config[f] && typeof withSecrets[f] === 'string' && withSecrets[f]) {
+            (config as unknown as Record<string, unknown>)[f] = withSecrets[f];
+          }
+        }
+      }
+    }
+
     // Update any open tab name for this connection
     for (const group of Object.values(state.groups)) {
       for (const tab of group.tabs) {
@@ -1875,6 +1943,9 @@ function AppContent() {
       });
       return;
     }
+
+    // Decrypt stored secrets for the connect requests below.
+    await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
 
     const isSftp = connectionData.protocol === 'SFTP';
     const isFtp = connectionData.protocol === 'FTP';

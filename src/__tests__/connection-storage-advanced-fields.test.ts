@@ -3,16 +3,34 @@
  * Verifies that fields edited in the dialog's Advanced / Proxy tabs survive a
  * save → reload round trip (regression: they were previously dropped).
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ConnectionStorageManager } from '../lib/connection-storage';
+import { sealSecret } from '../lib/credential-crypto';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (command: string, args: { secret?: string }) => {
+    if (command === 'credential_seal') {
+      return `v1:test:${btoa(encodeURIComponent(args.secret ?? ''))}`;
+    }
+    return {};
+  }),
+}));
 
 beforeEach(() => {
   localStorage.clear();
   ConnectionStorageManager.initialize();
 });
 
+
+/** The stored value must be ciphertext (v1 sealed), never the plaintext. */
+function expectSealed(value: unknown, plaintext: string): void {
+  expect(typeof value).toBe('string');
+  expect(value as string).toMatch(/^v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
+  expect(value as string).not.toContain(plaintext);
+}
+
 describe('connection-storage advanced & proxy field persistence', () => {
-  it('round-trips proxy fields through saveConnectionWithId', () => {
+  it('round-trips proxy fields through saveConnectionWithId', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-1', {
       name: 'My Server',
       host: 'example.com',
@@ -24,7 +42,7 @@ describe('connection-storage advanced & proxy field persistence', () => {
       proxyHost: 'proxy.example.com',
       proxyPort: 1080,
       proxyUsername: 'user',
-      proxyPassword: 'pass',
+      proxyPassword: await sealSecret('pass'),
     });
 
     const loaded = ConnectionStorageManager.getConnection('conn-1');
@@ -32,7 +50,7 @@ describe('connection-storage advanced & proxy field persistence', () => {
     expect(loaded?.proxyHost).toBe('proxy.example.com');
     expect(loaded?.proxyPort).toBe(1080);
     expect(loaded?.proxyUsername).toBe('user');
-    expect(loaded?.proxyPassword).toBe('pass');
+    expectSealed(loaded?.proxyPassword, 'pass');
   });
 
   it('round-trips advanced SSH fields through saveConnectionWithId', () => {
@@ -56,7 +74,7 @@ describe('connection-storage advanced & proxy field persistence', () => {
     expect(loaded?.serverAliveCountMax).toBe(5);
   });
 
-  it('updateConnection preserves advanced & proxy fields', () => {
+  it('updateConnection preserves advanced & proxy fields', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-3', {
       name: 'My Server',
       host: 'example.com',
@@ -75,7 +93,7 @@ describe('connection-storage advanced & proxy field persistence', () => {
       proxyHost: 'proxy.example.com',
       proxyPort: 3128,
       proxyUsername: 'user',
-      proxyPassword: 'pass',
+      proxyPassword: await sealSecret('pass'),
     });
 
     const loaded = ConnectionStorageManager.getConnection('conn-3');
@@ -87,10 +105,10 @@ describe('connection-storage advanced & proxy field persistence', () => {
     expect(loaded?.proxyHost).toBe('proxy.example.com');
     expect(loaded?.proxyPort).toBe(3128);
     expect(loaded?.proxyUsername).toBe('user');
-    expect(loaded?.proxyPassword).toBe('pass');
+    expectSealed(loaded?.proxyPassword, 'pass');
   });
 
-  it('round-trips SSH tunnel fields through saveConnectionWithId', () => {
+  it('round-trips SSH tunnel fields through saveConnectionWithId', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-4', {
       name: 'My Server',
       host: 'example.com',
@@ -105,7 +123,7 @@ describe('connection-storage advanced & proxy field persistence', () => {
       tunnelAuthMethod: 'publickey',
       tunnelPassword: '',
       tunnelKeyPath: '~/.ssh/id_ed25519',
-      tunnelPassphrase: 'secret',
+      tunnelPassphrase: await sealSecret('secret'),
     });
 
     const loaded = ConnectionStorageManager.getConnection('conn-4');
@@ -115,6 +133,6 @@ describe('connection-storage advanced & proxy field persistence', () => {
     expect(loaded?.tunnelUsername).toBe('jumpuser');
     expect(loaded?.tunnelAuthMethod).toBe('publickey');
     expect(loaded?.tunnelKeyPath).toBe('~/.ssh/id_ed25519');
-    expect(loaded?.tunnelPassphrase).toBe('secret');
+    expectSealed(loaded?.tunnelPassphrase, 'secret');
   });
 });

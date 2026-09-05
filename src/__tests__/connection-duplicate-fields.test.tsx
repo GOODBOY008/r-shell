@@ -94,9 +94,21 @@ describe('ConnectionManager duplicate', () => {
     expect(copy).toBeTruthy();
     expect(copy!.id).not.toBe(FULL_CONNECTION.id);
 
-    // Every field must be carried over except id/createdAt (and the name).
-    const { id: _srcId, createdAt: _srcCreated, name: _srcName, ...expected } = FULL_CONNECTION;
-    const { id: _copyId, createdAt: _copyCreated, name: _copyName, ...actual } = copy!;
+    // Every field must be carried over except id/createdAt/name and the
+    // secrets — plaintext secrets never round-trip through storage (they are
+    // stripped on read), so a duplicate cannot carry them either.
+    const {
+      id: _srcId, createdAt: _srcCreated, name: _srcName,
+      password: _pw, passphrase: _pp, privateKeyPath: _pkp,
+      proxyPassword: _ppw, vncPassword: _vpw,
+      ...expected
+    } = FULL_CONNECTION;
+    const {
+      id: _copyId, createdAt: _copyCreated, name: _copyName,
+      password: _pw2, passphrase: _pp2, privateKeyPath: _pkp2,
+      proxyPassword: _ppw2, vncPassword: _vpw2,
+      ...actual
+    } = copy!;
     expect(actual).toEqual(expected);
   });
 

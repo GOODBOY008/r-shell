@@ -2,6 +2,7 @@
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
  */
+import { SECRET_FIELDS } from './credential-crypto';
 
 export interface ConnectionData {
   id: string;
@@ -98,6 +99,34 @@ const FOLDERS_STORAGE_KEY = 'r-shell-connection-folders';
 const LEGACY_SESSIONS_STORAGE_KEY = 'r-shell-sessions';
 const LEGACY_FOLDERS_STORAGE_KEY = 'r-shell-session-folders';
 
+/**
+ * Secret fields that must never be persisted as plaintext. Values in `v1:`
+ * sealed format (encrypted via the Rust credential_seal command) are fine;
+ * anything else non-empty is legacy plaintext and is stripped before writing.
+ */
+
+function stripUnencryptedSecrets(connection: ConnectionData): ConnectionData {
+  const clone = { ...connection };
+  for (const field of SECRET_FIELDS) {
+    const value = clone[field];
+    if (typeof value === 'string' && value.length > 0 && !value.startsWith('v1:')) {
+      delete clone[field];
+    }
+  }
+  return clone;
+}
+
+/**
+ * Single write path for the connections array: strips any unencrypted secret
+ * before it can reach localStorage. Sealed (encrypted) values pass through.
+ */
+function persistConnections(connections: ConnectionData[]): void {
+  localStorage.setItem(
+    CONNECTIONS_STORAGE_KEY,
+    JSON.stringify(connections.map(stripUnencryptedSecrets)),
+  );
+}
+
 export class ConnectionStorageManager {
   /**
    * Migrate data from old session storage to new connection storage
@@ -120,7 +149,7 @@ export class ConnectionStorageManager {
             ...session,
             folder: session.folder?.replace(/All Sessions/g, 'All Connections')
           }));
-          localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+          persistConnections(connections);
           console.log(`[Migration] Migrated ${connections.length} sessions to connections`);
         }
         
@@ -222,7 +251,7 @@ export class ConnectionStorageManager {
     };
 
     connections.push(newConnection);
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
 
     return newConnection;
   }
@@ -253,7 +282,7 @@ export class ConnectionStorageManager {
       connections.push(newConnection);
     }
 
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
 
     return newConnection;
   }
@@ -272,7 +301,7 @@ export class ConnectionStorageManager {
       ...updates,
     };
 
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
     return connections[index];
   }
 
@@ -294,7 +323,7 @@ export class ConnectionStorageManager {
 
     if (filtered.length === connections.length) return false;
 
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(filtered));
+    persistConnections(filtered);
     return true;
   }
 
@@ -384,7 +413,7 @@ export class ConnectionStorageManager {
     }
 
     localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
     return true;
   }
 
@@ -437,7 +466,7 @@ export class ConnectionStorageManager {
     }
 
     localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
     return true;
   }
 
@@ -508,7 +537,7 @@ export class ConnectionStorageManager {
     if (filteredFolders.length === folders.length) return false;
 
     localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(filteredFolders));
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(filteredConnections));
+    persistConnections(filteredConnections);
 
     return true;
   }
@@ -667,7 +696,7 @@ export class ConnectionStorageManager {
         });
       });
 
-      localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+      persistConnections(connections);
       localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
 
       return imported.connections.length;

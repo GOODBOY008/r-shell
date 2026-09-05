@@ -470,6 +470,8 @@ pub fn run() {
             commands::request_app_quit,
             commands::cancel_app_quit,
             commands::editor_dirty_changed,
+            commands::credential_seal,
+            commands::credential_open,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
