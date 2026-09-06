@@ -39,6 +39,17 @@ import { GridRenderer } from './components/terminal/grid-renderer';
 import { ErrorBoundary } from './components/error-boundary';
 import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './components/ui/alert-dialog';
+import { buttonVariants } from './components/ui/button';
 import { toast } from 'sonner';
 import { dispatchTerminalCommand, type TerminalCommand } from './lib/terminal-commands';
 import {
@@ -110,6 +121,10 @@ function AppContent() {
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const [connectionInitialFolder, setConnectionInitialFolder] = useState<string | undefined>();
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  // Sessions-still-connected quit prompt: the backend quit guard emits
+  // `confirm-quit-sessions` with the active session count when quitting
+  // would tear down live SSH work (quit_guard.rs).
+  const [sessionQuitCount, setSessionQuitCount] = useState<number | null>(null);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   // Track whether the edit dialog was opened due to a failed connection attempt (double-click)
   // vs. direct edit (right-click). When non-null and matches saved config id, auto-connect after save.
@@ -227,10 +242,10 @@ function AppContent() {
     if (!activeGroup?.activeTabId) {
       // No terminal tabs left: close the main window itself (Terminal.app /
       // VS Code close their window when Cmd+W hits an empty session list).
-      // On macOS the app keeps running afterwards — the RunEvent::
-      // ExitRequested handler in lib.rs prevents the last-window exit; on
-      // Windows/Linux the process exits with the last window per platform
-      // convention. Every Ctrl+W entry point (DOM shortcut, global
+      // On macOS the CloseRequested handler in lib.rs turns this into a
+      // hide: the app keeps running and the Dock reopens the same webview;
+      // on Windows/Linux the process exits with the last window per
+      // platform convention. Every Ctrl+W entry point (DOM shortcut, global
       // shortcut, macOS menu close_connection) converges here.
       import('@tauri-apps/api/window')
         .then(({ getCurrentWindow }) => getCurrentWindow().close())
@@ -1657,6 +1672,28 @@ function AppContent() {
     setSettingsModalOpen(true);
   }, []);
 
+  // App quit with live SSH sessions: the backend quit guard (quit_guard.rs)
+  // emits `confirm-quit-sessions` with the connection count — Terminal.app
+  // style confirmation before quitting tears down remote work. Confirming
+  // re-runs the quit with the session gate satisfied (dirty editor windows
+  // are still consulted); Cancel aborts the quit entirely.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<number>('confirm-quit-sessions', (event) => {
+      if (!disposed) setSessionQuitCount(event.payload);
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
   useEffect(() => {
     const unlistenPromise = listen<string>('menu-action', (event) => {
@@ -2356,6 +2393,45 @@ function AppContent() {
         }}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />
+
+      {/* Quit confirmation while SSH sessions are still connected (emitted
+          by the backend quit guard). Only the Cancel button notifies the
+          backend — clicking Quit must not cancel the quit it just confirmed,
+          so onOpenChange merely clears the prompt state. */}
+      <AlertDialog
+        open={sessionQuitCount !== null}
+        onOpenChange={(open) => {
+          if (!open) setSessionQuitCount(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('app.quitSessionsTitle', { count: sessionQuitCount ?? 0 })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('app.quitSessionsDescription')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                invoke('cancel_app_quit').catch(() => {});
+              }}
+            >
+              {t('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'destructive' })}
+              onClick={() => {
+                void invoke('confirm_app_quit').catch(() => {});
+              }}
+            >
+              {t('app.quitSessionsConfirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Toaster richColors position="top-right" />
     </div>

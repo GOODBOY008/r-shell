@@ -364,6 +364,23 @@ pub fn run() {
             let _ = app.emit("menu-action", event.id().0.as_str());
         })
         .on_window_event(|window, event| {
+            // macOS close semantics: the red X (and any programmatic close of
+            // the main window, e.g. Ctrl+W with no tabs left) hides the
+            // window instead of destroying it. Clicking the Dock icon then
+            // shows the SAME webview via RunEvent::Reopen — terminals,
+            // scrollback and layout are untouched — instead of the
+            // destroy→rebuild cycle that re-ran the whole frontend boot and
+            // session-restore ceremony like an app restart. Quitting still
+            // goes through quit_app / quit_guard; on Windows/Linux the red X
+            // keeps quitting with the last window (platform convention).
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+            }
             // Keep the quit guard's dirty/pending registries free of stale
             // window labels (also resolves a pending quit when the last
             // dirty editor is discarded during quit confirmation).
@@ -466,8 +483,9 @@ pub fn run() {
             commands::desktop_resize,
             commands::update_menu_language,
             commands::get_system_locale,
-            // App quit guard (dirty file-editor windows)
+            // App quit guard (dirty file-editor windows + active SSH sessions)
             commands::request_app_quit,
+            commands::confirm_app_quit,
             commands::cancel_app_quit,
             commands::editor_dirty_changed,
             commands::credential_seal,
@@ -479,34 +497,39 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| match event {
             // The last window was destroyed. On macOS the app keeps running
-            // window-less (Terminal.app / VS Code behaviour: the red X and
-            // Ctrl+W-with-no-tabs close the window, quitting goes through
-            // the quit_app menu item / quit_guard). On Windows/Linux the
-            // process exits with the last window per platform convention.
-            // code: None means user-initiated window closure — explicit
-            // exits (quit_guard app.exit(0), updater restart) arrive as
-            // code: Some(_) and fall through unprevented.
+            // window-less (Terminal.app / VS Code behaviour: quitting goes
+            // through the quit_app menu item / quit_guard). With close-to-
+            // hide above, the main window is never destroyed by its red X,
+            // so this is a safety net for other close paths; on Windows/
+            // Linux the process exits with the last window per platform
+            // convention. code: None means user-initiated window closure —
+            // explicit exits (quit_guard app.exit(0), updater restart)
+            // arrive as code: Some(_) and fall through unprevented.
             tauri::RunEvent::ExitRequested { code: None, api, .. } => {
                 #[cfg(target_os = "macos")]
                 api.prevent_exit();
                 #[cfg(not(target_os = "macos"))]
                 let _ = api;
             }
-            // Dock icon clicked while no window is visible (macOS): recreate
-            // the main window from its tauri.conf.json definition. The
-            // window-state plugin restores size/position when the window
-            // becomes ready (its cache keeps entries across destroy/create).
+            // Dock icon clicked while no window is visible (macOS): the main
+            // window usually still exists but hidden (close-to-hide above) —
+            // show the SAME webview so terminals and scrollback come back
+            // instantly. Rebuild it from tauri.conf.json only if it genuinely
+            // does not exist (e.g. creation failed at startup); the
+            // window-state plugin restores size/position for that path (its
+            // cache keeps entries across destroy/create).
             #[cfg(target_os = "macos")]
             tauri::RunEvent::Reopen {
                 has_visible_windows: false,
                 ..
             } => {
-                if app.get_webview_window("main").is_none() {
-                    if let Some(window_config) = app.config().app.windows.first() {
-                        let builder = tauri::WebviewWindowBuilder::from_config(app, window_config);
-                        if let Err(e) = builder.map_err(tauri::Error::from).and_then(|b| b.build()) {
-                            tracing::warn!("Failed to recreate main window: {e}");
-                        }
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                } else if let Some(window_config) = app.config().app.windows.first() {
+                    let builder = tauri::WebviewWindowBuilder::from_config(app, window_config);
+                    if let Err(e) = builder.map_err(tauri::Error::from).and_then(|b| b.build()) {
+                        tracing::warn!("Failed to recreate main window: {e}");
                     }
                 }
             }

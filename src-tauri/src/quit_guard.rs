@@ -15,8 +15,10 @@
 //! The updater's `relaunch()` intentionally bypasses the guard.
 
 use std::collections::HashSet;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+
+use crate::connection_manager::ConnectionManager;
 
 /// What the caller should do after a quit-guard state transition.
 #[derive(Debug, PartialEq, Eq)]
@@ -92,6 +94,35 @@ fn with_core<T>(app: &AppHandle, f: impl FnOnce(&mut QuitGuardCore) -> T) -> T {
 /// Entry point for quit requests (native `quit_app` menu item, web menu bar
 /// Exit, `request_app_quit` command).
 pub fn request_quit(app: &AppHandle) {
+    request_quit_inner(app, false);
+}
+
+/// Entry point after the user confirmed the sessions-still-connected prompt
+/// (`confirm_app_quit` command): the session gate is satisfied, but the
+/// dirty-editor flow below still applies.
+pub fn request_quit_confirmed(app: &AppHandle) {
+    request_quit_inner(app, true);
+}
+
+fn request_quit_inner(app: &AppHandle, sessions_confirmed: bool) {
+    // Terminal.app / iTerm2 convention: quitting while SSH sessions are
+    // still connected asks first — a confirmed quit tears down live remote
+    // work along with the process. Main-thread sync read (see
+    // `active_ssh_connection_count`); the main window answers with
+    // `confirm_app_quit` or `cancel_app_quit`.
+    if !sessions_confirmed {
+        // Managed as Arc<ConnectionManager> (lib.rs) — the state lookup is
+        // runtime-typed, so fetching the bare type would panic here.
+        let active = app
+            .state::<Arc<ConnectionManager>>()
+            .active_ssh_connection_count();
+        if active > 0 {
+            if let Err(e) = app.emit("confirm-quit-sessions", active) {
+                tracing::warn!("failed to emit confirm-quit-sessions: {e}");
+            }
+            return;
+        }
+    }
     match with_core(app, QuitGuardCore::request_quit) {
         Decision::Exit => app.exit(0),
         Decision::Confirm => {
