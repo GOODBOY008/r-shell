@@ -2,6 +2,7 @@
  * Connection Profile Management
  * Handles saving, loading, and managing SSH connection profiles
  */
+import { SECRET_FIELDS } from './credential-crypto';
 
 export interface ConnectionProfile {
   id: string;
@@ -116,14 +117,20 @@ export class ConnectionProfileManager {
       
       const profiles = merge ? this.getProfiles() : [];
       
-      // Add imported profiles with new IDs to avoid conflicts
+      // Add imported profiles with new IDs to avoid conflicts. Bundles may
+      // predate export sanitization — never persist secrets coming from
+      // outside (storage secrets are handled by the startup seal migration).
       imported.forEach(profile => {
+        const clone = { ...profile } as Record<string, unknown>;
+        for (const field of SECRET_FIELDS) {
+          delete clone[field];
+        }
         profiles.push({
-          ...profile,
+          ...clone,
           id: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        });
+        } as ConnectionProfile);
       });
       
       localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));

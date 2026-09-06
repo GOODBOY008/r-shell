@@ -2,9 +2,19 @@
  * Task 1.5 — Property tests for connection storage with SFTP/FTP profiles
  * Task 1.6 — Unit tests for connection storage SFTP/FTP support
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import * as fc from 'fast-check';
 import { ConnectionStorageManager, type ConnectionData } from '../lib/connection-storage';
+import { sealSecret } from '../lib/credential-crypto';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (command: string, args: { secret?: string }) => {
+    if (command === 'credential_seal') {
+      return `v1:test:${btoa(encodeURIComponent(args.secret ?? ''))}`;
+    }
+    return {};
+  }),
+}));
 
 // ── Setup ──
 
@@ -29,6 +39,14 @@ const arbitraryConnectionInput = fc.record({
   password: fc.option(fc.string({ minLength: 1, maxLength: 30 }), { nil: undefined }),
   ftpsEnabled: fc.option(fc.boolean(), { nil: undefined }),
 });
+
+
+/** The stored value must be ciphertext (v1 sealed), never the plaintext. */
+function expectSealed(value: unknown, plaintext: string): void {
+  expect(typeof value).toBe('string');
+  expect(value as string).toMatch(/^v1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
+  expect(value as string).not.toContain(plaintext);
+}
 
 describe('connection-storage SFTP/FTP property tests', () => {
   // Property 4: Connection storage round trip
@@ -55,7 +73,7 @@ describe('connection-storage SFTP/FTP property tests', () => {
       );
     });
 
-    it('saved SFTP connection preserves publickey auth fields', () => {
+    it('saved SFTP connection preserves publickey auth fields', async () => {
       const conn = ConnectionStorageManager.saveConnection({
         name: 'SFTP Test',
         host: '10.0.0.1',
@@ -64,14 +82,14 @@ describe('connection-storage SFTP/FTP property tests', () => {
         protocol: 'SFTP',
         authMethod: 'publickey',
         privateKeyPath: '~/.ssh/id_ed25519',
-        passphrase: 'my-passphrase',
+        passphrase: await sealSecret('my-passphrase'),
       });
 
       const loaded = ConnectionStorageManager.getConnection(conn.id);
       expect(loaded!.protocol).toBe('SFTP');
       expect(loaded!.authMethod).toBe('publickey');
       expect(loaded!.privateKeyPath).toBe('~/.ssh/id_ed25519');
-      expect(loaded!.passphrase).toBe('my-passphrase');
+      expectSealed(loaded!.passphrase, 'my-passphrase');
     });
 
     it('saved FTP connection preserves ftpsEnabled and anonymous auth', () => {

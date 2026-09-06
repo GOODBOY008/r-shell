@@ -175,6 +175,40 @@ describe('exportAllConfig', () => {
     expect(bundle.data.language).toBe('zh-CN');
   });
 
+  it('strips secret fields — plaintext and sealed ciphertext — from the bundle', async () => {
+    // Seed a connection whose secrets are already sealed (v1: format, the
+    // normal encrypted-at-rest state) directly into storage.
+    const sealed = ConnectionStorageManager.getConnections();
+    sealed.push({
+      id: 'conn-sealed',
+      name: 'Sealed Server',
+      host: '10.0.0.9',
+      port: 22,
+      username: 'root',
+      protocol: 'SSH',
+      authMethod: 'password',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      password: 'v1:QUJDREVGR0hJSktMTU5P:QUJDREVGR0hJSktMTU5PUVJTVFVW',
+    } as ConnectionData);
+    localStorage.setItem('r-shell-connections', JSON.stringify(sealed));
+
+    mockSave.mockResolvedValue('/tmp/config.json');
+    mockWriteTextFile.mockResolvedValue(undefined);
+
+    const { exportAllConfig } = await import('../lib/config-export-import');
+    await exportAllConfig();
+
+    const bundle = JSON.parse(mockWriteTextFile.mock.calls[0][1] as string);
+    for (const c of bundle.data.connections.connections as ConnectionData[]) {
+      expect(c.password).toBeUndefined();
+      expect(c.passphrase).toBeUndefined();
+      expect(c.proxyPassword).toBeUndefined();
+      expect(c.vncPassword).toBeUndefined();
+      // Non-secret fields survive the strip.
+      expect(c.host).toBeDefined();
+    }
+  });
+
   it('returns false when user cancels the save dialog', async () => {
     mockSave.mockResolvedValue(null); // cancelled
 

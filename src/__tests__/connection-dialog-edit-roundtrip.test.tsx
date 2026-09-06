@@ -6,7 +6,7 @@
  * same storage path as the desktop app.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConnectionDialog, type ConnectionConfig } from '../components/connection-dialog';
 import { ConnectionStorageManager, type ConnectionData } from '../lib/connection-storage';
 
@@ -88,6 +88,11 @@ describe('edit advanced options round-trip (real storage)', () => {
     expect(switches[0].getAttribute('data-state')).toBe('checked'); // compression starts ON
     fireEvent.click(switches[0]); // compression → OFF
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // handleSave is async (seals secrets via IPC) — wait for the persist.
+    await waitFor(() => {
+      expect(ConnectionStorageManager.getConnection('c1')?.compression).toBe(false);
+    });
     unmount();
 
     // The stored value must now be false.
@@ -136,6 +141,10 @@ describe('edit advanced options round-trip (real storage)', () => {
     const intervalInput = screen.getByLabelText('Interval (seconds)');
     fireEvent.change(intervalInput, { target: { value: '30' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(ConnectionStorageManager.getConnection('c1')?.keepAliveInterval).toBe(30);
+    });
     unmount();
 
     expect(ConnectionStorageManager.getConnection('c1')?.keepAliveInterval).toBe(30);
