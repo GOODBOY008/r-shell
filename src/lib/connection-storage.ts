@@ -2,7 +2,7 @@
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
  */
-import { SECRET_FIELDS } from './credential-crypto';
+import { SECRET_FIELDS, isSealed } from './credential-crypto';
 
 export interface ConnectionData {
   id: string;
@@ -105,11 +105,31 @@ const LEGACY_FOLDERS_STORAGE_KEY = 'r-shell-session-folders';
  * anything else non-empty is legacy plaintext and is stripped before writing.
  */
 
+/**
+ * Connections whose legacy plaintext secrets failed to seal (e.g. the OS
+ * keychain was unavailable). Their plaintext is the only surviving copy, so
+ * persistence must not strip it until sealing succeeds — otherwise any
+ * unrelated write (updateLastConnected, a folder move) would destroy it.
+ * Rewritten by `markSealFailed` / `clearSealFailed`.
+ */
+const sealFailedIds = new Set<string>();
+
+/** Mark a connection's plaintext as "do not strip until sealed". */
+export function markSealFailed(connectionId: string): void {
+  sealFailedIds.add(connectionId);
+}
+
+/** Remove the protection once the connection's secrets are sealed. */
+export function clearSealFailed(connectionId: string): void {
+  sealFailedIds.delete(connectionId);
+}
+
 function stripUnencryptedSecrets(connection: ConnectionData): ConnectionData {
   const clone = { ...connection };
+  const protectedRecord = connection.id !== undefined && sealFailedIds.has(connection.id);
   for (const field of SECRET_FIELDS) {
     const value = clone[field];
-    if (typeof value === 'string' && value.length > 0 && !value.startsWith('v1:')) {
+    if (typeof value === 'string' && value.length > 0 && !isSealed(value) && !protectedRecord) {
       delete clone[field];
     }
   }
@@ -149,7 +169,11 @@ export class ConnectionStorageManager {
             ...session,
             folder: session.folder?.replace(/All Sessions/g, 'All Connections')
           }));
-          persistConnections(connections);
+          // Write the migrated records verbatim — including plaintext secrets.
+          // `persistConnections` would strip them here, before the startup
+          // credential migration (App.tsx) ever sees them, destroying the only
+          // copy. The plaintext lands in the seal migration's path instead.
+          localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
           console.log(`[Migration] Migrated ${connections.length} sessions to connections`);
         }
         

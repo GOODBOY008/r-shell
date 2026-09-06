@@ -16,8 +16,9 @@ import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
-import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials } from './lib/connection-storage';
-import { openConnectionSecrets, sealLegacySecrets, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
+import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, markSealFailed, clearSealFailed } from './lib/connection-storage';
+import { ConnectionProfileManager } from './lib/connection-profiles';
+import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { buildSftpConnectRequest, buildSshConnectRequest } from './lib/ssh-connect-request';
@@ -331,16 +332,37 @@ function AppContent() {
         try {
           const migrated = await sealLegacySecrets(conn as unknown as Record<string, unknown> & { id: string });
           if (migrated) {
+            clearSealFailed(conn.id);
             ConnectionStorageManager.updateConnection(conn.id, conn);
             console.log(`[Credential] Encrypted stored secrets for ${conn.id}`);
           }
         } catch (error) {
           // Keep the legacy plaintext on failure — never destroy the only copy.
+          // Guard it against persistence writes too: any unrelated write
+          // (updateLastConnected, a folder move) would otherwise strip the
+          // plaintext from storage and destroy that only copy.
+          markSealFailed(conn.id);
           console.error(`[Credential] Migration failed for ${conn.id}; keeping plaintext:`, error);
         }
       }
       if (withPlaintext.length > 0) {
         console.log(`[Credential] Legacy secret encryption checked ${withPlaintext.length} connection(s)`);
+      }
+
+      // Profiles can carry legacy plaintext passwords too (historical stores
+      // and export bundles from before exports were sanitized). Seal them the
+      // same way. On failure keep the plaintext — profile storage has no
+      // strip-on-write path, so the only copy is never at risk here.
+      const profiles = ConnectionProfileManager.getProfiles();
+      for (const profile of profiles) {
+        if (!isLegacyPlaintext(profile.password)) continue;
+        try {
+          const sealed = await sealSecret(profile.password);
+          ConnectionProfileManager.updateProfile(profile.id, { password: sealed });
+          console.log(`[Credential] Encrypted stored password of profile ${profile.id}`);
+        } catch (error) {
+          console.error(`[Credential] Profile migration failed for ${profile.id}; keeping plaintext:`, error);
+        }
       }
     })();
   }, []);

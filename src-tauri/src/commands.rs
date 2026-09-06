@@ -3650,6 +3650,9 @@ pub fn credential_open(sealed: String) -> Result<String, String> {
     let nonce_bytes = BASE64
         .decode(parts[1])
         .map_err(|e| format!("Corrupt nonce: {e}"))?;
+    if nonce_bytes.len() != 12 {
+        return Err("Corrupt nonce: invalid length".to_string());
+    }
     let ciphertext = BASE64
         .decode(parts[2])
         .map_err(|e| format!("Corrupt ciphertext: {e}"))?;

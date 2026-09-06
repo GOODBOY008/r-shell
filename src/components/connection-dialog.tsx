@@ -15,7 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager } from '../lib/connection-storage';
-import { SECRET_FIELDS, sealSecret } from '../lib/credential-crypto';
+import { SECRET_FIELDS, sealSecret, openSecret } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { toast } from 'sonner';
 import {
@@ -102,6 +102,30 @@ function mergeWithDefaults(defaults: ConnectionConfig, overrides: ConnectionConf
   return merged;
 }
 
+/**
+ * Sealed secret fields carried over from the connection being edited, so a
+ * blank form field on save means "keep the stored one". Empty for a new
+ * connection — reset on dialog open/close so secrets never leak across
+ * connections.
+ */
+interface StoredSecrets {
+  password: string;
+  passphrase: string;
+  proxyPassword: string;
+  vncPassword: string;
+  tunnelPassword: string;
+  tunnelPassphrase: string;
+}
+
+const EMPTY_STORED_SECRETS: StoredSecrets = {
+  password: '',
+  passphrase: '',
+  proxyPassword: '',
+  vncPassword: '',
+  tunnelPassword: '',
+  tunnelPassphrase: '',
+};
+
 export function ConnectionDialog({
   open,
   onOpenChange,
@@ -143,14 +167,7 @@ export function ConnectionDialog({
   // Sealed secrets of the connection being edited (empty for a new one). A
   // blank form field on save resolves back to these — plaintext is never
   // echoed into the form.
-  const [previousSecrets, setPreviousSecrets] = useState<{
-    password: string;
-    passphrase: string;
-    proxyPassword: string;
-    vncPassword: string;
-    tunnelPassword: string;
-    tunnelPassphrase: string;
-  }>({ password: '', passphrase: '', proxyPassword: '', vncPassword: '', tunnelPassword: '', tunnelPassphrase: '' });
+  const [previousSecrets, setPreviousSecrets] = useState<StoredSecrets>(EMPTY_STORED_SECRETS);
 
   // Track number input display values separately from config to allow
   // the field to be empty while editing — React controlled inputs need
@@ -250,14 +267,18 @@ export function ConnectionDialog({
         // When editing, don't show "save as connection" since it already exists
         setSaveAsConnection(false);
       } else {
-        // Reset to defaults for new connection
+        // Reset to defaults for a new connection. Clear previousSecrets too:
+        // it survives dialog reopens, so after editing connection A a blank
+        // field on connection B would silently resolve to A's stored secrets.
         setConfig(defaultConfig);
+        setPreviousSecrets(EMPTY_STORED_SECRETS);
         setSaveAsConnection(true);
         syncDisplayValues(initialDisplayValues);
       }
     } else {
       // Reset connection state when dialog closes
       resetConnectionState();
+      setPreviousSecrets(EMPTY_STORED_SECRETS);
     }
   }, [open, editingConnection, initialFolder]);
 
@@ -334,7 +355,11 @@ export function ConnectionDialog({
       tunnelPassphrase: '',
     };
     for (const field of SECRET_FIELDS) {
-      const typed = (config[field] ?? '').trim();
+      // Use the value as typed — never trim it. Leading/trailing whitespace
+      // can be part of a credential, and the connect request below sends the
+      // unmodified `config` value, so trimming here would store a different
+      // secret than the one that just authenticated.
+      const typed = config[field] ?? '';
       if (typed.length === 0) {
         // Field left blank → keep the previously stored (sealed) value.
         result[field] = previousSecrets[field];
@@ -383,8 +408,6 @@ export function ConnectionDialog({
     // user's default key (~/.ssh/id_rsa, then id_ed25519).
 
     // Encrypt secrets for persistence (blank field = keep stored value).
-    // The connect request below uses the plaintext `config` as before — only
-    // the saved payload carries ciphertext.
     let sealedSecrets: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>;
     try {
       sealedSecrets = await resolveSecretsForSave();
@@ -392,6 +415,23 @@ export function ConnectionDialog({
       toast.error(t('connectionDialog.toast.credentialSyncFailed'));
       resetConnectionState();
       return;
+    }
+
+    // Build the connect-only config. The form never echoes stored secrets, so
+    // a blank field while editing means "use the retained credential" — decrypt
+    // it here (plaintext exists transiently in memory only). The persisted
+    // payload above keeps the sealed form.
+    const connectConfig: ConnectionConfig = { ...config };
+    for (const field of SECRET_FIELDS) {
+      if (connectConfig[field] === '' && previousSecrets[field]) {
+        try {
+          connectConfig[field] = await openSecret(previousSecrets[field]);
+        } catch (error) {
+          // Decrypt failed (keychain hiccup etc.) — leave blank; auth will
+          // fail with a clear error rather than a wrong password.
+          console.error(`[Credential] Failed to decrypt ${field} for connect:`, error);
+        }
+      }
     }
 
     // For SFTP/FTP/RDP/VNC protocols, delegate connection to App.tsx (via onConnect)
@@ -473,7 +513,7 @@ export function ConnectionDialog({
         }
 
         // Delegate actual connection to App.tsx handler
-        onConnect({ ...config, id: connectionId });
+        onConnect({ ...connectConfig, id: connectionId });
         onOpenChange(false);
 
         if (!editingConnection) {
@@ -554,13 +594,13 @@ export function ConnectionDialog({
       const result = await invoke<{ success: boolean; error?: string }>(
         'ssh_connect',
         {
-          request: buildSshConnectRequest(connectionId, config),
+          request: buildSshConnectRequest(connectionId, connectConfig),
         }
       );
 
       if (result.success) {
         onConnect({
-          ...config,
+          ...connectConfig,
           id: connectionId
         });
         if (!editingConnection) {
