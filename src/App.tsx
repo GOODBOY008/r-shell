@@ -133,10 +133,10 @@ function AppContent() {
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoringProgress, setRestoringProgress] = useState({ current: 0, total: 0 });
   const [currentRestoreTarget, setCurrentRestoreTarget] = useState<{ name: string; host?: string; username?: string } | null>(null);
-  // Tabs restored from the previous session whose automatic reconnect was
-  // skipped because "Reconnect sessions on startup" is disabled. They stay
-  // `pending` and show a Connect action until the user reconnects them.
-  const [deferredRestoreTabIds, setDeferredRestoreTabIds] = useState<ReadonlySet<string>>(() => new Set());
+  // Pending tabs whose latest connect attempt failed. They stay `pending` and
+  // show a Connect action instead of the "waiting" placeholder, because
+  // nothing is actually in flight for them anymore.
+  const [failedPendingTabIds, setFailedPendingTabIds] = useState<ReadonlySet<string>>(() => new Set());
   // The exact tab whose Connect/Reconnect opened the credentials dialog, so
   // handleSaveConnection reconnects that tab. Matching by connection id alone
   // misses primary tabs (no originalConnectionId) and is ambiguous for
@@ -352,25 +352,12 @@ function AppContent() {
 
       if (!isRestoreSessionsOnStartupEnabled()) {
         // The user opted out of automatic reconnect at startup (issue #126).
-        // TerminalGroupProvider already restored the tab layout with every tab
-        // in the `pending` state; leave them there and start no backend
-        // connection. The active-connections list is intentionally kept so
-        // the tabs are persisted again for the next launch.
-        const restoredTabIds = new Set(
-          Object.values(stateRef.current.groups).flatMap(g => g.tabs.map(t => t.id))
-        );
-        const deferred = new Set(
-          activeConnections
-            .map(conn => conn.connectionId)
-            .filter(id => restoredTabIds.has(id))
-        );
-        console.log(`Session restore skipped by setting: ${deferred.size} tab(s) left pending`);
-        if (deferred.size > 0) {
-          setDeferredRestoreTabIds(deferred);
-          toast.info(t('app.restoreDeferred'), {
-            description: t('app.restoreDeferredDesc', { count: deferred.size }),
-          });
-        }
+        // TerminalGroupProvider started from a fresh, empty workspace and
+        // discarded the previous layout, so there is nothing to reconnect
+        // into. This branch is a guard: it keeps a stale active-connections
+        // list (e.g. after an effect-order change) from ever initiating a
+        // connection when the setting is off.
+        console.log('Session restore skipped by setting');
         return;
       }
 
@@ -1026,15 +1013,14 @@ function AppContent() {
     const isDesktop = tabToReconnect.tabType === 'desktop' ||
       connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
 
-    // A `pending` tab has no terminal mounted (deferred startup restore, or a
-    // connect still in flight). Keep it pending while the backend session is
-    // established: dispatching `connecting` now would mount PtyTerminal, which
-    // sends StartPty against a session that does not exist yet and can race a
-    // dead-session reconnect with this one. RECONNECT_TAB on success is what
-    // mounts the terminal.
+    // A `pending` tab has no terminal mounted (a connect still in flight).
+    // Keep it pending while the backend session is established: dispatching
+    // `connecting` now would mount PtyTerminal, which sends StartPty against
+    // a session that does not exist yet and can race a dead-session reconnect
+    // with this one. RECONNECT_TAB on success is what mounts the terminal.
     const wasPending = tabToReconnect.connectionStatus === 'pending';
     // Swap the Connect action for the in-flight placeholder while connecting.
-    setDeferredRestoreTabIds(prev => {
+    setFailedPendingTabIds(prev => {
       if (!prev.has(tabId)) return prev;
       const next = new Set(prev);
       next.delete(tabId);
@@ -1046,7 +1032,7 @@ function AppContent() {
      * already cleared), so the final failure never strands the tab.
      */
     const failPending = () => {
-      setDeferredRestoreTabIds(prev => new Set(prev).add(tabId));
+      setFailedPendingTabIds(prev => new Set(prev).add(tabId));
     };
 
     if (!wasPending) {
@@ -1806,8 +1792,8 @@ function AppContent() {
               // the old terminal content showing.)
               dispatch({ type: 'UPDATE_TAB_NAME', tabId: sessionId, name: config.name });
               dispatch({ type: 'RECONNECT_TAB', tabId: sessionId });
-              // A deferred startup-restore tab is connected now.
-              setDeferredRestoreTabIds(prev => {
+              // A pending tab whose connect failed earlier is connected now.
+              setFailedPendingTabIds(prev => {
                 if (!prev.has(sessionId)) return prev;
                 const next = new Set(prev);
                 next.delete(sessionId);
@@ -2151,7 +2137,7 @@ function AppContent() {
                       onCloseTab: handleCloseTab,
                       onCloseAllTabs: handleCloseAllTabs,
                       onDetachTab: handleDetachTab,
-                      deferredRestoreTabIds,
+                      failedPendingTabIds,
                     }}>
                       <ErrorBoundary label={t('app.terminal')}>
                         <GridRenderer node={state.gridLayout} path={[]} />

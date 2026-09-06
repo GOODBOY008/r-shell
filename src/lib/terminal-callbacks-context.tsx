@@ -26,12 +26,11 @@ export interface TerminalCallbacks {
   /** Xshell-style detach (Ctrl+A+D): keep the session alive in the background. */
   onDetachTab?: (tabId: string) => void | Promise<void>;
   /**
-   * Tabs restored from the previous session whose automatic reconnect was
-   * skipped because "Reconnect sessions on startup" is disabled. They stay in
-   * the `pending` state and offer a Connect action until the user connects
-   * them manually.
+   * Pending tabs whose latest connect attempt failed. They stay in the
+   * `pending` state and offer a Connect action instead of the "waiting"
+   * placeholder, because nothing is actually in flight for them anymore.
    */
-  deferredRestoreTabIds?: ReadonlySet<string>;
+  failedPendingTabIds?: ReadonlySet<string>;
 }
 
 const TerminalCallbacksContext = createContext<TerminalCallbacks>({});

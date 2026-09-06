@@ -53,7 +53,7 @@ function useThemeKey(): number {
 function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: number }) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onReconnectTab, onDetachTab, deferredRestoreTabIds } = useTerminalCallbacks();
+  const { onReconnectTab, onDetachTab, failedPendingTabIds } = useTerminalCallbacks();
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
@@ -124,16 +124,16 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
       />
     );
   } else if (tab.connectionStatus === 'pending') {
-    // A tab restored from the previous session whose automatic reconnect was
-    // skipped ("Reconnect sessions on startup" off) is not waiting for anything:
-    // offer an explicit Connect action instead of the pulsing placeholder.
-    const isDeferredRestore = deferredRestoreTabIds?.has(tab.id) ?? false;
+    // A `pending` tab whose latest connect attempt failed is not waiting for
+    // anything: offer an explicit Connect action instead of the pulsing
+    // placeholder.
+    const hasFailedConnect = failedPendingTabIds?.has(tab.id) ?? false;
     content = (
       <div className="h-full w-full flex items-center justify-center bg-muted/30">
         <div className="text-center text-muted-foreground space-y-3">
-          {isDeferredRestore ? (
+          {hasFailedConnect ? (
             <>
-              <div>{t('app.restoreDeferredHint')}</div>
+              <div>{t('app.connectFailedHint')}</div>
               <Button size="sm" variant="outline" onClick={handleReconnect}>
                 <RefreshCw className="mr-2 h-4 w-4" />
                 {t('app.connectNow')}

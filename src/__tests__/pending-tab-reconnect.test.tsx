@@ -1,17 +1,19 @@
 /**
- * Feature test for the "Reconnect Sessions on Startup" setting (issue #126).
+ * On-demand reconnect semantics for `pending` tabs (App.tsx handleReconnect).
  *
- * When the setting is OFF, the tabs from the previous session must still be
- * present in the layout (TerminalGroupProvider restores them as `pending`)
- * but App.tsx must NOT initiate any backend connection at startup. Each
- * deferred tab offers a Connect action that runs the regular full reconnect,
- * and the active-connections list is kept so the tabs persist again for the
- * next launch.
+ * A `pending` tab has no PtyTerminal mounted: mounting one would send StartPty
+ * against a backend session that does not exist yet. While a manual reconnect
+ * is in flight the tab must stay pending (pulsing placeholder); on success the
+ * terminal remounts (RECONNECT_TAB); on a permanent failure the tab is marked
+ * so the explicit Connect action is offered again instead of a dead terminal
+ * or a misleading "waiting" placeholder. A pending tab whose connection has no
+ * stored credentials opens the credentials dialog and reconnects the exact
+ * clicked tab after saving.
  *
- * When the setting is ON (or absent — the default for existing installs),
- * startup behaves as before and every saved connection is reconnected.
- *
- * Same mocked App shell as restore-timeout-cancellation.test.tsx.
+ * The startup layout is mocked with pending tabs (as TerminalGroupProvider
+ * would restore them) and the "Reconnect Sessions on Startup" setting is off,
+ * so startup itself starts no connection and every ssh_connect call below
+ * comes from the manual reconnect under test.
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -178,17 +180,31 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
-const DEFERRED_HINT = 'Automatic reconnect at startup is disabled';
+const CONNECT_FAILED_HINT = 'The last connection attempt failed';
 
 function sshConnectCalls() {
   return lifecycle.invoke.mock.calls.filter(([cmd]) => cmd === 'ssh_connect');
 }
 
-describe('"Reconnect Sessions on Startup" setting', () => {
+/** Open the tab context menu on the given tab and trigger its Reconnect item. */
+async function reconnectTabFromContextMenu(name: string): Promise<void> {
+  const groupView = screen.getByTestId('terminal-group-view-group-1');
+  fireEvent.contextMenu(within(groupView).getByText(name));
+  fireEvent.click(await screen.findByText('Reconnect'));
+}
+
+describe('pending tab reconnect', () => {
   beforeEach(() => {
     (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverMock;
     mockState = makeMockState();
     localStorage.clear();
+
+    // The setting is off: startup restores no connections and every
+    // ssh_connect below comes from the manual reconnect under test.
+    localStorage.setItem(
+      APP_SETTINGS_STORAGE_KEY,
+      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
+    );
 
     const connections = TAB_IDS.map((id, i) => ({
       id,
@@ -227,70 +243,29 @@ describe('"Reconnect Sessions on Startup" setting', () => {
     setRestoreTimingForTests({ connectTimeoutMs: 15_000, overallTimeoutMs: 60_000 });
   });
 
-  it('reconnects every saved connection at startup when the setting is absent (default)', async () => {
+  it('starts no connection at startup and leaves the tabs pending', async () => {
     render(<App />);
-
-    await vi.waitFor(
-      () => {
-        expect(sshConnectCalls()).toHaveLength(TAB_IDS.length);
-      },
-      { timeout: 5000, interval: 50 },
-    );
-    expect(lifecycle.toast.info).not.toHaveBeenCalled();
-    expect(screen.queryByText(DEFERRED_HINT)).toBeNull();
-  });
-
-  it('keeps the tabs pending and starts no connection when the setting is off', async () => {
-    localStorage.setItem(
-      APP_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
-    );
-
-    render(<App />);
-
-    // The deferred-restore notice fires once the restore effect has run.
-    await vi.waitFor(
-      () => {
-        expect(lifecycle.toast.info).toHaveBeenCalledTimes(1);
-      },
-      { timeout: 5000, interval: 50 },
-    );
 
     // Give any (wrongly) scheduled connect a chance to show up before asserting.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => setTimeout(resolve, 150));
     expect(sshConnectCalls()).toHaveLength(0);
+    expect(screen.queryByTestId('pty')).toBeNull();
+    // Every tab shows the pulsing placeholder; the explicit Connect action is
+    // reserved for tabs whose connect actually failed.
+    expect(screen.getAllByText('Waiting for connection...')).toHaveLength(TAB_IDS.length);
+    expect(screen.queryByText(CONNECT_FAILED_HINT)).toBeNull();
+    expect(lifecycle.toast.info).not.toHaveBeenCalled();
     expect(lifecycle.toast.success).not.toHaveBeenCalled();
     expect(lifecycle.toast.error).not.toHaveBeenCalled();
-
-    // The reconnect list must survive so the tabs come back next launch too.
-    expect(lifecycle.clearActiveConnectionsCalls).toBe(0);
-
-    // Every restored tab shows the explicit Connect action instead of the
-    // "waiting" placeholder.
-    expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
-    expect(screen.queryByText('Waiting for connection...')).toBeNull();
   });
 
-  it('connects a deferred tab on demand via its Connect button', async () => {
-    localStorage.setItem(
-      APP_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
-    );
-
+  it('reconnects a pending tab on demand via the tab context menu', async () => {
     render(<App />);
 
-    await vi.waitFor(
-      () => {
-        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
-      },
-      { timeout: 5000, interval: 50 },
-    );
+    await reconnectTabFromContextMenu('Server 1');
 
-    // The Connect button sits next to the hint inside the tab placeholder.
-    const firstPlaceholder = screen.getAllByText(DEFERRED_HINT)[0].parentElement as HTMLElement;
-    fireEvent.click(within(firstPlaceholder).getByRole('button', { name: 'Connect' }));
-
-    // Exactly one full reconnect for the clicked tab; the other tabs stay deferred.
+    // Exactly one full reconnect for the clicked tab; the other tabs stay
+    // pending with no connection started.
     await vi.waitFor(
       () => {
         expect(sshConnectCalls()).toHaveLength(1);
@@ -302,18 +277,15 @@ describe('"Reconnect Sessions on Startup" setting', () => {
 
     await vi.waitFor(
       () => {
-        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length - 1);
+        expect(screen.getByTestId('pty')).toBeTruthy();
       },
       { timeout: 5000, interval: 50 },
     );
     expect(sshConnectCalls()).toHaveLength(1);
+    expect(screen.getAllByText('Waiting for connection...')).toHaveLength(TAB_IDS.length - 1);
   }, 15_000);
 
-  it('keeps a deferred tab pending (no terminal mounted) while its connect is in flight', async () => {
-    localStorage.setItem(
-      APP_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
-    );
+  it('keeps a reconnecting tab pending (no terminal mounted) while its connect is in flight', async () => {
     let settle: ((value: { success: boolean }) => void) | undefined;
     lifecycle.invoke.mockImplementation((command: string) => {
       if (command === 'ssh_connect') {
@@ -326,15 +298,8 @@ describe('"Reconnect Sessions on Startup" setting', () => {
     });
 
     render(<App />);
-    await vi.waitFor(
-      () => {
-        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
-      },
-      { timeout: 5000, interval: 50 },
-    );
 
-    const firstPlaceholder = screen.getAllByText(DEFERRED_HINT)[0].parentElement as HTMLElement;
-    fireEvent.click(within(firstPlaceholder).getByRole('button', { name: 'Connect' }));
+    await reconnectTabFromContextMenu('Server 1');
     await vi.waitFor(
       () => {
         expect(sshConnectCalls()).toHaveLength(1);
@@ -342,12 +307,11 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       { timeout: 5000, interval: 50 },
     );
 
-    // In flight: the pulsing placeholder replaces the Connect action and no
-    // PtyTerminal is mounted yet (it would send StartPty to a backend session
-    // that does not exist until ssh_connect succeeds).
-    expect(screen.getByText('Waiting for connection...')).toBeTruthy();
+    // In flight: the pulsing placeholder stays and no PtyTerminal is mounted
+    // (it would send StartPty to a backend session that does not exist until
+    // ssh_connect succeeds).
+    expect(screen.getAllByText('Waiting for connection...')).toHaveLength(TAB_IDS.length);
     expect(screen.queryByTestId('pty')).toBeNull();
-    expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length - 1);
 
     // Success remounts the tab as a terminal (RECONNECT_TAB).
     await act(async () => {
@@ -359,14 +323,10 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       },
       { timeout: 5000, interval: 50 },
     );
-    expect(screen.queryByText('Waiting for connection...')).toBeNull();
+    expect(screen.getAllByText('Waiting for connection...')).toHaveLength(TAB_IDS.length - 1);
   }, 15_000);
 
-  it('offers Connect again when the on-demand connect fails, without mounting a dead terminal', async () => {
-    localStorage.setItem(
-      APP_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
-    );
+  it('offers Connect again when the on-demand reconnect fails, without mounting a dead terminal', async () => {
     lifecycle.invoke.mockImplementation((command: string) => {
       // "Authentication" marks the failure as permanent: no backoff retry.
       if (command === 'ssh_connect') return Promise.resolve({ success: false, error: 'Authentication failed' });
@@ -375,15 +335,8 @@ describe('"Reconnect Sessions on Startup" setting', () => {
     });
 
     render(<App />);
-    await vi.waitFor(
-      () => {
-        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
-      },
-      { timeout: 5000, interval: 50 },
-    );
 
-    const firstPlaceholder = screen.getAllByText(DEFERRED_HINT)[0].parentElement as HTMLElement;
-    fireEvent.click(within(firstPlaceholder).getByRole('button', { name: 'Connect' }));
+    await reconnectTabFromContextMenu('Server 1');
     await vi.waitFor(
       () => {
         expect(lifecycle.toast.error).toHaveBeenCalledTimes(1);
@@ -391,11 +344,11 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       { timeout: 5000, interval: 50 },
     );
 
-    // The tab is back to the deferred state: Connect is offered again and no
-    // terminal was mounted for a session that never existed.
+    // The tab is back to pending with the explicit Connect action offered,
+    // and no terminal was mounted for a session that never existed.
     await vi.waitFor(
       () => {
-        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
+        expect(screen.getAllByText(CONNECT_FAILED_HINT)).toHaveLength(1);
       },
       { timeout: 5000, interval: 50 },
     );
@@ -404,11 +357,7 @@ describe('"Reconnect Sessions on Startup" setting', () => {
   }, 15_000);
 
   it('reconnects the exact clicked tab after credentials are supplied in the dialog', async () => {
-    localStorage.setItem(
-      APP_SETTINGS_STORAGE_KEY,
-      JSON.stringify({ [RESTORE_SESSIONS_ON_STARTUP_KEY]: false }),
-    );
-    // conn-1 is saved without a password: Connect must open the credentials
+    // conn-1 is saved without a password: Reconnect must open the credentials
     // dialog instead of connecting.
     const saved = JSON.parse(localStorage.getItem('r-shell-connections') ?? '[]') as Array<Record<string, unknown>>;
     delete saved[0].password;
@@ -416,15 +365,8 @@ describe('"Reconnect Sessions on Startup" setting', () => {
     lifecycle.dialogProps = null;
 
     render(<App />);
-    await vi.waitFor(
-      () => {
-        expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length);
-      },
-      { timeout: 5000, interval: 50 },
-    );
 
-    const firstPlaceholder = screen.getAllByText(DEFERRED_HINT)[0].parentElement as HTMLElement;
-    fireEvent.click(within(firstPlaceholder).getByRole('button', { name: 'Connect' }));
+    await reconnectTabFromContextMenu('Server 1');
     await vi.waitFor(
       () => {
         expect(lifecycle.dialogProps?.open).toBe(true);
@@ -465,7 +407,7 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       },
       { timeout: 5000, interval: 50 },
     );
-    // Still three tabs: the two untouched ones remain deferred, none was added.
-    expect(screen.getAllByText(DEFERRED_HINT)).toHaveLength(TAB_IDS.length - 1);
+    // Still three tabs: the two untouched ones remain pending, none was added.
+    expect(screen.getAllByText('Waiting for connection...')).toHaveLength(TAB_IDS.length - 1);
   }, 15_000);
 });
