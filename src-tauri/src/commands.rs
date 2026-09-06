@@ -3536,13 +3536,23 @@ pub fn get_system_locale() -> Result<String, String> {
 
 // ========== App Quit Guard (dirty file-editor windows) ==========
 
-/// Request an app quit through the dirty-editor guard (quit_guard module).
-/// Quits immediately when no editor has unsaved changes; otherwise each
+/// Request an app quit through the quit guard (quit_guard module). With SSH
+/// sessions still connected, the main window first receives a
+/// `confirm-quit-sessions` event and must re-request via `confirm_app_quit`;
+/// then quits immediately when no editor has unsaved changes — otherwise each
 /// dirty editor window receives a `confirm-quit` event and shows its
 /// unsaved-changes prompt before the quit may proceed.
 #[tauri::command]
 pub fn request_app_quit(app: tauri::AppHandle) {
     crate::quit_guard::request_quit(&app);
+}
+
+/// Proceed with an app quit after the user accepted the
+/// sessions-still-connected prompt (App.tsx). The session gate is satisfied;
+/// dirty editors are still consulted before the process exits.
+#[tauri::command]
+pub fn confirm_app_quit(app: tauri::AppHandle) {
+    crate::quit_guard::request_quit_confirmed(&app);
 }
 
 /// Cancel an in-flight guarded quit (user chose Cancel in an editor's

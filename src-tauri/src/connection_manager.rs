@@ -210,6 +210,39 @@ impl ConnectionManager {
         connections.keys().cloned().collect()
     }
 
+    /// Number of SSH connections that still have live remote work — an
+    /// active PTY session (open terminal tab) or a parked one (Ctrl+A+D
+    /// detach, or the WebSocket-drop grace window). The quit guard uses
+    /// this to decide whether quitting would tear down running sessions.
+    ///
+    /// A bare `connections` entry does NOT count: closing a terminal tab
+    /// removes its PTY (explicit `Close`) but deliberately leaves the SSH
+    /// connection behind for SFTP/monitoring (see `expire_detached_session`),
+    /// and nothing evicts it afterwards — those idle control channels have
+    /// no shell to kill, so they must not trigger the quit prompt
+    /// ("no open tabs" ⇒ no warning). Dead-flagged sessions (SSH channel
+    /// already gone, awaiting eviction) are equally inert.
+    ///
+    /// Sync + main-thread only (quit handling); `blocking_read` must never
+    /// be called from inside the async runtime.
+    pub fn active_ssh_connection_count(&self) -> usize {
+        let connections = self.connections.blocking_read();
+        let ptys = self.pty_sessions.blocking_read();
+        let detached = self.detached_sessions.blocking_read();
+        connections
+            .keys()
+            .filter(|id| {
+                let live_pty = ptys
+                    .get(*id)
+                    .is_some_and(|s| !s.dead.load(Ordering::SeqCst));
+                let live_detached = detached
+                    .get(*id)
+                    .is_some_and(|info| !info.session.dead.load(Ordering::SeqCst));
+                live_pty || live_detached
+            })
+            .count()
+    }
+
     // ===== PTY Connection Management (Interactive Terminal) =====
 
     /// Start a PTY shell connection (like ttyd does).
@@ -1168,6 +1201,58 @@ mod tests {
             cancel: CancellationToken::new(),
             dead: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    fn insert_ssh_connection(mgr: &ConnectionManager, id: &str) {
+        mgr.connections
+            .blocking_write()
+            .insert(id.to_string(), Arc::new(tokio::sync::RwLock::new(SshClient::new())));
+    }
+
+    /// The quit prompt must only count sessions quitting would actually
+    /// kill: an open terminal tab's PTY, or a parked (detached) PTY whose
+    /// shell still runs. Leftover `connections` entries from closed tabs —
+    /// kept for SFTP/monitoring and never evicted — and dead-flagged
+    /// zombies must NOT trigger "N sessions still connected" when no tab
+    /// is open (PR #129 bug report).
+    #[test]
+    fn active_ssh_connection_counts_only_live_remote_work() {
+        let mgr = ConnectionManager::new();
+
+        // 1) Tab closed long ago: bare connection entry, no PTY anywhere.
+        insert_ssh_connection(&mgr, "closed-tab");
+
+        // 2) Open, connected terminal tab: live PTY session.
+        insert_ssh_connection(&mgr, "open-tab");
+        let (resize_tx, _rx) = mpsc::channel::<(u32, u32)>(1);
+        mgr.pty_sessions
+            .blocking_write()
+            .insert("open-tab".to_string(), Arc::new(fake_pty_session(resize_tx)));
+
+        // 3) Zombie: PTY entry present but the SSH channel already died.
+        insert_ssh_connection(&mgr, "zombie");
+        let (dead_resize_tx, _rx) = mpsc::channel::<(u32, u32)>(1);
+        let dead_session = fake_pty_session(dead_resize_tx);
+        dead_session.dead.store(true, Ordering::SeqCst);
+        mgr.pty_sessions
+            .blocking_write()
+            .insert("zombie".to_string(), Arc::new(dead_session));
+
+        // 4) Ctrl+A+D detach: parked session, shell still running.
+        insert_ssh_connection(&mgr, "detached");
+        let (park_resize_tx, _rx) = mpsc::channel::<(u32, u32)>(1);
+        mgr.detached_sessions.blocking_write().insert(
+            "detached".to_string(),
+            DetachedSession {
+                session: Arc::new(fake_pty_session(park_resize_tx)),
+                generation: 1,
+                drain_cancel: CancellationToken::new(),
+                parked_at: tokio::time::Instant::now(),
+            },
+        );
+
+        // Only the open tab and the detached shell count.
+        assert_eq!(mgr.active_ssh_connection_count(), 2);
     }
 
     #[tokio::test]
