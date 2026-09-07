@@ -443,6 +443,8 @@
     "quickTips": "Quick Tips",
     "getStarted": "Get Started",
     "getStartedDesc": "Create a new session or manage your saved connections",
+    "features": "Features",
+    "featuresDesc": "Everything R-Shell can do once you connect",
     "tip1": "Add a server in the <1>Connection Manager</1> (left sidebar), then double-click to connect",
     "tip2": "Split the terminal with <1>⌘\\</1> (right) or <3>⌘⇧\\</3> (down) for side-by-side sessions",
     "tip3": "The <1>System Monitor</1> and <3>Logs</3> panels appear automatically in the right sidebar once you connect",
@@ -482,6 +484,18 @@
       "transferQueueDesc": "Queued file transfers with progress, speed, ETA, cancel, and retry controls",
       "autoUpdate": "Auto-Update",
       "autoUpdateDesc": "Check for updates with download progress and one-click install-and-relaunch"
+    },
+    "recentConnections": "Recent Connections",
+    "connect": "Connect",
+    "connectTo": "Connect to {{name}}",
+    "timeAgo": {
+      "justNow": "just now",
+      "minutes_one": "{{count}} min ago",
+      "minutes_other": "{{count}} min ago",
+      "hours_one": "{{count}} hour ago",
+      "hours_other": "{{count}} hours ago",
+      "days_one": "{{count}} day ago",
+      "days_other": "{{count}} days ago"
     }
   },
   "menuBar": {

@@ -52,6 +52,7 @@ import {
 import { buttonVariants } from './components/ui/button';
 import { toast } from 'sonner';
 import { dispatchTerminalCommand, type TerminalCommand } from './lib/terminal-commands';
+import { OPEN_SETTINGS_EVENT, QUICK_CONNECT_EVENT } from './lib/app-events';
 import {
   addOpenEditor,
   EDITOR_WINDOW_CHANGED_EVENT,
@@ -1694,6 +1695,12 @@ function AppContent() {
     };
   }, []);
 
+  // Open settings requested from below App-level state (empty terminal group welcome screen)
+  useEffect(() => {
+    window.addEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
+  }, [handleOpenSettings]);
+
   // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
   useEffect(() => {
     const unlistenPromise = listen<string>('menu-action', (event) => {
@@ -2054,6 +2061,16 @@ function AppContent() {
       }
     }
   }, [allTabs, handleTabSelect, handleConnectionDialogConnect, t]);
+
+  // Quick-connect requested from below App-level callbacks (welcome screen recents)
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const connectionId = (event as CustomEvent<{ connectionId: string }>).detail?.connectionId;
+      if (connectionId) void handleQuickConnect(connectionId);
+    };
+    window.addEventListener(QUICK_CONNECT_EVENT, handler);
+    return () => window.removeEventListener(QUICK_CONNECT_EVENT, handler);
+  }, [handleQuickConnect]);
 
   // Derive active connection info for StatusBar (compatible format)
   const statusBarConnection = activeConnection ? {
