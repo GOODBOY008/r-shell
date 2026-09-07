@@ -1164,6 +1164,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       <SelectItem value={AUTO}>{t('settings.language.auto')}</SelectItem>
                       <SelectItem value="en">{t('settings.language.en')}</SelectItem>
                       <SelectItem value="zh-CN">{t('settings.language.zhCN')}</SelectItem>
+                      <SelectItem value="pl">{t('settings.language.pl')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

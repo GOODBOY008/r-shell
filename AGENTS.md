@@ -269,7 +269,7 @@ VS Code-like resizable panel layout with presets:
 
 R-Shell supports multiple languages via `react-i18next`. All user-facing strings must go through the translation system.
 
-- **Translation files**: `src/locales/en.json` (English, source of truth) and `src/locales/zh-CN.json` (Chinese)
+- **Translation files**: `src/locales/en.json` (English, source of truth), `src/locales/zh-CN.json` (Chinese) and `src/locales/pl.json` (Polish)
 - **i18n config**: `src/lib/i18n.ts` — initialization, language detection, `changeLanguage()` helper
 - **Hook**: Use `const { t } = useTranslation()` from `react-i18next` in every component with user-facing strings
 - **Key naming**: `{component}.{category}.{name}` — e.g. `connectionDialog.title.new`, `common.cancel`
@@ -279,4 +279,5 @@ R-Shell supports multiple languages via `react-i18next`. All user-facing strings
 - **HTML in strings**: Use `<Trans>` component from `react-i18next` for strings containing markup
 - **Do NOT translate**: protocol values (`"SSH"`), keyboard symbols (`⌘N`), font names, Rust error messages in toast descriptions, layout preset internal names
 - **Select option values**: Only translate display text, never the `value` attribute passed to backend
-- **After adding new strings**: Add keys to both `en.json` and `zh-CN.json`, then run `pnpm i18n:check` to verify parity
+- **After adding new strings**: Add keys to every locale file, then run `pnpm i18n:check` to verify parity
+- **Plural keys**: `pnpm i18n:check` compares plural keys by base name, because i18next picks the suffix from the language's CLDR categories — English needs `_one`/`_other`, Polish needs `_one`/`_few`/`_many`/`_other`. A locale must supply every category its language defines

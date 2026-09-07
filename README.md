@@ -59,7 +59,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 
 - **Native Performance** — Tauri 2 + Rust backend, not Electron or Java
 - **Cross-Platform** — macOS, Windows, and Linux
-- **Multilingual UI** — English and Simplified Chinese, with more languages welcome
+- **Multilingual UI** — English, Simplified Chinese and Polish, with more languages welcome
 
 ---
 
@@ -244,7 +244,7 @@ Download from the [Releases](https://github.com/GOODBOY008/r-shell/releases) pag
 - **xterm.js 6** — Terminal emulation with WebGL, search, web-links, fit, and overlay addons
 - **CodeMirror 6** — Embedded code editor with syntax highlighting
 - **Recharts** — Data visualization for monitoring
-- **i18next** — Internationalization (English, Simplified Chinese)
+- **i18next** — Internationalization (English, Simplified Chinese, Polish)
 - **Lucide Icons** — Icon set
 
 ---
