@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils';
 import { formatKeyboardShortcut, DEFAULT_APP_KEYBOARD_SHORTCUTS, DEFAULT_LAYOUT_SHORTCUTS } from '@/lib/keyboard-shortcuts';
 import { ConnectionStorageManager } from '@/lib/connection-storage';
 import { quickConnectConnection } from '@/lib/app-events';
+import { useLayout } from '@/lib/layout-context';
 import { version as appVersion } from '../../package.json';
 
 interface WelcomeScreenProps {
@@ -47,8 +48,15 @@ function protocolChipClass(protocol: string): string {
 
 export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
   const { t } = useTranslation();
+  const { layout, toggleLeftSidebar } = useLayout();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const formatShortcut = (shortcut: string) => formatKeyboardShortcut(shortcut, isMac);
+
+  // The Connection Manager lives in the left sidebar; the tile reveals it
+  // (idempotent — clicking when the sidebar is already open keeps it open).
+  const openConnectionManager = () => {
+    if (!layout.leftSidebarVisible) toggleLeftSidebar();
+  };
 
   // Compact i18n-aware "n min/hours/days ago" label; null when unknown.
   const formatLastConnected = (iso: string | undefined): string | null => {
@@ -76,7 +84,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       icon: FolderTree,
       title: t('welcome.connectionManager'),
       description: t('welcome.connectionManagerDesc'),
-      action: () => {},
+      action: openConnectionManager,
       shortcut: formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar),
       highlight: t('welcome.connectionManagerHighlight')
     },
