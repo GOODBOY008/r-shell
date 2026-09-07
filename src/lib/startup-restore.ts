@@ -2,14 +2,13 @@ import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcuts';
 
 /**
  * Settings key (inside the `APP_SETTINGS_STORAGE_KEY` object persisted by
- * SettingsModal) that controls whether App.tsx re-establishes the previous
- * session's connections automatically at startup.
+ * SettingsModal) that controls whether App.tsx restores the previous session
+ * at startup.
  *
- * When disabled, the tabs from the previous session are still restored to the
- * layout but stay in the `pending` state until the user connects them
- * manually (Connect button on the tab, or Reconnect in the tab context menu).
- * This keeps startup fast for users who leave many sessions open but do not
- * need all of them live immediately (see issue #126).
+ * When disabled, the previous session's tabs are not restored at all: the app
+ * starts with a fresh, empty workspace (TerminalGroupProvider skips loading
+ * the persisted layout and discards it) and no connection is made. See
+ * issue #126.
  */
 export const RESTORE_SESSIONS_ON_STARTUP_KEY = 'restoreSessionsOnStartup';
 
