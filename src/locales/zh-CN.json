@@ -443,6 +443,8 @@
     "quickTips": "快速提示",
     "getStarted": "开始使用",
     "getStartedDesc": "创建新会话或管理已保存的连接",
+    "features": "功能一览",
+    "featuresDesc": "连接后 R-Shell 能为你做的一切",
     "tip1": "在左侧边栏的<1>连接管理器</1>中添加服务器，然后双击连接",
     "tip2": "使用<1>⌘\\</1>（向右）或<3>⌘⇧\\</3>（向下）分割终端以并排显示会话",
     "tip3": "连接后，<1>系统监视器</1>和<3>日志</3>面板将自动显示在右侧边栏中",
@@ -482,6 +484,18 @@
       "transferQueueDesc": "队列文件传输，支持进度、速度、预计完成时间、取消和重试控制",
       "autoUpdate": "自动更新",
       "autoUpdateDesc": "检查更新，支持下载进度和点击安装并重新启动"
+    },
+    "recentConnections": "最近连接",
+    "connect": "连接",
+    "connectTo": "连接到 {{name}}",
+    "timeAgo": {
+      "justNow": "刚刚",
+      "minutes_one": "{{count}} 分钟前",
+      "minutes_other": "{{count}} 分钟前",
+      "hours_one": "{{count}} 小时前",
+      "hours_other": "{{count}} 小时前",
+      "days_one": "{{count}} 天前",
+      "days_other": "{{count}} 天前"
     }
   },
   "menuBar": {

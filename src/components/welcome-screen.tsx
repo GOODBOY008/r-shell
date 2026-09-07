@@ -1,12 +1,11 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { Button } from './ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
-import { 
-  Terminal, 
-  Plus, 
-  FolderTree, 
-  Zap, 
+import {
+  Terminal,
+  Plus,
+  FolderTree,
+  Zap,
   FileText,
   BookOpen,
   Settings,
@@ -20,35 +19,64 @@ import {
   Network,
   Palette,
   Download,
+  Server,
+  ArrowRight,
 } from 'lucide-react';
 import { Badge } from './ui/badge';
-import { Separator } from './ui/separator';
+import { cn } from '@/lib/utils';
 import { formatKeyboardShortcut, DEFAULT_APP_KEYBOARD_SHORTCUTS, DEFAULT_LAYOUT_SHORTCUTS } from '@/lib/keyboard-shortcuts';
+import { ConnectionStorageManager } from '@/lib/connection-storage';
+import { quickConnectConnection } from '@/lib/app-events';
+import { version as appVersion } from '../../package.json';
 
 interface WelcomeScreenProps {
   onNewConnection: () => void;
   onOpenSettings: () => void;
 }
 
+const PROTOCOL_STYLES: Record<string, string> = {
+  SSH: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
+  SFTP: 'bg-green-500/10 text-green-500 border-green-500/20',
+  FTP: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
+  FTPS: 'bg-purple-500/10 text-purple-500 border-purple-500/20',
+};
+
+function protocolChipClass(protocol: string): string {
+  return PROTOCOL_STYLES[protocol] ?? 'bg-muted text-muted-foreground border-border';
+}
+
 export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
   const { t } = useTranslation();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const formatShortcut = (shortcut: string) => formatKeyboardShortcut(shortcut, isMac);
+
+  // Compact i18n-aware "n min/hours/days ago" label; null when unknown.
+  const formatLastConnected = (iso: string | undefined): string | null => {
+    if (!iso) return null;
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return null;
+    const elapsedMs = Date.now() - then;
+    if (elapsedMs < 60_000) return t('welcome.timeAgo.justNow');
+    const minutes = Math.floor(elapsedMs / 60_000);
+    if (minutes < 60) return t('welcome.timeAgo.minutes', { count: minutes });
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return t('welcome.timeAgo.hours', { count: hours });
+    return t('welcome.timeAgo.days', { count: Math.floor(hours / 24) });
+  };
+
+  // The welcome screen unmounts as soon as a session opens, so a read on
+  // mount is enough — no need to observe storage changes.
+  const recentConnections = useMemo(
+    () => ConnectionStorageManager.getRecentConnections(5),
+    [],
+  );
+
   const quickActions = [
-    {
-      icon: Plus,
-      title: t('welcome.newConnection'),
-      description: t('welcome.newConnectionDesc'),
-      action: onNewConnection,
-      variant: 'default' as const,
-      shortcut: formatShortcut(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession)
-    },
     {
       icon: FolderTree,
       title: t('welcome.connectionManager'),
       description: t('welcome.connectionManagerDesc'),
       action: () => {},
-      variant: 'outline' as const,
       shortcut: formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar),
       highlight: t('welcome.connectionManagerHighlight')
     },
@@ -57,7 +85,6 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       title: t('welcome.preferences'),
       description: t('welcome.preferencesDesc'),
       action: onOpenSettings,
-      variant: 'outline' as const,
       shortcut: formatShortcut('Ctrl+,')
     }
   ];
@@ -125,159 +152,231 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
     }
   ];
 
-  const protocols = [
-    { name: 'SSH', color: 'bg-blue-500/10 text-blue-500 border-blue-500/20' },
-    { name: 'SFTP', color: 'bg-green-500/10 text-green-500 border-green-500/20' },
-    { name: 'FTP', color: 'bg-amber-500/10 text-amber-500 border-amber-500/20' },
-    { name: 'FTPS', color: 'bg-purple-500/10 text-purple-500 border-purple-500/20' },
-  ];
+  const protocols = ['SSH', 'SFTP', 'FTP', 'FTPS'];
 
   return (
-    <div className="h-full overflow-auto bg-gradient-to-br from-background via-background to-muted/20">
-      <div className="max-w-4xl w-full mx-auto p-6 space-y-6 animate-in fade-in duration-500">
-        {/* Hero Section */}
-        <div className="text-center space-y-3 pt-4">
-          <div className="flex items-center justify-center gap-3">
-            <div className="p-3 bg-primary/10 rounded-xl border border-primary/20">
+    <div className="relative h-full overflow-auto">
+      {/* Soft glow behind the hero */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-primary/10 via-primary/5 to-transparent"
+      />
+
+      <div className="relative mx-auto w-full max-w-4xl space-y-8 px-6 pb-8 animate-in fade-in duration-500">
+        {/* Hero */}
+        <div className="flex flex-col items-center gap-4 pt-12 text-center">
+          <div className="relative">
+            <div aria-hidden className="absolute inset-0 scale-125 rounded-2xl bg-primary/25 blur-xl" />
+            <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/20 to-primary/5 shadow-sm">
               <Terminal className="h-8 w-8 text-primary" />
-            </div>
-            <div className="text-left">
-              <h1 className="text-2xl font-bold tracking-tight">{t('app.title')}</h1>
-              <p className="text-muted-foreground text-sm">
-                {t('app.description')}
-              </p>
             </div>
           </div>
 
-          {/* Supported Protocols */}
-          <div className="flex items-center justify-center gap-2 flex-wrap">
-            {protocols.map((protocol) => (
-              <Badge 
-                key={protocol.name} 
-                variant="outline" 
-                className={`${protocol.color} text-xs`}
+          <div className="space-y-1.5">
+            <h1 className="text-3xl font-bold tracking-tight">{t('app.title')}</h1>
+            <p className="text-muted-foreground">{t('app.description')}</p>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+              {t('welcome.supportedProtocols')}
+            </p>
+            <div className="flex items-center justify-center gap-2 flex-wrap">
+              {protocols.map((protocol) => (
+                <Badge
+                  key={protocol}
+                  variant="outline"
+                  className={cn('text-xs', protocolChipClass(protocol))}
+                >
+                  {protocol}
+                </Badge>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex flex-col items-center gap-2 pt-2">
+            <Button
+              size="lg"
+              onClick={onNewConnection}
+              className="gap-2 shadow-lg shadow-primary/20"
+            >
+              <Plus className="h-5 w-5" />
+              {t('welcome.newConnection')}
+              <span
+                aria-hidden
+                className="ml-1 rounded border border-primary-foreground/25 px-1.5 py-0.5 font-mono text-[10px] font-normal leading-none opacity-70"
               >
-                {protocol.name}
-              </Badge>
-            ))}
+                {formatShortcut(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession)}
+              </span>
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              {t('welcome.orPickFromSidebar')}
+            </p>
           </div>
         </div>
 
         {/* Quick Actions */}
-        <Card className="border-2 border-border">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Zap className="h-4 w-4" />
+        <section className="space-y-3">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-semibold">
+              <Zap className="h-4 w-4 text-primary" />
               {t('welcome.getStarted')}
-            </CardTitle>
-            <CardDescription className="text-xs">
-              {t('welcome.getStartedDesc')}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3 md:grid-cols-3">
-            {quickActions.map((action, index) => (
-              <Card 
-                key={index}
-                className="relative overflow-hidden hover:shadow-md transition-all cursor-pointer group border-2 border-border hover:border-primary/50"
+            </h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">{t('welcome.getStartedDesc')}</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {quickActions.map((action) => (
+              <button
+                key={action.title}
+                type="button"
                 onClick={action.action}
+                className="group flex flex-col items-center gap-2 rounded-xl border bg-card/50 px-4 py-5 text-center transition-all hover:border-primary/50 hover:bg-accent/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
-                <CardContent className="p-4">
-                  <div className="flex flex-col items-center text-center space-y-2">
-                    <div className="p-2.5 bg-primary/10 rounded-lg group-hover:bg-primary/20 transition-colors">
-                      <action.icon className="h-5 w-5 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-sm mb-0.5">{action.title}</h3>
-                      <p className="text-xs text-muted-foreground">
-                        {action.description}
-                      </p>
-                    </div>
-                    {action.shortcut && (
-                      <Badge variant="secondary" className="text-xs font-mono">
-                        {action.shortcut}
-                      </Badge>
+                <div className="rounded-lg bg-primary/10 p-2.5 text-primary transition-colors group-hover:bg-primary/20">
+                  <action.icon className="h-5 w-5" />
+                </div>
+                <span className="text-sm font-medium">{action.title}</span>
+                <span className="text-xs leading-snug text-muted-foreground">
+                  {action.description}
+                </span>
+                {action.shortcut && (
+                  <Badge variant="secondary" className="font-mono text-[10px]">
+                    {action.shortcut}
+                  </Badge>
+                )}
+                {action.highlight && (
+                  <span className="text-xs font-medium text-primary">
+                    {action.highlight}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {/* Recent Connections */}
+        {recentConnections.length > 0 && (
+          <section className="space-y-3">
+            <h2 className="flex items-center gap-2 text-sm font-semibold">
+              <History className="h-4 w-4 text-primary" />
+              {t('welcome.recentConnections')}
+            </h2>
+            <div className="overflow-hidden rounded-xl border bg-card/50">
+              {recentConnections.map((connection, index) => {
+                const lastConnectedLabel = formatLastConnected(connection.lastConnected);
+                return (
+                  <button
+                    key={connection.id}
+                    type="button"
+                    onClick={() => quickConnectConnection(connection.id)}
+                    aria-label={t('welcome.connectTo', { name: connection.name })}
+                    className={cn(
+                      'group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent/50',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                      index > 0 && 'border-t border-border/60',
                     )}
-                    {action.highlight && (
-                      <span className="text-xs text-primary font-medium">
-                        {action.highlight}
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted">
+                      <Server className="h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-sm font-medium">{connection.name}</span>
+                        <Badge
+                          variant="outline"
+                          className={cn('shrink-0 px-1.5 py-0 text-[10px]', protocolChipClass(connection.protocol))}
+                        >
+                          {connection.protocol}
+                        </Badge>
+                      </div>
+                      <div className="truncate font-mono text-xs text-muted-foreground">
+                        {connection.username}@{connection.host}
+                        {connection.port && connection.port !== 22 ? `:${connection.port}` : ''}
+                      </div>
+                    </div>
+                    {lastConnectedLabel && (
+                      <span className="shrink-0 text-xs text-muted-foreground/70">
+                        {lastConnectedLabel}
                       </span>
                     )}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </CardContent>
-        </Card>
+                    <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                      {t('welcome.connect')}
+                      <ArrowRight className="h-3.5 w-3.5" />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Features Grid */}
-        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {features.map((feature, index) => (
-            <Card key={index} className="hover:shadow-md transition-shadow">
-              <CardContent className="p-4">
-                <div className="flex gap-3">
-                  <div className="p-2 bg-muted rounded-lg h-fit shrink-0">
-                    <feature.icon className="h-4 w-4 text-muted-foreground" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-medium text-sm mb-0.5">{feature.title}</h4>
-                    <p className="text-xs text-muted-foreground leading-relaxed">
-                      {feature.description}
-                    </p>
-                  </div>
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold">{t('welcome.features')}</h2>
+            <p className="mt-0.5 text-xs text-muted-foreground">{t('welcome.featuresDesc')}</p>
+          </div>
+          <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {features.map((feature) => (
+              <div
+                key={feature.title}
+                className="flex items-start gap-3 rounded-xl p-3 transition-colors hover:bg-muted/50"
+              >
+                <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                  <feature.icon className="h-4 w-4 text-muted-foreground" />
                 </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-
-        <Separator />
+                <div className="min-w-0">
+                  <h3 className="text-sm font-medium leading-tight">{feature.title}</h3>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {feature.description}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
 
         {/* Getting Started Tips */}
-        <Card className="bg-muted/50 border-dashed">
-          <CardContent className="p-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-background rounded-lg">
-                <BookOpen className="h-4 w-4 text-muted-foreground" />
-              </div>
-              <div className="flex-1 space-y-2">
-                <h4 className="font-medium text-sm">{t('welcome.quickTips')}</h4>
-                <ul className="space-y-1.5 text-xs text-muted-foreground">
-                  <li className="flex items-start gap-2">
-                    <span className="text-primary mt-0.5">1.</span>
-                    <Trans i18nKey="welcome.tip1" components={{ strong: <strong /> }} />
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-primary mt-0.5">2.</span>
-                    <Trans i18nKey="welcome.tip2" components={{ strong: <strong /> }} />
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-primary mt-0.5">3.</span>
-                    <Trans i18nKey="welcome.tip3" components={{ strong: <strong /> }} />
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-primary mt-0.5">4.</span>
-                    <Trans i18nKey="welcome.tip4" components={{ strong: <strong /> }} />
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="text-primary mt-0.5">5.</span>
-                    <Trans i18nKey="welcome.tip5" components={{ strong: <strong /> }} />
-                  </li>
-                </ul>
-              </div>
+        <section className="rounded-xl border border-dashed bg-muted/30 p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background shadow-sm">
+              <BookOpen className="h-4 w-4 text-muted-foreground" />
             </div>
-          </CardContent>
-        </Card>
+            <div className="flex-1 space-y-2">
+              <h2 className="text-sm font-medium">{t('welcome.quickTips')}</h2>
+              <ul className="space-y-1.5 text-xs text-muted-foreground">
+                <li className="flex items-start gap-2">
+                  <span className="mt-0.5 font-medium text-primary">1.</span>
+                  <Trans i18nKey="welcome.tip1" components={{ strong: <strong /> }} />
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-0.5 font-medium text-primary">2.</span>
+                  <Trans i18nKey="welcome.tip2" components={{ strong: <strong /> }} />
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-0.5 font-medium text-primary">3.</span>
+                  <Trans i18nKey="welcome.tip3" components={{ strong: <strong /> }} />
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-0.5 font-medium text-primary">4.</span>
+                  <Trans i18nKey="welcome.tip4" components={{ strong: <strong /> }} />
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-0.5 font-medium text-primary">5.</span>
+                  <Trans i18nKey="welcome.tip5" components={{ strong: <strong /> }} />
+                </li>
+              </ul>
+            </div>
+          </div>
+        </section>
 
-        {/* Call to Action */}
-        <div className="text-center pb-4">
-          <Button size="lg" onClick={onNewConnection} className="gap-2 shadow-lg">
-            <Plus className="h-5 w-5" />
-            {t('welcome.newConnection')}
-          </Button>
-          <p className="text-xs text-muted-foreground mt-2">
-            {t('welcome.orPickFromSidebar')}
-          </p>
-        </div>
+        {/* Footer */}
+        <footer className="flex items-center justify-center gap-1.5 pb-2 text-xs text-muted-foreground/70">
+          <Terminal className="h-3 w-3" />
+          <span>
+            {t('app.title')} v{appVersion}
+          </span>
+        </footer>
       </div>
     </div>
   );

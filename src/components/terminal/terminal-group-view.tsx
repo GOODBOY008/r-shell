@@ -2,6 +2,7 @@ import { useCallback, type KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
+import { openAppSettings } from '../../lib/app-events';
 import { GroupTabBar } from './group-tab-bar';
 import { TerminalTabPortalHost } from './terminal-tab-portals';
 import { WelcomeScreen } from '../welcome-screen';
@@ -90,7 +91,10 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
       />
       <div className="flex-1 relative overflow-hidden">
         {showWelcome ? (
-          <WelcomeScreen onNewConnection={() => {}} onOpenSettings={() => {}} />
+          <WelcomeScreen
+            onNewConnection={() => onNewTab?.()}
+            onOpenSettings={openAppSettings}
+          />
         ) : (
           group.tabs.map((tab) => (
             <TerminalTabPortalHost
