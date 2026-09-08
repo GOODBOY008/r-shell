@@ -2279,6 +2279,24 @@ pub async fn get_websocket_port() -> Result<u16, String> {
     }
 }
 
+/// What the webview needs to open the PTY bridge: the bound port and the
+/// per-launch token the server demands in the handshake (issue #138).
+#[derive(Debug, Serialize)]
+pub struct WebSocketEndpoint {
+    pub port: u16,
+    pub token: String,
+}
+
+#[tauri::command]
+pub async fn get_websocket_endpoint() -> Result<WebSocketEndpoint, String> {
+    let port = get_websocket_port().await?;
+    let token = crate::WEBSOCKET_TOKEN
+        .get()
+        .cloned()
+        .ok_or_else(|| "WebSocket server not yet started".to_string())?;
+    Ok(WebSocketEndpoint { port, token })
+}
+
 // ========== PTY Connection ==========
 // PTY terminal I/O now uses WebSocket instead of IPC for better performance
 // WebSocket server runs on a dynamically assigned port (9001-9010)

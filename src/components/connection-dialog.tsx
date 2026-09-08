@@ -384,7 +384,9 @@ export function ConnectionDialog({
     setIsConnecting(true);
     setIsCancelling(false);
     cancelRequestedRef.current = false;
-    const connectionId = editingConnection?.id || `connection-${Date.now()}`;
+    // A random id, never a timestamp: connection ids address sessions on the
+    // local bridge, so they must not be guessable (issue #138).
+    const connectionId = editingConnection?.id || crypto.randomUUID();
     connectionIdRef.current = connectionId;
 
     // Basic validation — anonymous FTP doesn't require a username

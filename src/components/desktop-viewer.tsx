@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { toast } from 'sonner';
 import { DesktopToolbar } from './desktop-toolbar';
@@ -64,16 +65,12 @@ export function DesktopViewer({
     let cancelled = false;
 
     const connect = async () => {
-      let wsPort = 9001;
-      try {
-        wsPort = await invoke<number>('get_websocket_port');
-      } catch {
-        // fallback to default
-      }
+      // Port + per-launch bridge token from the backend (issue #138).
+      const wsUrl = await getWebSocketUrl();
 
       if (cancelled) return;
 
-      ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+      ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {

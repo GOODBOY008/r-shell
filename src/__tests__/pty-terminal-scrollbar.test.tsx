@@ -99,7 +99,7 @@ vi.mock('@xterm/addon-search', () => ({
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (command: string) => (command === 'get_websocket_port' ? 9001 : undefined)),
+  invoke: vi.fn(async (command: string) => (command === 'get_websocket_endpoint' ? { port: 9001, token: 'test-token' } : undefined)),
 }));
 
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({

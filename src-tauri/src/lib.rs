@@ -16,11 +16,18 @@ mod websocket_server;
 use connection_manager::ConnectionManager;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
 use websocket_server::WebSocketServer;
 
 // Global atomic to store the WebSocket port (shared between backend and frontend)
 pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// Per-launch secret the PTY bridge requires in every WebSocket handshake.
+/// Generated when the server starts; handed to the webview only through the
+/// `get_websocket_endpoint` command, so a foreign local process or a web page
+/// that can reach 127.0.0.1 cannot open or drive sessions (issue #138).
+pub static WEBSOCKET_TOKEN: OnceLock<String> = OnceLock::new();
 
 /// Applies the saved top-left position of the "main" window on startup.
 ///
@@ -448,6 +455,7 @@ pub fn run() {
             commands::detect_gpu,
             commands::get_gpu_stats,
             commands::get_websocket_port,
+            commands::get_websocket_endpoint,
             // Standalone SFTP/FTP commands
             commands::sftp_connect,
             commands::sftp_standalone_disconnect,
