@@ -3938,6 +3938,7 @@ mod proxy_config_tests {
             password: Some("pw".to_string()),
             key_path: None,
             passphrase: None,
+            host_key_policy: None,
             compression: None,
             keepalive_enabled: None,
             keepalive_interval: None,
