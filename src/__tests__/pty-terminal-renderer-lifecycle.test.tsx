@@ -295,7 +295,7 @@ describe('PtyTerminal renderer lifecycle (issue #87)', () => {
     expect(mocks.terminals[0].refresh).toHaveBeenCalledWith(0, mocks.terminals[0].rows - 1);
     expect(mocks.terminals[0].focus).toHaveBeenCalled();
 
-    // Hidden again: the GPU context is released.
+    // Hidden again: the GPU context is kept through the grace period …
     view.rerender(
       <PtyTerminal
         connectionId="lazy-1"
@@ -306,7 +306,72 @@ describe('PtyTerminal renderer lifecycle (issue #87)', () => {
       />,
     );
     await flushFrames(1);
+    expect(mocks.webglInstances[0].dispose).not.toHaveBeenCalled();
+
+    // … and released once the pane has stayed hidden long enough (60 s).
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
     expect(mocks.webglInstances[0].dispose).toHaveBeenCalled();
+  });
+
+  it('keeps the live WebGL renderer across a quick hide/show (issue #134)', async () => {
+    // Releasing on every hide cost ~1.2 s per tab switch: a dispose on the
+    // outgoing pane and a full renderer rebuild + first paint on the
+    // incoming one. A pane shown again before the grace period must reuse
+    // its renderer — no dispose, no second WebglAddon.
+    const view = render(
+      <PtyTerminal
+        connectionId="quick-1"
+        connectionName="Quick"
+        host="127.0.0.1"
+        username="root"
+        isActive
+      />,
+    );
+    await flushFrames(2);
+    expect(mocks.webglInstances).toHaveLength(1);
+
+    view.rerender(
+      <PtyTerminal
+        connectionId="quick-1"
+        connectionName="Quick"
+        host="127.0.0.1"
+        username="root"
+        isActive={false}
+      />,
+    );
+    await flushFrames(1);
+    // Well inside the grace period.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+
+    const terminal = mocks.terminals[0];
+    terminal.refresh.mockClear();
+    terminal.focus.mockClear();
+    view.rerender(
+      <PtyTerminal
+        connectionId="quick-1"
+        connectionName="Quick"
+        host="127.0.0.1"
+        username="root"
+        isActive
+      />,
+    );
+    await flushFrames(3);
+
+    expect(mocks.webglInstances[0].dispose).not.toHaveBeenCalled();
+    expect(mocks.webglInstances).toHaveLength(1);
+    // Activation still repaints and focuses the pane.
+    expect(terminal.refresh).toHaveBeenCalledWith(0, terminal.rows - 1);
+    expect(terminal.focus).toHaveBeenCalled();
+
+    // The cancelled release must not fire later either.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120_000);
+    });
+    expect(mocks.webglInstances[0].dispose).not.toHaveBeenCalled();
   });
 
   it('loads WebGL at mount for a terminal that mounts active', async () => {

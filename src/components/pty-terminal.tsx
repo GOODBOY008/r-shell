@@ -84,6 +84,17 @@ function claimSshDeadEscalation(connectionId: string): boolean {
  * Communication is done via WebSocket for low-latency bidirectional streaming.
  */
 
+/**
+ * How long a pane stays hidden before its WebGL context is released.
+ *
+ * Releasing on every hide (#105) made each tab switch tear the renderer down
+ * and rebuild it on return — measured at ~1.2 s per switch on a 248×45 grid
+ * (issue #134). The reason to release at all is to stop panes hidden for hours
+ * from holding GPU contexts the browser may evict; a grace period keeps quick
+ * switching free while long-hidden panes still let go of the GPU.
+ */
+const HIDDEN_WEBGL_RELEASE_MS = 60_000;
+
 export function PtyTerminal({
   connectionId,
   connectionName,
@@ -107,6 +118,9 @@ export function PtyTerminal({
   // activation effect can load/release the renderer without re-running the
   // whole session setup.
   const webglControlsRef = React.useRef<{ ensure: () => void; release: () => void } | null>(null);
+  // Pending grace-period release of this pane's WebGL context (see
+  // HIDDEN_WEBGL_RELEASE_MS); cancelled when the pane becomes visible again.
+  const webglReleaseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   // Mirrors the latest `isActive` prop for non-effect code paths (the
   // ResizeObserver completing a pending activation).
   const isActiveStateRef = React.useRef(isActive);
@@ -1251,6 +1265,10 @@ export function PtyTerminal({
       
       // Dispose WebGL addon FIRST so GPU textures are released before the
       // terminal canvas is removed from the DOM.
+      if (webglReleaseTimerRef.current) {
+        clearTimeout(webglReleaseTimerRef.current);
+        webglReleaseTimerRef.current = null;
+      }
       if (webglAddonRef.current) {
         try { webglAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
         webglAddonRef.current = null;
@@ -1292,11 +1310,24 @@ export function PtyTerminal({
     if (!isActive) {
       wasActiveRef.current = false;
       isActiveStateRef.current = false;
-      // Release this pane's WebGL context while hidden — visible panes get
-      // the GPU; hidden panes keep their text via the DOM renderer (xterm
-      // v6 core's `_createRenderer()` → `DomRenderer`, restored on dispose).
-      webglControlsRef.current?.release();
+      // Release this pane's WebGL context only once it has stayed hidden for
+      // the grace period — visible panes get the GPU; long-hidden panes keep
+      // their text via the DOM renderer (xterm v6 core's `_createRenderer()`
+      // → `DomRenderer`, restored on dispose). Releasing immediately on every
+      // hide was what made tab switching slow (issue #134).
+      if (webglReleaseTimerRef.current) clearTimeout(webglReleaseTimerRef.current);
+      webglReleaseTimerRef.current = setTimeout(() => {
+        webglReleaseTimerRef.current = null;
+        webglControlsRef.current?.release();
+      }, HIDDEN_WEBGL_RELEASE_MS);
       return;
+    }
+
+    // Visible again before the grace period elapsed: keep the live renderer,
+    // so the switch costs neither a dispose nor a rebuild.
+    if (webglReleaseTimerRef.current) {
+      clearTimeout(webglReleaseTimerRef.current);
+      webglReleaseTimerRef.current = null;
     }
 
     if (wasActiveRef.current) {
