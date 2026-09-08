@@ -5,6 +5,7 @@ import { changeLanguage, applyLanguageFromPreference, getLanguagePreference, AUT
 import { describe, it, expect, beforeEach } from 'vitest';
 import en from '../locales/en.json';
 import zhCN from '../locales/zh-CN.json';
+import pl from '../locales/pl.json';
 
 describe('i18n', () => {
   it('should initialize with English', () => {
@@ -35,7 +36,24 @@ describe('i18n', () => {
     expect(plural).toContain('5 files');
   });
 
-  it('every t() key used in source code exists in both locales', () => {
+  it('should switch language to pl', async () => {
+    await i18n.changeLanguage('pl');
+    expect(i18n.language).toBe('pl');
+    expect(i18n.t('common.cancel')).toBe('Anuluj');
+    await i18n.changeLanguage('en');
+  });
+
+  it('uses the Polish plural forms i18next selects per count', async () => {
+    await i18n.changeLanguage('pl');
+    // Polish has three integer plural categories; each must resolve to its
+    // own form rather than falling back to _other.
+    expect(i18n.t('filePanel.statusBar.items', { count: 1 })).toBe('1 element');
+    expect(i18n.t('filePanel.statusBar.items', { count: 3 })).toBe('3 elementy');
+    expect(i18n.t('filePanel.statusBar.items', { count: 7 })).toBe('7 elementów');
+    await i18n.changeLanguage('en');
+  });
+
+  it('every t() key used in source code exists in every locale', () => {
     // Guard against future hardcoded translation keys: collect every literal
     // t('...') / i18n.t('...') key from the source tree and assert it resolves
     // in en.json (accounting for plural/context suffixes like _one/_other).
@@ -54,7 +72,10 @@ describe('i18n', () => {
       return out;
     }
     const enFlat = flatten(en);
-    const zhFlat = flatten(zhCN);
+    const locales: Record<string, Record<string, unknown>> = {
+      'zh-CN': flatten(zhCN),
+      pl: flatten(pl),
+    };
 
     const suffixes = ['one', 'other', 'zero', 'two', 'few', 'many', 'plural'];
     const resolveKey = (k: string): boolean =>
@@ -84,8 +105,21 @@ describe('i18n', () => {
     const missing = [...used].filter((k) => !resolveKey(k)).sort();
     expect(missing).toEqual([]);
 
-    // Both locale files must define exactly the same set of keys.
-    expect(Object.keys(zhFlat).sort()).toEqual(Object.keys(enFlat).sort());
+    // Every locale must cover the same keys as en.json. Plural keys are
+    // compared by base key: i18next derives the suffix from the language's
+    // CLDR categories, so Polish legitimately has _few/_many where English
+    // only has _one/_other.
+    const pluralSuffixes = ['zero', 'one', 'two', 'few', 'many', 'other'];
+    const baseKey = (k: string): string => {
+      const suffix = pluralSuffixes.find((s) => k.endsWith(`_${s}`));
+      return suffix ? k.slice(0, -(suffix.length + 1)) : k;
+    };
+    const baseKeys = (flat: Record<string, unknown>): string[] =>
+      [...new Set(Object.keys(flat).map(baseKey))].sort();
+
+    for (const [locale, flat] of Object.entries(locales)) {
+      expect(baseKeys(flat), `key parity for ${locale}`).toEqual(baseKeys(enFlat));
+    }
   });
 });
 

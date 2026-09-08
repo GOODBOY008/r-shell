@@ -407,7 +407,8 @@
       "label": "Language",
       "auto": "Auto (System)",
       "en": "English",
-      "zhCN": "Chinese (Simplified)"
+      "zhCN": "Chinese (Simplified)",
+      "pl": "Polish"
     },
     "button": {
       "resetToDefaults": "Reset to Defaults",
