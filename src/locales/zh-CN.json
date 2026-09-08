@@ -1386,5 +1386,15 @@
       "updated": "命令片段已更新",
       "deleted": "命令片段已删除"
     }
+  },
+  "hostKey": {
+    "changedTitle": "主机密钥已更改",
+    "changedDesc": "SSH 服务器 {{host}}:{{port}} 提供的主机密钥与 known_hosts 中保存的不一致。",
+    "fingerprint": "新指纹",
+    "recordedAt": "已保存的密钥",
+    "recordedAtValue": "{{file}} 第 {{line}} 行",
+    "warning": "这可能意味着中间人攻击。仅当您确定服务器已重装或密钥已更换时才继续。",
+    "trustHint": "信任后将替换该主机已保存的密钥并重新连接。",
+    "trust": "信任新密钥并连接"
   }
 }

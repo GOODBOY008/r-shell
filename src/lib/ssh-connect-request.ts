@@ -1,3 +1,4 @@
+import { getHostKeyPolicy, type HostKeyPolicy } from './host-key';
 /**
  * Builds the `ssh_connect` and `sftp_connect` invoke request payloads.
  *
@@ -47,6 +48,8 @@ export interface SshConnectRequest {
   password: string | null;
   key_path: string | null;
   passphrase: string | null;
+  /** See `HostKeyPolicy`; derived from Settings unless overridden for a retry. */
+  host_key_policy: HostKeyPolicy;
   compression: boolean;
   keepalive_enabled: boolean;
   keepalive_interval: number | null;
@@ -94,6 +97,7 @@ export function buildSshConnectRequest(
     password: source.password ?? null,
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
+    host_key_policy: getHostKeyPolicy(),
     compression: source.compression !== false,
     keepalive_enabled: keepAlive,
     keepalive_interval: keepAlive ? (source.keepAliveInterval ?? 60) : null,

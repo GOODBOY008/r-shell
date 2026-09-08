@@ -4,7 +4,7 @@ use crate::os_detect::{self, OsInfo};
 use crate::os_keypath::resolve_private_key_path;
 use crate::proxy::{ProxyConfig, ProxyType};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
-use crate::ssh::{AuthMethod, SshConfig, TunnelConfig};
+use crate::ssh::{AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
@@ -19,6 +19,9 @@ pub struct ConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// "strict" (default), "accept-new" (after the user confirmed a changed
+    /// key) or "off" (Host Key Verification switched off in Settings).
+    pub host_key_policy: Option<String>,
     /// Advanced SSH options — `Option` so legacy callers that omit them keep
     /// the previous defaults (compression on, keepalive 60 s / 3).
     pub compression: Option<bool>,
@@ -76,11 +79,30 @@ pub struct CommandResponse {
     pub error: Option<String>,
 }
 
+/// `ssh_connect` result. Same shape as `CommandResponse` plus the details
+/// of a refused host key, so the UI can offer to trust the new key.
+#[derive(Debug, Serialize)]
+pub struct SshConnectResponse {
+    pub success: bool,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_key_changed: Option<HostKeyChanged>,
+}
+
+fn parse_host_key_policy(value: Option<&str>) -> HostKeyPolicy {
+    match value {
+        Some("off") => HostKeyPolicy::Off,
+        Some("accept-new") => HostKeyPolicy::AcceptNew,
+        _ => HostKeyPolicy::Strict,
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_connect(
     request: ConnectRequest,
     state: State<'_, Arc<ConnectionManager>>,
-) -> Result<CommandResponse, String> {
+) -> Result<SshConnectResponse, String> {
     let proxy = build_proxy(&request)?;
     let tunnel = build_tunnel(&request)?;
 
@@ -118,21 +140,24 @@ pub async fn ssh_connect(
         keepalive_max,
         proxy,
         tunnel,
+        host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
     };
 
     match state
         .create_connection(request.connection_id.clone(), config)
         .await
     {
-        Ok(_) => Ok(CommandResponse {
+        Ok(_) => Ok(SshConnectResponse {
             success: true,
             output: Some(format!("Connected: {}", request.connection_id)),
             error: None,
+            host_key_changed: None,
         }),
-        Err(e) => Ok(CommandResponse {
+        Err(e) => Ok(SshConnectResponse {
             success: false,
             output: None,
             error: Some(e.to_string()),
+            host_key_changed: e.downcast_ref::<HostKeyChanged>().cloned(),
         }),
     }
 }

@@ -1386,5 +1386,15 @@
       "updated": "Snippet updated",
       "deleted": "Snippet deleted"
     }
+  },
+  "hostKey": {
+    "changedTitle": "Host key changed",
+    "changedDesc": "The SSH server {{host}}:{{port}} presented a host key that differs from the one saved in known_hosts.",
+    "fingerprint": "New fingerprint",
+    "recordedAt": "Saved key",
+    "recordedAtValue": "line {{line}} of {{file}}",
+    "warning": "This can mean a man-in-the-middle attack. Continue only if you know the server was reinstalled or its key was rotated.",
+    "trustHint": "Trusting replaces the saved key for this host and connects again.",
+    "trust": "Trust new key and connect"
   }
 }
