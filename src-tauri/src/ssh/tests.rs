@@ -43,7 +43,6 @@ mod tests {
     fn test_tunnel_config_creation() {
         let config = SshConfig {
             tunnel: Some(crate::ssh::TunnelConfig {
-            host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 host: "bastion.example.com".to_string(),
                 port: 2222,
                 username: "jumpuser".to_string(),
@@ -51,6 +50,7 @@ mod tests {
                     password: "jumppass".to_string(),
                 },
             }),
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
             ..create_test_config()
         };
 
@@ -554,7 +554,6 @@ mod shell_integration_tests {
                 keepalive_max: Some(3),
                 proxy: None,
                 tunnel: Some(TunnelConfig {
-                host_key_policy: crate::ssh::HostKeyPolicy::default(),
                     host,
                     port,
                     username: "testuser".to_string(),
@@ -562,6 +561,7 @@ mod shell_integration_tests {
                         password: "testpass".to_string(),
                     },
                 }),
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
             })
             .await
             .expect("connect through SSH tunnel to Docker SSH server");
