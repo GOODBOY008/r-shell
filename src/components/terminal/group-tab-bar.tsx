@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useLayoutEffect, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode, MonitorOff } from 'lucide-react';
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
@@ -17,6 +17,7 @@ import {
   ContextMenuSubContent,
 } from '../ui/context-menu';
 import { DEFAULT_APP_KEYBOARD_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { announce } from '@/lib/live-announcer';
 
 // ── Module-level drag state (shared across all GroupTabBar instances) ──
 
@@ -94,6 +95,14 @@ export function GroupTabBar({
     closeTabShortcut ?? DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
     navigator.platform.toUpperCase().includes('MAC'),
   );
+  const formattedMoveTabLeftShortcut = formatKeyboardShortcut(
+    DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabLeft,
+    navigator.platform.toUpperCase().includes('MAC'),
+  );
+  const formattedMoveTabRightShortcut = formatKeyboardShortcut(
+    DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabRight,
+    navigator.platform.toUpperCase().includes('MAC'),
+  );
   const { dispatch } = useTerminalGroups();
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -129,22 +138,88 @@ export function GroupTabBar({
 
   // ── Pointer-based custom drag ──
 
+  // FLIP: when a commit changes which position each tab occupies (drag drop,
+  // keyboard/context-menu move, tab close), animate tabs from their previous
+  // on-screen position into the new one instead of jumping.
+  const tabOrderRef = useRef<{ order: string; lefts: Map<string, number> } | null>(null);
+
+  useLayoutEffect(() => {
+    const container = tabBarRef.current;
+    if (!container) return;
+
+    const lefts = new Map<string, number>();
+    for (const node of container.querySelectorAll<HTMLElement>('[data-tab-id]')) {
+      lefts.set(node.dataset.tabId ?? '', node.getBoundingClientRect().left);
+    }
+    const order = tabs.map((tab) => tab.id).join('\u0000');
+    const prev = tabOrderRef.current;
+    tabOrderRef.current = { order, lefts };
+
+    // First paint, or a re-render that kept the order (status update, drag
+    // indicator moving, panel resize) — just refresh the snapshot.
+    if (!prev || prev.order === order) return;
+
+    const reducedMotion =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) return;
+
+    for (const node of container.querySelectorAll<HTMLElement>('[data-tab-id]')) {
+      const id = node.dataset.tabId ?? '';
+      const prevLeft = prev.lefts.get(id);
+      const nextLeft = lefts.get(id);
+      if (prevLeft === undefined || nextLeft === undefined) continue;
+      const delta = prevLeft - nextLeft;
+      if (Math.abs(delta) < 1) continue;
+
+      node.style.transform = `translateX(${delta}px)`;
+      node.style.transition = 'none';
+      // Force a style flush so the inverted position is committed before the
+      // play transition starts in the same frame.
+      void node.offsetWidth;
+      node.style.transition = 'transform 150ms ease';
+      node.style.transform = '';
+      // The inline transition intentionally stays: nothing else transitions
+      // transform on tabs, and the next FLIP resets it to 'none' first.
+    }
+  }, [tabs]);
+
   const handlePointerDown = useCallback(
     (e: React.PointerEvent, tabId: string, tabName: string) => {
       if (e.button !== 0) return; // left click only
       e.preventDefault(); // prevent native drag ghost + text selection
 
+      // Capture the pointer so pointerup is delivered even when the button is
+      // released outside the window — otherwise WebKit drops it and the drag
+      // sticks to the cursor with no button held.
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Environments without pointer capture (jsdom) — the buttons guard in
+        // onMove below is the fallback.
+      }
+
+      const pointerId = e.pointerId;
       const startX = e.clientX;
       const startY = e.clientY;
       let dragging = false;
       const DRAG_THRESHOLD = 5;
 
       const onMove = (ev: PointerEvent) => {
+        if (ev.pointerId !== pointerId) return; // ignore other pointers
+
+        // Button released without a pointerup reaching us (missed event) —
+        // end the drag instead of following the cursor with no button held.
+        if (ev.buttons === 0) {
+          onUp(ev);
+          return;
+        }
+
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
 
         if (!dragging) {
-          if (Math.abs(dx) + Math.abs(dy) < DRAG_THRESHOLD) return;
+          if (Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
           dragging = true;
           activeDrag = { tabId, sourceGroupId: groupId, tabName };
           document.body.style.userSelect = 'none';
@@ -225,6 +300,10 @@ export function GroupTabBar({
               const adjustedTarget = targetIndex > fromIndex ? targetIndex - 1 : targetIndex;
               if (adjustedTarget !== fromIndex) {
                 dispatch({ type: 'REORDER_TAB', groupId: sourceGroupId, fromIndex, toIndex: adjustedTarget });
+                announce(t('terminal.a11y.tabMovedToPosition', {
+                  position: adjustedTarget + 1,
+                  total: tabs.length,
+                }));
               }
             }
           } else {
@@ -236,7 +315,11 @@ export function GroupTabBar({
               tabId: dragTabId,
               targetIndex,
             });
+            announce(t('terminal.a11y.tabMovedToGroup'));
           }
+        } else {
+          // Released outside every tab bar (or the window blurred mid-drag)
+          announce(t('terminal.a11y.dragCancelled'));
         }
 
         activeDrag = null;
@@ -248,7 +331,7 @@ export function GroupTabBar({
       document.addEventListener('pointercancel', onUp);
       window.addEventListener('blur', onUp);
     },
-    [groupId, tabs, dispatch],
+    [groupId, tabs, dispatch, t],
   );
 
   // Suppress native dragstart in case browser tries to initiate HTML5 DnD
@@ -287,6 +370,18 @@ export function GroupTabBar({
       dispatch({ type: 'MOVE_TAB_TO_NEW_GROUP', groupId, tabId, direction });
     },
     [dispatch, groupId],
+  );
+
+  const handleMoveTabBy = useCallback(
+    (tabId: string, delta: -1 | 1) => {
+      const fromIndex = tabs.findIndex((t) => t.id === tabId);
+      if (fromIndex === -1) return;
+      const toIndex = fromIndex + delta;
+      if (toIndex < 0 || toIndex >= tabs.length) return;
+      dispatch({ type: 'REORDER_TAB', groupId, fromIndex, toIndex });
+      announce(t('terminal.a11y.tabMovedToPosition', { position: toIndex + 1, total: tabs.length }));
+    },
+    [tabs, dispatch, groupId, t],
   );
 
   return (
@@ -418,6 +513,18 @@ export function GroupTabBar({
                       {t('contextMenu.closeAllTabs')}
                     </ContextMenuItem>
                   )}
+                  <ContextMenuSeparator />
+                  {/* Move tab within the group */}
+                  <ContextMenuItem disabled={index === 0} onClick={() => handleMoveTabBy(tab.id, -1)}>
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    {t('contextMenu.moveTabLeft')}
+                    <ContextMenuShortcut>{formattedMoveTabLeftShortcut}</ContextMenuShortcut>
+                  </ContextMenuItem>
+                  <ContextMenuItem disabled={index === tabs.length - 1} onClick={() => handleMoveTabBy(tab.id, 1)}>
+                    <ArrowRight className="mr-2 h-4 w-4" />
+                    {t('contextMenu.moveTabRight')}
+                    <ContextMenuShortcut>{formattedMoveTabRightShortcut}</ContextMenuShortcut>
+                  </ContextMenuItem>
                   <ContextMenuSeparator />
                   {/* Move to New Group submenu */}
                   <ContextMenuSub>

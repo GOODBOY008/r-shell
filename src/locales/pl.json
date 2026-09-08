@@ -759,6 +759,8 @@
     "splitDown": "Podziel w dół",
     "moveTabToNewGroup": "Przenieś kartę do nowej grupy",
     "moveTabToGroup": "Przenieś kartę do grupy",
+    "moveTabLeft": "Przenieś kartę w lewo",
+    "moveTabRight": "Przenieś kartę w prawo",
     "search": "Szukaj",
     "findNext": "Znajdź następne",
     "findPrevious": "Znajdź poprzednie",
@@ -1181,7 +1183,12 @@
   },
   "terminal": {
     "search": "Szukaj...",
-    "groupAriaLabel": "Grupa terminali {{id}}"
+    "groupAriaLabel": "Grupa terminali {{id}}",
+    "a11y": {
+      "tabMovedToPosition": "Przeniesiono na pozycję {{position}} z {{total}}",
+      "tabMovedToGroup": "Przeniesiono do innej grupy",
+      "dragCancelled": "Anulowano przeciąganie karty"
+    }
   },
   "terminalSearchBar": {
     "findInTerminal": "Znajdź w terminalu...",
