@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-09-08
+
+### 🔧 R-Shell 2.9.1 — Welcome Page, Encrypted Credentials & Connection Fixes
+
+This patch release redesigns the start page with recent connections and quick connect, encrypts stored credentials at rest with a keychain-backed master key, and makes closing the window on macOS hide the app instead of restarting it. SSH connections become more forgiving: default key path fallback, passwordless logins, idle connections that survive the russh 1-hour rekey, and an option to skip automatic session reconnect at startup.
+
+### New Features 🎉
+
+- feat(welcome): redesign start page with recent connections and quick connect by @GOODBOY008 in #131
+- feat(macos): red X hides the window; Dock reopens the same webview by @GOODBOY008 in #129
+- feat(security): encrypt stored credentials at rest with keychain-backed master key by @sunxiaobin89 in #114
+- feat(settings): option to skip automatic session reconnect at startup by @twkrol in #127
+- feat(auth): use default ssh key path if field is not filled by @supercute in #103
+
+### Bug Fixes 🐛
+
+- fix(ui): register switch-background token and redesign Switch for light theme by @GOODBOY008 in #129
+- fix(settings): start with an empty workspace when startup reconnect is disabled by @GOODBOY008 in #128
+- fix(ssh): support connecting to hosts without a password by @sunxiaobin89 in #125
+- fix(ssh): keep idle connections alive past the russh 1h rekey and stop the reconnect loop by @GOODBOY008 in #123
+
+### Documentation 📚
+
+- docs(readme): polish for users and refresh for v2.9 by @GOODBOY008 in #124
+
+### Contributors
+
+Thanks to [@sunxiaobin89](https://github.com/sunxiaobin89), [@supercute](https://github.com/supercute), [@twkrol](https://github.com/twkrol), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.0...v2.9.1
+
 ## [2.9.0] - 2026-08-30
 
 ### 🚀 R-Shell 2.9 — SSH Jump Hosts, Quick Commands & Terminal Stability
