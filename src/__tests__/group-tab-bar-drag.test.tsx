@@ -90,6 +90,35 @@ describe('GroupTabBar custom drag', () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it('keeps a press on the close button out of the drag handler so the click closes the tab', () => {
+    // Regression: the tab's pointerdown handler calls setPointerCapture, which
+    // retargets pointerup to the tab; the browser then dispatches the click to
+    // the tab (the common ancestor) instead of the X button, so the close
+    // never fires and the press only selects the tab. jsdom has no pointer
+    // capture, so stub it on the tab and assert the press never reaches it.
+    const tabs = [makeTab('a'), makeTab('b')];
+    const { container } = render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" />);
+    stubDropTarget(container, '1');
+
+    const tabA = getTabEl('a');
+    const capture = vi.fn();
+    (tabA as HTMLElement & { setPointerCapture: (id: number) => void }).setPointerCapture = capture;
+    const closeButton = tabA.querySelector('button') as HTMLButtonElement;
+
+    fireEvent.pointerDown(closeButton, { button: 0, pointerId: 1, clientX: 100, clientY: 10 });
+    expect(capture).not.toHaveBeenCalled();
+
+    fireEvent.click(closeButton);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'REMOVE_TAB', groupId: '1', tabId: 'a' });
+    expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'ACTIVATE_TAB' }));
+
+    // A press on the tab body still arms the drag as before.
+    dispatch.mockClear();
+    fireEvent.pointerDown(tabA, { button: 0, pointerId: 2, clientX: 100, clientY: 10 });
+    expect(capture).toHaveBeenCalledWith(2);
+    fireEvent.pointerUp(document, { pointerId: 2, clientX: 100, clientY: 10 });
+  });
+
   it('FLIP-animates tabs when the order changes', () => {
     // jsdom rects are all-zero; fake per-tab lefts so the FLIP effect sees the
     // position change caused by a reorder.
