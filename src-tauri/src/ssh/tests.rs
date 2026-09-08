@@ -23,6 +23,8 @@ mod tests {
             keepalive_max: None,
             proxy: None,
             tunnel: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
         }
     }
 
@@ -41,6 +43,7 @@ mod tests {
     fn test_tunnel_config_creation() {
         let config = SshConfig {
             tunnel: Some(crate::ssh::TunnelConfig {
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 host: "bastion.example.com".to_string(),
                 port: 2222,
                 username: "jumpuser".to_string(),
@@ -127,6 +130,7 @@ mod tests {
             keepalive_max: None,
             proxy: None,
             tunnel: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
         };
 
         let result = client_write.connect(&config).await;
@@ -238,6 +242,8 @@ mod tests {
             keepalive_max: None,
             proxy: None,
             tunnel: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
         }
     }
 
@@ -444,6 +450,7 @@ mod shell_integration_tests {
                 keepalive_max: Some(3),
                 proxy: None,
                 tunnel: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
             })
             .await
             .expect("connect to Docker SSH server");
@@ -485,6 +492,7 @@ mod shell_integration_tests {
                 keepalive_max: Some(3),
                 proxy: None,
                 tunnel: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
             })
             .await
             .expect("connect to Docker SSH server");
@@ -546,6 +554,7 @@ mod shell_integration_tests {
                 keepalive_max: Some(3),
                 proxy: None,
                 tunnel: Some(TunnelConfig {
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
                     host,
                     port,
                     username: "testuser".to_string(),
@@ -671,6 +680,7 @@ mod shell_integration_tests {
                 keepalive_max: Some(3),
                 proxy: None,
                 tunnel: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
             })
             .await
             .expect("connect using the default-key fallback");
@@ -722,6 +732,7 @@ mod shell_integration_tests {
                 keepalive_max: Some(3),
                 proxy: None,
                 tunnel: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
             })
             .await
             .expect_err("an unauthorized key must be rejected");
@@ -825,6 +836,7 @@ mod key_loading_tests {
             keepalive_max: None,
             proxy: None,
             tunnel: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
         };
 
         let mut client = SshClient::new();
