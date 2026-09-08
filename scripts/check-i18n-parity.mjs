@@ -1,17 +1,24 @@
 #!/usr/bin/env node
 
 /**
- * Checks that every locale file defines the same set of translation keys as
- * en.json (the source of truth).
+ * Checks that every locale file — including en.json itself — defines the same
+ * set of translation keys as en.json (the source of truth).
  *
  * Plural keys are compared by their base key, not their suffix: i18next picks
  * the suffix from the language's CLDR plural categories, so English needs
  * `_one`/`_other` while Polish needs `_one`/`_few`/`_many`/`_other`. Requiring
  * identical suffixes across locales would make a correct Polish translation
  * fail. Instead each locale must cover exactly the categories its language
- * defines, which is what Intl.PluralRules reports.
+ * declares, as reported by Intl.PluralRules' resolvedOptions().pluralCategories
+ * (probing sample integers would miss categories that only appear far from
+ * zero, e.g. French `_many` at 1,000,000).
  *
- * Exits with code 1 if any locale has missing, extra or incomplete keys.
+ * Non-plural source keys must stay non-plural: `t('common.cancel')` never
+ * looks up `common.cancel_one`, so a locale replacing the plain key with
+ * suffixed variants breaks the lookup at runtime.
+ *
+ * Exits with code 1 if any locale has missing, extra, misplaced or incomplete
+ * keys.
  */
 
 import { readFileSync, readdirSync } from 'fs';
@@ -49,11 +56,7 @@ function splitPlural(key) {
 
 /** The plural categories i18next will look up for a language, per CLDR. */
 function pluralCategories(locale) {
-  const rules = new Intl.PluralRules(locale);
-  const categories = new Set(['other']);
-  // Sample enough integers to hit every category of the languages we support.
-  for (let n = 0; n <= 200; n++) categories.add(rules.select(n));
-  return categories;
+  return new Set(new Intl.PluralRules(locale).resolvedOptions().pluralCategories);
 }
 
 function loadJson(filePath) {
@@ -84,27 +87,46 @@ if (!localeFiles.includes(sourceFile)) {
 const sourceIndex = indexKeys(flattenKeys(loadJson(resolve(localeDir, sourceFile))));
 let failed = false;
 
+// The source locale is validated in the same loop as the translations so the
+// plural checks apply to it too (comparing it with itself is a no-op for
+// missing/extra keys).
 for (const file of localeFiles) {
-  if (file === sourceFile) continue;
   const locale = basename(file, '.json');
-  const index = indexKeys(flattenKeys(loadJson(resolve(localeDir, file))));
+  const isSource = file === sourceFile;
+  const index = isSource
+    ? sourceIndex
+    : indexKeys(flattenKeys(loadJson(resolve(localeDir, file))));
   const categories = pluralCategories(locale);
 
   const missing = [...sourceIndex.keys()].filter((k) => !index.has(k));
   const extra = [...index.keys()].filter((k) => !sourceIndex.has(k));
 
-  // A plural key must provide every category the language actually uses.
+  // A plural key must provide every category the language declares, and a
+  // non-plural key must stay non-plural — i18next looks up suffixed keys only
+  // when the caller passes a count, so suffixed variants of a plain key would
+  // be dead keys while the live lookup goes missing.
   const incomplete = [];
+  const misplaced = [];
   for (const [base, suffixes] of sourceIndex) {
-    if (!suffixes.has(null) && index.has(base)) {
-      const have = index.get(base);
+    if (!index.has(base)) continue;
+    const have = index.get(base);
+    if (suffixes.has(null) && suffixes.size === 1) {
+      if (have.size > 1 || !have.has(null)) {
+        const variants = [...have].filter((s) => s !== null).map((s) => `_${s}`);
+        misplaced.push(`${base} (unexpected plural key(s): ${variants.join(', ')})`);
+      }
+    } else if (!suffixes.has(null)) {
       const want = [...categories].filter((c) => !have.has(c));
       if (want.length > 0) incomplete.push(`${base} (missing _${want.join(', _')})`);
     }
   }
 
-  if (missing.length === 0 && extra.length === 0 && incomplete.length === 0) {
-    console.log(`✓ ${file}: ${index.size} keys match ${sourceFile}`);
+  if (missing.length === 0 && extra.length === 0 && incomplete.length === 0 && misplaced.length === 0) {
+    console.log(
+      isSource
+        ? `✓ ${file}: ${index.size} keys (source locale, plural forms verified)`
+        : `✓ ${file}: ${index.size} keys match ${sourceFile}`,
+    );
     continue;
   }
 
@@ -120,6 +142,10 @@ for (const file of localeFiles) {
   if (incomplete.length > 0) {
     console.error(`Incomplete plural forms in ${file} (${incomplete.length}):`);
     incomplete.forEach((k) => console.error(`  - ${k}`));
+  }
+  if (misplaced.length > 0) {
+    console.error(`Keys pluralized in ${file} but non-plural in ${sourceFile} (${misplaced.length}):`);
+    misplaced.forEach((k) => console.error(`  - ${k}`));
   }
 }
 
