@@ -2322,6 +2322,8 @@ pub struct SftpConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// "strict" (default), "accept-new" or "off" — see `HostKeyPolicy`.
+    pub host_key_policy: Option<String>,
     /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
     /// false/missing. Legacy callers that omit them connect directly.
     pub tunnel_enabled: Option<bool>,
@@ -2367,6 +2369,7 @@ pub async fn sftp_connect(
         username: request.username,
         auth_method: auth,
         tunnel,
+        host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
     };
 
     match state
@@ -2378,7 +2381,16 @@ pub async fn sftp_connect(
             output: Some(format!("SFTP connected: {}", request.connection_id)),
             error: None,
         }),
-        Err(e) => Err(format!("SFTP connection failed: {}", e)),
+        Err(e) => {
+            // The SFTP path has no "trust new key" dialog; point the user at
+            // the SSH terminal, which does, and shares the same known_hosts.
+            let hint = if e.downcast_ref::<HostKeyChanged>().is_some() {
+                " Open an SSH terminal to this host to review and trust the new key, or fix the entry in known_hosts."
+            } else {
+                ""
+            };
+            Err(format!("SFTP connection failed: {}{}", e, hint))
+        }
     }
 }
 

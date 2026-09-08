@@ -147,6 +147,8 @@ export interface SftpConnectRequest {
   password: string | null;
   key_path: string | null;
   passphrase: string | null;
+  /** Same policy as SSH sessions; derived from the Settings switch. */
+  host_key_policy: HostKeyPolicy;
   tunnel_enabled: boolean;
   tunnel_host: string | null;
   tunnel_port: number | null;
@@ -178,6 +180,7 @@ export function buildSftpConnectRequest(
     password: source.password || '',
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
+    host_key_policy: getHostKeyPolicy(),
     tunnel_enabled: tunnelEnabled,
     tunnel_host: tunnelEnabled ? (source.tunnelHost || null) : null,
     tunnel_port: tunnelEnabled ? (source.tunnelPort ?? null) : null,
