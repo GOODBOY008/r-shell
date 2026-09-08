@@ -741,6 +741,8 @@
     "splitDown": "Split Down",
     "moveTabToNewGroup": "Move Tab to New Group",
     "moveTabToGroup": "Move Tab to Group",
+    "moveTabLeft": "Move Tab Left",
+    "moveTabRight": "Move Tab Right",
     "search": "Search",
     "findNext": "Find Next",
     "findPrevious": "Find Previous",
@@ -1133,7 +1135,12 @@
   },
   "terminal": {
     "search": "Search...",
-    "groupAriaLabel": "Terminal group {{id}}"
+    "groupAriaLabel": "Terminal group {{id}}",
+    "a11y": {
+      "tabMovedToPosition": "Moved to position {{position}} of {{total}}",
+      "tabMovedToGroup": "Moved to another group",
+      "dragCancelled": "Tab drag cancelled"
+    }
   },
   "terminalSearchBar": {
     "findInTerminal": "Find in terminal...",

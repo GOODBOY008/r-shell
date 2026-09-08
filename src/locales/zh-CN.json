@@ -741,6 +741,8 @@
     "splitDown": "向下分屏",
     "moveTabToNewGroup": "移动到新分组",
     "moveTabToGroup": "移动到分组",
+    "moveTabLeft": "左移标签页",
+    "moveTabRight": "右移标签页",
     "search": "搜索",
     "findNext": "查找下一个",
     "findPrevious": "查找上一个",
@@ -1133,7 +1135,12 @@
   },
   "terminal": {
     "search": "搜索...",
-    "groupAriaLabel": "终端组 {{id}}"
+    "groupAriaLabel": "终端组 {{id}}",
+    "a11y": {
+      "tabMovedToPosition": "已移到第 {{position}} 位（共 {{total}} 个标签页）",
+      "tabMovedToGroup": "已移动到另一个分组",
+      "dragCancelled": "已取消标签页拖拽"
+    }
   },
   "terminalSearchBar": {
     "findInTerminal": "在终端中查找...",

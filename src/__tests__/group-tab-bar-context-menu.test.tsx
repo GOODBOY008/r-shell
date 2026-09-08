@@ -61,4 +61,32 @@ describe('GroupTabBar context menu', () => {
     expect(onCloseTab).toHaveBeenCalledWith('a');
     expect(dispatch).not.toHaveBeenCalledWith({ type: 'REMOVE_TAB', groupId: '1', tabId: 'a' });
   });
+
+  it('moves a tab left/right from the context menu', async () => {
+    const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
+    render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" />);
+
+    fireEvent.contextMenu(screen.getByText('b'));
+    fireEvent.click(await screen.findByText('Move Tab Left'));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'REORDER_TAB', groupId: '1', fromIndex: 1, toIndex: 0 });
+
+    dispatch.mockClear();
+    fireEvent.contextMenu(screen.getByText('b'));
+    fireEvent.click(await screen.findByText('Move Tab Right'));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'REORDER_TAB', groupId: '1', fromIndex: 1, toIndex: 2 });
+  });
+
+  it('disables Move Tab Left on the first tab and Move Tab Right on the last', async () => {
+    const tabs = [makeTab('a'), makeTab('b')];
+    render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" />);
+
+    fireEvent.contextMenu(screen.getByText('a'));
+    const moveLeft = (await screen.findByText('Move Tab Left')).closest('[role="menuitem"]');
+    expect(moveLeft?.getAttribute('data-disabled')).not.toBeNull();
+    fireEvent.click(moveLeft as HTMLElement);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    const moveRight = screen.getByText('Move Tab Right').closest('[role="menuitem"]');
+    expect(moveRight?.getAttribute('data-disabled')).toBeNull();
+  });
 });

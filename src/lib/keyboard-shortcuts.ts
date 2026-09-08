@@ -39,6 +39,9 @@ export const DEFAULT_APP_KEYBOARD_SHORTCUTS = {
   closeSession: 'Ctrl+W',
   nextTab: 'Ctrl+Tab',
   previousTab: 'Ctrl+Shift+Tab',
+  // Browser convention (Chrome/Firefox/GNOME Terminal) for reordering tabs.
+  moveTabLeft: 'Ctrl+Shift+PageUp',
+  moveTabRight: 'Ctrl+Shift+PageDown',
 } as const;
 
 export const DEFAULT_LAYOUT_SHORTCUTS = {
@@ -742,6 +745,8 @@ export const createSplitViewShortcuts = (actions: {
   closeTab: () => void;
   nextTab: () => void;
   prevTab: () => void;
+  moveTabLeft: () => void;
+  moveTabRight: () => void;
 }, bindings: Partial<SplitViewShortcutBindings> = {}): KeyboardShortcut[] => {
   const resolvedBindings: SplitViewShortcutBindings = {
     ...DEFAULT_SPLIT_VIEW_SHORTCUTS,
@@ -788,6 +793,21 @@ export const createSplitViewShortcuts = (actions: {
       DEFAULT_SPLIT_VIEW_SHORTCUTS.prevTab,
       actions.prevTab,
       'Previous tab in group',
+    ),
+    // Like the split shortcuts above, these intentionally keep firing while a
+    // terminal has focus — terminal emulators reserve Ctrl+Shift+PageUp/Down
+    // for tab reordering (the remote shell does not use this chord).
+    createConfiguredShortcut(
+      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabLeft,
+      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabLeft,
+      actions.moveTabLeft,
+      'Move tab left within group',
+    ),
+    createConfiguredShortcut(
+      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabRight,
+      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabRight,
+      actions.moveTabRight,
+      'Move tab right within group',
     ),
   ];
 };

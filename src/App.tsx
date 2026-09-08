@@ -33,6 +33,7 @@ import {
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
 import type { SplitViewShortcutBindings } from './lib/keyboard-shortcuts';
+import { announce } from './lib/live-announcer';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
@@ -265,6 +266,18 @@ function AppContent() {
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
     const groupIds = Object.keys(state.groups);
+    // Ctrl+Shift+PageUp/PageDown — move the active tab one slot in its group.
+    const moveActiveTab = (delta: -1 | 1) => {
+      if (!activeGroup?.activeTabId) return;
+      const fromIndex = activeGroup.tabs.findIndex((t) => t.id === activeGroup.activeTabId);
+      const toIndex = fromIndex + delta;
+      if (fromIndex === -1 || toIndex < 0 || toIndex >= activeGroup.tabs.length) return;
+      dispatch({ type: 'REORDER_TAB', groupId: activeGroup.id, fromIndex, toIndex });
+      announce(t('terminal.a11y.tabMovedToPosition', {
+        position: toIndex + 1,
+        total: activeGroup.tabs.length,
+      }));
+    };
     return createSplitViewShortcuts(
       {
         splitRight: () => {
@@ -299,10 +312,12 @@ function AppContent() {
             dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
           }
         },
+        moveTabLeft: () => moveActiveTab(-1),
+        moveTabRight: () => moveActiveTab(1),
       },
       keyboardShortcutSettings,
     );
-  }, [state.activeGroupId, state.groups, activeGroup, dispatch, handleCloseActiveTab, keyboardShortcutSettings]);
+  }, [state.activeGroupId, state.groups, activeGroup, dispatch, handleCloseActiveTab, keyboardShortcutSettings, t]);
 
   const layoutShortcuts = useMemo(() => createLayoutShortcuts({
     toggleLeftSidebar,
