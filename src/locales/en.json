@@ -238,7 +238,9 @@
       "cancelling": "Cancelling...",
       "connecting": "Connecting...",
       "connect": "Connect",
-      "updateAndConnect": "Update & Connect"
+      "updateAndConnect": "Update & Connect",
+      "browseKey": "Browse for key file",
+      "browseKeyTitle": "Select private key"
     },
     "toast": {
       "missingFields": "Missing Required Fields",
@@ -258,7 +260,8 @@
       "connectionFailedDesc": "Unable to connect to the server. Please check your credentials and try again.",
       "connectionError": "Connection Error",
       "connectionErrorDesc": "An unexpected error occurred while connecting.",
-      "credentialSyncFailed": "Failed to encrypt and save the credentials"
+      "credentialSyncFailed": "Failed to encrypt and save the credentials",
+      "keyPickerFailed": "Could not open the file picker"
     },
     "tunnel": {
       "enable": "Enable SSH Tunnel",

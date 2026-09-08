@@ -240,7 +240,9 @@
       "cancelling": "Anulowanie...",
       "connecting": "Łączenie...",
       "connect": "Połącz",
-      "updateAndConnect": "Zapisz i połącz"
+      "updateAndConnect": "Zapisz i połącz",
+      "browseKey": "Wybierz plik klucza",
+      "browseKeyTitle": "Wybierz klucz prywatny"
     },
     "toast": {
       "missingFields": "Brak wymaganych pól",
@@ -260,7 +262,8 @@
       "connectionFailedDesc": "Nie udało się połączyć z serwerem. Sprawdź dane logowania i spróbuj ponownie.",
       "connectionError": "Błąd połączenia",
       "connectionErrorDesc": "Podczas łączenia wystąpił nieoczekiwany błąd.",
-      "credentialSyncFailed": "Nie udało się zaszyfrować i zapisać danych logowania"
+      "credentialSyncFailed": "Nie udało się zaszyfrować i zapisać danych logowania",
+      "keyPickerFailed": "Nie udało się otworzyć okna wyboru pliku"
     },
     "tunnel": {
       "enable": "Włącz tunel SSH",
