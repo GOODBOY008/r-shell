@@ -438,6 +438,11 @@ export function GroupTabBar({
                       variant="ghost"
                       size="sm"
                       className="p-0 h-4 w-4 opacity-0 group-hover:opacity-100"
+                      // Keep the press off the tab's drag handler: it calls
+                      // setPointerCapture on the tab, which retargets pointerup
+                      // to the tab, so the browser dispatches the click to the
+                      // tab instead of this button and the close never fires.
+                      onPointerDown={(e) => e.stopPropagation()}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleTabClose(tab.id);
