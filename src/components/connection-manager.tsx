@@ -118,6 +118,23 @@ export function ConnectionManager({
     return tree.length > 0 ? tree : [];
   };
 
+  // Relative "n min/hours ago" (shared with the welcome screen) for recent
+  // timestamps; a fixed YYYY-MM-DD HH:mm date beyond a day — locale-default
+  // formatting is ambiguous (08/05 vs 05/08) and verbose.
+  const formatLastConnected = (iso: string): string => {
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return '';
+    const elapsedMs = Date.now() - then;
+    if (elapsedMs < 60_000) return t('welcome.timeAgo.justNow');
+    const minutes = Math.floor(elapsedMs / 60_000);
+    if (minutes < 60) return t('welcome.timeAgo.minutes', { count: minutes });
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return t('welcome.timeAgo.hours', { count: hours });
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
   const [connections, setConnections] = useState<ConnectionNode[]>(loadConnections());
 
   // Folder management state
@@ -990,19 +1007,11 @@ export function ConnectionManager({
                   </Badge>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">{t('connectionDetails.status')}</span>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${selectedConnection.isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
-                    <span className="text-xs">{selectedConnection.isConnected ? t('connectionDetails.connected') : t('connectionDetails.disconnected')}</span>
-                  </div>
-                </div>
-
                 {selectedConnection.lastConnected && (
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium">{t('connectionDetails.lastConnected')}</span>
                     <span className="text-xs">
-                      {new Date(selectedConnection.lastConnected).toLocaleString()}
+                      {formatLastConnected(selectedConnection.lastConnected)}
                     </span>
                   </div>
                 )}
