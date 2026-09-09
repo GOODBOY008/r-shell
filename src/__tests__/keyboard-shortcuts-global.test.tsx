@@ -64,6 +64,12 @@ function splitCtrlW(handler: () => void): KeyboardShortcut {
   return { key: 'w', ctrlKey: true, handler, description: 'Close active tab' };
 }
 
+function backgroundSummonShortcut(handler: () => void): KeyboardShortcut {
+  // Stands in for a future app-specific background summon key: explicitly
+  // opted in to keep its OS registration while the window is blurred.
+  return { key: 'n', ctrlKey: true, globalInBackground: true, handler, description: 'Summon' };
+}
+
 function focusElement(el: HTMLElement) {
   el.focus();
   document.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
@@ -76,9 +82,14 @@ function focusBody() {
 }
 
 // Default: no sibling windows exist (single-window app / tests).
+let platformSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   mockedGetAllWebviewWindows.mockReset();
   mockedGetAllWebviewWindows.mockResolvedValue([]);
+  // Pin a non-macOS host so the macOS menu-ownership paths stay dormant unless
+  // a test explicitly overrides via platformSpy below. (jsdom's own default is
+  // platform-dependent; forcing it removes any ambiguity.)
+  platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Linux x86_64');
 });
 
 afterEach(() => {
@@ -87,6 +98,7 @@ afterEach(() => {
   window.dispatchEvent(new Event('focus'));
   cleanup();
   focusBody();
+  platformSpy.mockRestore();
   vi.clearAllMocks();
 });
 
@@ -177,15 +189,106 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
   });
 
   it('skips the macOS-native menu accelerators on macOS', async () => {
-    const platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    platformSpy.mockReturnValue('MacIntel');
+
+    const zenCtrlZ = (): KeyboardShortcut => ({
+      key: 'z',
+      ctrlKey: true,
+      ignoreInTerminal: true,
+      handler: vi.fn(),
+      description: 'Toggle Zen Mode',
+    });
+    const sidebarCtrlM = (): KeyboardShortcut => ({
+      key: 'm',
+      ctrlKey: true,
+      ignoreInTerminal: true,
+      handler: vi.fn(),
+      description: 'Toggle Monitor Panel',
+    });
+    // A user-customized Ctrl+Shift+Z binding would map to the Redo menu chord
+    // (Cmd+Shift+Z) — it too must stay out of OS registration.
+    const redoShiftZ = (): KeyboardShortcut => ({
+      key: 'z',
+      ctrlKey: true,
+      shiftKey: true,
+      handler: vi.fn(),
+      description: 'Custom Ctrl+Shift+Z',
+    });
 
     await act(async () => {
-      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn()), zenCtrlZ(), sidebarCtrlM(), redoShiftZ()]} />);
     });
 
     expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
     expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
-    platformSpy.mockRestore();
+    // All macOS-native menu chords stay exclusive to the menu — nothing with
+    // a menu-owned Cmd form (including the Cmd+Shift+Z Redo chord) is
+    // registered as an OS global hotkey.
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Z', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Shift+Z', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+M', expect.any(Function));
+  });
+
+  it('drives menu-conflicting bindings from an in-window keydown on macOS (⌃Z/⌃M)', async () => {
+    platformSpy.mockReturnValue('MacIntel');
+    const onZ = vi.fn();
+    const zenShortcut: KeyboardShortcut = {
+      key: 'z',
+      ctrlKey: true,
+      ignoreInTerminal: true,
+      handler: onZ,
+      description: 'Toggle Zen Mode',
+    };
+    // A menu-conflicting binding WITHOUT ignoreInTerminal (e.g. a user binding
+    // used for a non-terminal-adjacent action) still fires inside the
+    // terminal — only `ignoreInTerminal` bindings yield to the remote shell.
+    const onShiftZ = vi.fn();
+    const redoFallback: KeyboardShortcut = {
+      key: 'z',
+      ctrlKey: true,
+      shiftKey: true,
+      handler: onShiftZ,
+      description: 'Custom Ctrl+Shift+Z',
+    };
+
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[zenShortcut, redoFallback]} />);
+    });
+
+    // Never registered with the OS — the Cmd chord belongs to the native Undo
+    // menu, and macOS menu items stay exclusive.
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Z', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Shift+Z', expect.any(Function));
+
+    // Physical Control (⌃Z) fires the in-window handler.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    expect(onZ).toHaveBeenCalledOnce();
+
+    // Cmd+Z is not the degraded binding — the keystroke must reach the Undo
+    // menu, not toggle Zen mode.
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'z', ctrlKey: false, metaKey: true, bubbles: true }),
+    );
+    expect(onZ).toHaveBeenCalledOnce();
+
+    // The Cmd+Shift+Z (Redo) fallback fires ⌃⇧Z from the same DOM listener.
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }),
+    );
+    expect(onShiftZ).toHaveBeenCalledOnce();
+
+    // Inside the terminal the binding yields to the remote shell — dispatch
+    // from the focused textarea so the listener sees a real input target.
+    const terminalTextarea = document.querySelector<HTMLElement>('[data-testid="terminal-textarea"]')!;
+    focusElement(terminalTextarea);
+    terminalTextarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    expect(onZ).toHaveBeenCalledOnce();
+
+    // The non-ignoreInTerminal binding does fire inside the terminal.
+    terminalTextarea.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }),
+    );
+    expect(onShiftZ).toHaveBeenCalledTimes(2);
   });
 
   it('does not register shortcuts without modifiers', async () => {
@@ -211,7 +314,7 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
   });
 
-  it('registers everything while the window is blurred, then re-applies the element context on focus', async () => {
+  it('unregisters convention-key defaults while the window is blurred, then re-applies the element context on focus', async () => {
     await act(async () => {
       render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
     });
@@ -221,16 +324,68 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
     mockedUnregister.mockClear();
 
-    // App goes to the background → everything stays registered (global
-    // semantics), even with a terminal still focused inside the webview.
+    // App goes to the background → default bindings are convention keys and
+    // must not hijack the foreground app (issues #130/#144): everything gets
+    // unregistered, even with a terminal still focused inside the webview.
+    // (Ctrl+B was already dropped by the terminal context above, so only
+    // Ctrl+W is observed being unregistered here.)
     window.dispatchEvent(new Event('blur'));
-    expect(mockedUnregister).not.toHaveBeenCalled();
-    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
 
     // App returns to the foreground → element context applies again.
     window.dispatchEvent(new Event('focus'));
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+  });
+
+  it('keeps only background-opted shortcuts registered while the window is blurred', async () => {
+    await act(async () => {
+      render(
+        <GlobalShortcutHarness
+          shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn()), backgroundSummonShortcut(vi.fn())]}
+        />,
+      );
+    });
+
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+N', expect.any(Function));
+
+    // App goes to the background → only the shortcut explicitly opted in via
+    // `globalInBackground` keeps its OS registration; convention keys
+    // (Ctrl+B sidebar, Ctrl+W close tab) are released to the foreground app.
+    window.dispatchEvent(new Event('blur'));
     expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
-    expect(mockedUnregister).not.toHaveBeenCalledWith('CommandOrControl+W');
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
+    expect(mockedUnregister).not.toHaveBeenCalledWith('CommandOrControl+N');
+
+    // Focus returns → everything registers again.
+    window.dispatchEvent(new Event('focus'));
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+  });
+
+  it('does not re-register convention keys when the window becomes visible but stays blurred', async () => {
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
+    });
+
+    // App goes to the background → everything unregistered (default config).
+    window.dispatchEvent(new Event('blur'));
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
+
+    // An occluding window moves away: visibility flips to visible while the
+    // window is STILL blurred. Treating visible as focused here would
+    // re-register the convention-key defaults and revive the hijack
+    // (#130/#144) until the next real focus event. Drive the hidden=false
+    // branch explicitly (jsdom's document.hidden is otherwise always true,
+    // which would make this test pass under the old `!document.hidden` logic).
+    mockedRegister.mockClear();
+    const hiddenSpy = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    const hasFocusSpy = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    hiddenSpy.mockRestore();
+    hasFocusSpy.mockRestore();
+
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
   });
 
   it('re-syncs on the Tauri onFocusChanged signal', async () => {
@@ -242,23 +397,27 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
     mockedUnregister.mockClear();
 
-    // Window focus lost (authoritative webview signal) → register everything.
+    // Window focus lost (authoritative webview signal) → unregister the
+    // convention-key default bindings (background hijack fix, #130/#144).
+    // (Ctrl+B was already dropped by the terminal context above.)
     expect(focusChangedCaptured.handler).toBeTypeOf('function');
     act(() => {
       focusChangedCaptured.handler!(false);
     });
-    expect(mockedUnregister).not.toHaveBeenCalled();
-    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
 
-    // Window focused again while the terminal is still focused → drop the
-    // terminal-critical shortcut again.
+    // Window focused again while the terminal is still focused → the
+    // terminal context applies: Ctrl+B stays dropped (must NOT be silently
+    // re-registered), Ctrl+W re-registers.
+    mockedRegister.mockClear();
     act(() => {
       focusChangedCaptured.handler!(true);
     });
-    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
   });
 
-  it('keeps shortcuts registered while blurred when no sibling window of the app is focused', async () => {
+  it('unregisters everything while blurred when no sibling window is focused and nothing opted in', async () => {
     mockedGetAllWebviewWindows.mockResolvedValue([
       { label: 'main', isFocused: vi.fn(async () => false) },
     ]);
@@ -273,13 +432,13 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     mockedUnregister.mockClear();
 
     // App goes to the background (another app, not a sibling window) →
-    // everything stays registered so the shortcuts keep firing globally.
+    // default bindings are convention keys: everything gets unregistered so
+    // the foreground app keeps its keys (issues #130/#144).
+    // (Ctrl+B was already dropped by the terminal context above.)
     window.dispatchEvent(new Event('blur'));
     await act(async () => {});
 
-    expect(mockedUnregister).not.toHaveBeenCalled();
-    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
-    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
   });
 
   it('unregisters every shortcut while a sibling window (e.g. the file-viewer editor) has focus', async () => {
@@ -313,7 +472,7 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     expect(handlerCalls).toHaveLength(2); // mount + refocus; each holds a fresh handler
   });
 
-  it('re-registers shortcuts when a sibling window closes while the app is backgrounded', async () => {
+  it('re-registers only background-opted shortcuts when a sibling window closes while the app is backgrounded', async () => {
     vi.useFakeTimers();
     try {
       mockedGetAllWebviewWindows.mockResolvedValue([
@@ -322,22 +481,31 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
       ]);
 
       await act(async () => {
-        render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn())]} />);
+        render(
+          <GlobalShortcutHarness
+            shortcuts={[layoutCtrlB(vi.fn()), splitCtrlW(vi.fn()), backgroundSummonShortcut(vi.fn())]}
+          />,
+        );
       });
 
       window.dispatchEvent(new Event('blur'));
       await act(async () => {});
       expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
+      expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+N');
 
       // The file-viewer window closes while another app stays foreground. The
-      // blur-time polling notices and restores the background semantics.
+      // blur-time polling notices and re-registers only the shortcuts that
+      // opted in via `globalInBackground` — convention keys stay unregistered.
       mockedGetAllWebviewWindows.mockResolvedValue([
         { label: 'main', isFocused: vi.fn(async () => false) },
       ]);
+      mockedRegister.mockClear();
       vi.advanceTimersByTime(2000);
       await act(async () => {});
 
-      expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+      expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+N', expect.any(Function));
+      expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
+      expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
     } finally {
       vi.useRealTimers();
     }
