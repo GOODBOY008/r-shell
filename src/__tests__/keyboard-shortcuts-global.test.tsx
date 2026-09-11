@@ -251,9 +251,6 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     // A menu-conflicting binding WITHOUT ignoreInTerminal (e.g. a user binding
     // used for a non-terminal-adjacent action) still fires inside the
     // terminal — only `ignoreInTerminal` bindings yield to the remote shell.
-    // A menu-conflicting binding WITHOUT ignoreInTerminal (e.g. a user binding
-    // used for a non-terminal-adjacent action) still fires inside the
-    // terminal — only `ignoreInTerminal` bindings yield to the remote shell.
     const onShiftZ = vi.fn();
     const redoFallback: KeyboardShortcut = {
       key: 'z',
