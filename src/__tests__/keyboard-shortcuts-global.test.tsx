@@ -11,9 +11,15 @@ vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => true,
 }));
 
+// `getCurrentWindow().isFocused()` probe added with the initial-focus
+// correction; tests that don't care pin it to `true` (the optimistic default)
+// in beforeEach. Resolvable to `false` to exercise the blurred-set correction.
+const isFocusedMock = vi.hoisted(() => vi.fn(async (): Promise<boolean> => true));
+
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({
     label: 'main',
+    isFocused: isFocusedMock,
     onFocusChanged: vi.fn(async (handler: (event: { payload: boolean }) => void) => {
       focusChangedCaptured.handler = (payload: boolean) => handler({ payload });
       return vi.fn();
@@ -84,11 +90,14 @@ function focusBody() {
 // Default: no sibling windows exist (single-window app / tests).
 let platformSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
+  isFocusedMock.mockReset();
+  isFocusedMock.mockResolvedValue(true);
   mockedGetAllWebviewWindows.mockReset();
   mockedGetAllWebviewWindows.mockResolvedValue([]);
   // Pin a non-macOS host so the macOS menu-ownership paths stay dormant unless
-  // a test explicitly overrides via platformSpy below. (jsdom's own default is
-  // platform-dependent; forcing it removes any ambiguity.)
+  // a test explicitly overrides via platformSpy below. (jsdom always reports
+  // an empty platform string, never the host OS — pinning makes the intent
+  // explicit rather than relying on that accident.)
   platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Linux x86_64');
 });
 
@@ -242,6 +251,9 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     // A menu-conflicting binding WITHOUT ignoreInTerminal (e.g. a user binding
     // used for a non-terminal-adjacent action) still fires inside the
     // terminal — only `ignoreInTerminal` bindings yield to the remote shell.
+    // A menu-conflicting binding WITHOUT ignoreInTerminal (e.g. a user binding
+    // used for a non-terminal-adjacent action) still fires inside the
+    // terminal — only `ignoreInTerminal` bindings yield to the remote shell.
     const onShiftZ = vi.fn();
     const redoFallback: KeyboardShortcut = {
       key: 'z',
@@ -250,19 +262,33 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
       handler: onShiftZ,
       description: 'Custom Ctrl+Shift+Z',
     };
+    const onM = vi.fn();
+    const sidebarCtrlM: KeyboardShortcut = {
+      key: 'm',
+      ctrlKey: true,
+      ignoreInTerminal: true,
+      handler: onM,
+      description: 'Toggle Monitor Panel',
+    };
 
     await act(async () => {
-      render(<GlobalShortcutHarness shortcuts={[zenShortcut, redoFallback]} />);
+      render(<GlobalShortcutHarness shortcuts={[zenShortcut, redoFallback, sidebarCtrlM]} />);
     });
 
     // Never registered with the OS — the Cmd chord belongs to the native Undo
     // menu, and macOS menu items stay exclusive.
     expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Z', expect.any(Function));
     expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Shift+Z', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+M', expect.any(Function));
 
     // Physical Control (⌃Z) fires the in-window handler.
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
     expect(onZ).toHaveBeenCalledOnce();
+
+    // Physical Control (⌃M) fires the in-window handler too — the other
+    // degraded chord (⌘M belongs to the Minimize menu).
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', ctrlKey: true, bubbles: true }));
+    expect(onM).toHaveBeenCalledOnce();
 
     // Cmd+Z is not the degraded binding — the keystroke must reach the Undo
     // menu, not toggle Zen mode.
@@ -289,6 +315,81 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
       new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, shiftKey: true, bubbles: true }),
     );
     expect(onShiftZ).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps explicit-Cmd spellings out of OS registration on macOS', async () => {
+    platformSpy.mockReturnValue('MacIntel');
+    // The shortcut editor accepts explicit Cmd/Command/Meta spellings, which
+    // map to the `Command` accelerator — the same physical chord on macOS as
+    // CommandOrControl. They must hit the same menu-ownership exclusions, or
+    // e.g. a user-configured Cmd+W would still be OS-registered and fire
+    // alongside the native menu's Close action.
+    await act(async () => {
+      render(
+        <GlobalShortcutHarness
+          shortcuts={[
+            { key: 'w', metaKey: true, handler: vi.fn(), description: 'Close (Cmd+W)' },
+            { key: 'z', metaKey: true, ignoreInTerminal: true, handler: vi.fn(), description: 'Zen (Cmd+Z)' },
+            { key: 'z', metaKey: true, shiftKey: true, handler: vi.fn(), description: 'Custom (Cmd+Shift+Z)' },
+            { key: 'n', metaKey: true, globalInBackground: true, handler: vi.fn(), description: 'Summon (Cmd+N)' },
+          ]}
+        />,
+      );
+    });
+
+    expect(mockedRegister).not.toHaveBeenCalledWith('Command+W', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('Command+Z', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('Command+Shift+Z', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('Command+N', expect.any(Function));
+  });
+
+  it('drives an explicit-Cmd Zen binding from the physical-Control chord on macOS', async () => {
+    platformSpy.mockReturnValue('MacIntel');
+    const onZ = vi.fn();
+    const zenCmdZ: KeyboardShortcut = {
+      key: 'z',
+      metaKey: true,
+      ignoreInTerminal: true,
+      handler: onZ,
+      description: 'Toggle Zen Mode (Cmd+Z)',
+    };
+
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[zenCmdZ]} />);
+    });
+
+    // Not OS-registered — ⌘Z belongs to the Undo menu.
+    expect(mockedRegister).not.toHaveBeenCalledWith('Command+Z', expect.any(Function));
+
+    // The physical Control variant (⌃Z) fires the handler — the degraded
+    // binding matches the physical key the label advertises (⌃).
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    expect(onZ).toHaveBeenCalledOnce();
+
+    // The actual Cmd chord reaches the Undo menu, not the handler.
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'z', ctrlKey: false, metaKey: true, bubbles: true }),
+    );
+    expect(onZ).toHaveBeenCalledOnce();
+  });
+
+  it('applies blurred-set semantics when mounted without window focus', async () => {
+    // A webview launched in the background (open -g, autostart) mounts with
+    // the optimistic focused set; the isFocused() probe corrects it to the
+    // blurred set without waiting for the first focus event.
+    isFocusedMock.mockResolvedValue(false);
+    const onB = vi.fn();
+    await act(async () => {
+      render(
+        <GlobalShortcutHarness shortcuts={[layoutCtrlB(onB), backgroundSummonShortcut(vi.fn())]} />,
+      );
+    });
+
+    // The mount-time probe corrected the registrations: Ctrl+B (a default
+    // convention key) unregisters, the explicit background opt-in stays.
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    expect(mockedUnregister).not.toHaveBeenCalledWith('CommandOrControl+N');
+    expect(mockedRegister).toHaveBeenLastCalledWith('CommandOrControl+N', expect.any(Function));
   });
 
   it('does not register shortcuts without modifiers', async () => {

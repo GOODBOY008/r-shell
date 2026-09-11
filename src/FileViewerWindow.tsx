@@ -91,7 +91,7 @@ export function FileViewerWindow() {
   // On macOS the shared native menu's "Close Tab" key equivalent (Cmd+W)
   // consumes the keystroke before it can reach this webview (menu key
   // equivalents are resolved before the responder chain — the same reason
-  // MACOS_NATIVE_MENU_ACCELERATORS skips them in keyboard-shortcuts.ts). So
+  // MACOS_MENU_OWNED_ACCELERATORS skips them in keyboard-shortcuts.ts). So
   // the menu path must close this window too: it broadcasts `menu-action`,
   // and we act on `close_connection` only while THIS window has focus — the
   // mirror image of the main window's document.hasFocus() guard.

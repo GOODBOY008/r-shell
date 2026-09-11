@@ -346,6 +346,26 @@ describe('formatKeyboardShortcut', () => {
     expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘+⇧+→');
     expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥+W');
   });
+
+  it('shows ⌃ for macOS menu-degraded chords (Zen/sidebar and explicit-Cmd spellings)', () => {
+    const platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    try {
+      // The degraded branch (new in this PR): ⌘Z/⌘M belong to the native menu,
+      // the binding fires as the physical-Control variant — labels show ⌃.
+      expect(formatKeyboardShortcut('Ctrl+Z', true)).toBe('⌃+Z');
+      expect(formatKeyboardShortcut('Ctrl+Shift+Z', true)).toBe('⌃+⇧+Z');
+      expect(formatKeyboardShortcut('Ctrl+M', true)).toBe('⌃+M');
+      // An explicit-Cmd spelling of the same chords degrades identically.
+      expect(formatKeyboardShortcut('Cmd+Z', true)).toBe('⌃+Z');
+      expect(formatKeyboardShortcut('Cmd+Shift+Z', true)).toBe('⌃+⇧+Z');
+      expect(formatKeyboardShortcut('Super+Z', true)).toBe('⌃+Z');
+      // Non-degraded chords keep their ⌘ labels, explicit-Cmd included.
+      expect(formatKeyboardShortcut('Ctrl+B', true)).toBe('⌘+B');
+      expect(formatKeyboardShortcut('Cmd+W', true)).toBe('⌘+W');
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
 });
 
 describe('toAccelerator', () => {

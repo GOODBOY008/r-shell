@@ -122,7 +122,11 @@ export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string
         case 'meta':
         case 'cmd':
         case 'command':
-          return isMac ? '⌘' : 'Meta';
+        case 'super':
+          // An explicit-Cmd binding in a degraded chord shows ⌃ too — its Cmd
+          // form belongs to the menu and the physical-Control variant is what
+          // the user actually presses (matches `menuConflictMatchMods`).
+          return isMac ? (macDegraded ? '⌃' : '⌘') : 'Meta';
         case 'arrowup':
           return '↑';
         case 'arrowdown':
@@ -342,6 +346,37 @@ function currentPlatformIsMac(): boolean {
 }
 
 /**
+ * Canonical macOS ⌘ chord of a binding, in the `CommandOrControl+…` spelling
+ * the menu-ownership sets use. On macOS a `CommandOrControl` (Ctrl-based) and
+ * an explicit `Cmd`/`Command` binding resolve to the same physical ⌘ chord,
+ * so both user spellings must hit the same menu-ownership exclusions —
+ * otherwise a user-configured `Cmd+W`/`Cmd+Z` would still be OS-registered
+ * and double-fire alongside the native menu. `null` when the binding has no
+ * ⌘ modifier at all (including modifier-less chords like F5, which the menu
+ * owns for Reconnect and which `desiredAccelerators` matches via `accel`).
+ */
+function macMenuChord(shortcut: {
+  key: string;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+}): string | null {
+  if (!(shortcut.ctrlKey ?? false) && !(shortcut.metaKey ?? false)) {
+    return null;
+  }
+  const parts = ['CommandOrControl'];
+  if (shortcut.shiftKey) {
+    parts.push('Shift');
+  }
+  if (shortcut.altKey) {
+    parts.push('Option');
+  }
+  parts.push(toAcceleratorKey(shortcut.key));
+  return parts.join('+');
+}
+
+/**
  * Accelerator a shortcut would use as an OS global shortcut. On macOS the
  * Cmd chords owned by the native menu (see `MACOS_MENU_OWNED_ACCELERATORS`)
  * are excluded from global registration entirely — the menu processes them
@@ -370,14 +405,8 @@ function isMacMenuConflictingShortcut(shortcut: KeyboardShortcut): boolean {
   if (!currentPlatformIsMac()) {
     return false;
   }
-  const accel = toAcceleratorFromParsed({
-    key: shortcut.key,
-    ctrlKey: shortcut.ctrlKey ?? false,
-    shiftKey: shortcut.shiftKey ?? false,
-    altKey: shortcut.altKey ?? false,
-    metaKey: shortcut.metaKey ?? false,
-  });
-  return accel !== null && MACOS_MENU_CONFLICT_DEGRADE.has(accel);
+  const chord = macMenuChord(shortcut);
+  return chord !== null && MACOS_MENU_CONFLICT_DEGRADE.has(chord);
 }
 
 /**
@@ -389,8 +418,38 @@ function isMacMenuDegradedShortcut(shortcut: string): boolean {
   if (!currentPlatformIsMac()) {
     return false;
   }
-  const accel = toAccelerator(shortcut);
-  return accel !== null && MACOS_MENU_CONFLICT_DEGRADE.has(accel);
+  const parsed = parseKeyboardShortcut(shortcut);
+  const chord = parsed ? macMenuChord(parsed) : null;
+  return chord !== null && MACOS_MENU_CONFLICT_DEGRADE.has(chord);
+}
+
+/**
+ * The modifier expectations the in-window keydown listener matches against for
+ * a menu-conflicting binding. An explicit-Cmd chord (`Cmd+Z`, `Cmd+Shift+Z`)
+ * degrades to the physical-Control variant (⌃Z, ⌃⇧Z) — its Cmd form belongs
+ * to the native menu, the label shows ⌃ (see `formatKeyboardShortcut`), so the
+ * listener matches the physical Control key the label advertises.
+ */
+function menuConflictMatchMods(shortcut: KeyboardShortcut): {
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+} {
+  if ((shortcut.metaKey ?? false) && !(shortcut.ctrlKey ?? false)) {
+    return {
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: shortcut.shiftKey ?? false,
+      altKey: shortcut.altKey ?? false,
+    };
+  }
+  return {
+    ctrlKey: shortcut.ctrlKey ?? false,
+    metaKey: shortcut.metaKey ?? false,
+    shiftKey: shortcut.shiftKey ?? false,
+    altKey: shortcut.altKey ?? false,
+  };
 }
 
 /**
@@ -558,8 +617,15 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       // macOS: the native menu owns these Cmd chords (⌘N new connection, ⌘W
       // close, … — and ⌘Z/⌘M whose features degrade to the in-window ⌃
       // listener below). Registering them as OS global hotkeys would
-      // double-fire alongside the menu.
-      if (currentPlatformIsMac() && MACOS_MENU_OWNED_ACCELERATORS.has(accel)) {
+      // double-fire alongside the menu. `macMenuChord` collapses the
+      // `CommandOrControl` and explicit-`Cmd` spellings (the same physical ⌘
+      // chord on macOS, so a user-configured Cmd+W degrades too); F5 is a
+      // modifier-less menu chord matched via its accelerator directly.
+      const menuChord = macMenuChord(shortcut);
+      if (
+        currentPlatformIsMac() &&
+        (accel === 'F5' || (menuChord !== null && MACOS_MENU_OWNED_ACCELERATORS.has(menuChord)))
+      ) {
         continue;
       }
       if (!byAccelerator.has(accel)) {
@@ -670,11 +736,12 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
         continue;
       }
       const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
+      const mods = menuConflictMatchMods(shortcut);
       const modsMatch =
-        event.ctrlKey === (shortcut.ctrlKey ?? false) &&
-        event.metaKey === (shortcut.metaKey ?? false) &&
-        event.shiftKey === (shortcut.shiftKey ?? false) &&
-        event.altKey === (shortcut.altKey ?? false);
+        event.ctrlKey === mods.ctrlKey &&
+        event.metaKey === mods.metaKey &&
+        event.shiftKey === mods.shiftKey &&
+        event.altKey === mods.altKey;
       if (keyMatch && modsMatch) {
         event.preventDefault();
         event.stopPropagation();
