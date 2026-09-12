@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { KeyPathInput } from './key-path-input';
 import { PasswordInput } from './ui/password-input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -1029,11 +1030,11 @@ const handleCancelConnectionAttempt = async () => {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label htmlFor="private-key">{t('connectionDialog.label.privateKey')}</Label>
-                      <Input
+                      <KeyPathInput
                         id="private-key"
                         placeholder={t('connectionDialog.placeholder.privateKey')}
-                        value={config.privateKeyPath}
-                        onChange={(e) => updateConfig({ privateKeyPath: e.target.value })}
+                        value={config.privateKeyPath ?? ''}
+                        onChange={(privateKeyPath) => updateConfig({ privateKeyPath })}
                       />
                       <p className="text-xs text-muted-foreground">
                         {t('connectionDialog.placeholder.privateKey')}
@@ -1291,11 +1292,11 @@ const handleCancelConnectionAttempt = async () => {
                           <>
                             <div className="space-y-2">
                               <Label htmlFor="tunnel-key">{t('connectionDialog.label.tunnelKeyPath')}</Label>
-                              <Input
+                              <KeyPathInput
                                 id="tunnel-key"
                                 placeholder={t('connectionDialog.placeholder.tunnelKeyPath')}
-                                value={config.tunnelKeyPath}
-                                onChange={(e) => updateConfig({ tunnelKeyPath: e.target.value })}
+                                value={config.tunnelKeyPath ?? ''}
+                                onChange={(tunnelKeyPath) => updateConfig({ tunnelKeyPath })}
                               />
                             </div>
                             <div className="space-y-2">

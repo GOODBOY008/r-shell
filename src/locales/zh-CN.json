@@ -238,7 +238,9 @@
       "cancelling": "取消中...",
       "connecting": "连接中...",
       "connect": "连接",
-      "updateAndConnect": "更新并连接"
+      "updateAndConnect": "更新并连接",
+      "browseKey": "浏览密钥文件",
+      "browseKeyTitle": "选择私钥"
     },
     "toast": {
       "missingFields": "缺少必填字段",
@@ -258,7 +260,8 @@
       "connectionFailedDesc": "无法连接到服务器，请检查您的凭据并重试。",
       "connectionError": "连接错误",
       "connectionErrorDesc": "连接时发生意外错误。",
-      "credentialSyncFailed": "加密并保存凭据失败"
+      "credentialSyncFailed": "加密并保存凭据失败",
+      "keyPickerFailed": "无法打开文件选择器"
     },
     "tunnel": {
       "enable": "启用 SSH 隧道",
