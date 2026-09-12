@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.2] - 2026-09-12
+
+### 🔧 R-Shell 2.9.2 — Terminal & Connection Manager Refinements
+
+This patch release polishes the connection manager — collapsed folders are remembered across restarts and the status row is replaced with a relative/compact last-connected date — and stabilizes the terminal: tab dragging is rock solid, a hidden pane keeps its WebGL renderer through a grace period, and the tab close button no longer loses clicks to the drag handler. Global shortcuts stop hijacking keys in other apps and macOS menu chords, the transfer queue gets scrollable rows without bright dividers, and a Polish translation is now available.
+
+### New Features 🎉
+
+- feat(connection-manager): remember collapsed folders across restarts by @twkrol in #143
+- feat(connection-manager): drop status row and show relative/compact last-connected date by @GOODBOY008
+- feat(i18n): add Polish translation by @twkrol in #132
+
+### Bug Fixes 🐛
+
+- fix(terminal): keep a hidden pane's WebGL renderer through a grace period by @twkrol in #137
+- fix(transfer-queue): fix bright row dividers and enable list scrolling by @sunxiaobin89 in #149
+- fix(shortcuts): stop hijacking cross-app keys and macOS menu chords by @sunxiaobin89 in #146
+- fix(terminal): let the tab close button receive its click under the drag handler by @twkrol in #136
+- fix(terminal): stabilize tab drag and round out reorder affordances by @GOODBOY008 in #133
+- fix(lint): remove unnecessary type assertion in settings modal by @sunxiaobin89 in #145
+
+### Contributors
+
+Thanks to [@twkrol](https://github.com/twkrol), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.1...v2.9.2
+
 ## [2.9.1] - 2026-09-08
 
 ### 🔧 R-Shell 2.9.1 — Welcome Page, Encrypted Credentials & Connection Fixes
