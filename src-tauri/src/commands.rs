@@ -3682,11 +3682,16 @@ pub fn credential_open(sealed: String) -> Result<String, String> {
 
 // ========== In-App Updater (channel selection + Homebrew detection) ==========
 
-/// Error marker returned by `updater_check` when the running app lives in a
-/// Homebrew Caskroom. The frontend recognizes it and shows `brew upgrade`
-/// guidance instead of an error — the in-app updater must never replace a
+/// Error marker returned by `updater_check` when this install is managed by
+/// Homebrew. The frontend recognizes it and shows `brew upgrade` guidance
+/// instead of an error — the in-app updater must never replace a
 /// brew-managed .app (it would break the receipt/sha256 tracking).
 pub const HOMEBREW_MANAGED_MARKER: &str = "HOMEBREW_MANAGED_INSTALL";
+
+/// Cask tokens that install this app: the stable-line `r-shell` cask and the
+/// evolution-line `r-shell@current` cask. A receipt for either marks the
+/// install as brew-managed.
+const HOMEBREW_CASK_TOKENS: [&str; 2] = ["r-shell", "r-shell@current"];
 
 /// Stable channel manifest. `releases/latest` never points at a prerelease,
 /// so evolution-line tags (`v*-current.N`) cannot hijack this URL.
@@ -3725,14 +3730,83 @@ fn macos_major_version() -> Option<u32> {
     None
 }
 
+/// True when this install is managed by Homebrew. `brew install --cask`
+/// moves the .app out to /Applications and leaves only a symlink plus a
+/// receipt in the Caskroom, so the executable path normally contains no
+/// "Caskroom" — the receipt (`<prefix>/Caskroom/<token>/.metadata/
+/// INSTALL_RECEIPT.json`, present for every cask install) is the reliable
+/// marker. Requiring the receipt file (not just the Caskroom dir) keeps a
+/// stale uninstalled-cask directory from counting.
+fn cask_receipt_exists(prefixes: &[std::path::PathBuf]) -> bool {
+    prefixes.iter().any(|prefix| {
+        HOMEBREW_CASK_TOKENS.iter().any(|token| {
+            prefix
+                .join("Caskroom")
+                .join(token)
+                .join(".metadata")
+                .join("INSTALL_RECEIPT.json")
+                .exists()
+        })
+    })
+}
+
+fn homebrew_prefixes() -> Vec<std::path::PathBuf> {
+    // Both default prefixes (Apple Silicon / Intel) plus custom installs via
+    // HOMEBREW_PREFIX (unset for GUI apps launched from Finder/Dock).
+    let mut prefixes: Vec<std::path::PathBuf> = vec!["/opt/homebrew".into(), "/usr/local".into()];
+    if let Ok(custom) = std::env::var("HOMEBREW_PREFIX") {
+        if !custom.is_empty() {
+            prefixes.push(custom.into());
+        }
+    }
+    prefixes
+}
+
+/// The innermost `.app` bundle containing `exe`, if any (a dev build's
+/// `target/debug/r-shell` binary has none).
+fn app_bundle_dir(exe: &std::path::Path) -> Option<&std::path::Path> {
+    exe.ancestors().skip(1).find(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".app"))
+    })
+}
+
+fn bundle_in_applications(bundle: &std::path::Path, home: Option<&std::path::Path>) -> bool {
+    bundle.starts_with("/Applications")
+        || home.is_some_and(|h| bundle.starts_with(h.join("Applications")))
+}
+
+fn homebrew_managed() -> bool {
+    // Fast path: running straight out of a Caskroom (e.g. Homebrew staging
+    // or a hand-copied bundle kept in place).
+    if std::env::current_exe()
+        .map(|exe| exe.to_string_lossy().contains("/Caskroom/"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    // Standard layout: app moved to /Applications, receipt in the Caskroom.
+    // The /Applications qualifier keeps an unrelated copy on the same machine
+    // (e.g. a `tauri dev` build) from being classified as managed.
+    if !cask_receipt_exists(&homebrew_prefixes()) {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let home = std::env::var("HOME")
+        .ok()
+        .map(std::path::PathBuf::from);
+    app_bundle_dir(&exe).is_some_and(|bundle| {
+        bundle_in_applications(bundle, home.as_deref())
+    })
+}
+
 #[tauri::command]
 pub fn get_update_context() -> UpdateContext {
-    let homebrew_managed = std::env::current_exe()
-        .map(|exe| exe.to_string_lossy().contains("/Caskroom/"))
-        .unwrap_or(false);
-
     UpdateContext {
-        homebrew_managed,
+        homebrew_managed: homebrew_managed(),
         platform: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         macos_major: macos_major_version(),
@@ -3750,7 +3824,9 @@ pub struct UpdateMeta {
     pub body: Option<String>,
 }
 
-/// Process-wide cache of the update found by the last `updater_check`.
+/// Process-wide cache of the update found by the last `updater_check`. The
+/// entry survives a failed `updater_download_and_install` so the frontend's
+/// retry re-downloads; it is only cleared after a successful install.
 #[derive(Default)]
 pub struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
 
@@ -3761,7 +3837,7 @@ pub async fn updater_check(
     proxy: Option<String>,
     pending: State<'_, PendingUpdate>,
 ) -> Result<Option<UpdateMeta>, String> {
-    if get_update_context().homebrew_managed {
+    if homebrew_managed() {
         return Err(HOMEBREW_MANAGED_MARKER.to_string());
     }
 
@@ -3811,14 +3887,17 @@ pub async fn updater_download_and_install(
     app: tauri::AppHandle,
     pending: State<'_, PendingUpdate>,
 ) -> Result<(), String> {
-    let update = pending.0.lock().map_err(|e| e.to_string())?.take();
+    // Clone rather than take: `Update` is cheap to clone and the cached one
+    // must survive a failed transfer, otherwise the dialog's retry would
+    // always die with "No update available" instead of re-downloading.
+    let update = pending.0.lock().map_err(|e| e.to_string())?.clone();
     let Some(update) = update else {
         return Err("No update available — run updater_check first".to_string());
     };
 
     let mut downloaded: u64 = 0;
     let progress_app = app.clone();
-    update
+    let result = update
         .download_and_install(
             move |chunk_len, total| {
                 downloaded += chunk_len as u64;
@@ -3829,8 +3908,96 @@ pub async fn updater_download_and_install(
             },
             || {},
         )
-        .await
-        .map_err(|e| e.to_string())
+        .await;
+
+    match result {
+        Ok(()) => {
+            // Installed: drop the cache so a stale `Update` can never be
+            // re-downloaded against the now-current version.
+            *pending.0.lock().map_err(|e| e.to_string())? = None;
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+// ========== Updater Tests ==========
+
+#[cfg(test)]
+mod updater_tests {
+    use super::*;
+
+    #[test]
+    fn cask_receipt_marks_homebrew_managed() {
+        let prefix = tempfile::tempdir().unwrap();
+        for token in HOMEBREW_CASK_TOKENS {
+            let receipt = prefix
+                .path()
+                .join("Caskroom")
+                .join(token)
+                .join(".metadata")
+                .join("INSTALL_RECEIPT.json");
+            std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+            std::fs::write(&receipt, "{}").unwrap();
+            assert!(
+                cask_receipt_exists(&[prefix.path().to_path_buf()]),
+                "receipt for {token} should mark the install as managed"
+            );
+        }
+    }
+
+    #[test]
+    fn no_receipt_means_unmanaged() {
+        let prefix = tempfile::tempdir().unwrap();
+        assert!(!cask_receipt_exists(&[prefix.path().to_path_buf()]));
+
+        // A Caskroom dir without the receipt (e.g. stale leftovers after a
+        // manual delete) must not count as a managed install.
+        let stale = prefix.path().join("Caskroom").join("r-shell").join("2.9.2");
+        std::fs::create_dir_all(&stale).unwrap();
+        assert!(!cask_receipt_exists(&[prefix.path().to_path_buf()]));
+    }
+
+    #[test]
+    fn other_casks_receipts_do_not_count() {
+        let prefix = tempfile::tempdir().unwrap();
+        let receipt = prefix
+            .path()
+            .join("Caskroom")
+            .join("some-other-app")
+            .join(".metadata")
+            .join("INSTALL_RECEIPT.json");
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::write(&receipt, "{}").unwrap();
+        assert!(!cask_receipt_exists(&[prefix.path().to_path_buf()]));
+    }
+
+    #[test]
+    fn app_bundle_detection_distinguishes_installed_from_dev_builds() {
+        let installed = std::path::Path::new("/Applications/r-shell.app/Contents/MacOS/r-shell");
+        let bundle = app_bundle_dir(installed).unwrap();
+        assert_eq!(bundle, std::path::Path::new("/Applications/r-shell.app"));
+        assert!(bundle_in_applications(bundle, Some(std::path::Path::new("/Users/dev"))));
+
+        let user_apps = std::path::Path::new("/Users/dev/Applications/r-shell.app/Contents/MacOS/r-shell");
+        assert!(bundle_in_applications(
+            app_bundle_dir(user_apps).unwrap(),
+            Some(std::path::Path::new("/Users/dev"))
+        ));
+
+        // A tauri-dev binary is not inside any .app bundle at all, so a
+        // receipt on the machine must not classify it as managed.
+        let dev_build = std::path::Path::new("/repo/src-tauri/target/debug/r-shell");
+        assert!(app_bundle_dir(dev_build).is_none());
+
+        // An .app bundle outside /Applications (e.g. run from a mounted dmg)
+        // is not the brew-managed copy either.
+        let from_dmg = std::path::Path::new("/Volumes/R-Shell/r-shell.app/Contents/MacOS/r-shell");
+        assert!(!bundle_in_applications(
+            app_bundle_dir(from_dmg).unwrap(),
+            Some(std::path::Path::new("/Users/dev"))
+        ));
+    }
 }
 
 // ========== Local Filesystem Tests ==========

@@ -75,7 +75,7 @@ Cask Cookbook：仅当应用自带更新（菜单里有真正执行下载安装�
 而 brew 侧语义：声明了 `auto_updates` 的 cask **默认不被 `brew upgrade` 升级**（需 `--greedy`）。我们希望 brew 用户走 `brew upgrade --cask r-shell`，因此：
 
 - 官方 cask **不含 `auto_updates`**；
-- 应用内更新器检测到自身运行于 `/opt/homebrew/Caskroom/` 或 `/usr/local/Caskroom/`（可判定"自更新可被禁用"）时，禁用自动检查与下载安装，UI 引导用户执行 `brew upgrade`（§4）。
+- 应用内更新器检测到 Homebrew cask receipt 时（`<prefix>/Caskroom/r-shell{,@current}/.metadata/INSTALL_RECEIPT.json`，prefix 覆盖 `/opt/homebrew`、`/usr/local` 与 `HOMEBREW_PREFIX`），禁用自动检查与下载安装，UI 引导用户执行 `brew upgrade`（§4）。注意 **不能靠可执行文件路径包含 `Caskroom` 判定**：`brew install --cask` 会把 .app 移出到 /Applications，Caskroom 里只剩符号链接与 receipt，运行路径不含 "Caskroom"（2026-09-13 在本机 `/opt/homebrew/Caskroom/r-shell/2.9.2/` 实测确认）。
 
 这同时**取代了此前"给私有 tap 加 `auto_updates true`"的方案**：既然 Caskroom 安装一律停用应用内更新，两条 tap 都应省略该 stanza，冲突从根上消失，且 `brew upgrade` 对两个 cask 都直接生效。
 
@@ -148,7 +148,7 @@ release:
         - { platform: windows-latest, args: '', baseline: current }
 ```
 
-每个 entry 顶部 `if: tagMatchesBaseline`（用一步 `jq`/`grep` 判定 tag 是否含 `-current.`，与 matrix 条目匹配；演进线新增的 mac 构建沿用 `macos-latest` runner）。
+基线过滤**不能**写成 job 级 `if: matrix.baseline == ...`——GitHub 的 job 级 `if` 只允许 `github/needs/vars/inputs` 上下文（matrix 仅在 step 级可用），直接引用会在触发时整个 workflow 校验失败。正确做法：前置一个 `resolve-matrix` job 用 `jq` 按 tag 生成过滤后的 entries JSON，`release` job 以 `strategy.matrix: ${{ fromJSON(needs.resolve-matrix.outputs.entries) }}` 消费（演进线新增的 mac 构建沿用 `macos-latest` runner）。
 
 ### 3.2 演进线的最低系统注入
 
@@ -248,7 +248,10 @@ bump-official-cask:
 ```rust
 #[tauri::command] fn get_update_context() -> UpdateContext
 // { homebrewManaged: bool, platform: String, arch: String, macosMajor: Option<u32> }
-// homebrewManaged = std::env::current_exe() 路径包含 "/Caskroom/"
+// homebrewManaged = 可执行文件路径含 "/Caskroom/"（staging 直跑）
+//   或（receipt 存在 且当前运行副本是 /Applications|~/Applications 下的 .app）：
+//   receipt = {/opt/homebrew, /usr/local, $HOMEBREW_PREFIX}/Caskroom/r-shell{,@current}/.metadata/INSTALL_RECEIPT.json
+//   （/Applications 限定用于排除同机上的 tauri-dev 构建——receipt 是机器级标记）
 // macosMajor 用 sysinfo/os_info 或简单解析 `sw_vers`（已有系统信息采集代码可复用）
 
 #[tauri::command] async fn updater_check(channel: String, proxy: Option<String>) -> Result<Option<UpdateMeta>, String>

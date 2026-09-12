@@ -7,43 +7,50 @@ on:
   workflow_dispatch:
 
 jobs:
+  # A job-level `if` cannot reference the `matrix` context (GitHub only
+  # allows github/needs/vars/inputs there), so the baseline selection for
+  # the tag happens here: this job picks the matrix entries matching the
+  # tag and hands them to `release` as JSON.
+  resolve-matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      entries: ${{ steps.resolve.outputs.entries }}
+    steps:
+      - name: Select matrix entries for this tag
+        id: resolve
+        run: |
+          # Dual baseline: tags without a `-current.` suffix (and
+          # workflow_dispatch) build the compat line; `v*-current.*` tags
+          # build only the evolution line (macOS 26+ arm64, no Intel) which
+          # is published as a prerelease so it can never hijack
+          # `releases/latest` from the stable channel.
+          if [[ "$GITHUB_REF_NAME" == *-current.* ]]; then
+            ENTRIES=$(jq -cn \
+              --arg macArgs '--target aarch64-apple-darwin --config '\''{"bundle":{"macOS":{"minimumSystemVersion":"26.0"}}}'\''' \
+              '{include: [
+                 {platform: "macos-latest",  args: $macArgs, baseline: "current"},
+                 {platform: "ubuntu-latest",  args: "",       baseline: "current"},
+                 {platform: "windows-latest", args: "",       baseline: "current"}
+               ]}')
+          else
+            ENTRIES=$(jq -cn \
+              '{include: [
+                 # Stable / compat line (minimumSystemVersion stays at the Tauri default)
+                 {platform: "macos-latest",  args: "--target aarch64-apple-darwin", baseline: "compat"},
+                 {platform: "macos-latest",  args: "--target x86_64-apple-darwin",  baseline: "compat"},
+                 {platform: "ubuntu-latest",  args: "",                              baseline: "compat"},
+                 {platform: "windows-latest", args: "",                              baseline: "compat"}
+               ]}')
+          fi
+          echo "entries=$ENTRIES" >> "$GITHUB_OUTPUT"
+
   release:
+    needs: resolve-matrix
     permissions:
       contents: write
-    # Dual baseline: tags without a `-current.` suffix (and workflow_dispatch)
-    # build the compat line; `v*-current.*` tags build only the evolution line
-    # (macOS 26+ arm64, no Intel) which is published as a prerelease so it can
-    # never hijack `releases/latest` from the stable channel.
-    if: >
-      (matrix.baseline == 'compat' && !contains(github.ref, '-current.')) ||
-      (matrix.baseline == 'current' && contains(github.ref, '-current.'))
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # ── Stable / compat line (minimumSystemVersion stays at the Tauri default) ──
-          - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
-            baseline: 'compat'
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
-            baseline: 'compat'
-          - platform: ubuntu-latest
-            args: ''
-            baseline: 'compat'
-          - platform: windows-latest
-            args: ''
-            baseline: 'compat'
-          # ── Evolution / current line (macOS 26+ baseline, arm64 only) ──
-          - platform: macos-latest
-            args: '--target aarch64-apple-darwin --config ''{"bundle":{"macOS":{"minimumSystemVersion":"26.0"}}}'''
-            baseline: 'current'
-          - platform: ubuntu-latest
-            args: ''
-            baseline: 'current'
-          - platform: windows-latest
-            args: ''
-            baseline: 'current'
+      matrix: ${{ fromJSON(needs.resolve-matrix.outputs.entries) }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -215,11 +222,18 @@ jobs:
           add_platform "linux-x86_64"    'amd64\.AppImage$'
           add_platform "windows-x86_64"  'x64-setup\.exe$'
 
-          # Fail loudly rather than shipping an empty/partial manifest that
-          # would silently break updates for every platform.
-          PLATFORM_COUNT=$(echo "$PLATFORMS" | jq 'length')
-          if [ "${PLATFORM_COUNT:-0}" -eq 0 ]; then
-            echo "::error::No updater assets were resolved from the release. Aborting latest.json upload."
+          # Fail loudly rather than shipping a partial manifest: a missing
+          # platform entry silently strands that platform's updater (it sees
+          # "no update" forever), so all four entries are required before
+          # latest.json is uploaded.
+          MISSING_KEYS=""
+          for key in darwin-aarch64 darwin-x86_64 linux-x86_64 windows-x86_64; do
+            if [ "$(echo "$PLATFORMS" | jq --arg k "$key" 'has($k)')" != "true" ]; then
+              MISSING_KEYS="$MISSING_KEYS $key"
+            fi
+          done
+          if [ -n "$MISSING_KEYS" ]; then
+            echo "::error::latest.json is missing required platform entries:$MISSING_KEYS. Aborting upload so a partial manifest can never strand a platform's updater."
             exit 1
           fi
 
@@ -331,9 +345,17 @@ jobs:
           add_platform "linux-x86_64"    'amd64\.AppImage$'
           add_platform "windows-x86_64"  'x64-setup\.exe$'
 
-          PLATFORM_COUNT=$(echo "$PLATFORMS" | jq 'length')
-          if [ "${PLATFORM_COUNT:-0}" -eq 0 ]; then
-            echo "::error::No updater assets were resolved from the release. Aborting current.json upload."
+          # Same completeness requirement as latest.json: the current line
+          # always builds all three platforms, and a partial manifest would
+          # strand the missing platform's updater.
+          MISSING_KEYS=""
+          for key in darwin-aarch64 linux-x86_64 windows-x86_64; do
+            if [ "$(echo "$PLATFORMS" | jq --arg k "$key" 'has($k)')" != "true" ]; then
+              MISSING_KEYS="$MISSING_KEYS $key"
+            fi
+          done
+          if [ -n "$MISSING_KEYS" ]; then
+            echo "::error::current.json is missing required platform entries:$MISSING_KEYS. Aborting upload so a partial manifest can never strand a platform's updater."
             exit 1
           fi
 
