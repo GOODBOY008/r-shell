@@ -440,7 +440,21 @@
       "debug": "Diagnostyka"
     },
     "tabScrollLeft": "Przewiń w lewo",
-    "tabScrollRight": "Przewiń w prawo"
+    "tabScrollRight": "Przewiń w prawo",
+    "updates": {
+      "channel": {
+        "label": "Kanał aktualizacji",
+        "stable": "Stabilna (zalecana)",
+        "current": "Najnowsza (macOS 26+)",
+        "currentHint": "Kanał najnowszej wersji działa tylko w przód: powrót do wersji stabilnej wymaga ręcznej instalacji wersji stabilnej.",
+        "currentUnavailable": "Kanał najnowszej wersji wymaga macOS 26 lub nowszego na Apple Silicon."
+      },
+      "homebrewManaged": {
+        "title": "Zarządzane przez Homebrew",
+        "desc": "Ta kopia została zainstalowana przez Homebrew, więc aktualizacjami zarządza brew. Aktualizacje w aplikacji są wyłączone, aby uniknąć konfliktu.",
+        "command": "brew upgrade --cask r-shell"
+      }
+    }
   },
   "welcome": {
     "quickTips": "Szybkie wskazówki",
@@ -803,7 +817,9 @@
     "downloadingButton": "Pobieranie…",
     "checkFailedFallback": "Nie udało się sprawdzić aktualizacji.",
     "downloadFailedFallback": "Nie udało się pobrać aktualizacji.",
-    "installFailedFallback": "Nie udało się zainstalować aktualizacji."
+    "installFailedFallback": "Nie udało się zainstalować aktualizacji.",
+    "homebrewManaged": "Aktualizacjami zarządza Homebrew",
+    "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew. Uruchom \"brew upgrade --cask r-shell\", aby zaktualizować."
   },
   "syncDialog": {
     "title": "Synchronizacja katalogów",
