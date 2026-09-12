@@ -22,6 +22,7 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
             tunnel: None,
         }
     }
@@ -40,6 +41,7 @@ mod tests {
     #[test]
     fn test_tunnel_config_creation() {
         let config = SshConfig {
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
             tunnel: Some(crate::ssh::TunnelConfig {
                 host: "bastion.example.com".to_string(),
                 port: 2222,
@@ -126,6 +128,7 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
             tunnel: None,
         };
 
@@ -237,6 +240,7 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
             tunnel: None,
         }
     }
@@ -443,6 +447,7 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
             })
             .await
@@ -484,6 +489,7 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
             })
             .await
@@ -545,6 +551,7 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: Some(TunnelConfig {
                     host,
                     port,
@@ -670,6 +677,7 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
             })
             .await
@@ -721,6 +729,7 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
             })
             .await
@@ -824,6 +833,7 @@ mod key_loading_tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
             tunnel: None,
         };
 

@@ -1436,5 +1436,15 @@
       "updated": "Zaktualizowano fragment",
       "deleted": "Usunięto fragment"
     }
+  },
+  "hostKey": {
+    "changedTitle": "Klucz hosta uległ zmianie",
+    "changedDesc": "Serwer SSH {{host}}:{{port}} przedstawił klucz hosta inny niż zapisany w known_hosts.",
+    "fingerprint": "Nowy odcisk",
+    "recordedAt": "Zapisany klucz",
+    "recordedAtValue": "linia {{line}} pliku {{file}}",
+    "warning": "Może to oznaczać atak typu man-in-the-middle. Kontynuuj tylko, jeśli wiesz, że serwer został przeinstalowany lub jego klucz wymieniono.",
+    "trustHint": "Zaufanie zastąpi zapisany klucz tego hosta i ponowi połączenie.",
+    "trust": "Zaufaj nowemu kluczowi i połącz"
   }
 }

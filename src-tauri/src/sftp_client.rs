@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::ssh::{Client, TunnelConfig};
+use crate::ssh::{Client, HostKeyPolicy, TunnelConfig};
 
 /// Configuration for a standalone SFTP connection (SSH transport, no PTY).
 #[derive(Debug, Clone, Deserialize)]
@@ -18,6 +18,9 @@ pub struct SftpConfig {
     pub auth_method: SftpAuthMethod,
     /// Optional SSH jump host (bastion) to route the connection through.
     pub tunnel: Option<TunnelConfig>,
+    /// Host-key policy for this connection and its jump host.
+    #[serde(default)]
+    pub host_key_policy: HostKeyPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -130,6 +133,8 @@ impl StandaloneSftpClient {
         };
         let connection_timeout = Duration::from_secs(10);
 
+        let (handler, host_key_error) =
+            Client::new(&config.host, config.port, config.host_key_policy);
         let mut ssh_session = if let Some(tunnel) = &config.tunnel {
             // Route through an SSH jump host, then run the target handshake
             // over the tunneled channel.
@@ -138,12 +143,13 @@ impl StandaloneSftpClient {
                 &config.host,
                 config.port,
                 connection_timeout,
+                config.host_key_policy,
             )
             .await
             .map_err(|e| anyhow::anyhow!("SFTP SSH tunnel failed: {e}"))?;
             tokio::time::timeout(
                 connection_timeout,
-                client::connect_stream(Arc::new(ssh_config), stream, Client),
+                client::connect_stream(Arc::new(ssh_config), stream, handler),
             )
             .await
             .map_err(|_| {
@@ -152,12 +158,12 @@ impl StandaloneSftpClient {
                 )
             })?
             .map_err(|e| {
-                anyhow::anyhow!(
+                host_key_error.explain_or(anyhow::anyhow!(
                     "Failed to connect to {}:{}: {}",
                     config.host,
                     config.port,
                     e
-                )
+                ))
             })?
         } else {
             tokio::time::timeout(
@@ -165,7 +171,7 @@ impl StandaloneSftpClient {
                 client::connect(
                     Arc::new(ssh_config),
                     (&config.host[..], config.port),
-                    Client,
+                    handler,
                 ),
             )
             .await
@@ -175,12 +181,12 @@ impl StandaloneSftpClient {
                 )
             })?
             .map_err(|e| {
-                anyhow::anyhow!(
+                host_key_error.explain_or(anyhow::anyhow!(
                     "Failed to connect to {}:{}: {}",
                     config.host,
                     config.port,
                     e
-                )
+                ))
             })?
         };
 
@@ -222,7 +228,8 @@ impl StandaloneSftpClient {
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "SFTP public key authentication failed with key {}: {}.",
-                            expanded_path, e
+                            expanded_path,
+                            e
                         )
                     })?;
                 if !authenticated {
