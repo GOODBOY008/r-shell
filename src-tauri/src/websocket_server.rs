@@ -1,5 +1,5 @@
 use crate::connection_manager::ConnectionManager;
-use crate::WEBSOCKET_PORT;
+use crate::{WEBSOCKET_PORT, WEBSOCKET_TOKEN};
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex, Semaphore};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -363,6 +365,8 @@ impl WebSocketServer {
         let listener = listener
             .ok_or_else(|| anyhow::anyhow!("Failed to bind to any port in range 9001-9010"))?;
 
+        // The bridge token must exist before the first client can connect.
+        WEBSOCKET_TOKEN.get_or_init(generate_bridge_token);
         // Store the bound port in the global atomic for frontend to query
         WEBSOCKET_PORT.store(bound_port, Ordering::SeqCst);
         tracing::info!("WebSocket port stored: {}", bound_port);
@@ -387,7 +391,29 @@ impl WebSocketServer {
 
     /// Handle a single WebSocket connection
     async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
-        let ws_stream = accept_async(stream).await?;
+        // Authenticate the handshake before any protocol message is read: the
+        // listener is on loopback, but loopback is reachable by every local
+        // process and, through the browser, by every web page the user has
+        // open. Without this, `StartPty`/`Input` with a known connection id
+        // would hand a foreign client a shell on the user's SSH session.
+        let expected = WEBSOCKET_TOKEN.get().cloned().unwrap_or_default();
+        let ws_stream = accept_hdr_async(stream, |req: &Request, res: Response| {
+            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+            match validate_handshake(origin, req.uri().query(), &expected) {
+                Ok(()) => Ok(res),
+                Err(reason) => {
+                    tracing::warn!(
+                        "Rejected WebSocket handshake: {} (origin={:?})",
+                        reason,
+                        origin
+                    );
+                    let mut response = ErrorResponse::new(Some(reason.to_string()));
+                    *response.status_mut() = StatusCode::FORBIDDEN;
+                    Err(response)
+                }
+            }
+        })
+        .await?;
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
         // Bounded channel: when full the PTY reader blocks, providing backpressure
@@ -1016,5 +1042,137 @@ mod tests {
         let uncoded = WsError::from(PtyStartError::Other(anyhow::anyhow!("misc")));
         assert_eq!(uncoded.code, None);
         assert_eq!(uncoded.message, "misc");
+    }
+}
+
+// ── Handshake authentication (issue #138) ───────────────────────────────────
+
+/// Origins the app's own webview reports, per platform. Anything else is a
+/// foreign page that happens to be able to reach 127.0.0.1.
+const ALLOWED_ORIGINS: &[&str] = &[
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
+
+/// The Vite dev server, only in debug builds.
+#[cfg(debug_assertions)]
+const DEV_ORIGINS: &[&str] = &["http://localhost:1420", "http://127.0.0.1:1420"];
+#[cfg(not(debug_assertions))]
+const DEV_ORIGINS: &[&str] = &[];
+
+/// 32 random bytes, base64url without padding — URL-safe, so the frontend can
+/// pass it verbatim as a query parameter.
+fn generate_bridge_token() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Compare without leaking where the first differing byte is.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Decide whether a WebSocket upgrade request may proceed.
+///
+/// - The `token` query parameter must equal the per-launch token. A missing
+///   or empty expected token (server not initialised) rejects everything.
+/// - If the client sent an `Origin` header it must be one of the app's own
+///   origins. Non-browser clients send none and rely on the token alone.
+pub(crate) fn validate_handshake(
+    origin: Option<&str>,
+    query: Option<&str>,
+    expected_token: &str,
+) -> Result<(), &'static str> {
+    if expected_token.is_empty() {
+        return Err("bridge token not initialised");
+    }
+    if let Some(origin) = origin {
+        let allowed = ALLOWED_ORIGINS
+            .iter()
+            .chain(DEV_ORIGINS.iter())
+            .any(|o| o.eq_ignore_ascii_case(origin));
+        if !allowed {
+            return Err("origin not allowed");
+        }
+    }
+    let presented = query.and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
+    match presented {
+        Some(t) if constant_time_eq(t.as_bytes(), expected_token.as_bytes()) => Ok(()),
+        Some(_) => Err("invalid token"),
+        None => Err("missing token"),
+    }
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+
+    const TOKEN: &str = "s3cr3t-t0k3n_ABC";
+
+    #[test]
+    fn accepts_app_origin_with_valid_token() {
+        assert_eq!(
+            validate_handshake(Some("tauri://localhost"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Ok(())
+        );
+        assert_eq!(
+            validate_handshake(Some("http://tauri.localhost"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn accepts_non_browser_client_with_valid_token() {
+        // No Origin header: a native client, allowed on the strength of the token.
+        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_ABC"), TOKEN), Ok(()));
+    }
+
+    #[test]
+    fn rejects_foreign_origin_even_with_valid_token() {
+        assert_eq!(
+            validate_handshake(Some("https://evil.example"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Err("origin not allowed")
+        );
+        assert_eq!(
+            validate_handshake(Some("null"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Err("origin not allowed")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_wrong_or_empty_token() {
+        assert_eq!(validate_handshake(None, None, TOKEN), Err("missing token"));
+        assert_eq!(validate_handshake(None, Some(""), TOKEN), Err("missing token"));
+        assert_eq!(validate_handshake(None, Some("token="), TOKEN), Err("invalid token"));
+        assert_eq!(validate_handshake(None, Some("token=nope"), TOKEN), Err("invalid token"));
+        // Prefix / superstring must not pass.
+        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_AB"), TOKEN), Err("invalid token"));
+        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_ABCD"), TOKEN), Err("invalid token"));
+    }
+
+    #[test]
+    fn finds_token_among_other_query_parameters() {
+        assert_eq!(validate_handshake(None, Some("x=1&token=s3cr3t-t0k3n_ABC&y=2"), TOKEN), Ok(()));
+    }
+
+    #[test]
+    fn rejects_everything_when_server_token_is_unset() {
+        assert_eq!(validate_handshake(None, Some("token="), ""), Err("bridge token not initialised"));
+    }
+
+    #[test]
+    fn generated_token_is_long_urlsafe_and_unique() {
+        let a = generate_bridge_token();
+        let b = generate_bridge_token();
+        assert_eq!(a.len(), 43); // 32 bytes → 43 base64url chars without padding
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert_ne!(a, b);
     }
 }
