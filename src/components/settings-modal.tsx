@@ -59,7 +59,12 @@ import {
   importAllConfig,
 } from '@/lib/config-export-import';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
-import { isTauri } from '@tauri-apps/api/core';
+import { isTauri, invoke } from '@tauri-apps/api/core';
+import {
+  DEFAULT_UPDATE_CONTEXT,
+  isCurrentChannelEligible,
+  type UpdateContext,
+} from '@/lib/update-channel';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
@@ -139,6 +144,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     logLevel: 'info',
     maxLogSize: 100,
     checkUpdates: true,
+    updateChannel: 'stable',
     updateProxy: '',
     telemetry: false,
 
@@ -149,6 +155,16 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   // True once the user has manually changed the autostart toggle (or reset
   // settings) while the modal is open — the OS state query must not clobber it.
   const autostartTouchedRef = useRef(false);
+
+  // Backend facts for the update group: Homebrew detection hides the channel/
+  // auto-check/proxy controls (brew owns updates), platform/arch/macOS major
+  // gate the `current` channel. Null in browser dev mode → gating stays off.
+  const [updateContext, setUpdateContext] = useState<UpdateContext | null>(null);
+
+  const currentChannelEligible = isCurrentChannelEligible(updateContext ?? DEFAULT_UPDATE_CONTEXT);
+  const homebrewManaged = updateContext?.homebrewManaged ?? false;
+  const channelValue =
+    settings.updateChannel === 'current' && currentChannelEligible ? 'current' : 'stable';
 
   // Load settings when modal opens
   useEffect(() => {
@@ -179,6 +195,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
       // the actual launch-at-login configuration, not a cached value.
       // Skip in browser dev mode where the Tauri backend is absent.
       if (isTauri()) {
+        invoke<UpdateContext>('get_update_context')
+          .then(setUpdateContext)
+          .catch(() => setUpdateContext(null));
+
         // Each open re-reads the OS state; discard any prior touch flag
         autostartTouchedRef.current = false;
         isAutostartEnabled()
@@ -341,6 +361,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
       ...settings,
       updateProxy: updateProxy ?? '',
+      // A stored `current` preference that no longer qualifies (e.g. the app
+      // moved to a Homebrew install or an older macOS) falls back to stable.
+      updateChannel: channelValue,
     }));
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     onOpenChange(false);
@@ -380,6 +403,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         logLevel: 'info',
         maxLogSize: 100,
         checkUpdates: true,
+        updateChannel: 'stable',
         updateProxy: '',
         telemetry: false,
         autostart: false
@@ -1334,47 +1358,86 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
 
                 <Separator />
 
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.advanced.checkUpdates')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.advanced.checkUpdatesDesc')}
+                {homebrewManaged ? (
+                  <div className="space-y-2 rounded-lg border border-border bg-muted/50 p-3">
+                    <p className="text-sm font-medium">
+                      {t('settings.updates.homebrewManaged.title')}
                     </p>
+                    <p className="text-sm text-muted-foreground">
+                      {t('settings.updates.homebrewManaged.desc')}
+                    </p>
+                    <code className="block rounded border border-border bg-background px-2 py-1.5 font-mono text-xs">
+                      {t('settings.updates.homebrewManaged.command')}
+                    </code>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        if (handleSave()) {
-                          onCheckForUpdates?.();
-                        }
-                      }}
-                      className="gap-1.5"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      {t('settings.advanced.checkNow')}
-                    </Button>
-                    <Switch
-                      checked={settings.checkUpdates}
-                      onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
-                    />
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <Label>{t('settings.updates.channel.label')}</Label>
+                      <Select
+                        value={channelValue}
+                        onValueChange={(value) => updateSetting('updateChannel', value)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="stable">{t('settings.updates.channel.stable')}</SelectItem>
+                          <SelectItem value="current" disabled={!currentChannelEligible}>
+                            {t('settings.updates.channel.current')}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-sm text-muted-foreground">
+                        {currentChannelEligible
+                          ? t('settings.updates.channel.currentHint')
+                          : t('settings.updates.channel.currentUnavailable')}
+                      </p>
+                    </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="update-proxy">{t('settings.advanced.updateProxy')}</Label>
-                  <Input
-                    id="update-proxy"
-                    type="url"
-                    placeholder={t('settings.advanced.updateProxyPlaceholder')}
-                    value={settings.updateProxy}
-                    onChange={(event) => updateSetting('updateProxy', event.target.value)}
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    {t('settings.advanced.updateProxyDesc')}
-                  </p>
-                </div>
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label>{t('settings.advanced.checkUpdates')}</Label>
+                        <p className="text-sm text-muted-foreground">
+                          {t('settings.advanced.checkUpdatesDesc')}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (handleSave()) {
+                              onCheckForUpdates?.();
+                            }
+                          }}
+                          className="gap-1.5"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          {t('settings.advanced.checkNow')}
+                        </Button>
+                        <Switch
+                          checked={settings.checkUpdates}
+                          onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="update-proxy">{t('settings.advanced.updateProxy')}</Label>
+                      <Input
+                        id="update-proxy"
+                        type="url"
+                        placeholder={t('settings.advanced.updateProxyPlaceholder')}
+                        value={settings.updateProxy}
+                        onChange={(event) => updateSetting('updateProxy', event.target.value)}
+                      />
+                      <p className="text-sm text-muted-foreground">
+                        {t('settings.advanced.updateProxyDesc')}
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
