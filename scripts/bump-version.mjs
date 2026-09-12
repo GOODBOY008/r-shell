@@ -31,6 +31,19 @@ const bumpType = args[0] || 'patch';
 const noCommit = args.includes('--no-commit');
 const skipChangelog = args.includes('--skip-changelog');
 
+// Release channel: 'stable' (default) or 'current' (evolution line,
+// versions like 3.0.0-current.<N>).
+const channelFlagIndex = args.indexOf('--channel');
+const channel =
+  channelFlagIndex !== -1 && args[channelFlagIndex + 1]
+    ? args[channelFlagIndex + 1]
+    : args.find((a) => a.startsWith('--channel='))?.split('=')[1] || 'stable';
+
+if (!['stable', 'current'].includes(channel)) {
+  log.error(`Error: Invalid channel '${channel}'. Use: stable or current`);
+  process.exit(1);
+}
+
 // Validate bump type
 if (!['major', 'minor', 'patch'].includes(bumpType)) {
   log.error(`Error: Invalid bump type '${bumpType}'. Use: major, minor, or patch`);
@@ -48,10 +61,28 @@ const changelogPath = path.join(rootDir, 'CHANGELOG.md');
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
 const currentVersion = packageJson.version;
 
-log.info(`Current version: ${currentVersion}`);
+// Strip an evolution-line suffix (3.0.0-current.2 → 3.0.0) so both channels
+// can bump from either line.
+const currentSuffixMatch = currentVersion.match(/-current\.\d+$/);
+const baseVersion = currentSuffixMatch ? currentVersion.slice(0, currentSuffixMatch.index) : currentVersion;
+
+log.info(`Current version: ${currentVersion} (channel: ${channel})`);
+
+// Count existing evolution-line tags for a base version (v3.0.0-current.*)
+function currentTagCount(base) {
+  try {
+    const tags = execSync('git tag --list', { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    return tags.filter((tag) => tag.startsWith(`v${base}-current.`)).length;
+  } catch {
+    return 0;
+  }
+}
 
 // Calculate new version
-const [major, minor, patch] = currentVersion.split('.').map(Number);
+const [major, minor, patch] = baseVersion.split('.').map(Number);
 let newVersion;
 
 switch (bumpType) {
@@ -64,6 +95,18 @@ switch (bumpType) {
   case 'patch':
     newVersion = `${major}.${minor}.${patch + 1}`;
     break;
+}
+
+if (channel === 'current') {
+  if (currentSuffixMatch) {
+    // Already on the evolution line: the base stays fixed for the whole
+    // line and only the -current.N counter moves (bumpType is ignored —
+    // promotion to a new base happens on the stable channel).
+    newVersion = baseVersion;
+    log.warn(`Already on the current line — keeping base ${baseVersion} (${bumpType} ignored)`);
+  }
+  const n = currentTagCount(newVersion) + 1;
+  newVersion = `${newVersion}-current.${n}`;
 }
 
 log.success(`New version: ${newVersion}`);
@@ -140,11 +183,25 @@ function performBump() {
 - _Add bug fixes here_
 `;
 
-      // Insert after the Unreleased section
-      changelog = changelog.replace(
-        /(## \[Unreleased\][^\n]*\n\n[^\n]*\n\n)/,
-        `$1${newSection}\n`
-      );
+      // Insert after the Unreleased section when that heading exists. The
+      // repo's CHANGELOG has no `## [Unreleased]` heading (the historical
+      // regex then silently no-opped), so fall back to inserting at the top
+      // of the versioned region, right before the first `## [` heading.
+      const unreleased = changelog.match(/(## \[Unreleased\][^\n]*\n\n[^\n]*\n\n)/);
+      if (unreleased) {
+        changelog = changelog.replace(unreleased[1], `${unreleased[1]}${newSection}\n`);
+      } else {
+        const firstVersionHeading = /^## \[/m.exec(changelog);
+        if (firstVersionHeading) {
+          const insertAt = firstVersionHeading.index;
+          changelog =
+            changelog.slice(0, insertAt) +
+            newSection.trim() + '\n\n' +
+            changelog.slice(insertAt);
+        } else {
+          changelog = changelog.trimEnd() + '\n\n' + newSection.trim() + '\n';
+        }
+      }
 
       fs.writeFileSync(changelogPath, changelog);
       log.warn('⚠️  Please update CHANGELOG.md with actual changes before committing');

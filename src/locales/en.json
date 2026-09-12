@@ -438,7 +438,21 @@
       "debug": "Debug"
     },
     "tabScrollLeft": "Scroll left",
-    "tabScrollRight": "Scroll right"
+    "tabScrollRight": "Scroll right",
+    "updates": {
+      "channel": {
+        "label": "Update Channel",
+        "stable": "Stable (recommended)",
+        "current": "Current (macOS 26+)",
+        "currentHint": "The current channel only moves forward: switching back to stable requires manually installing the stable version.",
+        "currentUnavailable": "The current channel requires macOS 26 or later on Apple Silicon."
+      },
+      "homebrewManaged": {
+        "title": "Managed by Homebrew",
+        "desc": "This copy was installed with Homebrew, so updates are handled by brew. In-app updates are disabled to avoid conflicting with it.",
+        "command": "brew upgrade --cask r-shell"
+      }
+    }
   },
   "welcome": {
     "quickTips": "Quick Tips",
@@ -785,7 +799,9 @@
     "downloadingButton": "Downloading…",
     "checkFailedFallback": "Failed to check for updates.",
     "downloadFailedFallback": "Failed to download update.",
-    "installFailedFallback": "Failed to install update."
+    "installFailedFallback": "Failed to install update.",
+    "homebrewManaged": "Updates are managed by Homebrew",
+    "homebrewManagedDesc": "This copy was installed with Homebrew. Run \"brew upgrade --cask r-shell\" to update."
   },
   "syncDialog": {
     "title": "Directory Sync",

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater';
+import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 // relaunch() calls the process plugin's restart command (process:allow-restart capability)
 import { toast } from 'sonner';
@@ -16,12 +17,31 @@ import { Progress } from './ui/progress';
 import { Button } from './ui/button';
 import { APP_SETTINGS_STORAGE_KEY } from '@/lib/keyboard-shortcuts';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
+import {
+  DEFAULT_UPDATE_CONTEXT,
+  HOMEBREW_MANAGED_MARKER,
+  getUpdateChannel,
+  isCurrentChannelEligible,
+  type UpdateContext,
+} from '@/lib/update-channel';
 
 interface UpdateCheckerProps {
   checkSignal?: number;
 }
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'ready' | 'error';
+
+/** Mirror of the `UpdateMeta` struct returned by the `updater_check` command. */
+interface UpdateMeta {
+  version: string;
+  currentVersion: string;
+  body: string | null;
+}
+
+interface UpdaterProgressPayload {
+  downloaded: number;
+  total: number | null;
+}
 
 /** Read the user's "auto check for updates" preference from localStorage. */
 const isAutoCheckEnabled = () => {
@@ -55,14 +75,16 @@ const getUpdateProxy = () => {
 export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<UpdateStatus>('idle');
-  const [updateInfo, setUpdateInfo] = useState<Update | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateMeta | null>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const lastSignalRef = useRef<number | undefined>(checkSignal);
-  const downloadTotalRef = useRef<number | null>(null);
-  const downloadedBytesRef = useRef(0);
   const busyRef = useRef(false);
+  // Environment facts from the backend (Homebrew detection + channel gating).
+  // The Rust side re-checks Caskroom on every updater_check, so a stale ref
+  // only costs a wasted round-trip, never a wrong install path.
+  const contextRef = useRef<UpdateContext>(DEFAULT_UPDATE_CONTEXT);
 
   const busy = status === 'downloading' || status === 'installing' || status === 'checking';
   busyRef.current = busy;
@@ -91,7 +113,16 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
 
     try {
       const proxy = getUpdateProxy();
-      const update = await check(proxy ? { proxy } : undefined);
+      // The channel preference only applies where the current baseline can
+      // run (macOS 26+ arm64); everyone else follows the stable manifest.
+      const channel =
+        getUpdateChannel() === 'current' && isCurrentChannelEligible(contextRef.current)
+          ? 'current'
+          : 'stable';
+      const update = await invoke<UpdateMeta | null>('updater_check', {
+        channel,
+        proxy: proxy ?? null,
+      });
 
       if (manual) {
         toast.dismiss('update-check');
@@ -112,9 +143,28 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
         toast.dismiss('update-check');
       }
 
-      const raw = caught instanceof Error ? caught.message : t('updateChecker.checkFailedFallback');
-      // Tauri updater throws when the endpoint is unreachable or returns invalid
-      // data. Map the common Rust error substrings to friendlier messages.
+      // invoke() rejects with the bare command error string; the old JS
+      // plugin threw Error objects, so handle both shapes here.
+      const raw =
+        typeof caught === 'string'
+          ? caught
+          : caught instanceof Error
+            ? caught.message
+            : t('updateChecker.checkFailedFallback');
+
+      if (raw === HOMEBREW_MANAGED_MARKER) {
+        // Homebrew Caskroom install: brew owns updates, guide instead of
+        // letting the in-app updater clobber the managed .app bundle.
+        setStatus('idle');
+        if (manual) {
+          toast.info(t('updateChecker.homebrewManaged'), {
+            description: t('updateChecker.homebrewManagedDesc'),
+          });
+        }
+        return;
+      }
+
+      // Map the common Rust error substrings to friendlier messages.
       const lower = raw.toLowerCase();
       const message =
         raw === 'Invalid update proxy URL'
@@ -142,79 +192,102 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
   }, [t]);
 
   const handleDownload = useCallback(async () => {
-    if (!updateInfo) {
-      return;
-    }
-
     setStatus('downloading');
     setProgress(0);
     setError(null);
-    downloadTotalRef.current = null;
-    downloadedBytesRef.current = 0;
 
     try {
-      await updateInfo.download((event: DownloadEvent) => {
-        if (event.event === 'Started') {
-          downloadTotalRef.current = event.data.contentLength ?? null;
-          return;
-        }
-
-        if (event.event === 'Progress') {
-          downloadedBytesRef.current += event.data.chunkLength;
-          if (downloadTotalRef.current) {
-            const percent = Math.round((downloadedBytesRef.current / downloadTotalRef.current) * 100);
-            setProgress(Math.max(0, Math.min(100, percent)));
-          }
-          return;
-        }
-
-        if (event.event === 'Finished') {
-          setProgress(100);
-        }
-      });
-
+      // One Rust command downloads AND installs (replaces the binary);
+      // progress arrives via the updater://progress event. The dialog keeps
+      // its "ready → restart" states so the user still controls the relaunch.
+      await invoke('updater_download_and_install');
+      setProgress(100);
       setStatus('ready');
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : t('updateChecker.downloadFailedFallback');
+      const message =
+        typeof caught === 'string'
+          ? caught
+          : caught instanceof Error
+            ? caught.message
+            : t('updateChecker.downloadFailedFallback');
       setStatus('error');
       setError(message);
       toast.error(t('updateChecker.downloadFailed'), { description: message });
     }
-  }, [updateInfo, t]);
+  }, [t]);
 
   const handleInstall = useCallback(async () => {
-    if (!updateInfo) {
-      return;
-    }
-
     setStatus('installing');
 
     try {
-      await updateInfo.install();
-      // On macOS/Linux, install() replaces the binary but does not restart the app.
-      // relaunch() is needed to start the new version.
-      // On Windows (NSIS), the installer handles restart, but relaunch() is a no-op
-      // in that case so calling it is safe.
+      // The new version is already installed by updater_download_and_install;
+      // relaunch() switches to it (a no-op on Windows where the NSIS
+      // installer handles the restart).
       await relaunch();
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : t('updateChecker.installFailedFallback');
+      const message =
+        typeof caught === 'string'
+          ? caught
+          : caught instanceof Error
+            ? caught.message
+            : t('updateChecker.installFailedFallback');
       setStatus('error');
       setError(message);
       toast.error(t('updateChecker.installFailed'), { description: message });
     }
-  }, [updateInfo, t]);
+  }, [t]);
+
+  // Download progress from the Rust updater command.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: UnlistenFn | undefined;
+    void listen<UpdaterProgressPayload>('updater://progress', (event) => {
+      const { downloaded, total } = event.payload;
+      if (total && total > 0) {
+        const percent = Math.round((downloaded / total) * 100);
+        setProgress(Math.max(0, Math.min(100, percent)));
+      }
+    }).then((fn) => {
+      if (disposed) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
-    if (isAutoCheckEnabled()) {
-      checkForUpdates(false);
-    }
+    let cancelled = false;
+    // Homebrew-managed installs never auto-check: brew owns updates there.
+    // Non-Tauri dev falls through with the default context so a manual
+    // check still surfaces the real backend error.
+    invoke<UpdateContext>('get_update_context')
+      .then((context) => {
+        if (cancelled) return;
+        contextRef.current = context;
+        if (!context.homebrewManaged && isAutoCheckEnabled()) {
+          void checkForUpdates(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled && isAutoCheckEnabled()) {
+          void checkForUpdates(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [checkForUpdates]);
 
   useEffect(() => {
     if (typeof checkSignal === 'number') {
       if (lastSignalRef.current !== checkSignal) {
         lastSignalRef.current = checkSignal;
-        checkForUpdates(true);
+        void checkForUpdates(true);
       }
     }
   }, [checkSignal, checkForUpdates]);
