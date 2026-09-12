@@ -35,6 +35,12 @@ import {
 } from './ui/alert-dialog';
 import { ConnectionStorageManager } from '../lib/connection-storage';
 import {
+  applyCollapsedState,
+  collectCollapsedFolderIds,
+  loadCollapsedFolderIds,
+  saveCollapsedFolderIds,
+} from '../lib/folder-expansion';
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -113,9 +119,11 @@ export function ConnectionManager({
     navigator.platform.toUpperCase().includes('MAC'),
   );
   // Load connections from storage
+  // The storage backend returns every folder expanded; reapply the folders
+  // the user collapsed so the tree survives rebuilds and app restarts.
   const loadConnections = (): ConnectionNode[] => {
     const tree = ConnectionStorageManager.buildConnectionTree(activeConnections);
-    return tree.length > 0 ? tree : [];
+    return tree.length > 0 ? applyCollapsedState(tree, loadCollapsedFolderIds()) : [];
   };
 
   // Relative "n min/hours ago" (shared with the welcome screen) for recent
@@ -638,7 +646,10 @@ export function ConnectionManager({
         return node;
       });
     };
-    setConnections(updateNode(connections));
+    const next = updateNode(connections);
+    // Persist on every change (folders that no longer exist drop out here).
+    saveCollapsedFolderIds(collectCollapsedFolderIds(next));
+    setConnections(next);
   };
 
   const getIcon = (node: ConnectionNode) => {
