@@ -7,7 +7,8 @@ use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
 use crate::ssh::{AuthMethod, SshConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Emitter, State};
+use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectRequest {
@@ -2844,7 +2845,10 @@ pub async fn list_local_files(path: String) -> Result<Vec<FileEntry>, String> {
         #[cfg(unix)]
         let (owner, group): (Option<String>, Option<String>) = {
             use std::os::unix::fs::MetadataExt;
-            (Some(metadata.uid().to_string()), Some(metadata.gid().to_string()))
+            (
+                Some(metadata.uid().to_string()),
+                Some(metadata.gid().to_string()),
+            )
         };
         #[cfg(not(unix))]
         let (owner, group): (Option<String>, Option<String>) = (None, None);
@@ -3631,8 +3635,8 @@ fn master_key() -> Result<Vec<u8>, String> {
 #[tauri::command]
 pub fn credential_seal(secret: String) -> Result<String, String> {
     let key = master_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Failed to init cipher: {e}"))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to init cipher: {e}"))?;
 
     use rand::RngCore;
     let mut nonce_bytes = [0u8; 12];
@@ -3667,13 +3671,166 @@ pub fn credential_open(sealed: String) -> Result<String, String> {
         .decode(parts[2])
         .map_err(|e| format!("Corrupt ciphertext: {e}"))?;
 
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|e| format!("Failed to init cipher: {e}"))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to init cipher: {e}"))?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
         .map_err(|e| format!("Failed to decrypt secret: {e}"))?;
 
     String::from_utf8(plaintext).map_err(|e| format!("Decrypted secret is not UTF-8: {e}"))
+}
+
+// ========== In-App Updater (channel selection + Homebrew detection) ==========
+
+/// Error marker returned by `updater_check` when the running app lives in a
+/// Homebrew Caskroom. The frontend recognizes it and shows `brew upgrade`
+/// guidance instead of an error — the in-app updater must never replace a
+/// brew-managed .app (it would break the receipt/sha256 tracking).
+pub const HOMEBREW_MANAGED_MARKER: &str = "HOMEBREW_MANAGED_INSTALL";
+
+/// Stable channel manifest. `releases/latest` never points at a prerelease,
+/// so evolution-line tags (`v*-current.N`) cannot hijack this URL.
+const STABLE_MANIFEST_URL: &str =
+    "https://github.com/GOODBOY008/r-shell/releases/latest/download/latest.json";
+/// Evolution channel manifest, attached to the rolling lightweight `current`
+/// tag (moved to the latest `v*-current.N` release by CI).
+const CURRENT_MANIFEST_URL: &str =
+    "https://github.com/GOODBOY008/r-shell/releases/download/current/current.json";
+
+/// Environment facts the update settings UI gates on. `current` channel is
+/// only offered for macOS ≥ 26 on Apple Silicon outside Homebrew.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateContext {
+    pub homebrew_managed: bool,
+    pub platform: String,
+    pub arch: String,
+    pub macos_major: Option<u32>,
+}
+
+/// Parse the macOS major version via `sw_vers -productVersion` (e.g. "26.1"
+/// → 26). Cheap enough to call per settings-modal open; None off-macOS.
+#[cfg(target_os = "macos")]
+fn macos_major_version() -> Option<u32> {
+    let output = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout.trim().split('.').next()?.parse().ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_major_version() -> Option<u32> {
+    None
+}
+
+#[tauri::command]
+pub fn get_update_context() -> UpdateContext {
+    let homebrew_managed = std::env::current_exe()
+        .map(|exe| exe.to_string_lossy().contains("/Caskroom/"))
+        .unwrap_or(false);
+
+    UpdateContext {
+        homebrew_managed,
+        platform: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        macos_major: macos_major_version(),
+    }
+}
+
+/// Projection of `tauri_plugin_updater::Update` for the frontend. The real
+/// `Update` (not serializable) is cached in [`PendingUpdate`] for the
+/// download-and-install step.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMeta {
+    pub version: String,
+    pub current_version: String,
+    pub body: Option<String>,
+}
+
+/// Process-wide cache of the update found by the last `updater_check`.
+#[derive(Default)]
+pub struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[tauri::command]
+pub async fn updater_check(
+    app: tauri::AppHandle,
+    channel: String,
+    proxy: Option<String>,
+    pending: State<'_, PendingUpdate>,
+) -> Result<Option<UpdateMeta>, String> {
+    if get_update_context().homebrew_managed {
+        return Err(HOMEBREW_MANAGED_MARKER.to_string());
+    }
+
+    // Endpoint override only exists on the Rust UpdaterBuilder (the JS
+    // CheckOptions have no such field), which is why the check lives here.
+    let endpoint = match channel.as_str() {
+        "stable" => STABLE_MANIFEST_URL,
+        "current" => CURRENT_MANIFEST_URL,
+        _ => return Err(format!("Unknown update channel: {channel}")),
+    };
+
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![endpoint
+            .parse()
+            .map_err(|e| format!("Invalid endpoint: {e}"))?])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(proxy) = proxy {
+        let url: tauri::Url = proxy
+            .parse()
+            .map_err(|_| "Invalid update proxy URL".to_string())?;
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return Err("Invalid update proxy URL".to_string());
+        }
+        builder = builder.proxy(url);
+    }
+
+    let update = builder
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    *pending.0.lock().map_err(|e| e.to_string())? = update.clone();
+
+    Ok(update.map(|u| UpdateMeta {
+        version: u.version.clone(),
+        current_version: u.current_version.clone(),
+        body: u.body.clone(),
+    }))
+}
+
+#[tauri::command]
+pub async fn updater_download_and_install(
+    app: tauri::AppHandle,
+    pending: State<'_, PendingUpdate>,
+) -> Result<(), String> {
+    let update = pending.0.lock().map_err(|e| e.to_string())?.take();
+    let Some(update) = update else {
+        return Err("No update available — run updater_check first".to_string());
+    };
+
+    let mut downloaded: u64 = 0;
+    let progress_app = app.clone();
+    update
+        .download_and_install(
+            move |chunk_len, total| {
+                downloaded += chunk_len as u64;
+                let _ = progress_app.emit(
+                    "updater://progress",
+                    serde_json::json!({ "downloaded": downloaded, "total": total }),
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ========== Local Filesystem Tests ==========
