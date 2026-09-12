@@ -156,13 +156,13 @@ export function TransferQueue({
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ScrollArea className="max-h-40">
+        <ScrollArea className="max-h-40 overflow-hidden [&>[data-slot=scroll-area-viewport]]:max-h-40">
           {transfers.length === 0 ? (
             <div className="flex items-center justify-center h-12 text-xs text-muted-foreground">
               {t('transferQueue.noTransfers')}
             </div>
           ) : (
-            <div className="divide-y divide-border/40">
+            <div className="divide-y divide-border">
               {transfers.map((item) => (
                 <div
                   key={item.id}
