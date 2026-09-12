@@ -13,6 +13,15 @@ export interface KeyboardShortcut {
   altKey?: boolean;
   metaKey?: boolean;
   ignoreInTerminal?: boolean;
+  /**
+   * Keep this shortcut registered as an OS global shortcut while the app
+   * window is in the background. Opt-in: default bindings are cross-app
+   * convention keys (Ctrl+W, Ctrl+Z, Ctrl+Tab, ...), and registering those
+   * system-wide hijacks them from whichever app is actually focused
+   * (issues #130/#144). Only opt in for keys that summon this app without
+   * colliding with other applications' muscle memory.
+   */
+  globalInBackground?: boolean;
   handler: () => void;
   description: string;
 }
@@ -92,6 +101,11 @@ function normalizeShortcutKey(key: string): string {
 }
 
 export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string {
+  // macOS: bindings whose Cmd form collides with a different menu feature
+  // (⌘Z is Undo, ⌘M is Minimize) fire as the physical-Control variant — show
+  // ⌃ so the label matches what the user actually presses. All other bindings
+  // keep showing their ⌘/Ctrl chord as configured.
+  const macDegraded = isMac && isMacMenuDegradedShortcut(shortcut);
   return shortcut
     .split('+')
     .map(part => {
@@ -99,7 +113,7 @@ export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string
         case 'ctrl':
         case 'control':
         case 'cmdorctrl':
-          return isMac ? '⌘' : 'Ctrl';
+          return isMac ? (macDegraded ? '⌃' : '⌘') : 'Ctrl';
         case 'shift':
           return isMac ? '⇧' : 'Shift';
         case 'alt':
@@ -108,7 +122,11 @@ export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string
         case 'meta':
         case 'cmd':
         case 'command':
-          return isMac ? '⌘' : 'Meta';
+        case 'super':
+          // An explicit-Cmd binding in a degraded chord shows ⌃ too — its Cmd
+          // form belongs to the menu and the physical-Control variant is what
+          // the user actually presses (matches `menuConflictMatchMods`).
+          return isMac ? (macDegraded ? '⌃' : '⌘') : 'Meta';
         case 'arrowup':
           return '↑';
         case 'arrowdown':
@@ -323,6 +341,49 @@ export function toAccelerator(shortcut: string): string | null {
   return parsed ? toAcceleratorFromParsed(parsed) : null;
 }
 
+function currentPlatformIsMac(): boolean {
+  return navigator.platform.toUpperCase().includes('MAC');
+}
+
+/**
+ * Canonical macOS ⌘ chord of a binding, in the `CommandOrControl+…` spelling
+ * the menu-ownership sets use. On macOS a `CommandOrControl` (Ctrl-based) and
+ * an explicit `Cmd`/`Command` binding resolve to the same physical ⌘ chord,
+ * so both user spellings must hit the same menu-ownership exclusions —
+ * otherwise a user-configured `Cmd+W`/`Cmd+Z` would still be OS-registered
+ * and double-fire alongside the native menu. `null` when the binding has no
+ * ⌘ modifier at all (including modifier-less chords like F5, which the menu
+ * owns for Reconnect and which `desiredAccelerators` matches via `accel`).
+ */
+function macMenuChord(shortcut: {
+  key: string;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+}): string | null {
+  if (!(shortcut.ctrlKey ?? false) && !(shortcut.metaKey ?? false)) {
+    return null;
+  }
+  const parts = ['CommandOrControl'];
+  if (shortcut.shiftKey) {
+    parts.push('Shift');
+  }
+  if (shortcut.altKey) {
+    parts.push('Option');
+  }
+  parts.push(toAcceleratorKey(shortcut.key));
+  return parts.join('+');
+}
+
+/**
+ * Accelerator a shortcut would use as an OS global shortcut. On macOS the
+ * Cmd chords owned by the native menu (see `MACOS_MENU_OWNED_ACCELERATORS`)
+ * are excluded from global registration entirely — the menu processes them
+ * (the exclusion itself happens in `desiredAccelerators`). This function only
+ * stringifies a binding; register here is the "live" accelerator solely for
+ * non-menu-owned bindings.
+ */
 function acceleratorForShortcut(shortcut: KeyboardShortcut): string | null {
   const parsed: ParsedKeyboardShortcut = {
     key: shortcut.key,
@@ -335,12 +396,71 @@ function acceleratorForShortcut(shortcut: KeyboardShortcut): string | null {
 }
 
 /**
- * Native macOS menu key equivalents (defined in `src-tauri/src/lib.rs`
- * `build_app_menu`). macOS processes those through its menu system whenever
- * the app is focused, so also registering them as global shortcuts would
- * trigger both the menu item action and the shortcut handler.
+ * True when this shortcut's Cmd form collides with a native macOS menu key
+ * (Cmd+Z Undo, Cmd+M Minimize) and the binding is therefore handled IN-WINDOW
+ * via a DOM keydown listener matching the physical Control key. The OS never
+ * registers it and the menu keeps the Cmd chord. Non-macOS: never.
  */
-const MACOS_NATIVE_MENU_ACCELERATORS = new Set([
+function isMacMenuConflictingShortcut(shortcut: KeyboardShortcut): boolean {
+  if (!currentPlatformIsMac()) {
+    return false;
+  }
+  const chord = macMenuChord(shortcut);
+  return chord !== null && MACOS_MENU_CONFLICT_DEGRADE.has(chord);
+}
+
+/**
+ * String-binding flavor of {@link isMacMenuConflictingShortcut} — used by
+ * `formatKeyboardShortcut` so labels show the physical-Control variant the
+ * user actually presses (⌃Z, ⌃M).
+ */
+function isMacMenuDegradedShortcut(shortcut: string): boolean {
+  if (!currentPlatformIsMac()) {
+    return false;
+  }
+  const parsed = parseKeyboardShortcut(shortcut);
+  const chord = parsed ? macMenuChord(parsed) : null;
+  return chord !== null && MACOS_MENU_CONFLICT_DEGRADE.has(chord);
+}
+
+/**
+ * The modifier expectations the in-window keydown listener matches against for
+ * a menu-conflicting binding. An explicit-Cmd chord (`Cmd+Z`, `Cmd+Shift+Z`)
+ * degrades to the physical-Control variant (⌃Z, ⌃⇧Z) — its Cmd form belongs
+ * to the native menu, the label shows ⌃ (see `formatKeyboardShortcut`), so the
+ * listener matches the physical Control key the label advertises.
+ */
+function menuConflictMatchMods(shortcut: KeyboardShortcut): {
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+} {
+  if ((shortcut.metaKey ?? false) && !(shortcut.ctrlKey ?? false)) {
+    return {
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: shortcut.shiftKey ?? false,
+      altKey: shortcut.altKey ?? false,
+    };
+  }
+  return {
+    ctrlKey: shortcut.ctrlKey ?? false,
+    metaKey: shortcut.metaKey ?? false,
+    shiftKey: shortcut.shiftKey ?? false,
+    altKey: shortcut.altKey ?? false,
+  };
+}
+
+/**
+ * Accelerators owned by the native macOS menus (defined in
+ * `src-tauri/src/lib.rs` `build_app_menu`). macOS processes these through its
+ * menu system whenever the app is focused, so they are never registered as OS
+ * global hotkeys — registering them would double-fire alongside the menu.
+ * Shift variants are included where the menu owns them too (Cmd+Shift+Z is
+ * Redo), and F5 for the menu's Reconnect item.
+ */
+const MACOS_MENU_OWNED_ACCELERATORS = new Set([
   'CommandOrControl+N',
   'CommandOrControl+S',
   'CommandOrControl+W',
@@ -348,7 +468,26 @@ const MACOS_NATIVE_MENU_ACCELERATORS = new Set([
   'CommandOrControl+D',
   'CommandOrControl+F',
   'CommandOrControl+L',
+  'CommandOrControl+Z',
+  'CommandOrControl+Shift+Z',
+  'CommandOrControl+M',
   'F5',
+]);
+
+/**
+ * The menu-owned chords whose Cmd form belongs to a DIFFERENT feature in the
+ * menu than the r-shell binding's action: Zen mode (⌘Z vs Undo) and right
+ * sidebar (⌘M vs Minimize). Their Cmd form is left to the menu, and on macOS
+ * they are handled in-window as the physical-Control variants ⌃Z / ⌃M via a
+ * DOM keydown listener (reliable for Control-characters, and inherently
+ * window-scoped so other apps are never affected). Cmd+Shift+Z (Redo) is
+ * included so a user who customizes a binding to Ctrl+Shift+Z gets the same
+ * in-window fallback instead of double-firing with the Redo menu item.
+ */
+const MACOS_MENU_CONFLICT_DEGRADE = new Set([
+  'CommandOrControl+Z',
+  'CommandOrControl+Shift+Z',
+  'CommandOrControl+M',
 ]);
 
 /**
@@ -379,13 +518,15 @@ function currentFocusContext(): FocusContext {
  * semantics) and so editable fields (settings inputs, dialogs) keep receiving
  * their keystrokes: while such an element has focus no shortcut is
  * registered, and while a terminal has focus only shortcuts without
- * `ignoreInTerminal` are. Element focus only applies while the app window is
- * focused — when the app is in the background everything is registered so
- * the shortcuts keep firing globally. The one exception is another window of
- * this same app (e.g. the file-viewer editor window): when such a sibling
- * window has focus the keyboard belongs to that window, so nothing is
- * registered here and OS-level shortcuts can't steal keystrokes from it
- * (Ctrl+W while typing in the editor must not close a terminal tab).
+ * `ignoreInTerminal` are. While the app window is in the background only
+ * shortcuts explicitly opted in via `globalInBackground` stay registered —
+ * default bindings are cross-app convention keys (Ctrl+W, Ctrl+Z, Ctrl+Tab,
+ * Ctrl+1..9) and would hijack them from whatever app is focused
+ * (issues #130/#144). The one exception is another window of this same app
+ * (e.g. the file-viewer editor window): when such a sibling window has focus
+ * the keyboard belongs to that window, so nothing is registered here and
+ * OS-level shortcuts can't steal keystrokes from it (Ctrl+W while typing in
+ * the editor must not close a terminal tab).
  * Accelerator duplicates are resolved in array order — the first shortcut
  * wins, on both registration and `ignoreInTerminal` exclusion — which
  * reproduces the DOM handler's first-match-wins behavior.
@@ -393,10 +534,9 @@ function currentFocusContext(): FocusContext {
 function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   const registered = new Map<string, KeyboardShortcut>();
   const failed = new Set<string>();
-  const isMac = navigator.platform.toUpperCase().includes('MAC');
   // Element focus (terminal/editable) only matters while the app window is
-  // focused; when another app is in the foreground the shortcuts must stay
-  // registered so they keep firing globally.
+  // focused; when another app is in the foreground only shortcuts explicitly
+  // opted in via `globalInBackground` stay registered.
   let appFocused = true;
   // True while another window of this app (e.g. the file-viewer editor
   // window) has focus. The keyboard then belongs to that window — acting on
@@ -459,9 +599,10 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       return;
     }
     // This window lost focus: element focus no longer applies, so apply the
-    // "blurred" semantics (full registration — background operation) right
-    // away, then refine with an async sibling check. If a sibling window of
-    // this app owns the keyboard, everything gets unregistered on that check.
+    // "blurred" semantics (only `globalInBackground` shortcuts stay
+    // registered) right away, then refine with an async sibling check. If a
+    // sibling window of this app owns the keyboard, everything gets
+    // unregistered on that check.
     sync();
     void refreshSiblingFocus();
   };
@@ -473,7 +614,18 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       if (!accel) {
         continue;
       }
-      if (isMac && MACOS_NATIVE_MENU_ACCELERATORS.has(accel)) {
+      // macOS: the native menu owns these Cmd chords (⌘N new connection, ⌘W
+      // close, … — and ⌘Z/⌘M whose features degrade to the in-window ⌃
+      // listener below). Registering them as OS global hotkeys would
+      // double-fire alongside the menu. `macMenuChord` collapses the
+      // `CommandOrControl` and explicit-`Cmd` spellings (the same physical ⌘
+      // chord on macOS, so a user-configured Cmd+W degrades too); F5 is a
+      // modifier-less menu chord matched via its accelerator directly.
+      const menuChord = macMenuChord(shortcut);
+      if (
+        currentPlatformIsMac() &&
+        (accel === 'F5' || (menuChord !== null && MACOS_MENU_OWNED_ACCELERATORS.has(menuChord)))
+      ) {
         continue;
       }
       if (!byAccelerator.has(accel)) {
@@ -488,7 +640,22 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       return new Map();
     }
 
-    const focus = appFocused ? currentFocusContext() : 'app';
+    if (!appFocused) {
+      // The app is in the background: default bindings are cross-app
+      // convention keys (Ctrl+W closes browser tabs, Ctrl+Z undoes,
+      // Ctrl+Tab/1..9 switch browser tabs) — registering them OS-wide would
+      // hijack them from whatever app is actually focused (issues #130/#144).
+      // Keep only shortcuts explicitly opted in as background-safe.
+      const background = new Map<string, KeyboardShortcut>();
+      for (const [accel, shortcut] of byAccelerator) {
+        if (shortcut.globalInBackground) {
+          background.set(accel, shortcut);
+        }
+      }
+      return background;
+    }
+
+    const focus = currentFocusContext();
     if (focus === 'editable') {
       return new Map();
     }
@@ -539,11 +706,55 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
 
   const handleWindowBlur = () => applyWindowFocus(false);
   const handleWindowFocus = () => applyWindowFocus(true);
-  const handleVisibilityChange = () => applyWindowFocus(!document.hidden);
+  // "Visible" is not "focused": a fully occluded window reports hidden=true
+  // while another app is foreground, and un-hiding it fires hidden=false while
+  // the window may STILL be blurred — assuming focus there would re-register
+  // the convention-key defaults and revive the background hijack (#130/#144).
+  // Only document.hidden=false consults the real focus state.
+  const handleVisibilityChange = () => applyWindowFocus(document.hidden ? false : document.hasFocus());
+
+  // macOS menu-conflicting bindings (Zen mode ⌃Z, right sidebar ⌃M): their
+  // Cmd chord belongs to a native menu command (Undo / Minimize), so the OS
+  // never registers them globally (see `desiredAccelerators`). They fire from
+  // this in-window keydown listener, matching the PHYSICAL Control key — a DOM
+  // listener runs only while this window is focused, so it can never hijack
+  // keys from another application.
+  const handleMenuConflictKeyDown = (event: KeyboardEvent) => {
+    const target = event.target;
+    // Editable fields always keep their keystrokes. A terminal keeps the
+    // keystroke for `ignoreInTerminal` bindings (matching the OS-registration
+    // semantics); other bindings fire here.
+    const inTerminal = isTerminalInputTarget(target);
+    if (isEditableTarget(target) && !inTerminal) {
+      return;
+    }
+    for (const shortcut of shortcutsRef.current) {
+      if (!isMacMenuConflictingShortcut(shortcut)) {
+        continue;
+      }
+      if (inTerminal && shortcut.ignoreInTerminal) {
+        continue;
+      }
+      const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
+      const mods = menuConflictMatchMods(shortcut);
+      const modsMatch =
+        event.ctrlKey === mods.ctrlKey &&
+        event.metaKey === mods.metaKey &&
+        event.shiftKey === mods.shiftKey &&
+        event.altKey === mods.altKey;
+      if (keyMatch && modsMatch) {
+        event.preventDefault();
+        event.stopPropagation();
+        shortcut.handler();
+        return;
+      }
+    }
+  };
 
   window.addEventListener('blur', handleWindowBlur);
   window.addEventListener('focus', handleWindowFocus);
   document.addEventListener('visibilitychange', handleVisibilityChange);
+  window.addEventListener('keydown', handleMenuConflictKeyDown, { capture: true });
 
   // Authoritative focus signal for the webview window: some webview
   // runtimes do not translate OS window focus changes into DOM
@@ -553,8 +764,22 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       .onFocusChanged(({ payload }) => {
         applyWindowFocus(payload);
       })
-      .then((unlisten) => {
+      .then(async (unlisten) => {
         unlistenFocusChanged = unlisten;
+        // The listener above only fires on CHANGES. The initial mount sync()
+        // registers the full focused set optimistically; probe the real focus
+        // state once so a webview launched in the background (open -g,
+        // autostart) corrects itself to the blurred set without waiting for
+        // its first focus event.
+        try {
+          const focused = await getCurrentWindow().isFocused();
+          if (focused === false) {
+            applyWindowFocus(false);
+          }
+        } catch {
+          // isFocused unavailable (older runtimes / tests): keep the
+          // optimistic default.
+        }
       })
       .catch(() => {});
   } catch {
@@ -574,6 +799,7 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     window.removeEventListener('blur', handleWindowBlur);
     window.removeEventListener('focus', handleWindowFocus);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.removeEventListener('keydown', handleMenuConflictKeyDown, { capture: true });
     unlistenFocusChanged?.();
     void unregisterAll().catch(() => {});
   };
@@ -635,10 +861,11 @@ function registerDomKeydown(shortcutsRef: RefObject<KeyboardShortcut[]>) {
  * Similar to VS Code's keyboard shortcuts system
  *
  * In the Tauri app shortcuts are registered with the OS through
- * tauri-plugin-global-shortcut, so they fire even while the app is in the
- * background (except when a terminal or an editable field has focus, see
- * `registerGlobalShortcuts`). In browser dev mode (no Tauri backend) a window
- * keydown listener keeps shortcuts working.
+ * tauri-plugin-global-shortcut and fire while the app is focused (with the
+ * terminal/editable-field caveats of `registerGlobalShortcuts`); while the
+ * app is in the background only shortcuts explicitly opted in via
+ * `globalInBackground` stay registered. In browser dev mode (no Tauri
+ * backend) a window keydown listener keeps shortcuts working.
  */
 export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boolean = true) {
   const shortcutsRef = useRef(shortcuts);
@@ -664,6 +891,7 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
     }
     return accelerators.join('|');
   }, [shortcuts]);
+
 
   useEffect(() => {
     if (!enabled) {
