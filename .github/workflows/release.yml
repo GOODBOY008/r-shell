@@ -10,18 +10,40 @@ jobs:
   release:
     permissions:
       contents: write
+    # Dual baseline: tags without a `-current.` suffix (and workflow_dispatch)
+    # build the compat line; `v*-current.*` tags build only the evolution line
+    # (macOS 26+ arm64, no Intel) which is published as a prerelease so it can
+    # never hijack `releases/latest` from the stable channel.
+    if: >
+      (matrix.baseline == 'compat' && !contains(github.ref, '-current.')) ||
+      (matrix.baseline == 'current' && contains(github.ref, '-current.'))
     strategy:
       fail-fast: false
       matrix:
         include:
+          # ── Stable / compat line (minimumSystemVersion stays at the Tauri default) ──
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
+            baseline: 'compat'
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
+            baseline: 'compat'
           - platform: ubuntu-latest
             args: ''
+            baseline: 'compat'
           - platform: windows-latest
             args: ''
+            baseline: 'compat'
+          # ── Evolution / current line (macOS 26+ baseline, arm64 only) ──
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin --config ''{"bundle":{"macOS":{"minimumSystemVersion":"26.0"}}}'''
+            baseline: 'current'
+          - platform: ubuntu-latest
+            args: ''
+            baseline: 'current'
+          - platform: windows-latest
+            args: ''
+            baseline: 'current'
 
     runs-on: ${{ matrix.platform }}
 
@@ -80,17 +102,20 @@ jobs:
           releaseName: 'r-shell ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: false
-          prerelease: false
-          includeUpdaterJson: true
+          prerelease: ${{ matrix.baseline == 'current' }}
+          # The complete manifest is assembled by upload-updater-json /
+          # upload-current-json; a per-job latest.json would be partial, so
+          # only the stable line lets tauri-action emit one at all.
+          includeUpdaterJson: ${{ matrix.baseline == 'compat' }}
           args: ${{ matrix.args }}
 
   # Generate and upload latest.json for the in-app updater.
-  # Skips pre-release tags so a beta/alpha never becomes the `latest` release
-  # and hijack the updater manifest for stable users.
+  # Skips pre-release tags so a beta/alpha/current tag never becomes the
+  # `latest` release and hijacks the updater manifest for stable users.
   upload-updater-json:
     needs: release
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta')
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, '-current.')
     permissions:
       contents: write
     steps:
@@ -211,7 +236,133 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Generate SHA256 checksums for Homebrew
+  # Generate current.json for the evolution line (`v*-current.*` tags) and
+  # attach it to the rolling lightweight `current` tag, so the in-app updater
+  # endpoint stays fixed at releases/download/current/current.json (GitHub has
+  # no "latest prerelease" URL; the rolling tag is the standard workaround).
+  upload-current-json:
+    needs: release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-current.')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Poll for release assets to become available
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The current line ships 3 platforms (mac arm64 + linux + windows),
+          # so wait (up to ~5 min) until all updater artifacts are visible.
+          for i in $(seq 1 30); do
+            COUNT=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/$REPO/releases/tags/$TAG" \
+              | jq '[.assets[]? | select(.name | endswith(".sig") or endswith(".app.tar.gz") or endswith(".AppImage") or endswith("-setup.exe"))] | length')
+            echo "attempt $i: $COUNT updater-related assets visible"
+            if [ "${COUNT:-0}" -ge 3 ]; then
+              break
+            fi
+            sleep 10
+          done
+
+      - name: Generate current.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Same shape as latest.json, but only the platforms the current
+          # line builds (no Intel macOS), and version keeps the full
+          # `-current.N` suffix so semver comparison keeps counting up.
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="${{ github.repository }}"
+          TAG="$GITHUB_REF_NAME"
+
+          RELEASE_JSON=$(curl -sL \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/$REPO/releases/tags/$TAG")
+
+          get_signature() {
+            local sig_asset_name="$1"
+            local sig_url sig_body
+            sig_url=$(echo "$RELEASE_JSON" | jq -r --arg name "$sig_asset_name" '.assets[] | select(.name == $name) | .browser_download_url')
+            if [ -z "$sig_url" ] || [ "$sig_url" = "null" ]; then
+              echo ""
+              return
+            fi
+            sig_body=$(curl -sL "$sig_url" | tr -d '\n' | tr -d '[:space:]')
+            if printf '%s' "$sig_body" | grep -Eq '^[A-Za-z0-9+/=]{32,}$'; then
+              printf '%s' "$sig_body"
+            else
+              echo ""
+            fi
+          }
+
+          pick_asset() {
+            local pattern="$1"
+            echo "$RELEASE_JSON" | jq -r --arg p "$pattern" \
+              'first(.assets[] | select(.name | test($p))) | "\(.browser_download_url)\t\(.name)" // empty'
+          }
+
+          add_platform() {
+            local key="$1" pattern="$2"
+            local picked asset_name url sig
+            picked=$(pick_asset "$pattern")
+            if [ -z "$picked" ]; then
+              return
+            fi
+            url="${picked%%$'\t'*}"
+            asset_name="${picked##*$'\t'}"
+            sig=$(get_signature "${asset_name}.sig")
+            if [ -z "$sig" ]; then
+              echo "::warning::No valid signature for $asset_name; $key will be skipped."
+              return
+            fi
+            PLATFORMS=$(echo "$PLATFORMS" | jq --arg k "$key" --arg url "$url" --arg sig "$sig" \
+              '. + {($k): {"url": $url, "signature": $sig}}')
+          }
+
+          PLATFORMS='{}'
+
+          # Evolution-line asset naming: mac arm64 (min macOS 26), linux, windows.
+          add_platform "darwin-aarch64"  'aarch64\.app\.tar\.gz$'
+          add_platform "linux-x86_64"    'amd64\.AppImage$'
+          add_platform "windows-x86_64"  'x64-setup\.exe$'
+
+          PLATFORM_COUNT=$(echo "$PLATFORMS" | jq 'length')
+          if [ "${PLATFORM_COUNT:-0}" -eq 0 ]; then
+            echo "::error::No updater assets were resolved from the release. Aborting current.json upload."
+            exit 1
+          fi
+
+          jq -n --arg version "$VERSION" --arg notes "See release page for details." --arg pub_date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson platforms "$PLATFORMS" \
+            '{version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms}' > current.json
+
+          cat current.json
+
+      - name: Upload current.json under the rolling current tag
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: current
+          name: 'r-shell current channel'
+          prerelease: true
+          files: current.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Move the rolling current tag to this release
+        run: |
+          # The `current` release above keeps its tag_name, but the tag REF
+          # must follow the newest `-current.N` commit. Force-move it; this
+          # is a mutable reference by design — nothing may assume `current`
+          # points at an immutable commit.
+          git tag -f current "$GITHUB_REF_NAME"
+          git push -f origin current
+
+  # Generate SHA256 checksums (both baselines — whichever .dmg assets the
+  # tag's release carries: 2 dmg on compat tags, 1 arm64 dmg on current tags)
   generate-checksums:
     needs: release
     runs-on: ubuntu-latest
@@ -247,11 +398,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Update Homebrew tap (requires HOMEBREW_TAP_TOKEN secret)
+  # Update Homebrew tap (requires HOMEBREW_TAP_TOKEN secret).
+  # The tap's `r-shell` cask tracks the stable line only — current-line tags
+  # must not bump it to a prerelease version.
   update-homebrew:
     needs: generate-checksums
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta')
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, '-current.')
     steps:
       - name: Update Homebrew Cask
         uses: peter-evans/repository-dispatch@v4
