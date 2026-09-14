@@ -5,8 +5,8 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
-import { invoke } from '@tauri-apps/api/core';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
+import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar, type TerminalSearchState } from './terminal/terminal-search-bar';
@@ -669,17 +669,10 @@ export function PtyTerminal({
         onConnectionStatusChange?.(connectionId, 'connecting');
       }
       
-      // Get the dynamically assigned WebSocket port from the backend
-      let wsPort = 9001; // fallback default
-      try {
-        wsPort = await invoke<number>('get_websocket_port');
-        console.log(`[PTY Terminal] [${connectionId}] WebSocket port: ${wsPort}`);
-      } catch (e) {
-        console.warn(`[PTY Terminal] [${connectionId}] Failed to get WebSocket port, using default:`, e);
-      }
-      
+      // Port + per-launch bridge token from the backend (issue #138).
+      const wsUrl = await getWebSocketUrl();
       console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
-      const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+      const ws = new WebSocket(wsUrl);
       // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of
       // encoding Vec<u8> as integer arrays.  The backend sends binary output
       // frames with the format: [0x01][id_len: u16 BE][connection_id][payload]
