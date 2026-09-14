@@ -78,7 +78,11 @@ fn build_app_menu<F: Fn(&str) -> String>(
         "r-shell",
         true,
         &[
-            &PredefinedMenuItem::about(app, Some(&t("menuBar.about")), Some(AboutMetadata::default()))?,
+            &PredefinedMenuItem::about(
+                app,
+                Some(&t("menuBar.about")),
+                Some(AboutMetadata::default()),
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::services(app, Some(&t("menuBar.services")))?,
             &PredefinedMenuItem::separator(app)?,
@@ -399,9 +403,7 @@ pub fn run() {
                 // registers global shortcuts today.
                 if window.label() == "main" {
                     use tauri_plugin_global_shortcut::GlobalShortcutExt;
-                    if let Err(e) =
-                        window.app_handle().global_shortcut().unregister_all()
-                    {
+                    if let Err(e) = window.app_handle().global_shortcut().unregister_all() {
                         tracing::warn!(
                             "Failed to unregister global shortcuts on window destroy: {e}"
                         );
@@ -411,6 +413,7 @@ pub fn run() {
         })
         .manage(connection_manager)
         .manage(quit_guard::QuitGuard::default())
+        .manage(commands::PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
             commands::ssh_connect,
             commands::ssh_cancel_connect,
@@ -490,6 +493,10 @@ pub fn run() {
             commands::editor_dirty_changed,
             commands::credential_seal,
             commands::credential_open,
+            // In-app updater (channel endpoints + Homebrew detection)
+            commands::get_update_context,
+            commands::updater_check,
+            commands::updater_download_and_install,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
@@ -505,7 +512,9 @@ pub fn run() {
             // convention. code: None means user-initiated window closure —
             // explicit exits (quit_guard app.exit(0), updater restart)
             // arrive as code: Some(_) and fall through unprevented.
-            tauri::RunEvent::ExitRequested { code: None, api, .. } => {
+            tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } => {
                 #[cfg(target_os = "macos")]
                 api.prevent_exit();
                 #[cfg(not(target_os = "macos"))]
@@ -566,11 +575,42 @@ mod shortcut_accelerator_tests {
 
         // Named keys and symbols that customizable bindings can produce
         let keys = [
-            "Escape", "Enter", "Space", "Backspace", "Delete", "Insert", "PageUp", "PageDown",
-            "Home", "End", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Pause",
-            "CapsLock", "PrintScreen", "ScrollLock", "NumLock", "F1", "F5", "F13", "F24",
-            "Backquote", "BracketLeft", "BracketRight", "Comma", "Equal", "Minus", "Period",
-            "Quote", "Semicolon", "Slash", "1", "9", "0",
+            "Escape",
+            "Enter",
+            "Space",
+            "Backspace",
+            "Delete",
+            "Insert",
+            "PageUp",
+            "PageDown",
+            "Home",
+            "End",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Pause",
+            "CapsLock",
+            "PrintScreen",
+            "ScrollLock",
+            "NumLock",
+            "F1",
+            "F5",
+            "F13",
+            "F24",
+            "Backquote",
+            "BracketLeft",
+            "BracketRight",
+            "Comma",
+            "Equal",
+            "Minus",
+            "Period",
+            "Quote",
+            "Semicolon",
+            "Slash",
+            "1",
+            "9",
+            "0",
         ];
         for key in keys {
             accelerators.push(format!("CommandOrControl+{key}"));

@@ -438,7 +438,21 @@
       "debug": "调试"
     },
     "tabScrollLeft": "向左滚动",
-    "tabScrollRight": "向右滚动"
+    "tabScrollRight": "向右滚动",
+    "updates": {
+      "channel": {
+        "label": "更新通道",
+        "stable": "稳定版（推荐）",
+        "current": "最新版（macOS 26+）",
+        "currentHint": "最新版通道只升不降：切回稳定版需手动下载稳定版安装包覆盖安装。",
+        "currentUnavailable": "最新版通道仅支持 macOS 26 及以上的 Apple Silicon 设备。"
+      },
+      "homebrewManaged": {
+        "title": "由 Homebrew 管理",
+        "desc": "此副本通过 Homebrew 安装，更新由 brew 负责。为避免冲突，应用内更新已停用。",
+        "command": "brew upgrade --cask r-shell"
+      }
+    }
   },
   "welcome": {
     "quickTips": "快速提示",
@@ -785,7 +799,9 @@
     "downloadingButton": "正在下载…",
     "checkFailedFallback": "检查更新失败。",
     "downloadFailedFallback": "更新下载失败。",
-    "installFailedFallback": "更新安装失败。"
+    "installFailedFallback": "更新安装失败。",
+    "homebrewManaged": "更新由 Homebrew 管理",
+    "homebrewManagedDesc": "此副本通过 Homebrew 安装，请运行 brew upgrade --cask r-shell 获取更新。"
   },
   "syncDialog": {
     "title": "目录同步",
