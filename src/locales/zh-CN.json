@@ -1131,6 +1131,7 @@
     "sendCtrlAltDel": "发送 Ctrl+Alt+Del",
     "exitFullScreen": "退出全屏",
     "fullScreen": "全屏",
+    "popOutWindow": "在独立窗口中打开",
     "disconnect": "断开连接"
   },
   "sidebar": {
@@ -1324,7 +1325,14 @@
     "failedToDisconnect": "断开连接失败",
     "desktopDisconnected": "桌面已断开",
     "reconnect": "重新连接",
-    "connectingTo": "正在连接到 {{name}}..."
+    "connectingTo": "正在连接到 {{name}}...",
+    "openedInWindow": "桌面已在独立窗口中打开",
+    "backToTab": "返回标签页显示",
+    "failedToOpenWindow": "打开独立窗口失败",
+    "failedToCloseWindow": "关闭独立窗口失败",
+    "focusWindow": "聚焦窗口",
+    "disconnect": "断开连接",
+    "failedToFocus": "无法聚焦窗口"
   },
   "errorBoundary": {
     "somethingWentWrong": "出错了",
