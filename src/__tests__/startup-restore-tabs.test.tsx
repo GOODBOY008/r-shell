@@ -2,8 +2,10 @@
  * Feature tests for the "Reconnect Sessions on Startup" setting (issue #126).
  *
  * When the setting is ON (or absent — the default for existing installs),
- * startup restores the previous session: the saved tab layout is reopened and
- * every saved connection that has credentials is reconnected.
+ * startup restores the previous session Chrome-style: the saved tab layout is
+ * reopened, only the tab that was active in each group reconnects right away,
+ * and the remaining tabs stay `pending` and reconnect the first time they are
+ * activated (lazy restore).
  *
  * When the setting is OFF, the previous session's tabs are NOT reopened: the
  * app starts with a fresh, empty workspace (TerminalGroupProvider skips the
@@ -15,7 +17,7 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import App from '../App';
 import { setRestoreTimingForTests } from '../lib/restore-timing';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
@@ -95,6 +97,14 @@ vi.mock('@/components/connection-dialog', async () => {
   const ReactModule = await import('react');
   return {
     ConnectionDialog: () => ReactModule.createElement('div'),
+  };
+});
+vi.mock('@/components/connection-manager', async () => {
+  const ReactModule = await import('react');
+  // The real sidebar would render "Server N" labels too and make the tab-bar
+  // queries below ambiguous.
+  return {
+    ConnectionManager: () => ReactModule.createElement('div'),
   };
 });
 vi.mock('@/components/system-monitor', async () => {
@@ -199,16 +209,37 @@ describe('"Reconnect Sessions on Startup" setting', () => {
     setRestoreTimingForTests({ connectTimeoutMs: 15_000, overallTimeoutMs: 60_000 });
   });
 
-  it('reconnects every saved connection at startup when the setting is absent (default)', async () => {
+  it('reconnects only the active tab at startup and lazy-connects the rest when activated (default)', async () => {
     seedLayout();
     render(<App />);
 
+    // The saved layout has one group whose active tab is conn-1, so only
+    // conn-1 reconnects at startup — no reconnect storm for conn-2/conn-3.
     await vi.waitFor(
       () => {
-        expect(sshConnectCalls()).toHaveLength(TAB_IDS.length);
+        expect(sshConnectCalls()).toHaveLength(1);
       },
       { timeout: 5000, interval: 50 },
     );
+    const startedIds = sshConnectCalls().map(
+      ([, args]) => (args as { request: { connection_id: string } }).request.connection_id,
+    );
+    expect(startedIds).toEqual(['conn-1']);
+
+    // Background tabs stay in the workspace, unconnected.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(sshConnectCalls()).toHaveLength(1);
+
+    // Activating a background tab reconnects it exactly once.
+    fireEvent.click(screen.getByText('Server 2'));
+    await vi.waitFor(
+      () => {
+        expect(sshConnectCalls()).toHaveLength(2);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+    const secondId = (sshConnectCalls()[1][1] as { request: { connection_id: string } }).request.connection_id;
+    expect(secondId).toBe('conn-2');
     expect(lifecycle.toast.info).not.toHaveBeenCalled();
   });
 
