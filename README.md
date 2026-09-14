@@ -79,7 +79,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Connection Manager** — Tree-view sidebar with folders, favorites, tags, and drag-and-drop reordering
 - **SSH Tunnel (Jump Host)** — Route connections through a bastion or jump server
 - **Connection Profiles** — Save, import/export (JSON), duplicate, and edit connections
-- **Session Restore** — Automatically reconnects your workspace on launch
+- **Session Restore** — Chrome-style lazy restore: reopens your workspace on launch, reconnects the tab you were on, and reconnects the rest as you open them
 - **Quick Connect** — Toolbar dropdown with recent connections
 - **Auto Reconnect** — Exponential backoff reconnection (up to 5 attempts)
 

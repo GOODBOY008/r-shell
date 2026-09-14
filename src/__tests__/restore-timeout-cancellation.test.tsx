@@ -36,13 +36,33 @@ const lifecycle = vi.hoisted(() => ({
 
 let mockState: TerminalGroupState;
 
+/**
+ * Five groups, each with its own single (and therefore active) tab, mirroring
+ * what initializeState would load from a persisted 5-pane layout: every tab
+ * starts `pending` and every group-active tab belongs to the eager restore
+ * set, so the restore loop has 5 serial connections to initiate.
+ */
 function makeMockState(): TerminalGroupState {
+  const groupIds = Array.from({ length: 5 }, (_, i) => `group-${i + 1}`);
+  const tabs = Array.from({ length: 5 }, (_, i) => ({
+    id: `conn-${i + 1}`,
+    name: `Server ${i + 1}`,
+    tabType: 'terminal' as const,
+    protocol: 'SSH',
+    host: 'example.com',
+    username: 'root',
+    connectionStatus: 'pending' as const,
+    reconnectCount: 0,
+  }));
   return {
-    groups: { 'group-1': { id: 'group-1', tabs: [], activeTabId: null } },
-    activeGroupId: 'group-1',
-    gridLayout: { type: 'leaf', groupId: 'group-1' },
-    nextGroupId: 2,
-    tabToGroupMap: {},
+    groups: Object.fromEntries(groupIds.map((groupId, i) => [
+      groupId,
+      { id: groupId, tabs: [tabs[i]], activeTabId: tabs[i].id },
+    ])),
+    activeGroupId: groupIds[0],
+    gridLayout: { type: 'leaf', groupId: groupIds[0] },
+    nextGroupId: 6,
+    tabToGroupMap: Object.fromEntries(tabs.map((tab, i) => [tab.id, groupIds[i]])),
   };
 }
 
