@@ -1,7 +1,7 @@
-use crate::desktop_protocol::{DesktopConnectRequest, DesktopProtocol, FrameUpdate};
+use crate::desktop_protocol::{DesktopConnectRequest, DesktopEvent, DesktopProtocol, SendableHandles};
 use crate::ftp_client::FtpClient;
 use crate::os_detect::OsInfoCache;
-use crate::rdp_client::RdpClient;
+use crate::rdp::RdpClient;
 use crate::sftp_client::StandaloneSftpClient;
 use crate::ssh::{PtySession, SshClient, SshConfig};
 use crate::vnc_client::VncClient;
@@ -840,7 +840,7 @@ impl ConnectionManager {
     pub async fn start_desktop_stream(
         &self,
         connection_id: &str,
-        frame_tx: mpsc::UnboundedSender<FrameUpdate>,
+        event_tx: mpsc::UnboundedSender<DesktopEvent>,
         cancel: CancellationToken,
     ) -> Result<()> {
         let desktop = self.desktop_connections.read().await;
@@ -848,7 +848,49 @@ impl ConnectionManager {
             .get(connection_id)
             .ok_or_else(|| anyhow::anyhow!("Desktop connection not found: {}", connection_id))?;
         let client = client.read().await;
-        client.start_frame_loop(frame_tx, cancel).await
+        client.start_frame_loop(event_tx, cancel).await
+    }
+
+    /// Start native rendering for a desktop connection (RDP only).
+    pub async fn start_desktop_native_render(
+        &self,
+        connection_id: &str,
+        handles: SendableHandles,
+        cancel: CancellationToken,
+    ) -> Result<()> {
+        let desktop = self.desktop_connections.read().await;
+        let client = desktop
+            .get(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Desktop connection not found: {}", connection_id))?;
+        let client = client.read().await;
+        client.start_native_render(handles, cancel).await
+    }
+
+    /// Drop the native renderer for a desktop connection (its window closed).
+    /// No-op unless the connection is currently rendering natively.
+    pub async fn stop_desktop_native_render(&self, connection_id: &str) -> Result<()> {
+        let desktop = self.desktop_connections.read().await;
+        let client = desktop
+            .get(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Desktop connection not found: {}", connection_id))?;
+        let client = client.read().await;
+        client.stop_native_render().await
+    }
+
+    /// Resize the native renderer surface for a desktop connection (its
+    /// window changed size). No-op unless rendering natively.
+    pub async fn resize_desktop_native_surface(
+        &self,
+        connection_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        let desktop = self.desktop_connections.read().await;
+        let client = desktop
+            .get(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Desktop connection not found: {}", connection_id))?;
+        let client = client.read().await;
+        client.resize_native_surface(width, height).await
     }
 }
 
