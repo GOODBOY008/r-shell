@@ -3671,7 +3671,12 @@ async fn open_rdp_native_window_macos(
         app.run_on_main_thread(move || {
             let handles = sendable;
             let _ = tx.send(crate::rdp::native_render::NativeRenderer::new(
-                handles.display, handles.window, wp, hp,
+                handles.display,
+                handles.window,
+                wp,
+                hp,
+                w,
+                h,
             ));
         })
         .map_err(|e| format!("Failed to schedule renderer creation: {}", e))?;

@@ -186,7 +186,30 @@ pub(super) async fn rdp_session_loop(
                             }
                         }
                     }
-                    other => {
+                    // Native-window pointer events arrive normalized to the
+                    // window content; scale them to the remote desktop here,
+                    // where the current size is known.
+                    InputCommand::PointerNorm { xn, yn, mask, prev_mask } => {
+                        let x = ((xn.clamp(0.0, 1.0) * image.width() as f32) as u16)
+                            .min(image.width().saturating_sub(1));
+                        let y = ((yn.clamp(0.0, 1.0) * image.height() as f32) as u16)
+                            .min(image.height().saturating_sub(1));
+                        last_pointer_pos = (x, y);
+                        if mask != prev_mask {
+                            tracing::info!(
+                                "RDP native pointer button {:#04x}->{:#04x} at remote ({}, {})",
+                                prev_mask,
+                                mask,
+                                x,
+                                y
+                            );
+                        }
+                        map_input_to_outputs(
+                            &mut active_stage,
+                            &mut image,
+                            InputCommand::Pointer { x, y, mask, prev_mask },
+                        )
+                    }                    other => {
                         if let InputCommand::Pointer { x, y, .. } = other {
                             last_pointer_pos = (x, y);
                         }
@@ -244,7 +267,7 @@ pub(super) async fn rdp_session_loop(
                     }
                     Some(SessionSignal::NativeRender(handles, _)) => match handles.renderer {
                         Some(mut renderer) => {
-                            renderer.resize(image.width() as u32, image.height() as u32);
+                            renderer.set_remote_size(image.width(), image.height());
                             mode = RenderMode::Native(renderer);
                             if let Some(frame) = compact_frame(
                                 &image,
@@ -344,7 +367,21 @@ pub(super) async fn rdp_session_loop(
                                     });
                                 }
                                 RenderMode::Native(ref mut renderer) => {
-                                    renderer.resize(w as u32, h as u32);
+                                    // The reactivated desktop has a new size
+                                    // and layout — sync the renderer and
+                                    // push a full repaint (the framebuffer
+                                    // still holds the pre-resize picture).
+                                    renderer.set_remote_size(w, h);
+                                    if let Some(frame) = compact_frame(
+                                        &image,
+                                        &mut rgba_buf,
+                                        0,
+                                        0,
+                                        w as usize,
+                                        h as usize,
+                                    ) {
+                                        renderer.blit(&frame);
+                                    }
                                 }
                                 RenderMode::Noop => {}
                             }

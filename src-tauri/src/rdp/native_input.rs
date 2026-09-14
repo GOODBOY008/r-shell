@@ -200,23 +200,19 @@ pub fn install_native_input_monitor(
                 }
                 // Mouse moved
                 5 => {
-                    let location: (f64, f64) = get_event_location_in_window(event);
-                    let x = location.0.max(0.0) as u16;
-                    let y = location.1.max(0.0) as u16;
-                    let mask = prev_mask.load(Ordering::Relaxed);
-                    let _ = input_tx.send(InputCommand::Pointer {
-                        x,
-                        y,
-                        mask,
-                        prev_mask: mask,
-                    });
+                    if let Some((xn, yn)) = get_event_location_normalized(event) {
+                        let mask = prev_mask.load(Ordering::Relaxed);
+                        let _ = input_tx.send(InputCommand::PointerNorm {
+                            xn,
+                            yn,
+                            mask,
+                            prev_mask: mask,
+                        });
+                    }
                     event
                 }
                 // Left/Right/Other mouse down/up
                 1 | 2 | 3 | 4 | 25 | 26 => {
-                    let location: (f64, f64) = get_event_location_in_window(event);
-                    let x = location.0.max(0.0) as u16;
-                    let y = location.1.max(0.0) as u16;
                     let button_number: i64 = msg_send![event, buttonNumber];
                     let is_down = matches!(event_type, 1 | 3 | 25);
 
@@ -231,28 +227,29 @@ pub fn install_native_input_monitor(
                     let new_mask = if is_down { prev | bit } else { prev & !bit };
                     prev_mask.store(new_mask, Ordering::Relaxed);
 
-                    let _ = input_tx.send(InputCommand::Pointer {
-                        x,
-                        y,
-                        mask: new_mask,
-                        prev_mask: prev,
-                    });
+                    if let Some((xn, yn)) = get_event_location_normalized(event) {
+                        let _ = input_tx.send(InputCommand::PointerNorm {
+                            xn,
+                            yn,
+                            mask: new_mask,
+                            prev_mask: prev,
+                        });
+                    }
                     event
                 }
                 // Scroll wheel
                 22 => {
-                    let location: (f64, f64) = get_event_location_in_window(event);
-                    let x = location.0.max(0.0) as u16;
-                    let y = location.1.max(0.0) as u16;
                     let delta_y: f64 = msg_send![event, deltaY];
                     // Wheel up = 0x08, wheel down = 0x10
                     let wheel_mask = if delta_y > 0.0 { 0x08u8 } else { 0x10 };
-                    let _ = input_tx.send(InputCommand::Pointer {
-                        x,
-                        y,
-                        mask: wheel_mask,
-                        prev_mask: 0,
-                    });
+                    if let Some((xn, yn)) = get_event_location_normalized(event) {
+                        let _ = input_tx.send(InputCommand::PointerNorm {
+                            xn,
+                            yn,
+                            mask: wheel_mask,
+                            prev_mask: 0,
+                        });
+                    }
                     event
                 }
                 _ => event,
@@ -303,31 +300,36 @@ pub fn take_native_input_monitor(connection_id: &str) -> Option<*mut std::ffi::c
     None
 }
 
-/// Get the mouse location in window coordinates (origin top-left).
+/// Get the mouse position relative to the window's content view, normalized
+/// to `0.0..=1.0` on both axes with the origin at the top-left. Normalized
+/// coordinates stay correct across window resizes and DPI changes; the
+/// session thread scales them to the current remote desktop size.
 #[cfg(target_os = "macos")]
-unsafe fn get_event_location_in_window(event: *mut objc2::runtime::AnyObject) -> (f64, f64) {
+unsafe fn get_event_location_normalized(event: *mut objc2::runtime::AnyObject) -> Option<(f32, f32)> {
     use objc2::msg_send;
     use objc2::runtime::AnyObject;
 
     // locationInWindow returns NSPoint { x, y } with origin at bottom-left
     let location: [f64; 2] = msg_send![event, locationInWindow];
-    let x = location[0];
-    let y_from_bottom = location[1];
 
-    // Get the window's content height to flip Y axis
     let window: *mut AnyObject = msg_send![event, window];
     if window.is_null() {
-        return (x, y_from_bottom);
+        return None;
     }
     let content_view: *mut AnyObject = msg_send![window, contentView];
     if content_view.is_null() {
-        return (x, y_from_bottom);
+        return None;
     }
     let bounds: [f64; 4] = msg_send![content_view, bounds]; // NSRect { x, y, w, h }
-    let height = bounds[3];
+    let (w, h) = (bounds[2], bounds[3]);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
 
-    // Flip Y: RDP expects origin at top-left
-    (x, height - y_from_bottom)
+    // Flip Y (AppKit bottom-left origin → RDP top-left origin) and normalize.
+    let xn = (location[0] / w).clamp(0.0, 1.0);
+    let yn = ((h - location[1]) / h).clamp(0.0, 1.0);
+    Some((xn as f32, yn as f32))
 }
 
 /// Remove a previously installed NSEvent monitor.

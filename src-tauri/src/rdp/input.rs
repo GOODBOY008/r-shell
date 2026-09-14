@@ -8,6 +8,11 @@ use smallvec::SmallVec;
 pub enum InputCommand {
     Key { scancode: u16, down: bool },
     Pointer { x: u16, y: u16, mask: u8, prev_mask: u8 },
+    /// Pointer position as fractions of the window content size (0.0..=1.0).
+    /// Used by the native-window input path, whose coordinates only make
+    /// sense relative to the window; the session thread scales them to the
+    /// current remote desktop size.
+    PointerNorm { xn: f32, yn: f32, mask: u8, prev_mask: u8 },
     Resize { width: u16, height: u16 },
     FullFrame,
 }
@@ -18,6 +23,9 @@ pub fn map_input(cmd: &InputCommand) -> SmallVec<[FastPathInputEvent; 4]> {
     match cmd {
         InputCommand::Key { scancode, down } => map_key(*scancode, *down),
         InputCommand::Pointer { x, y, mask, prev_mask } => map_pointer(*x, *y, *mask, *prev_mask),
+        // PointerNorm must be resolved to a concrete remote position by the
+        // session (which knows the remote size) before mapping.
+        InputCommand::PointerNorm { .. } => SmallVec::new(),
         InputCommand::Resize { .. } | InputCommand::FullFrame => SmallVec::new(),
     }
 }

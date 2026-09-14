@@ -130,13 +130,10 @@ impl RdpClient {
                         }
                         SessionSignal::NativeRender(handles, cancel) => match handles.renderer {
                             Some(mut renderer) => {
-                                let (w, h) = (
-                                    state.connection_result.desktop_size.width as u32,
-                                    state.connection_result.desktop_size.height as u32,
+                                renderer.set_remote_size(
+                                    state.connection_result.desktop_size.width,
+                                    state.connection_result.desktop_size.height,
                                 );
-                                if renderer.size() != (w, h) {
-                                    renderer.resize(w, h);
-                                }
                                 break (RenderMode::Native(renderer), cancel);
                             }
                             None => {
