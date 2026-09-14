@@ -10,6 +10,7 @@ import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
+import { HostKeyChangedDialog } from './components/host-key-changed-dialog';
 import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { QuickCommandsPanel } from './components/quick-commands-panel';
@@ -22,6 +23,7 @@ import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { buildSftpConnectRequest, buildSshConnectRequest } from './lib/ssh-connect-request';
+import { sshConnect } from '@/lib/ssh-connect';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
@@ -617,12 +619,7 @@ function AppContent() {
           } else {
             // SSH restoration (existing behavior)
             const result = await withTimeout(
-              invoke<{ success: boolean; error?: string }>(
-                'ssh_connect',
-                {
-                  request: buildSshConnectRequest(activeConn.connectionId, connectionData),
-                }
-              ),
+              sshConnect(buildSshConnectRequest(activeConn.connectionId, connectionData)),
               CONNECT_TIMEOUT_MS,
               `ssh_connect ${connectionData.name}`,
             );
@@ -823,12 +820,7 @@ function AppContent() {
         console.debug('[SSH] Connecting:', { id: connectionData.id, host: connectionData.host, port: connectionData.port, authMethod: connectionData.authMethod });
 
         try {
-          const result = await invoke<{ success: boolean; error?: string }>(
-            'ssh_connect',
-            {
-              request: buildSshConnectRequest(sessionId, connectionData),
-            }
-          );
+          const result = await sshConnect(buildSshConnectRequest(sessionId, connectionData));
 
           if (result.success) {
             ConnectionStorageManager.updateLastConnected(connection.id);
@@ -1006,12 +998,7 @@ function AppContent() {
         }
       } else {
         // SSH duplicate flow
-        const result = await invoke<{ success: boolean; error?: string }>(
-          'ssh_connect',
-          {
-            request: buildSshConnectRequest(duplicateId, connectionData),
-          }
-        );
+        const result = await sshConnect(buildSshConnectRequest(duplicateId, connectionData));
 
         if (result.success) {
           const duplicatedTab: TerminalTab = {
@@ -1221,12 +1208,7 @@ function AppContent() {
           // Ignore errors when disconnecting
         }
 
-        const result = await invoke<{ success: boolean; error?: string }>(
-          'ssh_connect',
-          {
-            request: buildSshConnectRequest(tabId, connectionData),
-          }
-        );
+        const result = await sshConnect(buildSshConnectRequest(tabId, connectionData));
 
         if (result.success) {
           clearReconnectRetry(tabId);
@@ -1928,9 +1910,7 @@ function AppContent() {
       } else {
         // SSH / Telnet / Raw — connect then create/reuse tab
         try {
-          const result = await invoke<{ success: boolean; error?: string }>('ssh_connect', {
-            request: buildSshConnectRequest(sessionId, config),
-          });
+          const result = await sshConnect(buildSshConnectRequest(sessionId, config));
 
           if (result.success) {
             ConnectionStorageManager.updateLastConnected(config.id);
@@ -2038,12 +2018,7 @@ function AppContent() {
     } else {
       // SSH quick connect (existing behavior)
       try {
-        const result = await invoke<{ success: boolean; error?: string }>(
-          'ssh_connect',
-          {
-            request: buildSshConnectRequest(connectionData.id, connectionData),
-          }
-        );
+        const result = await sshConnect(buildSshConnectRequest(connectionData.id, connectionData));
 
         if (result.success) {
           ConnectionStorageManager.updateLastConnected(connectionData.id);
@@ -2400,6 +2375,7 @@ function AppContent() {
       <StatusBar activeConnection={statusBarConnection} />
 
       {/* Modals */}
+      <HostKeyChangedDialog />
       <ConnectionDialog
         open={connectionDialogOpen}
         onOpenChange={(open) => {

@@ -17,6 +17,7 @@ import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connect
 import { ConnectionStorageManager } from '../lib/connection-storage';
 import { SECRET_FIELDS, sealSecret, openSecret } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
+import { sshConnect } from '@/lib/ssh-connect';
 import { toast } from 'sonner';
 import {
   Server,
@@ -593,12 +594,7 @@ export function ConnectionDialog({
     }
 
     try {
-      const result = await invoke<{ success: boolean; error?: string }>(
-        'ssh_connect',
-        {
-          request: buildSshConnectRequest(connectionId, connectConfig),
-        }
-      );
+      const result = await sshConnect(buildSshConnectRequest(connectionId, connectConfig));
 
       if (result.success) {
         onConnect({
