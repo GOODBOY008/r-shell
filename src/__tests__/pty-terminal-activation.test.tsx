@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { PtyTerminal } from '../components/pty-terminal';
 import { MenuBar } from '../components/menu-bar';
 import { dispatchTerminalCommand } from '../lib/terminal-commands';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 
 const mocks = vi.hoisted(() => {
   const terminals: Array<any> = [];
@@ -266,6 +267,7 @@ describe('PtyTerminal activation', () => {
     mocks.searchAddons.length = 0;
     mocks.webSockets.length = 0;
     mocks.terminalCallbacks.onWorkingDirectoryChange.mockClear();
+    localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
 
     Object.defineProperty(HTMLElement.prototype, 'offsetWidth', {
       configurable: true,
@@ -492,6 +494,27 @@ describe('PtyTerminal activation', () => {
     expect(terminal.reset).not.toHaveBeenCalled();
     expect(terminal.clear).not.toHaveBeenCalled();
     expect(sentMessagesOfType(webSocket, 'Resume')).toHaveLength(132);
+  });
+
+  it('stops after a disconnect when automatic reconnect is disabled', async () => {
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ autoReconnect: false }));
+    renderTerminal(true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+
+    const terminal = mocks.terminals[0];
+    const socket = mocks.webSockets[0];
+    await act(async () => {
+      socket.onmessage?.({
+        data: JSON.stringify({ type: 'Success', message: 'PTY connection started' }),
+      } as MessageEvent);
+      socket.onclose?.();
+      await vi.advanceTimersByTimeAsync(2100);
+    });
+
+    expect(mocks.webSockets).toHaveLength(1);
+    expect(terminal.write).toHaveBeenCalledWith(expect.stringContaining('Press R'));
   });
 
   it('lets xterm handle Ctrl+V paste without duplicate custom send', async () => {
