@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.3] - 2026-09-14
+
+### 🔧 R-Shell 2.9.3 — Security Hardening & Lazy Session Restore
+
+This patch release hardens security in two places: the local WebSocket PTY bridge now requires authentication, and SSH host keys are verified against your `known_hosts` — an unknown key asks once via a "trust new key" dialog, and a changed key refuses to connect. Startup session restore becomes Chrome-style lazy: only each group's active tab reconnects eagerly while background tabs wait for their first activation. Disconnected terminals can now be reconnected by simply pressing R, and the Homebrew packaging moves to a dual-baseline update channel.
+
+### New Features 🎉
+
+- feat(terminal): add reconnect shortcut (press R) for disconnected sessions by @htazq in #52
+- feat(restore): Chrome-style lazy session restore by @GOODBOY008 in #153
+- feat(release): Homebrew dual-baseline updates by @GOODBOY008 in #151
+
+### Bug Fixes 🐛
+
+- fix(security): verify SSH host keys against known_hosts, with a "trust new key" dialog and a working Settings switch by @twkrol in #141
+- fix(security): authenticate the local WebSocket PTY bridge by @twkrol in #140
+
+### Contributors
+
+Thanks to [@twkrol](https://github.com/twkrol), [@htazq](https://github.com/htazq), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.2...v2.9.3
+
 ## [2.9.2] - 2026-09-12
 
 ### 🔧 R-Shell 2.9.2 — Terminal & Connection Manager Refinements
