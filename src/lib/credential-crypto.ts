@@ -4,6 +4,10 @@
  * Secrets (SSH passwords, key passphrases, proxy/VNC passwords) are encrypted
  * with AES-256-GCM on the Rust side using an app master key that lives in the
  * OS keychain (created on first use, one keychain entry for the whole app).
+ * Dev/e2e builds never touch the keychain — every rebuild changes the ad-hoc
+ * code signature and macOS would re-prompt, stalling unattended automation —
+ * so `master_key()` keeps the key in `dev-master-key.dat` under the app-data
+ * dir instead (`RSHELL_DISABLE_KEYCHAIN=1` forces this in packaged builds).
  * Only the ciphertext is ever persisted to localStorage — plaintext secrets
  * exist in memory transiently at connect time.
  *
