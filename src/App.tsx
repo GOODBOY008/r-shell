@@ -39,7 +39,7 @@ import {
   loadKeyboardShortcutSettings,
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
-import type { SplitViewShortcutBindings } from './lib/keyboard-shortcuts';
+import type { SplitViewShortcutBindings, KeyboardShortcut } from './lib/keyboard-shortcuts';
 import { announce } from './lib/live-announcer';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
@@ -366,7 +366,6 @@ function AppContent() {
     toggleBottomPanel,
     toggleZenMode,
   }), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode]);
-
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
@@ -962,8 +961,6 @@ function AppContent() {
     }),
     [keyboardShortcutSettings.newSession, handleNewTab],
   );
-
-  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts, newSessionShortcut], true);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
@@ -1714,6 +1711,33 @@ function AppContent() {
   const handleOpenSettings = useCallback(() => {
     setSettingsModalOpen(true);
   }, []);
+
+  // All app shortcuts register through ONE useKeyboardShortcuts instance.
+  // Multiple instances of the hook must not coexist in a window: each
+  // instance's cleanup calls the plugin's app-wide unregisterAll(), so a
+  // sibling instance's effect re-run would wipe the other's registrations
+  // without restoring them (its sync() then sees them as already-registered).
+  // This hook sits below the handler definitions it binds (handleNewTab,
+  // handleOpenSettings); hooks run unconditionally, so the position is legal.
+  //
+  // macOS: ⌘N (new session) and ⌘, (settings) are owned by the native menu —
+  // CommandOrControl+N and CommandOrControl+Comma sit in
+  // MACOS_MENU_OWNED_ACCELERATORS, so those two bindings never OS-register
+  // here and the menu's menu-action routing handles them. Windows/Linux have
+  // no native menu, so the same bindings register as real global shortcuts.
+  const settingsShortcut = useMemo<KeyboardShortcut>(
+    () => ({
+      key: ',',
+      ctrlKey: true,
+      handler: handleOpenSettings,
+      description: 'Open Settings',
+    }),
+    [handleOpenSettings],
+  );
+  useKeyboardShortcuts(
+    [...layoutShortcuts, ...splitViewShortcuts, settingsShortcut, newSessionShortcut],
+    true,
+  );
 
   // App quit with live SSH sessions: the backend quit guard (quit_guard.rs)
   // emits `confirm-quit-sessions` with the connection count — Terminal.app
