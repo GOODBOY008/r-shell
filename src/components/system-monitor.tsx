@@ -684,7 +684,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.systemOverview')}</h3>
           </div>
           <Card>
-            <CardContent className="p-2 space-y-1">
+            <CardContent className="p-2 space-y-1 [&:last-child]:pb-2">
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
                   <span className="text-xs font-medium">{t('systemMonitor.cpu')}</span>
@@ -698,12 +698,12 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
                   <span className="text-xs font-medium">{t('systemMonitor.memory')}</span>
-                  <span className={`text-xs font-semibold ${getUsageColor(stats.memory)} truncate`} title={stats.memoryUsed && stats.memoryTotal ? `${stats.memoryUsed}MB / ${stats.memoryTotal}MB` : ''}>
+                  <span className={`text-xs font-semibold ${getUsageColor(stats.memory)} truncate`} title={stats.memoryUsed !== undefined && stats.memoryTotal !== undefined ? `${stats.memoryUsed}MB / ${stats.memoryTotal}MB` : ''}>
                     {stats.memory.toFixed(1)}%
                   </span>
                 </div>
                 <Progress value={stats.memory} className={`h-1.5 ${getProgressColor(stats.memory)}`} />
-                {stats.memoryUsed && stats.memoryTotal && (
+                {stats.memoryUsed !== undefined && stats.memoryTotal !== undefined && (
                   <div className="text-[9px] text-muted-foreground text-right leading-tight">
                     {stats.memoryUsed}MB / {stats.memoryTotal}MB
                   </div>
@@ -761,7 +761,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               )}
             </div>
             <Card>
-              <CardContent className="p-2">
+              <CardContent className="p-2 [&:last-child]:pb-2">
                 {!gpuDetection?.available ? (
                   <div className="text-[10px] text-muted-foreground space-y-1">
                     <p>{t('systemMonitor.noGpuDetected')}</p>
@@ -837,15 +837,16 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         <div className="text-[9px] text-muted-foreground mb-1">{t('systemMonitor.combinedUsageHistory')}</div>
                         <div className="h-24 text-foreground">
                           <ResponsiveContainer width="100%" height="100%">
-                            <LineChart margin={{ top: 5, right: 2, left: 0, bottom: 5 }}>
+                            <LineChart margin={{ top: 5, right: 2, left: 0, bottom: 0 }}>
                               <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
-                              <XAxis 
+                              <XAxis
                                 dataKey="time"
                                 type="category"
                                 allowDuplicatedCategory={false}
                                 tick={{ fontSize: 8, fill: 'currentColor' }}
                                 stroke="hsl(var(--muted-foreground))"
                                 strokeWidth={0.5}
+                                height={16}
                                 interval="preserveStartEnd"
                                 minTickGap={30}
                               />
@@ -1011,7 +1012,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                 <ResponsiveContainer width="100%" height="100%">
                                   <AreaChart 
                                     data={gpuHistory.get(currentGpu.index) || []}
-                                    margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
+                                    margin={{ top: 5, right: 2, left: 0, bottom: 0 }}
                                   >
                                     <defs>
                                       <linearGradient id="gpuUtilGradient" x1="0" y1="0" x2="0" y2="1">
@@ -1024,11 +1025,12 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                       </linearGradient>
                                     </defs>
                                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
-                                    <XAxis 
-                                      dataKey="time" 
+                                    <XAxis
+                                      dataKey="time"
                                       tick={{ fontSize: 8, fill: 'currentColor' }}
                                       stroke="hsl(var(--muted-foreground))"
                                       strokeWidth={0.5}
+                                      height={16}
                                       interval="preserveStartEnd"
                                       minTickGap={30}
                                     />
@@ -1094,14 +1096,15 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                 <ResponsiveContainer width="100%" height="100%">
                                   <LineChart 
                                     data={gpuHistory.get(currentGpu.index) || []}
-                                    margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
+                                    margin={{ top: 5, right: 2, left: 0, bottom: 0 }}
                                   >
                                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
-                                    <XAxis 
-                                      dataKey="time" 
+                                    <XAxis
+                                      dataKey="time"
                                       tick={{ fontSize: 8, fill: 'currentColor' }}
                                       stroke="hsl(var(--muted-foreground))"
                                       strokeWidth={0.5}
+                                      height={16}
                                       interval="preserveStartEnd"
                                       minTickGap={30}
                                     />
@@ -1152,7 +1155,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.runningProcesses')}</h3>
           </div>
           <Card className="overflow-hidden">
-            <CardContent className="p-0">
+            <CardContent className="p-0 [&:last-child]:pb-0">
               <div className="max-h-40 overflow-auto">
                 <table className="w-full caption-bottom text-sm">
                   <thead className="[&_tr]:border-b [&_tr]:border-border">
@@ -1220,7 +1223,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.diskUsage')}</h3>
           </div>
           <Card className="overflow-hidden">
-            <CardContent className="p-0">
+            <CardContent className="p-0 [&:last-child]:pb-0">
               {disks.length === 0 ? (
                 <div className="p-2 text-[10px] text-muted-foreground">
                   {t('systemMonitor.noDiskInfo')}
@@ -1289,7 +1292,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             )}
           </div>
           <Card>
-            <CardContent className="p-2 space-y-2">
+            <CardContent className="p-2 space-y-2 [&:last-child]:pb-2">
               {/* Current Speeds */}
               <div className="grid grid-cols-2 gap-1.5">
                 <div className="flex flex-col gap-0.5">
@@ -1323,7 +1326,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         uploadPositive: item.upload,
                         downloadNegative: -item.download
                       }))}
-                      margin={{ top: 5, right: 2, left: 0, bottom: 5 }}
+                      margin={{ top: 5, right: 2, left: 0, bottom: 0 }}
                     >
                       <defs>
                         <linearGradient id="uploadGradient" x1="0" y1="0" x2="0" y2="1">
@@ -1336,12 +1339,13 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
-                      <XAxis 
+                      <XAxis
                         dataKey="time"
                         axisLine={true}
                         tick={{ fontSize: 8, fill: 'currentColor' }}
                         stroke="hsl(var(--muted-foreground))"
                         tickLine={false}
+                        height={16}
                         interval="preserveStartEnd"
                         minTickGap={50}
                       />
@@ -1411,10 +1415,10 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.networkLatency')}</h3>
           </div>
           <Card>
-            <CardContent className="p-2">
+            <CardContent className="p-2 [&:last-child]:pb-2">
               <div className="h-24 text-foreground">
                 <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={latencyData} margin={{ top: 5, right: 2, left: -10, bottom: 5 }}>
+                  <AreaChart data={latencyData} margin={{ top: 5, right: 2, left: -10, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
                     <defs>
                       <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
@@ -1422,11 +1426,12 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                       </linearGradient>
                     </defs>
-                    <XAxis 
-                      dataKey="time" 
+                    <XAxis
+                      dataKey="time"
                       tick={{ fontSize: 8, fill: 'currentColor' }}
                       stroke="hsl(var(--muted-foreground))"
                       strokeWidth={0.5}
+                      height={16}
                     />
                     <YAxis 
                       tick={{ fontSize: 8, fill: 'currentColor' }}
