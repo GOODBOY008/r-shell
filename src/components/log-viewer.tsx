@@ -203,7 +203,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
         <CardHeader className="p-3">
           <CardTitle className="text-xs">{t('logViewer.selectLogFile')}</CardTitle>
         </CardHeader>
-        <CardContent className="p-3 pt-0 space-y-2">
+        <CardContent className="p-3 pt-0 space-y-2 [&:last-child]:pb-3">
           <div className="flex gap-2">
             <Select value={selectedLogPath} onValueChange={setSelectedLogPath}>
               <SelectTrigger className="flex-1">
@@ -263,7 +263,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
       {/* Search and filters */}
       {selectedLogPath && (
         <Card>
-          <CardContent className="p-3 space-y-2">
+          <CardContent className="p-3 space-y-2 [&:last-child]:pb-3">
             <div className="flex gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-2 top-2.5 h-3 w-3 text-muted-foreground" />
@@ -295,7 +295,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
 
       {/* Log content */}
       <Card className="flex-1 flex flex-col overflow-hidden">
-        <CardContent className="p-0 flex-1 overflow-hidden">
+        <CardContent className="p-0 flex-1 overflow-hidden [&:last-child]:pb-0">
           <ScrollArea className="h-full" ref={scrollAreaRef}>
             <div 
               className="p-3" 
