@@ -447,7 +447,9 @@
       "homebrewManaged": {
         "title": "Managed by Homebrew",
         "desc": "This copy was installed with Homebrew, so updates are handled by brew. In-app updates are disabled to avoid conflicting with it.",
-        "command": "brew upgrade --cask r-shell"
+        "command": "brew upgrade --cask r-shell",
+        "copyCommand": "Copy update command",
+        "commandCopied": "Update command copied to clipboard"
       }
     }
   },
@@ -802,7 +804,8 @@
     "downloadFailedFallback": "Failed to download update.",
     "installFailedFallback": "Failed to install update.",
     "homebrewManaged": "Updates are managed by Homebrew",
-    "homebrewManagedDesc": "This copy was installed with Homebrew. Run \"brew upgrade --cask r-shell\" to update."
+    "homebrewManagedDesc": "This copy was installed with Homebrew, so in-app updates are disabled.",
+    "homebrewCommandCopied": "Upgrade command copied — run it in your terminal."
   },
   "syncDialog": {
     "title": "Directory Sync",

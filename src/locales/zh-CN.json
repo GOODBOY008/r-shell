@@ -447,7 +447,9 @@
       "homebrewManaged": {
         "title": "由 Homebrew 管理",
         "desc": "此副本通过 Homebrew 安装，更新由 brew 负责。为避免冲突，应用内更新已停用。",
-        "command": "brew upgrade --cask r-shell"
+        "command": "brew upgrade --cask r-shell",
+        "copyCommand": "复制更新命令",
+        "commandCopied": "更新命令已复制到剪贴板"
       }
     }
   },
@@ -802,7 +804,8 @@
     "downloadFailedFallback": "更新下载失败。",
     "installFailedFallback": "更新安装失败。",
     "homebrewManaged": "更新由 Homebrew 管理",
-    "homebrewManagedDesc": "此副本通过 Homebrew 安装，请运行 brew upgrade --cask r-shell 获取更新。"
+    "homebrewManagedDesc": "此副本通过 Homebrew 安装，应用内更新已停用。",
+    "homebrewCommandCopied": "升级命令已复制，请在终端中运行。"
   },
   "syncDialog": {
     "title": "目录同步",
