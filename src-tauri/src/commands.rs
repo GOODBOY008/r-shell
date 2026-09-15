@@ -3918,6 +3918,10 @@ const CURRENT_MANIFEST_URL: &str =
 
 /// Environment facts the update settings UI gates on. `current` channel is
 /// only offered for macOS ≥ 26 on Apple Silicon outside Homebrew.
+/// `auto_check_disabled` suppresses the frontend's startup auto-check: dev
+/// builds (same gate as the keychain bypass) and `RSHELL_DISABLE_AUTO_UPDATE=1`
+/// must not fetch release manifests or pop an update dialog mid-run during
+/// unattended automation. Manual checks are never suppressed.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateContext {
@@ -3925,6 +3929,7 @@ pub struct UpdateContext {
     pub platform: String,
     pub arch: String,
     pub macos_major: Option<u32>,
+    pub auto_check_disabled: bool,
 }
 
 /// Parse the macOS major version via `sw_vers -productVersion` (e.g. "26.1"
@@ -4017,13 +4022,26 @@ fn homebrew_managed() -> bool {
     })
 }
 
+/// True when the startup auto-check for updates must be skipped. Dev/e2e
+/// builds never auto-check; `RSHELL_DISABLE_AUTO_UPDATE=1` extends the
+/// suppression to packaged builds. Manual checks are never affected.
+fn update_auto_check_disabled() -> bool {
+    tauri::is_dev()
+        || std::env::var("RSHELL_DISABLE_AUTO_UPDATE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+}
+
+/// Async per Tauri guidance — resolving the context spawns `sw_vers` on
+/// macOS and stats Caskroom dirs, which must not block the main thread.
 #[tauri::command]
-pub fn get_update_context() -> UpdateContext {
+pub async fn get_update_context() -> UpdateContext {
     UpdateContext {
         homebrew_managed: homebrew_managed(),
         platform: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         macos_major: macos_major_version(),
+        auto_check_disabled: update_auto_check_disabled(),
     }
 }
 
@@ -4140,6 +4158,16 @@ pub async fn updater_download_and_install(
 #[cfg(test)]
 mod updater_tests {
     use super::*;
+
+    #[test]
+    fn dev_builds_disable_the_update_auto_check() {
+        // `tauri dev` and `cargo test` both build without the
+        // `custom-protocol` feature, so is_dev() is true here. If this ever
+        // fails, dev/e2e runs would auto-fetch release manifests and could
+        // pop an update dialog mid-automation again.
+        std::env::remove_var("RSHELL_DISABLE_AUTO_UPDATE");
+        assert!(update_auto_check_disabled());
+    }
 
     #[test]
     fn cask_receipt_marks_homebrew_managed() {

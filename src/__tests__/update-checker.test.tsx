@@ -143,6 +143,39 @@ describe('UpdateChecker', () => {
       expect(mockInvoke).not.toHaveBeenCalledWith('updater_check', expect.anything());
     });
 
+    it('never auto-checks when the backend reports autoCheckDisabled (dev/e2e)', async () => {
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'get_update_context') return Promise.resolve(makeContext({ autoCheckDisabled: true }));
+        if (cmd === 'updater_check') return Promise.resolve(null);
+        return Promise.reject(new Error(`unexpected command: ${cmd}`));
+      });
+
+      render(<UpdateChecker />);
+      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+
+      expect(mockInvoke).toHaveBeenCalledWith('get_update_context');
+      expect(mockInvoke).not.toHaveBeenCalledWith('updater_check', expect.anything());
+    });
+
+    it('still allows manual checks when autoCheckDisabled is set', async () => {
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'get_update_context') return Promise.resolve(makeContext({ autoCheckDisabled: true }));
+        if (cmd === 'updater_check') return Promise.resolve(null);
+        return Promise.reject(new Error(`unexpected command: ${cmd}`));
+      });
+
+      const { rerender } = render(<UpdateChecker checkSignal={0} />);
+      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+      expect(mockInvoke).not.toHaveBeenCalledWith('updater_check', expect.anything());
+      mockInvoke.mockClear();
+
+      rerender(<UpdateChecker checkSignal={1} />);
+      await waitFor(() =>
+        expect(mockInvoke).toHaveBeenCalledWith('updater_check', expect.anything())
+      );
+      expect(mockToast.success).toHaveBeenCalledWith("You're up to date!");
+    });
+
     it('shows no toast on silent auto-check when no update', async () => {
       render(<UpdateChecker />);
       await waitFor(() =>

@@ -11,6 +11,14 @@ export interface UpdateContext {
   platform: string;
   arch: string;
   macosMajor: number | null;
+  /**
+   * True when the backend suppresses the startup auto-check: dev/e2e builds
+   * (or `RSHELL_DISABLE_AUTO_UPDATE=1`) must not fetch release manifests or
+   * pop an update dialog mid-automation. Optional so contexts from older
+   * binaries keep typechecking; treated as false when absent. Manual checks
+   * are never suppressed.
+   */
+  autoCheckDisabled?: boolean;
 }
 
 /** Assumed context before `get_update_context` resolves (or in browser dev). */
