@@ -361,8 +361,8 @@ mod e2e_tests {
             username: "administrator".to_string(),
             password: "Oristand@2021".to_string(),
             domain: None,
-            width: 1280,
-            height: 800,
+            width: 1920,
+            height: 1080,
         }
     }
 
@@ -598,5 +598,140 @@ mod e2e_tests {
                 Err(_) => return false,
             }
         }
+    }
+
+    /// Composite `frame` into `fb` (w×h×4 RGBA), same as the capture test.
+    fn composite(fb: &mut [u8], w: u16, h: u16, frame: &crate::desktop_protocol::FrameUpdate) {
+        let fx = frame.x as usize;
+        let fy = frame.y as usize;
+        let fw = frame.width as usize;
+        let fh = frame.height as usize;
+        for row in 0..fh {
+            let src_start = row * fw * 4;
+            let dst_y = fy + row;
+            if dst_y >= h as usize {
+                break;
+            }
+            let dst_start = (dst_y * w as usize + fx) * 4;
+            let copy_len = (fw * 4).min(frame.rgba_data.len().saturating_sub(src_start));
+            if copy_len > 0 && dst_start + copy_len <= fb.len() {
+                fb[dst_start..dst_start + copy_len]
+                    .copy_from_slice(&frame.rgba_data[src_start..src_start + copy_len]);
+            }
+        }
+    }
+
+    /// Fraction of sampled pixels differing by more than 24 per channel-sum.
+    fn fb_diff_ratio(a: &[u8], b: &[u8]) -> f64 {
+        let step = 16;
+        let mut total = 0usize;
+        let mut changed = 0usize;
+        for i in (0..a.len().min(b.len())).step_by(step) {
+            let d = a[i].abs_diff(b[i]);
+            total += 1;
+            if d > 24 {
+                changed += 1;
+            }
+        }
+        if total == 0 { 0.0 } else { changed as f64 / total as f64 }
+    }
+
+    /// Collect frames into `fb` until `secs` elapse. Returns frames received.
+    async fn collect_frames(
+        rx: &mut mpsc::UnboundedReceiver<DesktopEvent>,
+        fb: &mut [u8],
+        w: u16,
+        h: u16,
+        secs: u64,
+    ) -> usize {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(secs);
+        let mut n = 0;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return n;
+            }
+            match tokio::time::timeout(remaining, rx.recv()).await {
+                Ok(Some(DesktopEvent::Frame(frame))) => {
+                    composite(fb, w, h, &frame);
+                    n += 1;
+                }
+                Ok(Some(_)) => continue,
+                Ok(None) => return n,
+                Err(_) => return n,
+            }
+        }
+    }
+
+    fn save_png(path: &str, fb: &[u8], w: u16, h: u16) {
+        let file = std::fs::File::create(path).expect("create PNG file");
+        let wtr = std::io::BufWriter::new(file);
+        let mut encoder = png::Encoder::new(wtr, w as u32, h as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("PNG header");
+        writer.write_image_data(fb).expect("PNG data");
+    }
+
+    /// Diagnostic for "clicking a user on the logon screen does nothing":
+    /// settle the picture, click the user tile, measure whether the remote
+    /// repaints, then press Enter as a keyboard-channel control. Distinguishes
+    /// a client input-encoding problem from a server logon screen that simply
+    /// ignores RDP-originated input.
+    #[tokio::test]
+    #[ignore = "requires live RDP server at 192.168.20.180"]
+    async fn rdp_logon_click_diagnostic() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        // Baseline: collect until quiet.
+        let mut before = vec![0u8; (w as usize) * (h as usize) * 4];
+        let n0 = collect_frames(&mut event_rx, &mut before, w, h, 4).await;
+        println!("baseline frames: {n0}");
+
+        // Click the user tile (~43%, ~56% of the logon screen).
+        let (cx, cy) = ((w as u32) * 43 / 100, (h as u32) * 56 / 100);
+        client.send_pointer(cx as u16, cy as u16, 0x01).await.expect("down");
+        client.send_pointer(cx as u16, cy as u16, 0x00).await.expect("up");
+        println!("clicked at ({cx},{cy})");
+
+        let mut after_click = vec![0u8; before.len()];
+        let n1 = collect_frames(&mut event_rx, &mut after_click, w, h, 4).await;
+        let click_change = fb_diff_ratio(&before, &after_click);
+        println!("after click: {n1} frames, changed {:.2}%", click_change * 100.0);
+        save_png("target/rdp_diag_before_click.png", &before, w, h);
+        save_png("target/rdp_diag_after_click.png", &after_click, w, h);
+
+        // Keyboard control: Enter should also produce a repaint if the
+        // logon screen processes RDP input at all.
+        client.send_key(13, true).await.expect("enter down");
+        client.send_key(13, false).await.expect("enter up");
+
+        let mut after_key = vec![0u8; before.len()];
+        let n2 = collect_frames(&mut event_rx, &mut after_key, w, h, 4).await;
+        let key_change = fb_diff_ratio(&after_click, &after_key);
+        println!("after Enter: {n2} frames, changed {:.2}%", key_change * 100.0);
+        save_png("target/rdp_diag_after_key.png", &after_key, w, h);
+
+        println!("VERDICT click_change={click_change:.4} key_change={key_change:.4}");
+        println!("  both ~0   → logon screen ignores RDP input (server-side)");
+        println!("  key only  → mouse encoding suspect (client-side)");
+        println!("  click only→ click works; original report likely a different screen/path");
+
+        cancel.cancel();
     }
 }

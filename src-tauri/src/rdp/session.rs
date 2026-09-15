@@ -186,6 +186,22 @@ pub(super) async fn rdp_session_loop(
                             }
                         }
                     }
+                    // Frontend requested a full refresh (frame-stream health
+                    // watchdog): push the whole current picture through the
+                    // active render mode.
+                    InputCommand::FullFrame => {
+                        if let Some(frame) = compact_frame(
+                            &image,
+                            &mut rgba_buf,
+                            0,
+                            0,
+                            image.width() as usize,
+                            image.height() as usize,
+                        ) {
+                            deliver_frame(&mut mode, frame);
+                        }
+                        Vec::new()
+                    }
                     // Native-window pointer events arrive normalized to the
                     // window content; scale them to the remote desktop here,
                     // where the current size is known.

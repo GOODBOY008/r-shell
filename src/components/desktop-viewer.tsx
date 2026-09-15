@@ -47,6 +47,9 @@ export function DesktopViewer({
 
   // Calculate displayed dimensions
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  // Frame-stream watchdog bookkeeping
+  const activeCloseRef = useRef(false);
+  const lastFrameRef = useRef(0);
 
   // (Re-)attach the WebSocket canvas stream. Safe to call repeatedly: the
   // backend swaps the session's render mode back to the channel and pushes
@@ -95,6 +98,10 @@ export function DesktopViewer({
 
     let ws: WebSocket | null = null;
     let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    activeCloseRef.current = false;
+    lastFrameRef.current = 0;
 
     const connect = async () => {
       // Port + per-launch bridge token from the backend (issue #138).
@@ -140,6 +147,7 @@ export function DesktopViewer({
             if (view.byteLength < 3) return;
             const cmd = view.getUint8(0);
             if (cmd !== 0x02) return; // not a desktop frame
+            lastFrameRef.current = Date.now();
             const idLen = view.getUint16(1, false); // big-endian
             const headerSize = 1 + 2 + idLen + 8;
             if (event.data.byteLength < headerSize) return;
@@ -165,14 +173,48 @@ export function DesktopViewer({
       };
 
       ws.onclose = () => {
-        wsRef.current = null;
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+        }
+        // Unexpected drop (not our own cleanup): reconnect with backoff and
+        // re-attach the frame stream — otherwise the tab freezes on the last
+        // painted frame while clicks keep being sent into the void.
+        if (cancelled || activeCloseRef.current) {
+          return;
+        }
+        attempt += 1;
+        if (attempt > 8) {
+          return;
+        }
+        reconnectTimer = setTimeout(() => {
+          if (!cancelled && !activeCloseRef.current) {
+            void connect();
+          }
+        }, Math.min(1000 * 2 ** (attempt - 1), 5000));
       };
     };
 
-    connect();
+    void connect();
+
+    // Frame-stream watchdog: while the socket is open, ask the session for a
+    // full frame if nothing arrives for 15s (self-heals a stalled stream).
+    const watchdog = setInterval(() => {
+      const active = wsRef.current;
+      if (!active || active.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (Date.now() - lastFrameRef.current > 15000) {
+        active.send(JSON.stringify({ type: 'RequestFullFrame', connection_id: connectionId }));
+      }
+    }, 5000);
 
     return () => {
       cancelled = true;
+      activeCloseRef.current = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      clearInterval(watchdog);
       // If the session is showing in a native window, tear that window down
       // together with the tab (the Destroyed handler drops the renderer).
       if (poppedOutRef.current) {
