@@ -328,7 +328,21 @@ describe('keyboard shortcut settings', () => {
       closeTab: 'Alt+W',
       nextTab: 'Ctrl+PageDown',
       prevTab: 'Ctrl+PageUp',
+      newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
     });
+  });
+
+  it('loads a saved New Session binding and falls back to the default when invalid', () => {
+    localStorage.setItem('sshClientSettings', JSON.stringify({
+      newSession: 'Alt+N',
+    }));
+    expect(loadKeyboardShortcutSettings().newSession).toBe('Alt+N');
+
+    // Unparseable (no key part) / missing values fall back to the default.
+    localStorage.setItem('sshClientSettings', JSON.stringify({ newSession: 'Ctrl+' }));
+    expect(loadKeyboardShortcutSettings().newSession).toBe(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession);
+    localStorage.setItem('sshClientSettings', JSON.stringify({}));
+    expect(loadKeyboardShortcutSettings().newSession).toBe(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession);
   });
 
   it('migrates the former Ctrl+Shift+W close shortcut to the new default', () => {
@@ -343,8 +357,9 @@ describe('keyboard shortcut settings', () => {
 describe('formatKeyboardShortcut', () => {
   it('uses platform-appropriate modifier labels', () => {
     expect(formatKeyboardShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar, false)).toBe('Ctrl+B');
-    expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘+⇧+→');
-    expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥+W');
+    // macOS chains modifiers without separators (⌘⇧→).
+    expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘⇧→');
+    expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥W');
   });
 
   it('shows ⌃ for macOS menu-degraded chords (Zen/sidebar and explicit-Cmd spellings)', () => {
@@ -352,16 +367,16 @@ describe('formatKeyboardShortcut', () => {
     try {
       // The degraded branch (new in this PR): ⌘Z/⌘M belong to the native menu,
       // the binding fires as the physical-Control variant — labels show ⌃.
-      expect(formatKeyboardShortcut('Ctrl+Z', true)).toBe('⌃+Z');
-      expect(formatKeyboardShortcut('Ctrl+Shift+Z', true)).toBe('⌃+⇧+Z');
-      expect(formatKeyboardShortcut('Ctrl+M', true)).toBe('⌃+M');
+      expect(formatKeyboardShortcut('Ctrl+Z', true)).toBe('⌃Z');
+      expect(formatKeyboardShortcut('Ctrl+Shift+Z', true)).toBe('⌃⇧Z');
+      expect(formatKeyboardShortcut('Ctrl+M', true)).toBe('⌃M');
       // An explicit-Cmd spelling of the same chords degrades identically.
-      expect(formatKeyboardShortcut('Cmd+Z', true)).toBe('⌃+Z');
-      expect(formatKeyboardShortcut('Cmd+Shift+Z', true)).toBe('⌃+⇧+Z');
-      expect(formatKeyboardShortcut('Super+Z', true)).toBe('⌃+Z');
+      expect(formatKeyboardShortcut('Cmd+Z', true)).toBe('⌃Z');
+      expect(formatKeyboardShortcut('Cmd+Shift+Z', true)).toBe('⌃⇧Z');
+      expect(formatKeyboardShortcut('Super+Z', true)).toBe('⌃Z');
       // Non-degraded chords keep their ⌘ labels, explicit-Cmd included.
-      expect(formatKeyboardShortcut('Ctrl+B', true)).toBe('⌘+B');
-      expect(formatKeyboardShortcut('Cmd+W', true)).toBe('⌘+W');
+      expect(formatKeyboardShortcut('Ctrl+B', true)).toBe('⌘B');
+      expect(formatKeyboardShortcut('Cmd+W', true)).toBe('⌘W');
     } finally {
       platformSpy.mockRestore();
     }
@@ -425,5 +440,48 @@ describe('toAccelerator', () => {
     expect(toAccelerator('F5')).toBeNull();
     expect(toAccelerator('')).toBeNull();
     expect(toAccelerator('Nonsense+Input')).toBeNull();
+  });
+});
+
+describe('formatKeyboardShortcut (macOS degrade display)', () => {
+  const originalPlatform = Object.getOwnPropertyDescriptor(Navigator.prototype, 'platform');
+
+  afterEach(() => {
+    if (originalPlatform) {
+      Object.defineProperty(Navigator.prototype, 'platform', originalPlatform);
+    }
+  });
+
+  function pinPlatform(platform: string) {
+    Object.defineProperty(Navigator.prototype, 'platform', {
+      configurable: true,
+      get: () => platform,
+    });
+  }
+
+  it('shows ⌃ for chords whose Cmd form the OS rejects on macOS (⌃Tab)', () => {
+    // ⌘Tab is the macOS app switcher — the binding fires as the physical
+    // ⌃Tab chord (in-window), so the label must advertise ⌃, not ⌘ (#161).
+    pinPlatform('MacIntel');
+    expect(formatKeyboardShortcut('Ctrl+Tab', true)).toBe('⌃Tab');
+    expect(formatKeyboardShortcut('Ctrl+Shift+Tab', true)).toBe('⌃⇧Tab');
+    // An explicit-Cmd spelling of the same physical chord degrades too.
+    expect(formatKeyboardShortcut('Cmd+Tab', true)).toBe('⌃Tab');
+  });
+
+  it('keeps ⌘ for bindings whose Cmd form works on macOS', () => {
+    pinPlatform('MacIntel');
+    expect(formatKeyboardShortcut('Ctrl+N', true)).toBe('⌘N');
+    expect(formatKeyboardShortcut('Ctrl+W', true)).toBe('⌘W');
+    // Non-mac stays plain Ctrl regardless.
+    pinPlatform('Linux x86_64');
+    expect(formatKeyboardShortcut('Ctrl+N', false)).toBe('Ctrl+N');
+    expect(formatKeyboardShortcut('Ctrl+Tab', false)).toBe('Ctrl+Tab');
+  });
+
+  it('still shows ⌃Z/⌃M for the menu-degraded chords on macOS', () => {
+    pinPlatform('MacIntel');
+    expect(formatKeyboardShortcut('Ctrl+Z', true)).toBe('⌃Z');
+    expect(formatKeyboardShortcut('Ctrl+M', true)).toBe('⌃M');
   });
 });
