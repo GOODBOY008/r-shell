@@ -19,6 +19,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
 import { DEFAULT_LAYOUT_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import type { UpdateAnnouncement } from './update-checker';
 import { 
   Plus, 
   FolderOpen, 
@@ -61,6 +62,9 @@ interface MenuBarProps {
   onOpenSettings?: () => void;
   onOpenSFTP?: () => void;
   onCheckForUpdates?: () => void;
+  // Update pill (VS Code-style non-intrusive availability cue)
+  updateAnnouncement?: UpdateAnnouncement | null;
+  onOpenUpdateDialog?: () => void;
   onNewTab?: () => void;
   onCloneTab?: () => void;
   onNextTab?: () => void;
@@ -102,6 +106,8 @@ export function MenuBar({
   onOpenSettings,
   onOpenSFTP: _onOpenSFTP,
   onCheckForUpdates,
+  updateAnnouncement,
+  onOpenUpdateDialog,
   onNewTab,
   onCloneTab,
   onNextTab,
@@ -426,6 +432,37 @@ export function MenuBar({
       {/* Layout controls — VS Code style, right-aligned */}
       <div className="flex items-center gap-0.5 pr-1">
         <TooltipProvider>
+          {/* Update pill: non-intrusive persistent cue for a discovered
+              update. Hidden when idle; variant switches to the green-dot
+              "restart to update" state once download+install completed. */}
+          {updateAnnouncement && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-7 px-2.5 gap-1.5"
+                  onClick={onOpenUpdateDialog}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-2 w-2 rounded-full ${
+                      updateAnnouncement.ready ? 'bg-emerald-500' : 'bg-blue-500'
+                    }`}
+                  />
+                  {updateAnnouncement.ready
+                    ? t('menuBar.restartToUpdatePill')
+                    : t('menuBar.updateAvailablePill', { version: updateAnnouncement.version })}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {updateAnnouncement.ready
+                  ? t('updateChecker.restartToFinish')
+                  : t('updateChecker.updateAvailable')}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           <Separator orientation="vertical" className="h-4 mx-1" />
 
           <Tooltip>
