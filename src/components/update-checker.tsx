@@ -5,6 +5,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 // relaunch() calls the process plugin's restart command (process:allow-restart capability)
 import { toast } from 'sonner';
+import { Copy } from 'lucide-react';
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import {
   AlertDialog,
   AlertDialogContent,
@@ -157,8 +159,30 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
         // letting the in-app updater clobber the managed .app bundle.
         setStatus('idle');
         if (manual) {
+          const brewCommand = t('settings.updates.homebrewManaged.command');
           toast.info(t('updateChecker.homebrewManaged'), {
-            description: t('updateChecker.homebrewManagedDesc'),
+            description: (
+              <span className="flex flex-col gap-1.5">
+                <span>{t('updateChecker.homebrewManagedDesc')}</span>
+                <span className="flex items-center gap-1.5">
+                  <code className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-xs">
+                    {brewCommand}
+                  </code>
+                  <button
+                    type="button"
+                    aria-label={t('settings.updates.homebrewManaged.copyCommand')}
+                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+                    onClick={() => {
+                      void writeClipboardText(brewCommand)
+                        .then(() => toast.success(t('updateChecker.homebrewCommandCopied')))
+                        .catch((err: unknown) => console.warn('clipboard write failed:', err));
+                    }}
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              </span>
+            ),
           });
         }
         return;

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 
 // ── Hoisted mocks (must exist before vi.mock factories run) ─────────────────
 
-const { mockInvoke, mockListen, mockRelaunch, mockToast } = vi.hoisted(() => ({
+const { mockInvoke, mockListen, mockRelaunch, mockToast, mockWriteText } = vi.hoisted(() => ({
   mockInvoke: vi.fn(),
   mockListen: vi.fn(),
   mockRelaunch: vi.fn(),
+  mockWriteText: vi.fn().mockResolvedValue(undefined),
   mockToast: {
     loading: vi.fn(),
     dismiss: vi.fn(),
@@ -30,6 +31,10 @@ vi.mock('@tauri-apps/plugin-process', () => ({
 
 vi.mock('sonner', () => ({
   toast: mockToast,
+}));
+
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  writeText: (...args: unknown[]) => mockWriteText(...args),
 }));
 
 // Minimal UI stubs – AlertDialog renders children so we can query by text
@@ -332,7 +337,7 @@ describe('UpdateChecker', () => {
       expect(mockInvoke).not.toHaveBeenCalledWith('updater_check', expect.anything());
     });
 
-    it('shows brew guidance toast on a managed install instead of an error', async () => {
+    it('shows brew guidance toast with a copyable command on a managed install instead of an error', async () => {
       // Rust side reports the managed marker even though the cached context
       // said unmanaged (defense in depth: backend is source of truth).
       mockInvoke.mockImplementation((cmd: string) => {
@@ -351,7 +356,41 @@ describe('UpdateChecker', () => {
 
       expect(mockToast.error).not.toHaveBeenCalled();
       expect(mockToast.info.mock.calls[0][0]).toBe('Updates are managed by Homebrew');
-      expect(mockToast.info.mock.calls[0][1].description).toContain('brew upgrade --cask r-shell');
+
+      // The description renders the command on its own line with an inline
+      // icon copy button (matching the settings banner).
+      const { description } = mockToast.info.mock.calls[0][1];
+      render(<>{description}</>);
+      expect(screen.getByText('brew upgrade --cask r-shell')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Copy update command' }));
+      await act(async () => { await Promise.resolve(); });
+      expect(mockWriteText).toHaveBeenCalledWith('brew upgrade --cask r-shell');
+      expect(mockToast.success).toHaveBeenCalledWith('Upgrade command copied — run it in your terminal.');
+    });
+
+    it('stays quiet when the guidance-toast clipboard write fails', async () => {
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ checkUpdates: false }));
+      mockInvoke.mockImplementation((cmd: string) => {
+        if (cmd === 'get_update_context') return Promise.resolve(eligibleContext());
+        if (cmd === 'updater_check') return Promise.reject('HOMEBREW_MANAGED_INSTALL');
+        return Promise.reject(new Error(`unexpected command: ${cmd}`));
+      });
+      mockWriteText.mockRejectedValue('clipboard unavailable');
+
+      const { rerender } = render(<UpdateChecker checkSignal={0} />);
+      await act(async () => { await new Promise(r => setTimeout(r, 30)); });
+      mockToast.success.mockClear();
+
+      rerender(<UpdateChecker checkSignal={1} />);
+      await waitFor(() => expect(mockToast.info).toHaveBeenCalled());
+
+      const { description } = mockToast.info.mock.calls[0][1];
+      render(<>{description}</>);
+      fireEvent.click(screen.getByRole('button', { name: 'Copy update command' }));
+      await act(async () => { await Promise.resolve(); });
+      expect(mockWriteText).toHaveBeenCalledWith('brew upgrade --cask r-shell');
+      // No false success feedback when the clipboard write failed
+      expect(mockToast.success).not.toHaveBeenCalled();
     });
   });
 
