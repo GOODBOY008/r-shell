@@ -532,6 +532,8 @@
     "clearScreen": "Clear Screen",
     "options": "Options...",
     "checkForUpdates": "Check for Updates",
+    "updateAvailablePill": "Update to {{version}}",
+    "restartToUpdatePill": "Restart to Update",
     "newTab": "New Tab",
     "duplicateTab": "Duplicate Tab",
     "nextTab": "Next Tab",
@@ -797,7 +799,9 @@
     "downloadFailedFallback": "Failed to download update.",
     "installFailedFallback": "Failed to install update.",
     "homebrewManaged": "Updates are managed by Homebrew",
-    "homebrewManagedDesc": "This copy was installed with Homebrew. Run \"brew upgrade --cask r-shell\" to update."
+    "homebrewManagedDesc": "This copy was installed with Homebrew. Run \"brew upgrade --cask r-shell\" to update.",
+    "autoToastTitle": "New version {{version}} available",
+    "autoToastDesc": "Click \"Download update\" to download and install it."
   },
   "syncDialog": {
     "title": "Directory Sync",

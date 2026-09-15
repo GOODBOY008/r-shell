@@ -15,7 +15,7 @@ import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
-import { UpdateChecker } from './components/update-checker';
+import { UpdateChecker, type UpdateAnnouncement } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
 import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, markSealFailed, clearSealFailed } from './lib/connection-storage';
 import { ConnectionProfileManager } from './lib/connection-profiles';
@@ -155,6 +155,10 @@ function AppContent() {
   // Incremented after any save/connect dialog close to trigger sidebar refresh
   const [connectionSaveTrigger, setConnectionSaveTrigger] = useState(0);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
+  // MenuBar update pill state, fed by UpdateChecker's announcement callback.
+  const [updateAnnouncement, setUpdateAnnouncement] = useState<UpdateAnnouncement | null>(null);
+  // Incremented when the MenuBar pill is clicked to open the update dialog.
+  const [updateDialogSignal, setUpdateDialogSignal] = useState(0);
   const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
     () => loadKeyboardShortcutSettings(),
   );
@@ -2061,7 +2065,11 @@ function AppContent() {
 
   return (
     <div className="h-screen flex flex-col bg-background">
-      <UpdateChecker checkSignal={updateCheckSignal} />
+      <UpdateChecker
+        checkSignal={updateCheckSignal}
+        openDialogSignal={updateDialogSignal}
+        onAnnouncement={setUpdateAnnouncement}
+      />
 
       {/* Web menu bar – on macOS shows only layout controls (native system menu handles File/Edit); on Windows/Linux shows full menus */}
       <MenuBar
@@ -2098,6 +2106,8 @@ function AppContent() {
         onClearScreen={() => runActiveTerminalCommand('clear-screen')}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
+        updateAnnouncement={updateAnnouncement}
+        onOpenUpdateDialog={() => setUpdateDialogSignal((current) => current + 1)}
         closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
         nextTabShortcutLabel={keyboardShortcutSettings.nextTab}
         previousTabShortcutLabel={keyboardShortcutSettings.prevTab}

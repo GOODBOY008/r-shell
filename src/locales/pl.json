@@ -540,6 +540,8 @@
     "clearScreen": "Wyczyść ekran",
     "options": "Opcje...",
     "checkForUpdates": "Sprawdź aktualizacje",
+    "updateAvailablePill": "Zaktualizuj do {{version}}",
+    "restartToUpdatePill": "Uruchom ponownie, aby zaktualizować",
     "newTab": "Nowa karta",
     "duplicateTab": "Powiel kartę",
     "nextTab": "Następna karta",
@@ -815,7 +817,9 @@
     "downloadFailedFallback": "Nie udało się pobrać aktualizacji.",
     "installFailedFallback": "Nie udało się zainstalować aktualizacji.",
     "homebrewManaged": "Aktualizacjami zarządza Homebrew",
-    "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew. Uruchom \"brew upgrade --cask r-shell\", aby zaktualizować."
+    "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew. Uruchom \"brew upgrade --cask r-shell\", aby zaktualizować.",
+    "autoToastTitle": "Dostępna nowa wersja {{version}}",
+    "autoToastDesc": "Kliknij „Pobierz aktualizację”, aby pobrać i zainstalować."
   },
   "syncDialog": {
     "title": "Synchronizacja katalogów",
