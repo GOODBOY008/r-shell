@@ -40,6 +40,16 @@ export interface SplitViewShortcutBindings {
   prevTab: string;
 }
 
+/**
+ * All user-configurable app bindings loaded from settings storage: the
+ * split-view bindings plus the app-level New Session binding. On macOS the
+ * New Session chord is owned by the native menu (⌘N) and the OS-registration
+ * path excludes it; on Windows/Linux the configured value is registered.
+ */
+export interface AppShortcutBindings extends SplitViewShortcutBindings {
+  newSession: string;
+}
+
 export const APP_SETTINGS_STORAGE_KEY = 'sshClientSettings';
 export const APP_SETTINGS_CHANGED_EVENT = 'sshClientSettingsChanged';
 
@@ -101,12 +111,12 @@ function normalizeShortcutKey(key: string): string {
 }
 
 export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string {
-  // macOS: bindings whose Cmd form collides with a different menu feature
-  // (⌘Z is Undo, ⌘M is Minimize) fire as the physical-Control variant — show
-  // ⌃ so the label matches what the user actually presses. All other bindings
-  // keep showing their ⌘/Ctrl chord as configured.
-  const macDegraded = isMac && isMacMenuDegradedShortcut(shortcut);
-  return shortcut
+  // macOS: bindings whose Cmd form is unavailable OS-wide (⌘Z is Undo, ⌘M is
+  // Minimize, ⌘Tab is the system app switcher) fire as the physical-Control
+  // variant — show ⌃ so the label matches what the user actually presses.
+  // All other bindings keep showing their ⌘/Ctrl chord as configured.
+  const macDegraded = isMac && isMacDegradedShortcut(shortcut);
+  const parts = shortcut
     .split('+')
     .map(part => {
       switch (part.trim().toLowerCase()) {
@@ -125,7 +135,7 @@ export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string
         case 'super':
           // An explicit-Cmd binding in a degraded chord shows ⌃ too — its Cmd
           // form belongs to the menu and the physical-Control variant is what
-          // the user actually presses (matches `menuConflictMatchMods`).
+          // the user actually presses (matches `inWindowMatchMods`).
           return isMac ? (macDegraded ? '⌃' : '⌘') : 'Meta';
         case 'arrowup':
           return '↑';
@@ -138,8 +148,10 @@ export function formatKeyboardShortcut(shortcut: string, isMac: boolean): string
         default:
           return part.trim();
       }
-    })
-    .join('+');
+    });
+  // macOS convention chains modifiers without separators (⌘⇧Tab); other
+  // platforms keep the explicit Ctrl+Shift+Tab style.
+  return isMac ? parts.join('') : parts.join('+');
 }
 
 export function parseKeyboardShortcut(shortcut: string): ParsedKeyboardShortcut | null {
@@ -201,8 +213,11 @@ function resolveSavedShortcut(value: unknown, fallback: string, legacyShortcuts?
   return parseKeyboardShortcut(value) ? value : fallback;
 }
 
-export function loadKeyboardShortcutSettings(): SplitViewShortcutBindings {
-  const defaults = DEFAULT_SPLIT_VIEW_SHORTCUTS;
+export function loadKeyboardShortcutSettings(): AppShortcutBindings {
+  const defaults = {
+    ...DEFAULT_SPLIT_VIEW_SHORTCUTS,
+    newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+  };
 
   try {
     const savedSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
@@ -214,12 +229,14 @@ export function loadKeyboardShortcutSettings(): SplitViewShortcutBindings {
       closeSession: unknown;
       nextTab: unknown;
       previousTab: unknown;
+      newSession: unknown;
     }>;
 
     return {
       closeTab: resolveSavedShortcut(parsed.closeSession, defaults.closeTab, LEGACY_CLOSE_TAB_SHORTCUTS),
       nextTab: resolveSavedShortcut(parsed.nextTab, defaults.nextTab),
       prevTab: resolveSavedShortcut(parsed.previousTab, defaults.prevTab),
+      newSession: resolveSavedShortcut(parsed.newSession, defaults.newSession),
     };
   } catch {
     return defaults;
@@ -379,10 +396,12 @@ function macMenuChord(shortcut: {
 /**
  * Accelerator a shortcut would use as an OS global shortcut. On macOS the
  * Cmd chords owned by the native menu (see `MACOS_MENU_OWNED_ACCELERATORS`)
- * are excluded from global registration entirely — the menu processes them
- * (the exclusion itself happens in `desiredAccelerators`). This function only
- * stringifies a binding; register here is the "live" accelerator solely for
- * non-menu-owned bindings.
+ * and the in-window chords (see `MACOS_IN_WINDOW_CHORDS`: menu-degraded
+ * ⌃Z/⌃M and the OS-unregistrable ⌃Tab/⌃⇧Tab) are excluded from global
+ * registration entirely — they are processed by the menu / the in-window
+ * keydown listener (the exclusion itself happens in `desiredAccelerators`).
+ * This function only stringifies a binding; the "live" accelerator is
+ * registered solely for the remaining bindings.
  */
 function acceleratorForShortcut(shortcut: KeyboardShortcut): string | null {
   const parsed: ParsedKeyboardShortcut = {
@@ -396,41 +415,65 @@ function acceleratorForShortcut(shortcut: KeyboardShortcut): string | null {
 }
 
 /**
- * True when this shortcut's Cmd form collides with a native macOS menu key
- * (Cmd+Z Undo, Cmd+M Minimize) and the binding is therefore handled IN-WINDOW
- * via a DOM keydown listener matching the physical Control key. The OS never
- * registers it and the menu keeps the Cmd chord. Non-macOS: never.
+ * True when this shortcut's Cmd form is unavailable OS-wide on macOS — either
+ * because it collides with a native menu key (Cmd+Z Undo, Cmd+M Minimize) or
+ * because the OS rejects it outright (Cmd+Tab is the system app switcher) —
+ * and the binding is therefore handled IN-WINDOW via a DOM keydown listener
+ * matching the physical Control key. The OS never registers it. Non-macOS:
+ * never.
  */
-function isMacMenuConflictingShortcut(shortcut: KeyboardShortcut): boolean {
+function isMacInWindowShortcut(shortcut: KeyboardShortcut): boolean {
   if (!currentPlatformIsMac()) {
     return false;
   }
   const chord = macMenuChord(shortcut);
-  return chord !== null && MACOS_MENU_CONFLICT_DEGRADE.has(chord);
+  return chord !== null && MACOS_IN_WINDOW_CHORDS.has(chord);
 }
 
 /**
- * String-binding flavor of {@link isMacMenuConflictingShortcut} — used by
+ * String-binding flavor of {@link isMacInWindowShortcut} — used by
  * `formatKeyboardShortcut` so labels show the physical-Control variant the
- * user actually presses (⌃Z, ⌃M).
+ * user actually presses (⌃Z, ⌃M, ⌃Tab).
  */
-function isMacMenuDegradedShortcut(shortcut: string): boolean {
+function isMacDegradedShortcut(shortcut: string): boolean {
   if (!currentPlatformIsMac()) {
     return false;
   }
   const parsed = parseKeyboardShortcut(shortcut);
   const chord = parsed ? macMenuChord(parsed) : null;
-  return chord !== null && MACOS_MENU_CONFLICT_DEGRADE.has(chord);
+  return chord !== null && MACOS_IN_WINDOW_CHORDS.has(chord);
 }
 
 /**
+ * The Cmd chords that never reach an OS global registration on macOS and are
+ * instead handled in-window as the physical-Control variant (⌃Z, ⌃M, ⌃Tab):
+ * - Menu-owned chords whose Cmd form belongs to a DIFFERENT feature than the
+ *   r-shell binding's action (Zen mode ⌘Z vs Undo, right sidebar ⌘M vs
+ *   Minimize). Their Cmd form is left to the menu. Cmd+Shift+Z (Redo) is
+ *   included so a user who customizes a binding to Ctrl+Shift+Z gets the same
+ *   in-window fallback instead of double-firing with the Redo menu item.
+ * - Chords the OS refuses to register at all: ⌘Tab / ⌘⇧Tab are the system
+ *   app switcher, so the Next/Previous Tab bindings (Ctrl+Tab /
+ *   Ctrl+Shift+Tab → CommandOrControl+Tab) can never be OS-registered and
+ *   would just fail with a toast (issue #161). They fire from the in-window
+ *   keydown listener on the physical ⌃Tab / ⌃⇧Tab chords instead.
+ */
+const MACOS_IN_WINDOW_CHORDS = new Set([
+  'CommandOrControl+Z',
+  'CommandOrControl+Shift+Z',
+  'CommandOrControl+M',
+  'CommandOrControl+Tab',
+  'CommandOrControl+Shift+Tab',
+]);
+
+/**
  * The modifier expectations the in-window keydown listener matches against for
- * a menu-conflicting binding. An explicit-Cmd chord (`Cmd+Z`, `Cmd+Shift+Z`)
+ * an in-window (degraded) binding. An explicit-Cmd chord (`Cmd+Z`, `Cmd+Shift+Z`)
  * degrades to the physical-Control variant (⌃Z, ⌃⇧Z) — its Cmd form belongs
  * to the native menu, the label shows ⌃ (see `formatKeyboardShortcut`), so the
  * listener matches the physical Control key the label advertises.
  */
-function menuConflictMatchMods(shortcut: KeyboardShortcut): {
+function inWindowMatchMods(shortcut: KeyboardShortcut): {
   ctrlKey: boolean;
   metaKey: boolean;
   shiftKey: boolean;
@@ -471,23 +514,8 @@ const MACOS_MENU_OWNED_ACCELERATORS = new Set([
   'CommandOrControl+Z',
   'CommandOrControl+Shift+Z',
   'CommandOrControl+M',
+  'CommandOrControl+Comma',
   'F5',
-]);
-
-/**
- * The menu-owned chords whose Cmd form belongs to a DIFFERENT feature in the
- * menu than the r-shell binding's action: Zen mode (⌘Z vs Undo) and right
- * sidebar (⌘M vs Minimize). Their Cmd form is left to the menu, and on macOS
- * they are handled in-window as the physical-Control variants ⌃Z / ⌃M via a
- * DOM keydown listener (reliable for Control-characters, and inherently
- * window-scoped so other apps are never affected). Cmd+Shift+Z (Redo) is
- * included so a user who customizes a binding to Ctrl+Shift+Z gets the same
- * in-window fallback instead of double-firing with the Redo menu item.
- */
-const MACOS_MENU_CONFLICT_DEGRADE = new Set([
-  'CommandOrControl+Z',
-  'CommandOrControl+Shift+Z',
-  'CommandOrControl+M',
 ]);
 
 /**
@@ -615,16 +643,18 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
         continue;
       }
       // macOS: the native menu owns these Cmd chords (⌘N new connection, ⌘W
-      // close, … — and ⌘Z/⌘M whose features degrade to the in-window ⌃
-      // listener below). Registering them as OS global hotkeys would
-      // double-fire alongside the menu. `macMenuChord` collapses the
+      // close, ⌘, settings, … — and ⌘Z/⌘M whose features degrade to the
+      // in-window ⌃ listener below). Registering them as OS global hotkeys
+      // would double-fire alongside the menu. `macMenuChord` collapses the
       // `CommandOrControl` and explicit-`Cmd` spellings (the same physical ⌘
       // chord on macOS, so a user-configured Cmd+W degrades too); F5 is a
       // modifier-less menu chord matched via its accelerator directly.
       const menuChord = macMenuChord(shortcut);
       if (
         currentPlatformIsMac() &&
-        (accel === 'F5' || (menuChord !== null && MACOS_MENU_OWNED_ACCELERATORS.has(menuChord)))
+        (accel === 'F5' ||
+          (menuChord !== null &&
+            (MACOS_MENU_OWNED_ACCELERATORS.has(menuChord) || MACOS_IN_WINDOW_CHORDS.has(menuChord))))
       ) {
         continue;
       }
@@ -713,13 +743,15 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   // Only document.hidden=false consults the real focus state.
   const handleVisibilityChange = () => applyWindowFocus(document.hidden ? false : document.hasFocus());
 
-  // macOS menu-conflicting bindings (Zen mode ⌃Z, right sidebar ⌃M): their
-  // Cmd chord belongs to a native menu command (Undo / Minimize), so the OS
-  // never registers them globally (see `desiredAccelerators`). They fire from
-  // this in-window keydown listener, matching the PHYSICAL Control key — a DOM
-  // listener runs only while this window is focused, so it can never hijack
-  // keys from another application.
-  const handleMenuConflictKeyDown = (event: KeyboardEvent) => {
+  // macOS in-window bindings (Zen mode ⌃Z, right sidebar ⌃M, tab switching
+  // ⌃Tab/⌃⇧Tab): their Cmd chord is unavailable OS-wide on macOS — owned by a
+  // native menu command (Undo / Minimize) or rejected outright by the OS
+  // (⌘Tab is the system app switcher) — so the OS never registers them
+  // globally (see `desiredAccelerators`). They fire from this in-window
+  // keydown listener, matching the PHYSICAL Control key — a DOM listener runs
+  // only while this window is focused, so it can never hijack keys from
+  // another application.
+  const handleInWindowKeyDown = (event: KeyboardEvent) => {
     const target = event.target;
     // Editable fields always keep their keystrokes. A terminal keeps the
     // keystroke for `ignoreInTerminal` bindings (matching the OS-registration
@@ -729,14 +761,14 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
       return;
     }
     for (const shortcut of shortcutsRef.current) {
-      if (!isMacMenuConflictingShortcut(shortcut)) {
+      if (!isMacInWindowShortcut(shortcut)) {
         continue;
       }
       if (inTerminal && shortcut.ignoreInTerminal) {
         continue;
       }
       const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
-      const mods = menuConflictMatchMods(shortcut);
+      const mods = inWindowMatchMods(shortcut);
       const modsMatch =
         event.ctrlKey === mods.ctrlKey &&
         event.metaKey === mods.metaKey &&
@@ -754,7 +786,7 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   window.addEventListener('blur', handleWindowBlur);
   window.addEventListener('focus', handleWindowFocus);
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  window.addEventListener('keydown', handleMenuConflictKeyDown, { capture: true });
+  window.addEventListener('keydown', handleInWindowKeyDown, { capture: true });
 
   // Authoritative focus signal for the webview window: some webview
   // runtimes do not translate OS window focus changes into DOM
@@ -799,7 +831,7 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     window.removeEventListener('blur', handleWindowBlur);
     window.removeEventListener('focus', handleWindowFocus);
     document.removeEventListener('visibilitychange', handleVisibilityChange);
-    window.removeEventListener('keydown', handleMenuConflictKeyDown, { capture: true });
+    window.removeEventListener('keydown', handleInWindowKeyDown, { capture: true });
     unlistenFocusChanged?.();
     void unregisterAll().catch(() => {});
   };

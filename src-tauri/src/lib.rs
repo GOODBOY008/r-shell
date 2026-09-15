@@ -185,7 +185,13 @@ fn build_app_menu<F: Fn(&str) -> String>(
         &t("menuBar.tools"),
         true,
         &[
-            &MenuItem::with_id(app, "settings", &t("menuBar.options"), true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                "settings",
+                &t("menuBar.options"),
+                true,
+                Some("CmdOrCtrl+,"),
+            )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
                 app,

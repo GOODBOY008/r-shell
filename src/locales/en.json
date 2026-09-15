@@ -366,6 +366,8 @@
       "closeSession": "Close Session",
       "nextTab": "Next Tab",
       "previousTab": "Previous Tab",
+      "effectiveKeys": "Actual keys",
+      "newSessionNote": "The ⌘N default is handled by the app menu on macOS; other customized bindings apply as configured unless the chord is already used by another app feature or binding.",
       "note": "Changes to keyboard shortcuts take effect after saving.",
       "registerFailed": "Failed to register shortcut {{shortcut}}"
     },
@@ -386,7 +388,7 @@
       "configBackup": "Config Backup",
       "configBackupDesc": "Export or import your full configuration to transfer connections and settings to another machine.",
       "exportConfig": "Export Config",
-      "exportConfigDesc": "Save all connections, settings and preferences to a JSON file.",
+      "exportConfigDesc": "Save all connections, settings and preferences to a JSON file. Passwords and other credentials are not included.",
       "importConfig": "Import Config",
       "importConfigDesc": "Restore configuration from a previously exported JSON file.",
       "exportSuccess": "Configuration exported successfully",
@@ -396,7 +398,7 @@
       "importCancelled": "Import cancelled",
       "importFailed": "Import failed",
       "exportFailed": "Export failed",
-      "passwordWarning": "Warning: The exported file contains passwords in plaintext. Keep it secure.",
+      "passwordWarning": "No passwords or credentials are included in exports — neither plaintext nor encrypted. You'll need to re-enter credentials after importing on another machine.",
       "mergeOption": "Merge with existing"
     },
     "language": {

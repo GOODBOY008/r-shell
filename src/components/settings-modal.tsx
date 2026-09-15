@@ -28,7 +28,7 @@ import {
   Code2,
   ChevronLeft,
   ChevronRight,
-  AlertTriangle
+  Info
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -43,6 +43,7 @@ import {
   APP_SETTINGS_CHANGED_EVENT,
   APP_SETTINGS_STORAGE_KEY,
   DEFAULT_APP_KEYBOARD_SHORTCUTS,
+  formatKeyboardShortcut,
   loadKeyboardShortcutSettings,
 } from '../lib/keyboard-shortcuts';
 import { applyTheme, ThemeMode } from '../lib/utils';
@@ -100,6 +101,9 @@ interface SettingsModalProps {
 
 export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckForUpdates }: SettingsModalProps) {
   const { t } = useTranslation();
+  // Mirrors formatKeyboardShortcut's platform check: labels must show the
+  // keys this machine actually uses (⌘N vs Ctrl+N, ⌃Tab vs Ctrl+Tab).
+  const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
   const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
   const [editorConfig, setEditorConfig] = useState<EditorConfig>(DEFAULT_EDITOR_CONFIG);
@@ -182,6 +186,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
           setSettings(prev => ({
             ...prev,
             ...parsed,
+            // Keyboard bindings come from the validated loader (with its
+            // fallback), not the raw saved JSON: what this dialog displays
+            // must match what App.tsx actually registers.
+            newSession: keyboardShortcuts.newSession,
             closeSession: keyboardShortcuts.closeTab,
             nextTab: keyboardShortcuts.nextTab,
             previousTab: keyboardShortcuts.prevTab,
@@ -1278,6 +1286,12 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       onChange={(e) => updateSetting('newSession', e.target.value)}
                       placeholder="Ctrl+N"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.newSession, isMac)}</span>
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {t('settings.keyboard.newSessionNote')}
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label>{t('settings.keyboard.closeSession')}</Label>
@@ -1286,6 +1300,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       onChange={(e) => updateSetting('closeSession', e.target.value)}
                       placeholder={DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession}
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.closeSession, isMac)}</span>
+                    </p>
                   </div>
                 </div>
 
@@ -1297,6 +1314,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       onChange={(e) => updateSetting('nextTab', e.target.value)}
                       placeholder="Ctrl+Tab"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.nextTab, isMac)}</span>
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label>{t('settings.keyboard.previousTab')}</Label>
@@ -1305,6 +1325,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       onChange={(e) => updateSetting('previousTab', e.target.value)}
                       placeholder="Ctrl+Shift+Tab"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.previousTab, isMac)}</span>
+                    </p>
                   </div>
                 </div>
 
@@ -1464,10 +1487,10 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                     {t('settings.advanced.configBackupDesc')}
                   </p>
 
-                  {/* Warning about passwords */}
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                    <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                    <p className="text-xs text-amber-600 dark:text-amber-400">
+                  {/* Info: exports never carry credentials (issue #162) */}
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
+                    <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-blue-600 dark:text-blue-400">
                       {t('settings.advanced.passwordWarning')}
                     </p>
                   </div>

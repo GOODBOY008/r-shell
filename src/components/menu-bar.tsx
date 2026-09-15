@@ -365,6 +365,7 @@ export function MenuBar({
           <DropdownMenuItem onClick={onOpenSettings}>
             <Settings className="mr-2 h-4 w-4" />
             {t('menuBar.options')}
+            <DropdownMenuShortcut>{formatShortcut('Ctrl+,')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onCheckForUpdates}>

@@ -366,6 +366,8 @@
       "closeSession": "关闭会话",
       "nextTab": "下一个标签页",
       "previousTab": "上一个标签页",
+      "effectiveKeys": "实际按键",
+      "newSessionNote": "默认的 ⌘N 在 macOS 上由应用菜单处理；其他自定义快捷键按配置生效，除非该组合键已被应用的其他功能占用。",
       "note": "键盘快捷键更改将在保存后生效。",
       "registerFailed": "快捷键 {{shortcut}} 注册失败"
     },
@@ -386,7 +388,7 @@
       "configBackup": "配置备份",
       "configBackupDesc": "导出或导入完整配置，以便将连接和设置迁移到另一台设备。",
       "exportConfig": "导出配置",
-      "exportConfigDesc": "将所有连接、设置和偏好保存为 JSON 文件。",
+      "exportConfigDesc": "将所有连接、设置和偏好保存为 JSON 文件。不包含密码。",
       "importConfig": "导入配置",
       "importConfigDesc": "从之前导出的 JSON 文件恢复配置。",
       "exportSuccess": "配置导出成功",
@@ -396,7 +398,7 @@
       "importCancelled": "已取消导入",
       "importFailed": "导入失败",
       "exportFailed": "导出失败",
-      "passwordWarning": "警告：导出的文件包含明文密码，请妥善保管。",
+      "passwordWarning": "导出的文件不包含任何密码或凭据（明文与加密形式均不会导出）。导入到其他设备后需重新输入凭据。",
       "mergeOption": "与现有数据合并"
     },
     "language": {
