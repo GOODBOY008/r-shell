@@ -262,21 +262,26 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
 
   useEffect(() => {
     let cancelled = false;
-    // Homebrew-managed installs never auto-check: brew owns updates there.
-    // Non-Tauri dev falls through with the default context so a manual
-    // check still surfaces the real backend error.
+    // Dev/e2e builds never auto-check (context.autoCheckDisabled): fetching
+    // the release manifest or popping an update dialog mid-run breaks
+    // unattended automation. The context is still fetched so manual checks
+    // see real Homebrew/channel facts; non-Tauri dev falls through with the
+    // default context so a manual check still surfaces the real backend error.
+    const maybeAutoCheck = () => {
+      if (cancelled) return;
+      const context = contextRef.current;
+      if (!context.autoCheckDisabled && !context.homebrewManaged && isAutoCheckEnabled()) {
+        void checkForUpdates(false);
+      }
+    };
     invoke<UpdateContext>('get_update_context')
       .then((context) => {
         if (cancelled) return;
         contextRef.current = context;
-        if (!context.homebrewManaged && isAutoCheckEnabled()) {
-          void checkForUpdates(false);
-        }
+        maybeAutoCheck();
       })
       .catch(() => {
-        if (!cancelled && isAutoCheckEnabled()) {
-          void checkForUpdates(false);
-        }
+        if (!cancelled) maybeAutoCheck();
       });
     return () => {
       cancelled = true;
