@@ -535,6 +535,8 @@
     "clearScreen": "清屏",
     "options": "选项...",
     "checkForUpdates": "检查更新",
+    "updateAvailablePill": "更新到 {{version}}",
+    "restartToUpdatePill": "重启以更新",
     "newTab": "新建标签页",
     "duplicateTab": "复制标签页",
     "nextTab": "下一个标签页",
@@ -805,7 +807,9 @@
     "installFailedFallback": "更新安装失败。",
     "homebrewManaged": "更新由 Homebrew 管理",
     "homebrewManagedDesc": "此副本通过 Homebrew 安装，应用内更新已停用。",
-    "homebrewCommandCopied": "升级命令已复制，请在终端中运行。"
+    "homebrewCommandCopied": "升级命令已复制，请在终端中运行。",
+    "autoToastTitle": "发现新版本 {{version}}",
+    "autoToastDesc": "点击「下载更新」即可下载并安装。"
   },
   "syncDialog": {
     "title": "目录同步",

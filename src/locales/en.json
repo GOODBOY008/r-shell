@@ -535,6 +535,8 @@
     "clearScreen": "Clear Screen",
     "options": "Options...",
     "checkForUpdates": "Check for Updates",
+    "updateAvailablePill": "Update to {{version}}",
+    "restartToUpdatePill": "Restart to Update",
     "newTab": "New Tab",
     "duplicateTab": "Duplicate Tab",
     "nextTab": "Next Tab",
@@ -805,7 +807,9 @@
     "installFailedFallback": "Failed to install update.",
     "homebrewManaged": "Updates are managed by Homebrew",
     "homebrewManagedDesc": "This copy was installed with Homebrew, so in-app updates are disabled.",
-    "homebrewCommandCopied": "Upgrade command copied — run it in your terminal."
+    "homebrewCommandCopied": "Upgrade command copied — run it in your terminal.",
+    "autoToastTitle": "New version {{version}} available",
+    "autoToastDesc": "Click \"Download update\" to download and install it."
   },
   "syncDialog": {
     "title": "Directory Sync",
