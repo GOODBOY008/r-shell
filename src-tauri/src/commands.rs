@@ -7,7 +7,7 @@ use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
 use crate::ssh::{AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -3642,11 +3642,91 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use std::sync::Mutex;
 
-/// Cached master key so we hit the keychain once per app run, not per call.
+/// Cached master key so we hit the keychain (or the dev key file) once per
+/// app run, not per call.
 static MASTER_KEY_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 
-/// Load (or first-use create) the 32-byte master key from the OS keychain.
-fn master_key() -> Result<Vec<u8>, String> {
+/// True when the OS keychain must never be touched. Dev builds always bypass
+/// it — every rebuild changes the ad-hoc code signature, so macOS re-prompts
+/// for keychain access and blocks unattended AI-agent/e2e runs — and packaged
+/// builds can opt in with `RSHELL_DISABLE_KEYCHAIN=1`.
+fn keychain_disabled() -> bool {
+    tauri::is_dev()
+        || std::env::var("RSHELL_DISABLE_KEYCHAIN")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+}
+
+/// Local stand-in for the keychain while it is bypassed. Lives in the
+/// Tauri-resolved app-data dir (`app_data_dir()` — the same dir the app
+/// already uses for localStorage), so the key persists across dev relaunches
+/// and follows tauri.conf.json's identifier instead of a hardcoded copy.
+fn file_master_key_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("dev-master-key.dat"))
+        .map_err(|e| format!("Cannot resolve the app data directory: {e}"))
+}
+
+/// Decode a previously persisted 32-byte file master key.
+fn read_file_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let stored = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read dev master key file: {e}"))?;
+    let key = BASE64
+        .decode(stored.trim())
+        .map_err(|e| format!("Stored dev master key is corrupt: {e}"))?;
+    if key.len() != 32 {
+        return Err("Stored dev master key has wrong length".to_string());
+    }
+    Ok(key)
+}
+
+/// Load (or first-use create) the 32-byte master key at `path`, base64 in a
+/// 0600 file. A concurrent creator that loses the `create_new` race falls
+/// back to reading the winner's key.
+fn load_or_create_file_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    if path.exists() {
+        return read_file_key(path);
+    }
+
+    use rand::RngCore;
+    let mut fresh = vec![0u8; 32];
+    rand::thread_rng().fill_bytes(&mut fresh);
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create app data directory: {e}"))?;
+    }
+
+    use std::io::Write;
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            return read_file_key(path);
+        }
+        Err(err) => return Err(format!("Failed to create dev master key file: {err}")),
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("Failed to restrict dev master key file: {e}"))?;
+    }
+
+    writeln!(file, "{}", BASE64.encode(&fresh))
+        .map_err(|e| format!("Failed to store dev master key: {e}"))?;
+    Ok(fresh)
+}
+
+/// Load (or first-use create) the 32-byte master key. Stored in the OS
+/// keychain normally; in a local file in dev/e2e runs so automation never
+/// trips a keychain authorization prompt.
+fn master_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
     if let Some(key) = MASTER_KEY_CACHE
         .lock()
         .map_err(|e| format!("Key cache lock poisoned: {e}"))?
@@ -3655,29 +3735,39 @@ fn master_key() -> Result<Vec<u8>, String> {
         return Ok(key.clone());
     }
 
-    let entry = keyring::Entry::new(MASTER_KEY_SERVICE, MASTER_KEY_USER)
-        .map_err(|e| format!("Failed to open keychain entry: {e}"))?;
+    let key = if keychain_disabled() {
+        let path = file_master_key_path(app)?;
+        tracing::info!(
+            "Dev/e2e run: OS keychain bypassed, master key file at {}",
+            path.display()
+        );
+        load_or_create_file_key(&path)?
+    } else {
+        let entry = keyring::Entry::new(MASTER_KEY_SERVICE, MASTER_KEY_USER)
+            .map_err(|e| format!("Failed to open keychain entry: {e}"))?;
 
-    let key = match entry.get_password() {
-        Ok(stored) => BASE64
-            .decode(stored)
-            .map_err(|e| format!("Stored master key is corrupt: {e}"))?,
-        Err(keyring::Error::NoEntry) => {
-            // First use: generate a random 32-byte key and persist it.
-            use rand::RngCore;
-            let mut fresh = vec![0u8; 32];
-            rand::thread_rng().fill_bytes(&mut fresh);
-            entry
-                .set_password(&BASE64.encode(&fresh))
-                .map_err(|e| format!("Failed to store master key: {e}"))?;
-            fresh
+        let key = match entry.get_password() {
+            Ok(stored) => BASE64
+                .decode(stored)
+                .map_err(|e| format!("Stored master key is corrupt: {e}"))?,
+            Err(keyring::Error::NoEntry) => {
+                // First use: generate a random 32-byte key and persist it.
+                use rand::RngCore;
+                let mut fresh = vec![0u8; 32];
+                rand::thread_rng().fill_bytes(&mut fresh);
+                entry
+                    .set_password(&BASE64.encode(&fresh))
+                    .map_err(|e| format!("Failed to store master key: {e}"))?;
+                fresh
+            }
+            Err(e) => return Err(format!("Failed to read master key: {e}")),
+        };
+
+        if key.len() != 32 {
+            return Err("Stored master key has wrong length".to_string());
         }
-        Err(e) => return Err(format!("Failed to read master key: {e}")),
+        key
     };
-
-    if key.len() != 32 {
-        return Err("Stored master key has wrong length".to_string());
-    }
 
     if let Ok(mut cache) = MASTER_KEY_CACHE.lock() {
         *cache = Some(key.clone());
@@ -3685,13 +3775,11 @@ fn master_key() -> Result<Vec<u8>, String> {
     Ok(key)
 }
 
-/// Encrypt a secret with the app master key (AES-256-GCM).
+/// Encrypt a secret with the given master key (AES-256-GCM).
 /// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
-#[tauri::command]
-pub fn credential_seal(secret: String) -> Result<String, String> {
-    let key = master_key()?;
+fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
     let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to init cipher: {e}"))?;
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
 
     use rand::RngCore;
     let mut nonce_bytes = [0u8; 12];
@@ -3708,10 +3796,8 @@ pub fn credential_seal(secret: String) -> Result<String, String> {
     ))
 }
 
-/// Decrypt a value produced by `credential_seal`.
-#[tauri::command]
-pub fn credential_open(sealed: String) -> Result<String, String> {
-    let key = master_key()?;
+/// Decrypt a value produced by `seal_with_key`.
+fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
     let parts: Vec<&str> = sealed.splitn(3, ':').collect();
     if parts.len() != 3 || parts[0] != "v1" {
         return Err("Unrecognized sealed secret format".to_string());
@@ -3727,12 +3813,85 @@ pub fn credential_open(sealed: String) -> Result<String, String> {
         .map_err(|e| format!("Corrupt ciphertext: {e}"))?;
 
     let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to init cipher: {e}"))?;
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
         .map_err(|e| format!("Failed to decrypt secret: {e}"))?;
 
     String::from_utf8(plaintext).map_err(|e| format!("Decrypted secret is not UTF-8: {e}"))
+}
+
+/// Encrypt a secret with the app master key (AES-256-GCM).
+/// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
+/// Async per Tauri guidance — the first call in a run does keychain/file
+/// I/O, which must not block the main thread. The `AppHandle` is injected.
+#[tauri::command]
+pub async fn credential_seal(app: tauri::AppHandle, secret: String) -> Result<String, String> {
+    seal_with_key(&master_key(&app)?, &secret)
+}
+
+/// Decrypt a value produced by `credential_seal`.
+#[tauri::command]
+pub async fn credential_open(app: tauri::AppHandle, sealed: String) -> Result<String, String> {
+    open_with_key(&master_key(&app)?, &sealed)
+}
+
+#[cfg(test)]
+mod credential_key_tests {
+    use super::*;
+
+    #[test]
+    fn dev_builds_bypass_the_keychain() {
+        // `tauri dev` and `cargo test` both build without the
+        // `custom-protocol` feature, so is_dev() is true exactly when the
+        // app runs in dev mode. If this ever fails, dev/e2e runs would hit
+        // macOS keychain prompts again — the file-key contract broke.
+        std::env::remove_var("RSHELL_DISABLE_KEYCHAIN");
+        assert!(tauri::is_dev());
+        assert!(keychain_disabled());
+    }
+
+    #[test]
+    fn file_key_roundtrips_and_is_stable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        let first = load_or_create_file_key(&path).expect("create key");
+        assert_eq!(first.len(), 32);
+        let second = load_or_create_file_key(&path).expect("reload key");
+        assert_eq!(first, second, "file key must be stable across runs");
+    }
+
+    #[test]
+    fn file_key_creation_race_converges_on_one_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        let a = load_or_create_file_key(&path).expect("first creator");
+        let b = load_or_create_file_key(&path).expect("loser of the race reads winner");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn file_key_rejects_corrupt_or_short_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        std::fs::write(&path, "not base64!!").expect("write corrupt key");
+        assert!(read_file_key(&path).is_err());
+        std::fs::write(&path, BASE64.encode([0u8; 16])).expect("write short key");
+        assert!(read_file_key(&path).is_err());
+    }
+
+    #[test]
+    fn sealed_secrets_roundtrip_through_the_file_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        let key = load_or_create_file_key(&path).expect("key");
+        let sealed = seal_with_key(&key, "s3cret-パスワード").expect("seal");
+        assert!(sealed.starts_with("v1:"));
+        assert_eq!(
+            open_with_key(&key, &sealed).expect("open"),
+            "s3cret-パスワード"
+        );
+    }
 }
 
 // ========== In-App Updater (channel selection + Homebrew detection) ==========
