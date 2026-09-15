@@ -663,6 +663,97 @@ mod e2e_tests {
         }
     }
 
+    /// Full logon flow against the live rig: click the administrator tile,
+    /// type the password through the keyboard channel, press Enter, and
+    /// capture the resulting desktop. End-to-end proof that a user can log
+    /// into the machine through r-shell's RDP client.
+    #[tokio::test]
+    #[ignore = "requires live RDP server at 192.168.20.180"]
+    async fn rdp_full_logon_flow() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        let mut fb = vec![0u8; (w as usize) * (h as usize) * 4];
+        let n0 = collect_frames(&mut event_rx, &mut fb, w, h, 5).await;
+        save_png("target/rdp_logon_0_initial.png", &fb, w, h);
+        println!("initial frames: {n0}");
+
+        // 1. Click the administrator tile (top-left user entry).
+        let (cx, cy) = ((w as u32) * 43 / 100, (h as u32) * 56 / 100);
+        client.send_pointer(cx as u16, cy as u16, 0x01).await.expect("down");
+        client.send_pointer(cx as u16, cy as u16, 0x00).await.expect("up");
+        let n1 = collect_frames(&mut event_rx, &mut fb, w, h, 4).await;
+        save_png("target/rdp_logon_1_after_click.png", &fb, w, h);
+        println!("after click: {n1} frames");
+
+        // 2. Focus the password field (the tile click highlights the user and
+        // reveals the password box below it), then type the password.
+        let (px_, py_) = ((w as u32) * 51 / 100, (h as u32) * 59 / 100);
+        client.send_pointer(px_ as u16, py_ as u16, 0x01).await.expect("pw down");
+        client.send_pointer(px_ as u16, py_ as u16, 0x00).await.expect("pw up");
+        let n_pw = collect_frames(&mut event_rx, &mut fb, w, h, 2).await;
+        println!("password field click: {n_pw} frames");
+
+        // Type the password (JS keyCodes; '@' = Shift+2, 'O' = Shift+79).
+        for ch in "Oristand@2021".chars() {
+            let (shift, code) = match ch {
+                'O' => (true, 79),
+                'r' => (false, 82),
+                'i' => (false, 73),
+                's' => (false, 83),
+                't' => (false, 84),
+                'a' => (false, 65),
+                'n' => (false, 78),
+                'd' => (false, 68),
+                '@' => (true, 50),
+                '2' => (false, 50),
+                '0' => (false, 48),
+                '1' => (false, 49),
+                other => panic!("unexpected char {other}"),
+            };
+            if shift {
+                client.send_key(16, true).await.expect("shift down");
+            }
+            client.send_key(code, true).await.expect("key down");
+            client.send_key(code, false).await.expect("key up");
+            if shift {
+                client.send_key(16, false).await.expect("shift up");
+            }
+        }
+        println!("password typed");
+
+        // 3. Enter to submit.
+        client.send_key(13, true).await.expect("enter down");
+        client.send_key(13, false).await.expect("enter up");
+
+        // 4. Capture the desktop as it comes up.
+        let n2 = collect_frames(&mut event_rx, &mut fb, w, h, 12).await;
+        save_png("target/rdp_logon_2_desktop.png", &fb, w, h);
+        println!("after submit: {n2} frames over 12s");
+
+        // Keep the session alive a while so the desktop stays up for manual
+        // inspection of the saved PNG.
+        let n3 = collect_frames(&mut event_rx, &mut fb, w, h, 10).await;
+        save_png("target/rdp_logon_3_settled.png", &fb, w, h);
+        println!("settled: {n3} more frames");
+
+        cancel.cancel();
+    }
+
     fn save_png(path: &str, fb: &[u8], w: u16, h: u16) {
         let file = std::fs::File::create(path).expect("create PNG file");
         let wtr = std::io::BufWriter::new(file);
