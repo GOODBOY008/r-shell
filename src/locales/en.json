@@ -1131,6 +1131,7 @@
     "sendCtrlAltDel": "Send Ctrl+Alt+Del",
     "exitFullScreen": "Exit Full Screen",
     "fullScreen": "Full Screen",
+    "popOutWindow": "Open in Separate Window",
     "disconnect": "Disconnect"
   },
   "sidebar": {
@@ -1324,7 +1325,14 @@
     "failedToDisconnect": "Failed to disconnect",
     "desktopDisconnected": "Desktop Disconnected",
     "reconnect": "Reconnect",
-    "connectingTo": "Connecting to {{name}}..."
+    "connectingTo": "Connecting to {{name}}...",
+    "openedInWindow": "Desktop open in a separate window",
+    "backToTab": "Show in Tab",
+    "failedToOpenWindow": "Failed to open native window",
+    "failedToCloseWindow": "Failed to close native window",
+    "focusWindow": "Focus Window",
+    "disconnect": "Disconnect",
+    "failedToFocus": "Failed to focus window"
   },
   "errorBoundary": {
     "somethingWentWrong": "Something went wrong",

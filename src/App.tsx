@@ -717,6 +717,7 @@ function AppContent() {
       const isSftp = connectionData.protocol === 'SFTP';
       const isFtp = connectionData.protocol === 'FTP';
       const isFileBrowser = isSftp || isFtp;
+      const isDesktop = connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
 
       // A blank password is still a valid credential — hosts that allow
       // passwordless login must connect directly instead of opening the dialog.
@@ -767,6 +768,43 @@ function AppContent() {
               }
             });
           }
+          ConnectionStorageManager.updateLastConnected(connection.id);
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
+        } catch (error) {
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          toast.error(t('app.connectionFailed'), {
+            description: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (isDesktop) {
+        // RDP/VNC connect flow
+        const newTab: TerminalTab = {
+          id: sessionId,
+          name: connectionData.name,
+          tabType: 'desktop',
+          protocol: connectionData.protocol,
+          host: connectionData.host,
+          username: connectionData.username,
+          originalConnectionId: connection.id,
+          connectionStatus: 'connecting',
+          reconnectCount: 0,
+        };
+        dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+
+        try {
+          await invoke('desktop_connect', {
+            connectionId: sessionId,
+            request: {
+              host: connectionData.host,
+              port: connectionData.port || (connectionData.protocol === 'RDP' ? 3389 : 5900),
+              protocol: connectionData.protocol.toLowerCase(),
+              username: connectionData.username || '',
+              password: connectionData.password || '',
+              domain: connectionData.domain || null,
+              resolution: connectionData.rdpResolution || '1920x1080',
+              color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
+            }
+          });
           ConnectionStorageManager.updateLastConnected(connection.id);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
@@ -1522,8 +1560,8 @@ function AppContent() {
         // RDP/VNC reconnect flow
         try {
           await invoke('desktop_connect', {
+            connectionId: tabId,
             request: {
-              connection_id: tabId,
               host: config.host,
               port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
               protocol: config.protocol.toLowerCase(),
@@ -1567,8 +1605,8 @@ function AppContent() {
 
         try {
           await invoke('desktop_connect', {
+            connectionId: tabId,
             request: {
-              connection_id: tabId,
               host: config.host,
               port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
               protocol: config.protocol.toLowerCase(),
@@ -1974,6 +2012,7 @@ function AppContent() {
     const isSftp = connectionData.protocol === 'SFTP';
     const isFtp = connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
+    const isDesktop = connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
 
     // A blank password is still a valid credential (passwordless SSH hosts).
     const hasCredentials = connectionHasCredentials(connectionData);
@@ -1985,8 +2024,9 @@ function AppContent() {
       return;
     }
 
-    if (isFileBrowser) {
+    if (isFileBrowser || isDesktop) {
       // Route through handleConnectionDialogConnect which handles SFTP/FTP
+      // and RDP/VNC (desktop tab + desktop_connect)
       const config: ConnectionConfig = toConnectionConfig(connectionData);
       await handleConnectionDialogConnect(config);
       toast.success(t('app.quickConnected'), {

@@ -7,7 +7,8 @@ mod os_detect;
 mod os_keypath;
 mod proxy;
 mod quit_guard;
-mod rdp_client;
+mod rdp;
+mod rdp_keymap;
 mod sftp_client;
 mod ssh;
 mod vnc_client;
@@ -28,6 +29,31 @@ pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
 /// `get_websocket_endpoint` command, so a foreign local process or a web page
 /// that can reach 127.0.0.1 cannot open or drive sessions (issue #138).
 pub static WEBSOCKET_TOKEN: OnceLock<String> = OnceLock::new();
+
+/// Monotonic resize-event generation per RDP window, for the debounced
+/// remote-resolution sync: a spawned task only acts when its generation is
+/// still the newest one.
+static RDP_RESIZE_GENS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, u64>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+fn next_rdp_resize_gen(connection_id: &str) -> u64 {
+    let mut map = RDP_RESIZE_GENS
+        .lock()
+        .expect("rdp resize gen mutex poisoned");
+    let entry = map.entry(connection_id.to_string()).or_insert(0);
+    *entry += 1;
+    *entry
+}
+
+fn current_rdp_resize_gen(connection_id: &str) -> u64 {
+    RDP_RESIZE_GENS
+        .lock()
+        .expect("rdp resize gen mutex poisoned")
+        .get(connection_id)
+        .copied()
+        .unwrap_or(0)
+}
 
 /// Applies the saved top-left position of the "main" window on startup.
 ///
@@ -398,6 +424,49 @@ pub fn run() {
             if matches!(event, tauri::WindowEvent::Destroyed { .. }) {
                 quit_guard::window_destroyed(window.app_handle(), window.label());
 
+                // Native RDP windows: the softbuffer surface belongs to the
+                // destroyed window, so drop the renderer and tell the
+                // frontend — which flips the tab back to the embedded canvas
+                // and re-attaches the WebSocket frame stream. This covers
+                // every teardown path (titlebar close, programmatic destroy,
+                // disconnect) since they all funnel through here.
+                if let Some(connection_id) = window.label().strip_prefix("rdp-") {
+                    // Remove the NSEvent input monitor first — it holds the
+                    // window number and would keep firing (or dangle) after
+                    // teardown.
+                    #[cfg(target_os = "macos")]
+                    if let Some(monitor) =
+                        crate::rdp::native_input::take_native_input_monitor(connection_id)
+                    {
+                        let connection_id = connection_id.to_string();
+                        // Raw monitor pointers are !Send; cross the thread
+                        // boundary as an address and rebuild on the main thread.
+                        let monitor_addr = monitor as usize;
+                        let _ = window.app_handle().run_on_main_thread(move || {
+                            crate::rdp::native_input::remove_native_input_monitor(
+                                monitor_addr as *mut std::ffi::c_void,
+                            );
+                            tracing::info!("RDP input monitor removed for {}", connection_id);
+                        });
+                    }
+
+                    let app = window.app_handle().clone();
+                    let connection_id = connection_id.to_string();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app.state::<std::sync::Arc<crate::connection_manager::ConnectionManager>>();
+                        if let Err(e) = state.stop_desktop_native_render(&connection_id).await {
+                            tracing::debug!(
+                                "stop_desktop_native_render for {}: {}",
+                                connection_id,
+                                e
+                            );
+                        }
+                        if let Err(e) = app.emit("rdp-native-window-closed", &connection_id) {
+                            tracing::warn!("Failed to emit rdp-native-window-closed: {}", e);
+                        }
+                    });
+                }
+
                 // Global shortcuts are registered from the main window's JS
                 // runtime; when that webview is torn down with the window,
                 // its unregisterAll cleanup never runs. The OS hotkeys would
@@ -415,6 +484,43 @@ pub fn run() {
                             "Failed to unregister global shortcuts on window destroy: {e}"
                         );
                     }
+                }
+            }
+
+            // Native RDP windows: follow the user's window resize — resize
+            // the softbuffer surface (physical pixels) and, debounced, ask
+            // the remote desktop to match (Display Control DVC).
+            if let tauri::WindowEvent::Resized(size) = event {
+                if let Some(connection_id) = window.label().strip_prefix("rdp-") {
+                    let app = window.app_handle().clone();
+                    let connection_id = connection_id.to_string();
+                    let (w, h) = (size.width, size.height);
+
+                    // Surface resize follows every event — cheap and keeps
+                    // blits aligned with the backing store mid-drag.
+                    let cm = app.state::<std::sync::Arc<crate::connection_manager::ConnectionManager>>().inner().clone();
+                    {
+                        let connection_id = connection_id.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = cm.resize_desktop_native_surface(&connection_id, w, h).await;
+                        });
+                    }
+
+                    // Remote resize is debounced: only act after the user
+                    // stops dragging (a DVC resize triggers a server-side
+                    // reactivation, which is expensive).
+                    let gen = next_rdp_resize_gen(&connection_id);
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        if gen != current_rdp_resize_gen(&connection_id) {
+                            return; // superseded by a newer resize
+                        }
+                        let state = app.state::<std::sync::Arc<crate::connection_manager::ConnectionManager>>();
+                        if let Some(client) = state.get_desktop_connection(&connection_id).await {
+                            let mut c = client.write().await;
+                            let _ = c.resize(w.min(u16::MAX as u32) as u16, h.min(u16::MAX as u32) as u16).await;
+                        }
+                    });
                 }
             }
         })
@@ -492,6 +598,8 @@ pub fn run() {
             commands::desktop_request_frame,
             commands::desktop_set_clipboard,
             commands::desktop_resize,
+            commands::rdp_open_native_window,
+            commands::rdp_close_native_window,
             commands::update_menu_language,
             commands::get_system_locale,
             // App quit guard (dirty file-editor windows + active SSH sessions)

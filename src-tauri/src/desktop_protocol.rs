@@ -1,8 +1,33 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+use crate::rdp::input::InputCommand;
+
+/// Wrapper to allow sending raw window handles across threads.
+///
+/// # Safety
+/// The handles point to a Tauri window that outlives the consumer thread
+/// (guaranteed by the CancellationToken: the window is only destroyed
+/// after the token is cancelled and the thread exits).
+pub struct SendableHandles {
+    pub display: RawDisplayHandle,
+    pub window: RawWindowHandle,
+    /// Pre-built softbuffer renderer. On macOS the surface must be created on
+    /// the app main thread (Core Graphics constraint), so the command layer
+    /// builds it there and ships it to the consumer thread through this
+    /// field. `None` when creation failed or is not applicable — the
+    /// consumer should then fall back instead of failing the session.
+    pub renderer: Option<crate::rdp::native_render::NativeRenderer>,
+}
+
+// SAFETY: Raw handles are opaque pointers to the windowing system's objects.
+// They remain valid for the lifetime of the window, which outlives the consumer thread.
+unsafe impl Send for SendableHandles {}
+unsafe impl Sync for SendableHandles {}
 
 /// A decoded framebuffer update — a dirty rectangle with RGBA pixel data.
 #[derive(Clone, Debug)]
@@ -15,19 +40,53 @@ pub struct FrameUpdate {
     pub rgba_data: Vec<u8>,
 }
 
+/// Events emitted by a desktop session loop toward the frontend.
+#[derive(Clone, Debug)]
+pub enum DesktopEvent {
+    /// A decoded dirty-rectangle framebuffer update.
+    Frame(FrameUpdate),
+    /// The remote desktop size changed (initial mismatch, reactivation, or resize).
+    Resized { width: u16, height: u16 },
+}
+
 /// Unified trait for RDP and VNC remote desktop protocol clients.
 ///
 /// Both `RdpClient` and `VncClient` implement this trait so that the
 /// `ConnectionManager` and Tauri commands can work protocol-agnostically.
 #[async_trait]
 pub trait DesktopProtocol: Send + Sync {
-    /// Start the frame update loop, sending `FrameUpdate` messages via the
+    /// Start the frame update loop, sending `DesktopEvent` messages via the
     /// provided sender until the cancellation token is triggered.
     async fn start_frame_loop(
         &self,
-        frame_tx: mpsc::UnboundedSender<FrameUpdate>,
+        event_tx: mpsc::UnboundedSender<DesktopEvent>,
         cancel: CancellationToken,
     ) -> Result<()>;
+
+    /// Start native rendering — blit frames directly into a native window via
+    /// softbuffer. Only supported by RDP; VNC returns an error (stays on canvas).
+    async fn start_native_render(
+        &self,
+        _handles: SendableHandles,
+        _cancel: CancellationToken,
+    ) -> Result<()> {
+        Err(anyhow::anyhow!(
+            "Native rendering is not supported for this protocol"
+        ))
+    }
+
+    /// Drop the native renderer, e.g. after its window was closed. No-op when
+    /// not rendering natively — never disturbs a running channel (canvas)
+    /// stream. The session itself keeps running.
+    async fn stop_native_render(&self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Resize the native renderer's surface (physical pixels) after its
+    /// window changed size. No-op when not rendering natively.
+    async fn resize_native_surface(&self, _width: u32, _height: u32) -> Result<()> {
+        Ok(())
+    }
 
     /// Send a keyboard event to the remote host.
     async fn send_key(&self, key_code: u32, down: bool) -> Result<()>;
@@ -51,6 +110,12 @@ pub trait DesktopProtocol: Send + Sync {
 
     /// Disconnect and release resources.
     async fn disconnect(&mut self) -> Result<()>;
+
+    /// Get the input command sender (for native input routing).
+    /// Returns `None` for protocols that don't support direct input injection.
+    fn input_sender(&self) -> Option<mpsc::UnboundedSender<InputCommand>> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

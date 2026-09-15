@@ -3468,9 +3468,13 @@ pub async fn desktop_connect(
 #[tauri::command]
 pub async fn desktop_disconnect(
     connection_id: String,
+    app: tauri::AppHandle,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<(), String> {
     tracing::info!("Desktop disconnect: {}", connection_id);
+    // Tear down a native RDP window first — closing the connection cancels
+    // the session and would leave the window showing a frozen last frame.
+    close_rdp_native_window(&app, &state, &connection_id).await;
     state
         .close_desktop_connection(&connection_id)
         .await
@@ -3557,6 +3561,257 @@ pub async fn desktop_resize(
         .ok_or_else(|| format!("Desktop connection not found: {}", connection_id))?;
     let mut c = client.write().await;
     c.resize(width, height).await.map_err(|e| e.to_string())
+}
+
+/// Open a dedicated native window for an RDP session, switching the running
+/// session from the WebSocket canvas to native softbuffer rendering.
+///
+/// Creates a **bare** Tauri window (no webview) and renders the RDP session
+/// directly via softbuffer. Keyboard/mouse input is captured natively via
+/// NSEvent local monitor (macOS) — no web layer in the rendering or input path.
+/// If the window already exists it is focused instead of recreated.
+#[tauri::command]
+pub async fn rdp_open_native_window(
+    connection_id: String,
+    title: Option<String>,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<String, String> {
+    // Native softbuffer rendering is currently exercised on macOS only
+    // (Win32/wayland window threading and surface-lifecycle constraints are
+    // unverified). Everywhere else the tab canvas keeps showing the session.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (&connection_id, &title, &app, &state);
+        return Err(
+            "The standalone RDP window is currently supported on macOS; the in-tab canvas works on all platforms."
+                .to_string(),
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        open_rdp_native_window_macos(connection_id, title, app, state).await
+    }
+}
+
+/// macOS implementation of [`rdp_open_native_window`].
+#[cfg(target_os = "macos")]
+async fn open_rdp_native_window_macos(
+    connection_id: String,
+    title: Option<String>,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<String, String> {
+    use tauri::WindowBuilder;
+
+    // Verify the desktop connection exists and get its size + input sender
+    let client = state
+        .get_desktop_connection(&connection_id)
+        .await
+        .ok_or_else(|| format!("Desktop connection not found: {}", connection_id))?;
+    let (w, h, input_tx) = {
+        let c = client.read().await;
+        let (w, h) = c.desktop_size();
+        let tx = c.input_sender()
+            .ok_or_else(|| "Protocol does not support native input".to_string())?;
+        (w, h, tx)
+    };
+
+    // Build a unique window label
+    let label = rdp_window_label(&connection_id);
+
+    // Focus an already-open native window instead of recreating it. Bare
+    // windows (no webview) are only visible to `get_window`, not
+    // `get_webview_window`.
+    if let Some(existing) = app.get_window(&label) {
+        let _ = existing.unminimize();
+        let _ = existing.set_focus();
+        return Ok(label);
+    }
+
+    // Create a BARE window (no webview) for native softbuffer rendering
+    let window_title = title.unwrap_or_else(|| format!("RDP - {}", connection_id));
+    let window = WindowBuilder::new(&app, &label)
+        .title(window_title)
+        .inner_size(w as f64, h as f64)
+        .min_inner_size(640.0, 480.0)
+        .build()
+        .map_err(|e| format!("Failed to create RDP window: {}", e))?;
+
+    // Extract raw window handles for softbuffer (in a helper to avoid
+    // holding non-Send values across await points)
+    let mut handles = extract_window_handles(&window)?;
+    let window_id = get_macos_window_number(handles.window);
+
+    // Size the softbuffer surface in PHYSICAL pixels — the pixel buffer must
+    // match the window's backing store or blits only cover a fraction of a
+    // Retina window.
+    let (wp, hp) = {
+        let s = window.inner_size()
+            .map_err(|e| format!("Failed to read window size: {}", e))?;
+        (s.width.max(1), s.height.max(1))
+    };
+
+    // macOS requires softbuffer's surface to be created on the app main
+    // thread ("can only access Core Graphics handles from the main thread"),
+    // so build the renderer there and ship it to the RDP session thread via
+    // the handles. Unlike the tab canvas, there is no automatic fallback
+    // here — a failed surface means we cannot paint the window at all, so
+    // the window is destroyed again and the caller stays on the canvas.
+    {
+        // Wrap the raw handles in `SendableHandles` (unsafe impl Send) so
+        // they can cross into the main-thread closure.
+        let sendable = crate::desktop_protocol::SendableHandles {
+            display: handles.display,
+            window: handles.window,
+            renderer: None,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.run_on_main_thread(move || {
+            let handles = sendable;
+            let _ = tx.send(crate::rdp::native_render::NativeRenderer::new(
+                handles.display,
+                handles.window,
+                wp,
+                hp,
+                w,
+                h,
+            ));
+        })
+        .map_err(|e| format!("Failed to schedule renderer creation: {}", e))?;
+        match rx.recv() {
+            Ok(Ok(renderer)) => handles.renderer = Some(renderer),
+            Ok(Err(e)) => {
+                let _ = window.destroy();
+                return Err(format!("Native renderer unavailable: {}", e));
+            }
+            Err(_) => {
+                let _ = window.destroy();
+                return Err("Native renderer unavailable: creation thread dropped".to_string());
+            }
+        }
+    }
+
+    let cancel = tokio_util::sync::CancellationToken::new();
+    state
+        .start_desktop_native_render(&connection_id, handles, cancel.clone())
+        .await
+        .map_err(|e| format!("Failed to start native render: {}", e))?;
+
+    // Set up native input monitoring (macOS: NSEvent local monitor). The
+    // monitor handle is tracked under the connection id so the window
+    // destroy cleanup in lib.rs can remove it from the OS event loop.
+    {
+        use std::sync::atomic::AtomicU8;
+        use std::sync::Arc;
+
+        let prev_mask = Arc::new(AtomicU8::new(0));
+
+        // Install the NSEvent monitor on the main thread
+        let _ = app.run_on_main_thread(move || {
+            let monitor = crate::rdp::native_input::install_native_input_monitor(
+                input_tx,
+                window_id,
+                prev_mask,
+                &connection_id,
+            );
+            tracing::info!(
+                "RDP native input monitor installed: window_id={}, monitor={:?}",
+                window_id,
+                monitor
+            );
+            // Tracked in the registry; removed on window destroy.
+            let _ = monitor;
+        });
+    }
+
+    tracing::info!(
+        "RDP native window opened: label={}, size={}x{}",
+        label, w, h
+    );
+
+    Ok(label)
+}
+
+/// Label of the native window hosting the RDP session for `connection_id`.
+pub fn rdp_window_label(connection_id: &str) -> String {
+    format!("rdp-{}", connection_id)
+}
+
+/// Close the native RDP window for a connection (if open) and drop its
+/// renderer. Destroying the window fires the app-wide `Destroyed` handler in
+/// `lib.rs`, which re-runs the renderer cleanup and emits
+/// `rdp-native-window-closed` so the frontend can re-attach the tab canvas.
+/// Both halves are idempotent, so racing teardown paths are harmless.
+#[tauri::command]
+pub async fn rdp_close_native_window(
+    connection_id: String,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<(), String> {
+    close_rdp_native_window(&app, &state, &connection_id).await;
+    Ok(())
+}
+
+/// Shared teardown: drop the native renderer, then destroy the window.
+async fn close_rdp_native_window(
+    app: &tauri::AppHandle,
+    state: &State<'_, Arc<ConnectionManager>>,
+    connection_id: &str,
+) {
+    // Drop the renderer first so the session loop stops blitting into a
+    // window that is about to go away. "Connection not found" is fine — the
+    // session may already be torn down.
+    if let Err(e) = state.stop_desktop_native_render(connection_id).await {
+        tracing::debug!("stop_desktop_native_render for {}: {}", connection_id, e);
+    }
+    let label = rdp_window_label(connection_id);
+    if let Some(window) = app.get_window(&label) {
+        if let Err(e) = window.destroy() {
+            tracing::warn!("Failed to destroy RDP window {}: {}", label, e);
+        }
+    }
+}
+
+/// Extract raw window handles from a Tauri Window.
+/// Isolated in a helper so non-Send values don't cross await points.
+fn extract_window_handles(
+    window: &tauri::Window,
+) -> Result<crate::desktop_protocol::SendableHandles, String> {
+    use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+    let display = window.display_handle()
+        .map_err(|e| format!("Failed to get display handle: {}", e))?
+        .as_raw();
+    let win = window.window_handle()
+        .map_err(|e| format!("Failed to get window handle: {}", e))?
+        .as_raw();
+    Ok(crate::desktop_protocol::SendableHandles {
+        display,
+        window: win,
+        renderer: None,
+    })
+}
+
+/// Extract the macOS window number from a raw window handle.
+#[cfg(target_os = "macos")]
+fn get_macos_window_number(handle: raw_window_handle::RawWindowHandle) -> u64 {
+    use raw_window_handle::RawWindowHandle;
+    match handle {
+        RawWindowHandle::AppKit(app_kit) => unsafe {
+            use objc2::msg_send;
+            use objc2::runtime::AnyObject;
+            let ns_view = app_kit.ns_view.as_ptr() as *mut AnyObject;
+            let window: *mut AnyObject = msg_send![ns_view, window];
+            if window.is_null() {
+                0
+            } else {
+                let num: i64 = msg_send![window, windowNumber];
+                num as u64
+            }
+        },
+        _ => 0,
+    }
 }
 
 // ========== Native Menu i18n ==========
