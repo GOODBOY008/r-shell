@@ -372,6 +372,7 @@
     "advanced": {
       "title": "Advanced Settings",
       "desc": "Configure advanced options and diagnostic settings.",
+      "version": "Version",
       "logLevel": "Log Level",
       "maxLogSize": "Max Log Size: {{size}}MB",
       "checkUpdates": "Check for Updates",
@@ -541,6 +542,7 @@
     "undo": "Undo",
     "redo": "Redo",
     "about": "About r-shell",
+    "help": "Help",
     "services": "Services",
     "hide": "Hide r-shell",
     "hideOthers": "Hide Others",
@@ -561,6 +563,9 @@
     "toggleZenMode": "Toggle Zen Mode",
     "closeTab": "Close Tab",
     "window": "Window"
+  },
+  "aboutDialog": {
+    "version": "Version"
   },
   "toolbar": {
     "newConnection": "New Connection",

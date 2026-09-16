@@ -1,7 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { 
@@ -40,7 +49,8 @@ import {
   PanelBottomClose,
   PanelBottomOpen,
   Maximize2,
-  LayoutGrid
+  LayoutGrid,
+  Info
 } from 'lucide-react';
 
 interface MenuBarProps {
@@ -155,6 +165,17 @@ export function MenuBar({
       void getCurrentWindow().toggleMaximize();
     }
   }, [isMac]);
+
+  // About dialog: show the running app version. Falls back to a dash when
+  // getVersion is unavailable (browser dev mode without the Tauri backend).
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(null));
+  }, []);
 
   return (
     <div
@@ -413,6 +434,19 @@ export function MenuBar({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* Help Menu — Windows/Linux only (macOS has the native About item) */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm">{t('menuBar.help')}</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onClick={() => setAboutOpen(true)}>
+            <Info className="mr-2 h-4 w-4" />
+            {t('menuBar.about')}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
         </> /* end !isMac menu dropdowns */
       )}
 
@@ -528,6 +562,24 @@ export function MenuBar({
           </Tooltip>
         </TooltipProvider>
       </div>
+
+      {/* About dialog (opened from Help → About r-shell) */}
+      <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
+        <DialogContent className="sm:max-w-[320px]">
+          <DialogHeader>
+            <DialogTitle>{t('menuBar.about')}</DialogTitle>
+            <DialogDescription>r-shell</DialogDescription>
+          </DialogHeader>
+          <div className="text-sm">
+            {t('aboutDialog.version')}: <span className="font-mono">{appVersion ?? '—'}</span>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAboutOpen(false)}>
+              {t('common.close')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

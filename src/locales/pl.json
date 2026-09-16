@@ -374,6 +374,7 @@
     "advanced": {
       "title": "Ustawienia zaawansowane",
       "desc": "Skonfiguruj opcje zaawansowane i diagnostyczne.",
+      "version": "Wersja",
       "logLevel": "Poziom logowania",
       "maxLogSize": "Maksymalny rozmiar logu: {{size}} MB",
       "checkUpdates": "Sprawdzaj aktualizacje",
@@ -549,6 +550,7 @@
     "undo": "Cofnij",
     "redo": "Ponów",
     "about": "R-shell — informacje",
+    "help": "Pomoc",
     "services": "Usługi",
     "hide": "Ukryj r-shell",
     "hideOthers": "Ukryj pozostałe",
@@ -569,6 +571,9 @@
     "toggleZenMode": "Przełącz tryb zen",
     "closeTab": "Zamknij kartę",
     "window": "Okno"
+  },
+  "aboutDialog": {
+    "version": "Wersja"
   },
   "toolbar": {
     "newConnection": "Nowe połączenie",

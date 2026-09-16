@@ -60,6 +60,7 @@ import {
 } from '@/lib/config-export-import';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
 import { isTauri, invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import {
   DEFAULT_UPDATE_CONTEXT,
   isCurrentChannelEligible,
@@ -166,6 +167,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   const channelValue =
     settings.updateChannel === 'current' && currentChannelEligible ? 'current' : 'stable';
 
+  // Running app version for the update group; null in browser dev mode → dash.
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
   // Load settings when modal opens
   useEffect(() => {
     if (open) {
@@ -198,6 +202,11 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         invoke<UpdateContext>('get_update_context')
           .then(setUpdateContext)
           .catch(() => setUpdateContext(null));
+
+        // Current app version shown in the update group (each open re-reads)
+        getVersion()
+          .then(setAppVersion)
+          .catch(() => setAppVersion(null));
 
         // Each open re-reads the OS state; discard any prior touch flag
         autostartTouchedRef.current = false;
@@ -1353,6 +1362,16 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       max={500}
                       step={10}
                     />
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Current app version — visible on every platform (issue #166) */}
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.advanced.version')}</Label>
+                    <p className="text-sm text-muted-foreground font-mono">{appVersion ?? '—'}</p>
                   </div>
                 </div>
 

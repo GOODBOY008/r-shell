@@ -372,6 +372,7 @@
     "advanced": {
       "title": "高级设置",
       "desc": "配置高级选项和诊断设置。",
+      "version": "版本",
       "logLevel": "日志级别",
       "maxLogSize": "最大日志大小：{{size}}MB",
       "checkUpdates": "检查更新",
@@ -541,6 +542,7 @@
     "undo": "撤销",
     "redo": "重做",
     "about": "关于 r-shell",
+    "help": "帮助",
     "services": "服务",
     "hide": "隐藏 r-shell",
     "hideOthers": "隐藏其他",
@@ -561,6 +563,9 @@
     "toggleZenMode": "切换禅定模式",
     "closeTab": "关闭标签页",
     "window": "窗口"
+  },
+  "aboutDialog": {
+    "version": "版本"
   },
   "toolbar": {
     "newConnection": "新建连接",
