@@ -160,7 +160,8 @@ export function DesktopViewer({
               }
               setIsLoading(false);
             } else if (msg.type === 'Error' && typeof msg.message === 'string'
-                       && msg.message.includes('Desktop connection not found')) {
+                       && (msg.message.includes('Desktop connection not found')
+                           || msg.message.includes('desktop_session_ended'))) {
               // Backend has no such session (app restarted, connection not
               // re-established yet): surface the reconnect panel instead of
               // freezing on a black canvas that silently eats every click.

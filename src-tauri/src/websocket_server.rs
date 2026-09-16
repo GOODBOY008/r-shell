@@ -978,6 +978,15 @@ impl WebSocketServer {
                                 }
                             }
                         }
+                        // The frame channel closed without the frontend asking:
+                        // the RDP session loop exited on its own (server
+                        // disconnect, protocol error). Tell the viewer so it
+                        // shows the reconnect panel instead of a frozen frame.
+                        let ended = WsMessage::Error {
+                            message: format!("desktop_session_ended: {cid}"),
+                            code: None,
+                        };
+                        let _ = send_control(&tx_clone, &ended).await;
                     });
                 } else {
                     let error = WsMessage::Error {
