@@ -274,6 +274,25 @@ impl DesktopProtocol for RdpClient {
         Ok(())
     }
 
+    /// Explicit button transition: keeps `prev_pointer_mask` in sync (so the
+    /// legacy mask-diff path stays coherent) but emits a stateless
+    /// PointerButton that always produces the requested DOWN/RELEASE.
+    async fn send_pointer_button(&self, x: u16, y: u16, button: u8, pressed: bool) -> Result<()> {
+        let prev = if pressed {
+            self.prev_pointer_mask.fetch_or(button, Ordering::Relaxed)
+        } else {
+            self.prev_pointer_mask.fetch_and(!button, Ordering::Relaxed)
+        };
+        let _ = self.input_tx.send(InputCommand::PointerButton {
+            x,
+            y,
+            button,
+            down: pressed,
+        });
+        let _ = prev;
+        Ok(())
+    }
+
     async fn request_full_frame(&self) -> Result<()> {
         let _ = self.input_tx.send(InputCommand::FullFrame);
         Ok(())
@@ -694,8 +713,8 @@ mod e2e_tests {
 
         // 1. Click the administrator tile (top-left user entry).
         let (cx, cy) = ((w as u32) * 43 / 100, (h as u32) * 56 / 100);
-        client.send_pointer(cx as u16, cy as u16, 0x01).await.expect("down");
-        client.send_pointer(cx as u16, cy as u16, 0x00).await.expect("up");
+        client.send_pointer_button(cx as u16, cy as u16, 0x01, true).await.expect("down");
+        client.send_pointer_button(cx as u16, cy as u16, 0x00, false).await.expect("up");
         let n1 = collect_frames(&mut event_rx, &mut fb, w, h, 4).await;
         save_png("target/rdp_logon_1_after_click.png", &fb, w, h);
         println!("after click: {n1} frames");
@@ -703,8 +722,8 @@ mod e2e_tests {
         // 2. Focus the password field (the tile click highlights the user and
         // reveals the password box below it), then type the password.
         let (px_, py_) = ((w as u32) * 51 / 100, (h as u32) * 59 / 100);
-        client.send_pointer(px_ as u16, py_ as u16, 0x01).await.expect("pw down");
-        client.send_pointer(px_ as u16, py_ as u16, 0x00).await.expect("pw up");
+        client.send_pointer_button(px_ as u16, py_ as u16, 0x01, true).await.expect("pw down");
+        client.send_pointer_button(px_ as u16, py_ as u16, 0x00, false).await.expect("pw up");
         let n_pw = collect_frames(&mut event_rx, &mut fb, w, h, 2).await;
         println!("password field click: {n_pw} frames");
 
@@ -796,8 +815,8 @@ mod e2e_tests {
 
         // Click the user tile (~43%, ~56% of the logon screen).
         let (cx, cy) = ((w as u32) * 43 / 100, (h as u32) * 56 / 100);
-        client.send_pointer(cx as u16, cy as u16, 0x01).await.expect("down");
-        client.send_pointer(cx as u16, cy as u16, 0x00).await.expect("up");
+        client.send_pointer_button(cx as u16, cy as u16, 0x01, true).await.expect("down");
+        client.send_pointer_button(cx as u16, cy as u16, 0x00, false).await.expect("up");
         println!("clicked at ({cx},{cy})");
 
         let mut after_click = vec![0u8; before.len()];

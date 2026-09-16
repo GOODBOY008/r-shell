@@ -119,6 +119,17 @@ pub enum WsMessage {
         y: u16,
         button_mask: u8,
     },
+    /// Explicit button transition from the frontend. `button` is the DOM
+    /// button index (0 left / 1 middle / 2 right); the handler maps it to
+    /// the RDP mask bit. Stateless on the wire — immune to dropped events
+    /// during a reconnect.
+    DesktopPointerButton {
+        connection_id: String,
+        x: u16,
+        y: u16,
+        button: u8,
+        pressed: bool,
+    },
     /// Clipboard update (bidirectional)
     ClipboardUpdate { connection_id: String, text: String },
     /// Request full framebuffer refresh
@@ -1013,6 +1024,39 @@ impl WebSocketServer {
                     let c = client.read().await;
                     if let Err(e) = c.send_pointer(x, y, button_mask).await {
                         tracing::error!("Failed to send desktop pointer event: {}", e);
+                    }
+                }
+                Ok(PtyLifecycleEvent::None)
+            }
+
+            WsMessage::DesktopPointerButton {
+                connection_id,
+                x,
+                y,
+                button,
+                pressed,
+            } => {
+                // DOM button index → RDP mask bit: 0 left, 1 middle, 2 right.
+                let mask_bit = match button {
+                    0 => 0x01u8,
+                    1 => 0x04,
+                    2 => 0x02,
+                    other => {
+                        tracing::debug!("Desktop pointer button: unmapped index {other}");
+                        return Ok(PtyLifecycleEvent::None);
+                    }
+                };
+                if pressed {
+                    tracing::info!("WS pointer button down: x={} y={} bit={:#04x}", x, y, mask_bit);
+                }
+                if let Some(client) = self
+                    .connection_manager
+                    .get_desktop_connection(&connection_id)
+                    .await
+                {
+                    let c = client.read().await;
+                    if let Err(e) = c.send_pointer_button(x, y, mask_bit, pressed).await {
+                        tracing::error!("Failed to send desktop pointer button: {}", e);
                     }
                 }
                 Ok(PtyLifecycleEvent::None)

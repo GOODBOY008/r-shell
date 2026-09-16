@@ -202,6 +202,16 @@ pub(super) async fn rdp_session_loop(
                         }
                         Vec::new()
                     }
+                    // Explicit button press/release from the frontend —
+                    // stateless, immune to dropped events during reconnects.
+                    InputCommand::PointerButton { x, y, button, down } => {
+                        last_pointer_pos = (x, y);
+                        map_input_to_outputs(
+                            &mut active_stage,
+                            &mut image,
+                            InputCommand::PointerButton { x, y, button, down },
+                        )
+                    }
                     // Native-window pointer events arrive normalized to the
                     // window content; scale them to the remote desktop here,
                     // where the current size is known.

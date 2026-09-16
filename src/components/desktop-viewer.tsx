@@ -366,16 +366,18 @@ export function DesktopViewer({
   }, [desktopWidth, desktopHeight, displayedWidth, displayedHeight]);
 
   // Container-level mouse handlers — ensures events are captured even if overlays sit on top of canvas
+  // Button press/release use explicit stateless events (state lives in the
+  // DOM event itself), so a reconnect can never desync them into moves.
   const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: e.buttons });
+    sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: e.button, pressed: true });
   }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
 
   const handleContainerMouseUp = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: e.buttons });
+    sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: e.button, pressed: false });
   }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
 
   const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {

@@ -94,6 +94,16 @@ pub trait DesktopProtocol: Send + Sync {
     /// Send a pointer (mouse) event to the remote host.
     async fn send_pointer(&self, x: u16, y: u16, button_mask: u8) -> Result<()>;
 
+    /// Send an explicit button transition (stateless — cannot be corrupted
+    /// by a dropped event while the frontend reconnects). `button` is the
+    /// RDP mask bit (0x01 left / 0x02 right / 0x04 middle). The default
+    /// implementation degrades to the mask-based path for protocols without
+    /// dedicated button events.
+    async fn send_pointer_button(&self, x: u16, y: u16, button: u8, pressed: bool) -> Result<()> {
+        let mask = if pressed { button } else { 0 };
+        self.send_pointer(x, y, mask).await
+    }
+
     /// Request a full framebuffer update from the remote host.
     async fn request_full_frame(&self) -> Result<()>;
 
