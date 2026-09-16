@@ -50,6 +50,11 @@ export function DesktopViewer({
   // Frame-stream watchdog bookkeeping
   const activeCloseRef = useRef(false);
   const lastFrameRef = useRef(0);
+  // Set when the backend reports the desktop session is gone (e.g. after an
+  // app restart restored the tab before its connection was re-established);
+  // shows the reconnect panel instead of a dead canvas that eats clicks.
+  const [sessionMissing, setSessionMissing] = useState(false);
+  const startedRef = useRef(false);
 
   // (Re-)attach the WebSocket canvas stream. Safe to call repeatedly: the
   // backend swaps the session's render mode back to the channel and pushes
@@ -102,6 +107,8 @@ export function DesktopViewer({
     let attempt = 0;
     activeCloseRef.current = false;
     lastFrameRef.current = 0;
+    startedRef.current = false;
+    setSessionMissing(false);
 
     const connect = async () => {
       // Port + per-launch bridge token from the backend (issue #138).
@@ -123,12 +130,20 @@ export function DesktopViewer({
           if (typeof event.data === 'string') {
             const msg = JSON.parse(event.data);
             if (msg.type === 'DesktopStarted' && msg.connection_id === connectionId) {
+              startedRef.current = true;
+              setSessionMissing(false);
               // Update canvas dimensions from negotiated desktop size
               if (msg.width && msg.height) {
                 setDesktopWidth(msg.width);
                 setDesktopHeight(msg.height);
               }
               setIsLoading(false);
+            } else if (msg.type === 'Error' && typeof msg.message === 'string'
+                       && msg.message.includes('Desktop connection not found')) {
+              // Backend has no such session (app restarted, connection not
+              // re-established yet): surface the reconnect panel instead of
+              // freezing on a black canvas that silently eats every click.
+              setSessionMissing(true);
             } else if (msg.type === 'DesktopResized' && msg.connection_id === connectionId) {
               // Remote desktop size changed (reactivation or resize) — update canvas
               if (msg.width && msg.height) {
@@ -201,6 +216,12 @@ export function DesktopViewer({
     const watchdog = setInterval(() => {
       const active = wsRef.current;
       if (!active || active.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      if (!startedRef.current) {
+        // DesktopStarted never arrived — the backend session may only now be
+        // coming up (lazy restore); keep asking until it answers.
+        active.send(JSON.stringify({ type: 'StartDesktop', connection_id: connectionId }));
         return;
       }
       if (Date.now() - lastFrameRef.current > 15000) {
@@ -459,8 +480,9 @@ export function DesktopViewer({
       });
   }, [connectionId, t]);
 
-  // Disconnected state
-  if (!isConnected) {
+  // Disconnected state (also when the backend session went missing — the
+  // reconnect flow re-establishes the whole connection)
+  if (!isConnected || sessionMissing) {
     return (
       <div className="h-full w-full flex items-center justify-center bg-muted/30">
         <div className="text-center space-y-4">
