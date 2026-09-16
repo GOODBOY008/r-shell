@@ -50,11 +50,30 @@ export function DesktopViewer({
   // Frame-stream watchdog bookkeeping
   const activeCloseRef = useRef(false);
   const lastFrameRef = useRef(0);
+  // TEMP diag: expose internal state via local http log
+  const diagRef = useRef({ frames: 0, started: false, ws: 'null' });
+  useEffect(() => {
+    const iv = setInterval(() => {
+      const c = canvasRef.current;
+      const r = c ? c.getBoundingClientRect() : null;
+      const st = diagRef.current;
+      fetch(`http://127.0.0.1:8924/d?frames=${st.frames}&started=${st.started}&ws=${st.ws}&cwh=${c ? c.width + 'x' + c.height : 'none'}&rect=${r ? Math.round(r.left) + ',' + Math.round(r.top) + ',' + Math.round(r.width) + 'x' + Math.round(r.height) : 'none'}&dwh=${desktopWidth}x${desktopHeight}&conn=${isConnected}&miss=${sessionMissing}`, { mode: 'no-cors' }).catch(() => {});
+    }, 2000);
+    return () => clearInterval(iv);
+  });
   // Set when the backend reports the desktop session is gone (e.g. after an
   // app restart restored the tab before its connection was re-established);
   // shows the reconnect panel instead of a dead canvas that eats clicks.
   const [sessionMissing, setSessionMissing] = useState(false);
   const startedRef = useRef(false);
+  const reconnectAttemptRef = useRef(0);
+  const lastAutoReconnectRef = useRef(0);
+  const sessionMissingRef = useRef(false);
+  const onReconnectRef = useRef(onReconnect);
+  useEffect(() => {
+    sessionMissingRef.current = sessionMissing;
+    onReconnectRef.current = onReconnect;
+  }, [sessionMissing, onReconnect]);
 
   // (Re-)attach the WebSocket canvas stream. Safe to call repeatedly: the
   // backend swaps the session's render mode back to the channel and pushes
@@ -131,7 +150,9 @@ export function DesktopViewer({
             const msg = JSON.parse(event.data);
             if (msg.type === 'DesktopStarted' && msg.connection_id === connectionId) {
               startedRef.current = true;
+              diagRef.current.started = true;
               setSessionMissing(false);
+              reconnectAttemptRef.current = 0;
               // Update canvas dimensions from negotiated desktop size
               if (msg.width && msg.height) {
                 setDesktopWidth(msg.width);
@@ -163,6 +184,7 @@ export function DesktopViewer({
             const cmd = view.getUint8(0);
             if (cmd !== 0x02) return; // not a desktop frame
             lastFrameRef.current = Date.now();
+            diagRef.current.frames++;
             const idLen = view.getUint16(1, false); // big-endian
             const headerSize = 1 + 2 + idLen + 8;
             if (event.data.byteLength < headerSize) return;
@@ -188,6 +210,7 @@ export function DesktopViewer({
       };
 
       ws.onclose = () => {
+        diagRef.current.ws = 'closed';
         if (wsRef.current === ws) {
           wsRef.current = null;
         }
@@ -219,9 +242,24 @@ export function DesktopViewer({
         return;
       }
       if (!startedRef.current) {
-        // DesktopStarted never arrived — the backend session may only now be
-        // coming up (lazy restore); keep asking until it answers.
+        // DesktopStarted never arrived. Re-sending StartDesktop covers a
+        // backend session that is still coming up; if the backend reported
+        // the session missing, only a full reconnect (desktop_disconnect +
+        // desktop_connect) can restore it — run that automatically, with a
+        // cap so a permanently unreachable host cannot loop forever.
         active.send(JSON.stringify({ type: 'StartDesktop', connection_id: connectionId }));
+        const now = Date.now();
+        if (
+          sessionMissingRef.current &&
+          onReconnectRef.current &&
+          reconnectAttemptRef.current < 3 &&
+          now - lastAutoReconnectRef.current > 10000
+        ) {
+          lastAutoReconnectRef.current = now;
+          reconnectAttemptRef.current += 1;
+          console.info('[DesktopViewer] backend session missing — auto-reconnecting');
+          onReconnectRef.current();
+        }
         return;
       }
       if (Date.now() - lastFrameRef.current > 15000) {
