@@ -640,6 +640,43 @@ mod e2e_tests {
         }
     }
 
+    /// Fraction of sampled pixels differing by more than 24 per channel-sum,
+    /// restricted to a fractional region of the framebuffer (x0..x1, y0..y1
+    /// in 0.0..=1.0 of the desktop size). Used to assert that a specific UI
+    /// element (e.g. the logon password box) appeared.
+    fn fb_region_diff(
+        a: &[u8],
+        b: &[u8],
+        w: u16,
+        h: u16,
+        rx0: f64,
+        ry0: f64,
+        rx1: f64,
+        ry1: f64,
+    ) -> f64 {
+        let (x0, x1) = ((w as f64 * rx0) as usize, (w as f64 * rx1) as usize);
+        let (y0, y1) = ((h as f64 * ry0) as usize, (h as f64 * ry1) as usize);
+        let stride = w as usize * 4;
+        let mut total = 0usize;
+        let mut changed = 0usize;
+        for y in (y0..y1.min(h as usize)).step_by(4) {
+            for x in (x0..x1.min(w as usize)).step_by(4) {
+                let i = y * stride + x * 4;
+                if i + 3 >= a.len().min(b.len()) {
+                    continue;
+                }
+                total += 1;
+                let d = a[i].abs_diff(b[i]) as u16
+                    + a[i + 1].abs_diff(b[i + 1]) as u16
+                    + a[i + 2].abs_diff(b[i + 2]) as u16;
+                if d > 60 {
+                    changed += 1;
+                }
+            }
+        }
+        if total == 0 { 0.0 } else { changed as f64 / total as f64 }
+    }
+
     /// Fraction of sampled pixels differing by more than 24 per channel-sum.
     fn fb_diff_ratio(a: &[u8], b: &[u8]) -> f64 {
         let step = 16;
@@ -781,6 +818,66 @@ mod e2e_tests {
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder.write_header().expect("PNG header");
         writer.write_image_data(fb).expect("PNG data");
+    }
+
+    /// Final acceptance for the user-reported defect: clicking the user on
+    /// the logon screen must make the password input box appear. Asserts on
+    /// the center-of-screen region (where the prompt renders) with a strict
+    /// per-channel threshold, and saves the evidence as PNGs.
+    #[tokio::test]
+    #[ignore = "requires live RDP server at 192.168.20.180"]
+    async fn rdp_click_avatar_shows_password_box() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        let mut before = vec![0u8; (w as usize) * (h as usize) * 4];
+        let n0 = collect_frames(&mut event_rx, &mut before, w, h, 5).await;
+        println!("baseline frames: {n0}");
+
+        // Click the user tile.
+        let (cx, cy) = ((w as u32) * 43 / 100, (h as u32) * 56 / 100);
+        client
+            .send_pointer_button(cx as u16, cy as u16, 0x01, true)
+            .await
+            .expect("press");
+        client
+            .send_pointer_button(cx as u16, cy as u16, 0x01, false)
+            .await
+            .expect("release");
+
+        let mut after = vec![0u8; before.len()];
+        let n1 = collect_frames(&mut event_rx, &mut after, w, h, 6).await;
+        println!("frames after click: {n1}");
+
+        // The password prompt renders near the center of the screen.
+        let prompt_change = fb_region_diff(&before, &after, w, h, 0.30, 0.35, 0.70, 0.80);
+        save_png("target/rdp_pwbox_before.png", &before, w, h);
+        save_png("target/rdp_pwbox_after.png", &after, w, h);
+        println!("center region change after click: {:.2}%", prompt_change * 100.0);
+
+        assert!(
+            prompt_change > 0.05,
+            "password prompt should appear after clicking the user tile (center region changed {:.2}%)",
+            prompt_change * 100.0
+        );
+
+        println!("PASS: password input box appeared after clicking the user");
+
+        cancel.cancel();
     }
 
     /// Diagnostic for "clicking a user on the logon screen does nothing":
