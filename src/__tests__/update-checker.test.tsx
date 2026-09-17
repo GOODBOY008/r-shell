@@ -179,7 +179,9 @@ describe('UpdateChecker', () => {
       await waitFor(() =>
         expect(mockInvoke).toHaveBeenCalledWith('updater_check', expect.anything())
       );
-      expect(mockToast.success).toHaveBeenCalledWith("You're up to date!");
+      // The up-to-date toast includes the running version (issue #166):
+      // beforeEach mocks getVersion to resolve, so the ref is populated
+      expect(mockToast.success).toHaveBeenCalledWith('R-Shell 2.9.3 is the latest version.');
     });
 
     it('shows no toast on silent auto-check when no update', async () => {
