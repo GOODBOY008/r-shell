@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { changeLanguage, getLanguagePreference, AUTO } from '@/lib/i18n';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
@@ -28,7 +29,8 @@ import {
   Code2,
   ChevronLeft,
   ChevronRight,
-  AlertTriangle
+  AlertTriangle,
+  Copy
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -1385,9 +1387,24 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                     <p className="text-sm text-muted-foreground">
                       {t('settings.updates.homebrewManaged.desc')}
                     </p>
-                    <code className="block rounded border border-border bg-background px-2 py-1.5 font-mono text-xs">
-                      {t('settings.updates.homebrewManaged.command')}
-                    </code>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 rounded border border-border bg-background px-2 py-1.5 font-mono text-xs">
+                        {t('settings.updates.homebrewManaged.command')}
+                      </code>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 w-7 shrink-0 p-0"
+                        aria-label={t('settings.updates.homebrewManaged.copyCommand')}
+                        onClick={() => {
+                          void writeClipboardText(t('settings.updates.homebrewManaged.command'))
+                            .then(() => toast.success(t('settings.updates.homebrewManaged.commandCopied')))
+                            .catch((err: unknown) => console.warn('clipboard write failed:', err));
+                        }}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </div>
                 ) : (
                   <>

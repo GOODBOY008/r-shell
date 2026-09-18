@@ -449,7 +449,9 @@
       "homebrewManaged": {
         "title": "Zarządzane przez Homebrew",
         "desc": "Ta kopia została zainstalowana przez Homebrew, więc aktualizacjami zarządza brew. Aktualizacje w aplikacji są wyłączone, aby uniknąć konfliktu.",
-        "command": "brew upgrade --cask r-shell"
+        "command": "brew upgrade --cask r-shell",
+        "copyCommand": "Kopiuj komendę aktualizacji",
+        "commandCopied": "Komenda aktualizacji została skopiowana do schowka"
       }
     }
   },
@@ -820,7 +822,8 @@
     "downloadFailedFallback": "Nie udało się pobrać aktualizacji.",
     "installFailedFallback": "Nie udało się zainstalować aktualizacji.",
     "homebrewManaged": "Aktualizacjami zarządza Homebrew",
-    "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew. Uruchom \"brew upgrade --cask r-shell\", aby zaktualizować."
+    "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew, więc aktualizacje w aplikacji są wyłączone.",
+    "homebrewCommandCopied": "Komenda aktualizacji została skopiowana — uruchom ją w terminalu."
   },
   "syncDialog": {
     "title": "Synchronizacja katalogów",
