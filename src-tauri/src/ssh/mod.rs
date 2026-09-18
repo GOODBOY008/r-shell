@@ -933,23 +933,37 @@ impl SshClient {
     }
 
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {
-        self.download_file_with_progress(remote_path, local_path, None)
-            .await
+        self.download_file_with_progress(
+            remote_path,
+            local_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// Clone the russh session handle out so a caller can drop the client
+    /// read guard before starting a long transfer (the guard would otherwise
+    /// block `disconnect()` for the whole transfer).
+    pub fn transfer_session(&self) -> Result<Arc<client::Handle<Client>>> {
+        self.session
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))
     }
 
     /// Download via the pipelined streaming engine (`sftp_transfer`), with
     /// optional progress callbacks. Keeps whole files out of memory.
+    /// Cancelling `cancel` aborts the transfer promptly.
     pub async fn download_file_with_progress(
         &self,
         remote_path: &str,
         local_path: &str,
         progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self
-            .session
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
-        crate::sftp_transfer::download_file(session, remote_path, local_path, progress).await
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
+            .await
     }
 
     pub async fn download_file_to_memory(&self, remote_path: &str) -> Result<Vec<u8>> {
@@ -976,24 +990,27 @@ impl SshClient {
     }
 
     pub async fn upload_file(&self, local_path: &str, remote_path: &str) -> Result<u64> {
-        self.upload_file_with_progress(local_path, remote_path, None)
-            .await
+        self.upload_file_with_progress(
+            local_path,
+            remote_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
     }
 
     /// Upload via the pipelined streaming engine (`sftp_transfer`), with
-    /// optional progress callbacks. Streams from disk instead of loading the
-    /// whole file into memory.
+    /// optional progress callbacks. Streams from disk instead of loading
+    /// the whole file into memory. Cancelling `cancel` aborts promptly.
     pub async fn upload_file_with_progress(
         &self,
         local_path: &str,
         remote_path: &str,
         progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self
-            .session
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
-        crate::sftp_transfer::upload_file(session, local_path, remote_path, progress).await
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
     }
 
     /// Open an SFTP subsystem session for small one-shot operations (viewer

@@ -8,9 +8,9 @@ use crate::vnc_client::VncClient;
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -109,12 +109,21 @@ pub struct ConnectionManager {
     pending_connections: Arc<RwLock<HashMap<String, CancellationToken>>>,
     /// Standalone SFTP connections (no PTY)
     sftp_connections: Arc<RwLock<HashMap<String, StandaloneSftpClient>>>,
-    /// FTP/FTPS connections
-    ftp_connections: Arc<RwLock<HashMap<String, FtpClient>>>,
+    /// FTP/FTPS connections. Values are per-connection mutexes: the FTP
+    /// control connection is inherently serial, and locking per connection
+    /// (instead of holding the map write lock) keeps one connection's
+    /// long transfer from blocking every other connection's operations.
+    ftp_connections: Arc<RwLock<HashMap<String, Arc<tokio::sync::Mutex<FtpClient>>>>>,
     /// Remote desktop (RDP/VNC) connections
     desktop_connections: Arc<RwLock<HashMap<String, Arc<RwLock<Box<dyn DesktopProtocol>>>>>>,
     /// Track protocol type per connection ID ("SSH", "SFTP", "FTP", "RDP", "VNC")
     connection_types: Arc<RwLock<HashMap<String, String>>>,
+    /// In-flight transfer jobs, keyed by (connection_id, transfer_id). The
+    /// transfer commands register a CancellationToken here and must remove it
+    /// on every outcome; connection close/eviction cancels all tokens for the
+    /// connection so transfers resolve promptly instead of waiting out the
+    /// SFTP per-request timeout.
+    transfer_jobs: Arc<RwLock<HashMap<(String, String), CancellationToken>>>,
     /// Cached OS info per SSH connection (auto-detected on first monitoring call)
     os_info_cache: OsInfoCache,
 }
@@ -131,6 +140,7 @@ impl ConnectionManager {
             ftp_connections: Arc::new(RwLock::new(HashMap::new())),
             desktop_connections: Arc::new(RwLock::new(HashMap::new())),
             connection_types: Arc::new(RwLock::new(HashMap::new())),
+            transfer_jobs: Arc::new(RwLock::new(HashMap::new())),
             os_info_cache: OsInfoCache::new(),
         }
     }
@@ -182,6 +192,11 @@ impl ConnectionManager {
     }
 
     pub async fn close_connection(&self, connection_id: &str) -> Result<()> {
+        // Transfers on this connection must stop first: an engine parked on a
+        // stalled request otherwise lingers until the per-request timeout,
+        // and (pre-fix) it held the client read guard, blocking the disconnect.
+        self.cancel_all_connection_transfers(connection_id).await;
+
         let mut connections = self.connections.write().await;
         if let Some(client) = connections.remove(connection_id) {
             let mut client = client.write().await;
@@ -203,6 +218,65 @@ impl ConnectionManager {
     /// Access the OS info cache (for distro-aware monitoring commands).
     pub fn os_info_cache(&self) -> &OsInfoCache {
         &self.os_info_cache
+    }
+
+    // ===== Transfer job registry =====
+
+    /// Register an in-flight transfer and return its cancellation token.
+    /// The transfer command MUST call [`Self::finish_transfer`] on every
+    /// outcome (success, failure, cancellation) or the token leaks.
+    pub async fn register_transfer(
+        &self,
+        connection_id: &str,
+        transfer_id: &str,
+    ) -> CancellationToken {
+        let token = CancellationToken::new();
+        self.transfer_jobs.write().await.insert(
+            (connection_id.to_string(), transfer_id.to_string()),
+            token.clone(),
+        );
+        token
+    }
+
+    /// Remove a transfer's token after it settled (any outcome).
+    pub async fn finish_transfer(&self, connection_id: &str, transfer_id: &str) {
+        self.transfer_jobs
+            .write()
+            .await
+            .remove(&(connection_id.to_string(), transfer_id.to_string()));
+    }
+
+    /// Cancel one transfer by its (globally unique) transfer id. Returns
+    /// whether an active transfer was found and cancelled.
+    pub async fn cancel_transfer_by_id(&self, transfer_id: &str) -> bool {
+        let mut jobs = self.transfer_jobs.write().await;
+        let key = jobs.keys().find(|(_, tid)| tid == transfer_id).cloned();
+        match key {
+            Some(key) => {
+                if let Some(token) = jobs.remove(&key) {
+                    token.cancel();
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cancel every active transfer for a connection. Called on explicit
+    /// disconnect and dead-connection eviction so their pending transfers
+    /// resolve immediately instead of timing out 120 s later.
+    pub async fn cancel_all_connection_transfers(&self, connection_id: &str) {
+        let mut jobs = self.transfer_jobs.write().await;
+        let keys: Vec<(String, String)> = jobs
+            .keys()
+            .filter(|(cid, _)| cid == connection_id)
+            .cloned()
+            .collect();
+        for key in keys {
+            if let Some(token) = jobs.remove(&key) {
+                token.cancel();
+            }
+        }
     }
 
     pub async fn list_connections(&self) -> Vec<String> {
@@ -348,6 +422,10 @@ impl ConnectionManager {
             connections.remove(connection_id);
         }
         tracing::info!("Evicted dead SSH session for {}", connection_id);
+
+        // The connection is gone — its transfers cannot make progress and
+        // must not wait out the SFTP per-request timeout.
+        self.cancel_all_connection_transfers(connection_id).await;
 
         // Best-effort DISCONNECT so the server can clean up promptly.
         let mut client = expected.write().await;
@@ -739,6 +817,7 @@ impl ConnectionManager {
     }
 
     pub async fn close_sftp_connection(&self, connection_id: &str) -> Result<()> {
+        self.cancel_all_connection_transfers(connection_id).await;
         let mut sftp_connections = self.sftp_connections.write().await;
         if let Some(mut client) = sftp_connections.remove(connection_id) {
             client.disconnect().await?;
@@ -757,19 +836,27 @@ impl ConnectionManager {
     ) -> Result<()> {
         let client = FtpClient::connect(&config).await?;
         let mut ftp_connections = self.ftp_connections.write().await;
-        ftp_connections.insert(connection_id.clone(), client);
+        ftp_connections.insert(
+            connection_id.clone(),
+            Arc::new(tokio::sync::Mutex::new(client)),
+        );
         let mut types = self.connection_types.write().await;
         types.insert(connection_id, "FTP".to_string());
         Ok(())
     }
 
-    pub async fn get_ftp_connection(&self) -> Arc<RwLock<HashMap<String, FtpClient>>> {
+    pub async fn get_ftp_connection(
+        &self,
+    ) -> Arc<RwLock<HashMap<String, Arc<tokio::sync::Mutex<FtpClient>>>>> {
         self.ftp_connections.clone()
     }
 
     pub async fn close_ftp_connection(&self, connection_id: &str) -> Result<()> {
+        // Stop in-flight transfers before waiting on the client mutex.
+        self.cancel_all_connection_transfers(connection_id).await;
         let mut ftp_connections = self.ftp_connections.write().await;
-        if let Some(mut client) = ftp_connections.remove(connection_id) {
+        if let Some(client) = ftp_connections.remove(connection_id) {
+            let mut client = client.lock().await;
             client.disconnect().await?;
         }
         let mut types = self.connection_types.write().await;
@@ -1084,10 +1171,7 @@ mod tests {
         // Populate the subsystem maps one by one.
         {
             let mut connections = mgr.connections.write().await;
-            connections.insert(
-                "c-1".to_string(),
-                Arc::new(RwLock::new(SshClient::new())),
-            );
+            connections.insert("c-1".to_string(), Arc::new(RwLock::new(SshClient::new())));
         }
         {
             let mut generations = mgr.pty_generations.write().await;
@@ -1204,9 +1288,10 @@ mod tests {
     }
 
     fn insert_ssh_connection(mgr: &ConnectionManager, id: &str) {
-        mgr.connections
-            .blocking_write()
-            .insert(id.to_string(), Arc::new(tokio::sync::RwLock::new(SshClient::new())));
+        mgr.connections.blocking_write().insert(
+            id.to_string(),
+            Arc::new(tokio::sync::RwLock::new(SshClient::new())),
+        );
     }
 
     /// The quit prompt must only count sessions quitting would actually
@@ -1225,9 +1310,10 @@ mod tests {
         // 2) Open, connected terminal tab: live PTY session.
         insert_ssh_connection(&mgr, "open-tab");
         let (resize_tx, _rx) = mpsc::channel::<(u32, u32)>(1);
-        mgr.pty_sessions
-            .blocking_write()
-            .insert("open-tab".to_string(), Arc::new(fake_pty_session(resize_tx)));
+        mgr.pty_sessions.blocking_write().insert(
+            "open-tab".to_string(),
+            Arc::new(fake_pty_session(resize_tx)),
+        );
 
         // 3) Zombie: PTY entry present but the SSH channel already died.
         insert_ssh_connection(&mgr, "zombie");
@@ -1324,6 +1410,101 @@ mod tests {
         // Evicting with the matching Arc removes it.
         mgr.evict_dead_connection("conn-1", &live_client).await;
         assert!(mgr.get_connection("conn-1").await.is_none());
+    }
+
+    // ===== Transfer job registry =====
+
+    #[tokio::test]
+    async fn test_cancel_transfer_by_id_cancels_and_clears() {
+        let mgr = ConnectionManager::new();
+        let token = mgr.register_transfer("conn-1", "tr-1").await;
+        assert!(!token.is_cancelled());
+
+        assert!(mgr.cancel_transfer_by_id("tr-1").await);
+        assert!(token.is_cancelled());
+
+        // The entry is gone — a second cancel reports not found.
+        assert!(!mgr.cancel_transfer_by_id("tr-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_finish_transfer_removes_token_without_cancelling() {
+        let mgr = ConnectionManager::new();
+        let token = mgr.register_transfer("conn-1", "tr-done").await;
+        mgr.finish_transfer("conn-1", "tr-done").await;
+        // A settled transfer must neither leak nor be cancellable afterwards.
+        assert!(!token.is_cancelled());
+        assert!(!mgr.cancel_transfer_by_id("tr-done").await);
+    }
+
+    #[tokio::test]
+    async fn test_transfer_ids_are_unique_across_connections() {
+        // Distinct connections may reuse an external id namespace; the key
+        // is the pair, so both entries coexist and cancel independently.
+        let mgr = ConnectionManager::new();
+        let t1 = mgr.register_transfer("conn-a", "tr-x").await;
+        let t2 = mgr.register_transfer("conn-b", "tr-x").await;
+
+        assert!(mgr.cancel_transfer_by_id("tr-x").await);
+        // Exactly one of the two same-named transfers was cancelled.
+        assert!(t1.is_cancelled() ^ t2.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_all_connection_transfers_scopes_to_connection() {
+        let mgr = ConnectionManager::new();
+        let mine = mgr.register_transfer("conn-1", "tr-1").await;
+        let other = mgr.register_transfer("conn-2", "tr-2").await;
+
+        mgr.cancel_all_connection_transfers("conn-1").await;
+        assert!(mine.is_cancelled());
+        assert!(!other.is_cancelled());
+        // The untouched connection's transfer is still cancellable later.
+        assert!(mgr.cancel_transfer_by_id("tr-2").await);
+    }
+
+    #[tokio::test]
+    async fn test_close_connection_cancels_active_transfers() {
+        let mgr = ConnectionManager::new();
+        let token = mgr.register_transfer("conn-1", "tr-1").await;
+        mgr.close_connection("conn-1").await.unwrap();
+        assert!(
+            token.is_cancelled(),
+            "close_connection must cancel the connection's transfers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_evict_dead_connection_cancels_active_transfers() {
+        let mgr = ConnectionManager::new();
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        {
+            let mut connections = mgr.connections.write().await;
+            connections.insert("conn-1".to_string(), client.clone());
+        }
+        let token = mgr.register_transfer("conn-1", "tr-1").await;
+        mgr.evict_dead_connection("conn-1", &client).await;
+        assert!(
+            token.is_cancelled(),
+            "eviction must cancel the connection's transfers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_close_ftp_cancels_active_transfers() {
+        let mgr = ConnectionManager::new();
+        // Insert a bare FTP entry so close has something to remove; the
+        // client is never connected so disconnect is a no-op.
+        {
+            let mut ftp = mgr.ftp_connections.write().await;
+            ftp.insert(
+                "ftp-1".to_string(),
+                Arc::new(tokio::sync::Mutex::new(FtpClient::new())),
+            );
+        }
+        let token = mgr.register_transfer("ftp-1", "tr-1").await;
+        mgr.close_ftp_connection("ftp-1").await.unwrap();
+        assert!(token.is_cancelled());
     }
 
     #[tokio::test]
@@ -1462,7 +1643,10 @@ mod tests {
         // No SSH session exists, so after the zombie is dropped the start must
         // escalate to SshSessionDead (frontend then does a full reconnect)
         // instead of reattaching the dead shell.
-        let err = mgr.start_pty_connection("zombie-1", 80, 24).await.unwrap_err();
+        let err = mgr
+            .start_pty_connection("zombie-1", 80, 24)
+            .await
+            .unwrap_err();
         assert!(matches!(err, PtyStartError::SshSessionDead(_)));
         // The zombie was removed and must not be parked/reattachable again.
         assert!(!mgr.has_detached_session("zombie-1").await);
@@ -1490,12 +1674,22 @@ mod tests {
 
         // Data flows while the channel is open.
         output_tx.send(b"hello".to_vec()).await.unwrap();
-        assert_eq!(mgr.read_from_pty("r-dead-1", None).await.unwrap().unwrap(), b"hello");
+        assert_eq!(
+            mgr.read_from_pty("r-dead-1", None).await.unwrap().unwrap(),
+            b"hello"
+        );
 
         // Dropping the sender (SSH channel gone) → next read errors AND marks dead.
         drop(output_tx);
         assert!(mgr.read_from_pty("r-dead-1", None).await.is_err());
-        assert!(mgr.pty_sessions.read().await.get("r-dead-1").unwrap().dead.load(Ordering::SeqCst));
+        assert!(mgr
+            .pty_sessions
+            .read()
+            .await
+            .get("r-dead-1")
+            .unwrap()
+            .dead
+            .load(Ordering::SeqCst));
     }
 
     #[tokio::test]

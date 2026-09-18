@@ -8,8 +8,10 @@ use crate::sftp_transfer;
 use crate::ssh::{AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_updater::UpdaterExt;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectRequest {
@@ -2534,10 +2536,14 @@ pub async fn list_remote_files(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found")?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found")?
+            };
+            let mut client = client.lock().await;
             client.list_dir(&path).await.map_err(|e| e.to_string())
         }
         _ => Err(format!("Unsupported protocol: {}", conn_type)),
@@ -2554,66 +2560,197 @@ fn transfer_progress_callback(
     })
 }
 
+/// Log the outcome of one transfer command. `ok_bytes` is `Some(bytes)` on
+/// success so finish lines always carry the moved byte count.
+fn trace_transfer_finish(
+    transfer_id: &str,
+    connection_id: &str,
+    direction: &str,
+    remote_path: &str,
+    started: Instant,
+    outcome: &Result<u64, anyhow::Error>,
+) {
+    match outcome {
+        Ok(bytes) => tracing::info!(
+            transfer_id,
+            connection_id,
+            direction,
+            remote_path,
+            bytes,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "transfer finished"
+        ),
+        Err(e) => tracing::info!(
+            transfer_id,
+            connection_id,
+            direction,
+            remote_path,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error = %e,
+            "transfer failed"
+        ),
+    }
+}
+
+/// Register the transfer's cancellation token, run `body`, then always
+/// unregister — on every outcome — so tokens can never leak. Returns the
+/// transfer result mapped into the command response.
+async fn run_registered_transfer<F, Fut>(
+    state: &Arc<ConnectionManager>,
+    connection_id: &str,
+    transfer_id: &str,
+    direction: &str,
+    remote_path: &str,
+    body: F,
+) -> Result<FileTransferResponse, String>
+where
+    F: FnOnce(CancellationToken) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<u64>>,
+{
+    let cancel = state.register_transfer(connection_id, transfer_id).await;
+    let started = Instant::now();
+    tracing::info!(
+        transfer_id,
+        connection_id,
+        direction,
+        remote_path,
+        "transfer start"
+    );
+    let result = body(cancel.clone()).await;
+    trace_transfer_finish(
+        transfer_id,
+        connection_id,
+        direction,
+        remote_path,
+        started,
+        &result,
+    );
+    state.finish_transfer(connection_id, transfer_id).await;
+
+    Ok(match result {
+        Ok(bytes) => FileTransferResponse {
+            success: true,
+            bytes_transferred: Some(bytes),
+            data: None,
+            error: None,
+        },
+        Err(e) => FileTransferResponse {
+            success: false,
+            bytes_transferred: None,
+            data: None,
+            error: Some(e.to_string()),
+        },
+    })
+}
+
 async fn download_remote_file_to_path(
     connection_id: &str,
+    transfer_id: &str,
     remote_path: &str,
     local_path: &str,
     state: &Arc<ConnectionManager>,
     on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
 ) -> Result<FileTransferResponse, String> {
     let conn_type = state.get_connection_type(connection_id).await;
-    let progress = transfer_progress_callback(on_progress);
-    let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
 
-    let result = match conn_type.as_deref() {
-        Some("SFTP") => {
-            let sftp_map = state.get_sftp_connection().await;
-            let connections = sftp_map.read().await;
-            let client = connections
-                .get(connection_id)
-                .ok_or("SFTP connection not found".to_string())?;
-            client
-                .download_file_with_progress(remote_path, local_path, progress_ref)
-                .await
-        }
-        Some("FTP") => {
-            let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(connection_id)
-                .ok_or("FTP connection not found".to_string())?;
-            client
-                .download_file_with_progress(remote_path, local_path, progress_ref)
-                .await
-        }
-        Some(other) => return Err(format!("Unsupported protocol: {}", other)),
-        None => {
-            // Fallback: try SSH connection (integrated file browser uses SSH connections
-            // which are not registered in connection_types)
-            let connection = state
-                .get_connection(connection_id)
-                .await
-                .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
-            let client = connection.read().await;
-            client
-                .download_file_with_progress(remote_path, local_path, progress_ref)
-                .await
-        }
-    };
+    run_registered_transfer(
+        state,
+        connection_id,
+        transfer_id,
+        "download",
+        remote_path,
+        |cancel| async move {
+            let progress = transfer_progress_callback(on_progress);
+            let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
 
-    match result {
-        Ok(bytes) => Ok(FileTransferResponse {
+            match conn_type.as_deref() {
+                Some("SFTP") => {
+                    let sftp_map = state.get_sftp_connection().await;
+                    let session = {
+                        let connections = sftp_map.read().await;
+                        let client = connections
+                            .get(connection_id)
+                            .ok_or_else(|| anyhow::anyhow!("SFTP connection not found"))?;
+                        client.transfer_session()?
+                    };
+                    // The session handle is cloned out so the map read guard
+                    // is NOT held across the (potentially long) transfer.
+                    sftp_transfer::download_file(
+                        &session,
+                        remote_path,
+                        local_path,
+                        progress_ref,
+                        &cancel,
+                    )
+                    .await
+                }
+                Some("FTP") => {
+                    let ftp_map = state.get_ftp_connection().await;
+                    let client = {
+                        let connections = ftp_map.read().await;
+                        connections
+                            .get(connection_id)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("FTP connection not found"))?
+                    };
+                    // Per-connection mutex: serializes this connection's FTP
+                    // operations without blocking the whole map.
+                    let mut client = client.lock().await;
+                    client
+                        .download_file_with_progress(remote_path, local_path, progress_ref, &cancel)
+                        .await
+                }
+                Some(other) => Err(anyhow::anyhow!("Unsupported protocol: {}", other)),
+                None => {
+                    // Fallback: try SSH connection (integrated file browser
+                    // uses SSH connections which are not registered in
+                    // connection_types). The session handle is cloned out so
+                    // the client read guard is dropped before the transfer —
+                    // otherwise a long download would block disconnect().
+                    let connection =
+                        state.get_connection(connection_id).await.ok_or_else(|| {
+                            anyhow::anyhow!("No connection found for '{}'", connection_id)
+                        })?;
+                    let session = {
+                        let client = connection.read().await;
+                        client.transfer_session()?
+                    };
+                    sftp_transfer::download_file(
+                        &session,
+                        remote_path,
+                        local_path,
+                        progress_ref,
+                        &cancel,
+                    )
+                    .await
+                }
+            }
+        },
+    )
+    .await
+}
+
+/// Cancel an in-flight transfer. Idempotent: cancelling an unknown/finished
+/// transfer id reports `success: false` without erroring, so the frontend
+/// can fire it best-effort (e.g. against an already-dead connection).
+#[tauri::command]
+pub async fn cancel_transfer(
+    transfer_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    if state.cancel_transfer_by_id(&transfer_id).await {
+        tracing::info!(transfer_id, "transfer cancelled by user");
+        Ok(CommandResponse {
             success: true,
-            bytes_transferred: Some(bytes),
-            data: None,
+            output: Some("Transfer cancelled".to_string()),
             error: None,
-        }),
-        Err(e) => Ok(FileTransferResponse {
+        })
+    } else {
+        Ok(CommandResponse {
             success: false,
-            bytes_transferred: None,
-            data: None,
-            error: Some(e.to_string()),
-        }),
+            output: None,
+            error: Some("No active transfer for this id".to_string()),
+        })
     }
 }
 
@@ -2622,11 +2759,13 @@ pub async fn download_remote_file(
     connection_id: String,
     remote_path: String,
     local_path: String,
+    transfer_id: String,
     on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
     download_remote_file_to_path(
         &connection_id,
+        &transfer_id,
         &remote_path,
         &local_path,
         state.inner(),
@@ -2642,6 +2781,7 @@ pub async fn download_remote_file_confined(
     destination_root: String,
     remote_relative_path: String,
     destination_relative_path: String,
+    transfer_id: String,
     on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
@@ -2665,6 +2805,7 @@ pub async fn download_remote_file_confined(
 
     download_remote_file_to_path(
         &connection_id,
+        &transfer_id,
         &remote_path,
         local_path,
         state.inner(),
@@ -2678,63 +2819,75 @@ pub async fn upload_remote_file(
     connection_id: String,
     local_path: String,
     remote_path: String,
+    transfer_id: String,
     on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
     let conn_type = state.get_connection_type(&connection_id).await;
-    let progress = transfer_progress_callback(on_progress);
-    let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
 
-    let result = match conn_type.as_deref() {
-        Some("SFTP") => {
-            let sftp_map = state.get_sftp_connection().await;
-            let connections = sftp_map.read().await;
-            let client = connections
-                .get(&connection_id)
-                .ok_or("SFTP connection not found".to_string())?;
-            client
-                .upload_file_with_progress(&local_path, &remote_path, progress_ref)
-                .await
-        }
-        Some("FTP") => {
-            let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
-            client
-                .upload_file_with_progress(&local_path, &remote_path, progress_ref)
-                .await
-        }
-        Some(other) => return Err(format!("Unsupported protocol: {}", other)),
-        None => {
-            // Fallback: try SSH connection (integrated file browser uses SSH connections
-            // which are not registered in connection_types)
-            let connection = state
-                .get_connection(&connection_id)
-                .await
-                .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
-            let client = connection.read().await;
-            client
-                .upload_file_with_progress(&local_path, &remote_path, progress_ref)
-                .await
-        }
-    };
+    // Owned copies for the async block (the registry call borrows the originals).
+    let conn_id = connection_id.clone();
+    let local = local_path.clone();
+    let remote = remote_path.clone();
 
-    match result {
-        Ok(bytes) => Ok(FileTransferResponse {
-            success: true,
-            bytes_transferred: Some(bytes),
-            data: None,
-            error: None,
-        }),
-        Err(e) => Ok(FileTransferResponse {
-            success: false,
-            bytes_transferred: None,
-            data: None,
-            error: Some(e.to_string()),
-        }),
-    }
+    run_registered_transfer(
+        state.inner(),
+        &connection_id,
+        &transfer_id,
+        "upload",
+        &remote_path,
+        |cancel| async move {
+            let progress = transfer_progress_callback(on_progress);
+            let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
+
+            match conn_type.as_deref() {
+                Some("SFTP") => {
+                    let sftp_map = state.get_sftp_connection().await;
+                    let session = {
+                        let connections = sftp_map.read().await;
+                        let client = connections
+                            .get(&conn_id)
+                            .ok_or_else(|| anyhow::anyhow!("SFTP connection not found"))?;
+                        client.transfer_session()?
+                    };
+                    sftp_transfer::upload_file(&session, &local, &remote, progress_ref, &cancel)
+                        .await
+                }
+                Some("FTP") => {
+                    let ftp_map = state.get_ftp_connection().await;
+                    let client = {
+                        let connections = ftp_map.read().await;
+                        connections
+                            .get(&conn_id)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("FTP connection not found"))?
+                    };
+                    let mut client = client.lock().await;
+                    client
+                        .upload_file_with_progress(&local, &remote, progress_ref, &cancel)
+                        .await
+                }
+                Some(other) => Err(anyhow::anyhow!("Unsupported protocol: {}", other)),
+                None => {
+                    // Fallback: try SSH connection (integrated file browser uses
+                    // SSH connections which are not registered in
+                    // connection_types). Session handle cloned out — see the
+                    // download path for why the guard must not be held.
+                    let connection = state
+                        .get_connection(&conn_id)
+                        .await
+                        .ok_or_else(|| anyhow::anyhow!("No connection found for '{}'", conn_id))?;
+                    let session = {
+                        let client = connection.read().await;
+                        client.transfer_session()?
+                    };
+                    sftp_transfer::upload_file(&session, &local, &remote, progress_ref, &cancel)
+                        .await
+                }
+            }
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2755,7 +2908,7 @@ pub async fn delete_remote_item(
             let connections = sftp_map.read().await;
             let client = connections
                 .get(&connection_id)
-                .ok_or("SFTP connection not found".to_string())?;
+                .ok_or("SFTP connection not found")?;
             if is_directory {
                 client.delete_dir(&path).await
             } else {
@@ -2764,10 +2917,14 @@ pub async fn delete_remote_item(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found")?
+            };
+            let mut client = client.lock().await;
             if is_directory {
                 client.delete_dir(&path).await
             } else {
@@ -2813,10 +2970,14 @@ pub async fn create_remote_directory(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found".to_string())?
+            };
+            let mut client = client.lock().await;
             client.create_dir(&path).await
         }
         _ => return Err(format!("Unsupported protocol: {}", conn_type)),
@@ -2859,10 +3020,14 @@ pub async fn rename_remote_item(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found".to_string())?
+            };
+            let mut client = client.lock().await;
             client.rename(&old_path, &new_path).await
         }
         _ => return Err(format!("Unsupported protocol: {}", conn_type)),
@@ -3399,10 +3564,14 @@ pub async fn list_remote_files_recursive(
         }
         Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found")?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found")?
+            };
+            let mut client = client.lock().await;
 
             // FTP recursive walk — iterative with a queue since we need &mut
             let mut dirs_to_visit: Vec<String> = vec![path.clone()];
