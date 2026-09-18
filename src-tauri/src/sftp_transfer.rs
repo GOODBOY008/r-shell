@@ -15,6 +15,7 @@ use futures::StreamExt;
 use russh_sftp::client::{Config as RawSftpConfig, RawSftpSession, SftpSession};
 use russh_sftp::protocol::{Data, FileAttributes, OpenFlags, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 
 use crate::ssh::Client;
 
@@ -23,6 +24,15 @@ use crate::ssh::Client;
 /// long (cold server-side storage, throttling, window exhaustion, ...). A
 /// truly dead connection is still detected by the SSH keepalive machinery.
 pub(crate) const REQUEST_TIMEOUT_SECS: u64 = 120;
+
+/// Error message returned when a transfer is aborted through its
+/// CancellationToken. The frontend's queue reducer discards results for
+/// items the user already cancelled, so this string mainly matters for logs.
+pub(crate) const CANCEL_ERROR: &str = "Transfer cancelled";
+
+/// Upper bound for best-effort handle closes on the cancellation path. A
+/// hung close on a dead connection must not delay the cancel return.
+const CLOSE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Payload size of one SFTP READ request, clamped to what the server
 /// advertises via `limits@openssh.com` (OpenSSH caps reads at 32 KiB).
@@ -130,32 +140,41 @@ async fn pipelined_read(
 }
 
 /// Download `remote_path` to `local_path`, streaming to disk with pipelined
-/// reads. Returns the number of bytes transferred.
+/// reads. Returns the number of bytes transferred. Cancelling `cancel`
+/// aborts the transfer promptly; the partial local file is kept.
 pub(crate) async fn download_file(
     session: &russh::client::Handle<Client>,
     remote_path: &str,
     local_path: &str,
     progress: ProgressCallback<'_>,
+    cancel: &CancellationToken,
 ) -> Result<u64> {
-    let raw = open_raw_transfer_session(session).await?;
-    let handle = raw
-        .open(remote_path, OpenFlags::READ, FileAttributes::default())
-        .await
-        .map_err(|e| anyhow!("Failed to open remote file '{}': {}", remote_path, e))?
-        .handle;
-
-    let total = raw
-        .fstat(&handle)
-        .await
-        .ok()
-        .and_then(|attrs| attrs.attrs.size)
-        .unwrap_or(0);
+    // Handshake, open and fstat can each park on a stalled/dead connection
+    // for the full request timeout, so they race the token too.
+    let (raw, handle, total) = tokio::select! {
+        setup = async {
+            let raw = open_raw_transfer_session(session).await?;
+            let handle = raw
+                .open(remote_path, OpenFlags::READ, FileAttributes::default())
+                .await
+                .map_err(|e| anyhow!("Failed to open remote file '{}': {}", remote_path, e))?
+                .handle;
+            let total = raw
+                .fstat(&handle)
+                .await
+                .ok()
+                .and_then(|attrs| attrs.attrs.size)
+                .unwrap_or(0);
+            Ok::<_, anyhow::Error>((raw, handle, total))
+        } => setup?,
+        _ = cancel.cancelled() => return Err(anyhow!(CANCEL_ERROR)),
+    };
 
     let file = tokio::fs::File::create(local_path)
         .await
         .map_err(|e| anyhow!("Failed to create local file '{}': {}", local_path, e))?;
     let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUF_SIZE, file);
-    download_via_raw(raw, handle, total, &mut writer, progress).await
+    download_via_raw(raw, handle, total, &mut writer, progress, cancel).await
 }
 
 /// Core of [`download_file`]: the pipelined read loop over an already
@@ -168,6 +187,7 @@ async fn download_via_raw<W>(
     total: u64,
     writer: &mut W,
     progress: ProgressCallback<'_>,
+    cancel: &CancellationToken,
 ) -> Result<u64>
 where
     W: AsyncWrite + Unpin,
@@ -188,12 +208,18 @@ where
     };
     emit(0, &mut last_emit, true);
 
+    let mut cancelled = false;
+
     // Pipelined read loop. Windows of `depth` ordered reads are issued
     // concurrently and written sequentially. A short read (legal per the SFTP
     // spec, rare in practice) shifts the file cursor, so the remaining
     // misaligned requests in the window are dropped and the window restarts
     // from the corrected offset.
     'transfer: loop {
+        if cancel.is_cancelled() {
+            cancelled = true;
+            break 'transfer;
+        }
         // Iterator-side take_while (sync) trims the window at EOF; the
         // stream-side combinators all require async predicates.
         let window_items: Vec<(u64, u32)> = (0..depth)
@@ -210,7 +236,17 @@ where
 
         let mut short_read = false;
         let mut window = std::pin::pin!(window);
-        while let Some(result) = window.next().await {
+        loop {
+            // Dropping the window future on cancellation abandons the
+            // in-flight reads — no new READ requests are issued afterwards.
+            let next = tokio::select! {
+                item = window.next() => item,
+                _ = cancel.cancelled() => {
+                    cancelled = true;
+                    break 'transfer;
+                }
+            };
+            let Some(result) = next else { break };
             match result? {
                 None => break 'transfer,
                 Some(data) => {
@@ -246,35 +282,49 @@ where
         // else: restart the window at the corrected offset.
     }
 
+    // Flush even on cancellation — the partial file is deliberately kept
+    // (resume support is future work; deleting user data is worse).
     writer
         .flush()
         .await
         .map_err(|e| anyhow!("Failed to flush local file: {}", e))?;
-    // Best-effort handle close — the data is already on disk.
-    let _ = raw.close(&handle).await;
+    // Best-effort handle close — the data is already on disk. Bounded so a
+    // dead connection cannot hold the (possibly cancelled) transfer back.
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, raw.close(&handle)).await;
 
     emit(transferred, &mut last_emit, true);
+    if cancelled {
+        return Err(anyhow!(CANCEL_ERROR));
+    }
     Ok(transferred)
 }
 
 /// Upload `local_path` to `remote_path`, streaming from disk. Returns the
-/// number of bytes transferred.
+/// number of bytes transferred. Cancelling `cancel` aborts the transfer
+/// promptly; the remote file may remain partial (same policy as downloads).
 pub(crate) async fn upload_file(
     session: &russh::client::Handle<Client>,
     local_path: &str,
     remote_path: &str,
     progress: ProgressCallback<'_>,
+    cancel: &CancellationToken,
 ) -> Result<u64> {
     let mut local = tokio::fs::File::open(local_path)
         .await
         .map_err(|e| anyhow!("Failed to read local file '{}': {}", local_path, e))?;
     let total = local.metadata().await.map(|m| m.len()).unwrap_or(0);
 
-    let sftp = open_transfer_session(session).await?;
-    let mut remote = sftp
-        .create(remote_path)
-        .await
-        .map_err(|e| anyhow!("Failed to create remote file '{}': {}", remote_path, e))?;
+    let mut remote = tokio::select! {
+        setup = async {
+            let sftp = open_transfer_session(session).await?;
+            let remote = sftp
+                .create(remote_path)
+                .await
+                .map_err(|e| anyhow!("Failed to create remote file '{}': {}", remote_path, e))?;
+            Ok::<_, anyhow::Error>(remote)
+        } => setup?,
+        _ = cancel.cancelled() => return Err(anyhow!(CANCEL_ERROR)),
+    };
 
     let mut buffer = vec![0u8; WRITE_BUF_SIZE];
     let mut transferred: u64 = 0;
@@ -299,10 +349,18 @@ pub(crate) async fn upload_file(
         }
         // write_all feeds the session's internal write pipeline (8 concurrent
         // WRITE requests), so consecutive chunks overlap on the wire.
-        remote
-            .write_all(&buffer[..n])
-            .await
-            .map_err(|e| anyhow!("Failed to write remote file: {}", e))?;
+        tokio::select! {
+            result = remote.write_all(&buffer[..n]) => {
+                result.map_err(|e| anyhow!("Failed to write remote file: {}", e))?;
+            }
+            _ = cancel.cancelled() => {
+                // Abandon the write pipeline without draining acks (no
+                // flush/fsync — prompt return beats durability here) and
+                // close the handle best-effort under a timeout.
+                let _ = tokio::time::timeout(CLOSE_TIMEOUT, remote.shutdown()).await;
+                return Err(anyhow!(CANCEL_ERROR));
+            }
+        }
         transferred += n as u64;
         emit(transferred, &mut last_emit, false);
     }
@@ -360,14 +418,20 @@ mod tests {
 
     /// In-memory file served by the mock, with hooks for the server
     /// behaviours the engine must survive: short reads (legal per the SFTP
-    /// spec, rare in practice) and zero-length DATA payloads (not legal,
-    /// but seen from broken servers).
+    /// spec, rare in practice), zero-length DATA payloads (not legal, but
+    /// seen from broken servers), and — for the cancellation tests — reads
+    /// that never complete past a gate offset plus a log of every read
+    /// request the server received.
     struct MockFile {
         payload: Arc<Vec<u8>>,
         /// The read starting at this offset returns only this many bytes.
         short_read: Option<(u64, usize)>,
         /// The read at this offset returns a zero-length DATA payload.
         empty_data_at: Option<u64>,
+        /// Reads at offsets >= this value never resolve (stalled server).
+        gate_at: Option<u64>,
+        /// Records the offset of every read request that reached the server.
+        read_log: Option<Arc<Mutex<Vec<u64>>>>,
     }
 
     impl Handler for MockFile {
@@ -384,6 +448,17 @@ mod tests {
             offset: u64,
             len: u32,
         ) -> Result<Data, Self::Error> {
+            if let Some(log) = &self.read_log {
+                log.lock().expect("read log poisoned").push(offset);
+            }
+            if let Some(gate) = self.gate_at {
+                if offset >= gate {
+                    // Stalled server-side storage: the request never
+                    // completes, so the engine parks mid-window.
+                    std::future::pending::<()>().await;
+                    unreachable!();
+                }
+            }
             if offset >= self.payload.len() as u64 {
                 return Err(StatusCode::Eof);
             }
@@ -490,8 +565,16 @@ mod tests {
         let raw = Arc::new(mock_session(mock).await);
         let mut out = Vec::new();
         let (log, cb) = progress_logger();
-        let transferred =
-            download_via_raw(raw, "test-handle".to_string(), total, &mut out, Some(&cb)).await?;
+        let cancel = CancellationToken::new();
+        let transferred = download_via_raw(
+            raw,
+            "test-handle".to_string(),
+            total,
+            &mut out,
+            Some(&cb),
+            &cancel,
+        )
+        .await?;
         Ok((out, expected, transferred, log))
     }
 
@@ -505,6 +588,8 @@ mod tests {
             payload: deterministic_payload(size),
             short_read: None,
             empty_data_at: None,
+            gate_at: None,
+            read_log: None,
         };
         let (out, expected, transferred, log) =
             download_with(mock, size as u64).await.expect("download");
@@ -523,6 +608,8 @@ mod tests {
             payload: deterministic_payload(size),
             short_read: None,
             empty_data_at: None,
+            gate_at: None,
+            read_log: None,
         };
         let (out, expected, transferred, log) = download_with(mock, 0).await.expect("download");
         assert_eq!(transferred as usize, size);
@@ -541,6 +628,8 @@ mod tests {
             payload: deterministic_payload(size),
             short_read: Some((100_000, 1_000)),
             empty_data_at: None,
+            gate_at: None,
+            read_log: None,
         };
         let (out, expected, transferred, _log) = download_with(mock, 0).await.expect("download");
         assert_eq!(transferred as usize, size);
@@ -556,6 +645,8 @@ mod tests {
             payload: deterministic_payload(size),
             short_read: Some((100_000, 1_000)),
             empty_data_at: None,
+            gate_at: None,
+            read_log: None,
         };
         let (out, expected, transferred, log) =
             download_with(mock, size as u64).await.expect("download");
@@ -570,6 +661,8 @@ mod tests {
             payload: Arc::new(Vec::new()),
             short_read: None,
             empty_data_at: None,
+            gate_at: None,
+            read_log: None,
         };
         let (out, _expected, transferred, log) = download_with(mock, 0).await.expect("download");
         assert_eq!(transferred, 0);
@@ -585,9 +678,119 @@ mod tests {
             payload: deterministic_payload(100_000),
             short_read: None,
             empty_data_at: Some(0),
+            gate_at: None,
+            read_log: None,
         };
         let (out, _expected, transferred, _log) = download_with(mock, 0).await.expect("download");
         assert_eq!(transferred, 0);
         assert!(out.is_empty());
+    }
+
+    // ── Cancellation ──────────────────────────────────────────────────────
+    //
+    // The mock gates reads at a fixed offset so the pipeline provably parks
+    // inside its first window with a byte-exact prefix already written.
+
+    #[tokio::test]
+    async fn cancel_mid_download_returns_fast_keeps_partial_file_and_stops_reading() {
+        let gate_at = 4 * READ_CHUNK_SIZE as u64;
+        let size = 3 * READ_PIPELINE_DEPTH * READ_CHUNK_SIZE as usize;
+        let read_log: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let mock = MockFile {
+            payload: deterministic_payload(size),
+            short_read: None,
+            empty_data_at: None,
+            gate_at: Some(gate_at),
+            read_log: Some(Arc::clone(&read_log)),
+        };
+        let expected = Arc::clone(&mock.payload);
+        let raw = Arc::new(mock_session(mock).await);
+
+        let cancel = CancellationToken::new();
+        let (log, cb) = progress_logger();
+        let task = {
+            let cancel = cancel.clone();
+            let handle = "test-handle".to_string();
+            tokio::spawn(async move {
+                let mut out = Vec::new();
+                let result =
+                    download_via_raw(raw, handle, size as u64, &mut out, Some(&cb), &cancel).await;
+                (result, out)
+            })
+        };
+
+        // Let the unblocked chunks of the first window (offsets 0..4) land
+        // on the writer; everything at/after the gate stays pending.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(
+            !read_log.lock().unwrap().is_empty(),
+            "engine should have issued its first window of reads"
+        );
+        cancel.cancel();
+
+        let (result, out) = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("download must return within 1 s of cancellation")
+            .expect("task join");
+        let err = result.expect_err("cancelled download must error");
+        assert_eq!(err.to_string(), CANCEL_ERROR);
+        // Partial file: byte-exact prefix of the payload up to the gate.
+        assert_eq!(out.len(), gate_at as usize);
+        assert_eq!(out, expected[..gate_at as usize]);
+        // Final progress event reflects exactly the bytes kept on disk.
+        assert_eq!(log.lock().unwrap().last(), Some(&(gate_at, size as u64)));
+
+        // The engine must never have issued a second window of reads, and no
+        // new read may arrive after the cancellation was observed.
+        let snapshot: Vec<u64> = read_log.lock().unwrap().clone();
+        assert!(
+            snapshot.len() <= READ_PIPELINE_DEPTH,
+            "engine must not issue a second window, got {} reads",
+            snapshot.len()
+        );
+        let window_end = (READ_PIPELINE_DEPTH * READ_CHUNK_SIZE as usize) as u64;
+        assert!(
+            snapshot.iter().all(|off| *off < window_end),
+            "all reads must belong to the first window: {snapshot:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            read_log.lock().unwrap().len(),
+            snapshot.len(),
+            "no new reads may be issued after cancellation"
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_download_errors_without_reading() {
+        let read_log: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+        let mock = MockFile {
+            payload: deterministic_payload(READ_CHUNK_SIZE as usize * 4),
+            short_read: None,
+            empty_data_at: None,
+            gate_at: None,
+            read_log: Some(Arc::clone(&read_log)),
+        };
+        let raw = Arc::new(mock_session(mock).await);
+
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let mut out = Vec::new();
+        let err = download_via_raw(
+            raw,
+            "test-handle".to_string(),
+            READ_CHUNK_SIZE as u64 * 4,
+            &mut out,
+            None,
+            &cancel,
+        )
+        .await
+        .expect_err("pre-cancelled download must error");
+        assert_eq!(err.to_string(), CANCEL_ERROR);
+        assert!(out.is_empty());
+        assert!(
+            read_log.lock().unwrap().is_empty(),
+            "no reads may be issued for a pre-cancelled transfer"
+        );
     }
 }

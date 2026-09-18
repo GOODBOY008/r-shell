@@ -302,8 +302,21 @@ impl StandaloneSftpClient {
     /// large transfers neither buffer the whole file in memory nor stall the
     /// shared listing session.
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {
-        self.download_file_with_progress(remote_path, local_path, None)
-            .await
+        self.download_file_with_progress(
+            remote_path,
+            local_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// Clone the russh session handle out so a caller can drop the map read
+    /// guard before starting a long transfer.
+    pub fn transfer_session(&self) -> Result<Arc<client::Handle<Client>>> {
+        self.session
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))
     }
 
     pub async fn download_file_with_progress(
@@ -311,20 +324,24 @@ impl StandaloneSftpClient {
         remote_path: &str,
         local_path: &str,
         progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self
-            .session
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
-        crate::sftp_transfer::download_file(session, remote_path, local_path, progress).await
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
+            .await
     }
 
     /// Upload a local file to a remote path. Returns bytes uploaded.
     ///
     /// Streams from disk through the pipelined transfer engine.
     pub async fn upload_file(&self, local_path: &str, remote_path: &str) -> Result<u64> {
-        self.upload_file_with_progress(local_path, remote_path, None)
-            .await
+        self.upload_file_with_progress(
+            local_path,
+            remote_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
     }
 
     pub async fn upload_file_with_progress(
@@ -332,12 +349,10 @@ impl StandaloneSftpClient {
         local_path: &str,
         remote_path: &str,
         progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self
-            .session
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
-        crate::sftp_transfer::upload_file(session, local_path, remote_path, progress).await
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
     }
 
     /// Create a directory on the remote server.

@@ -835,6 +835,7 @@ mod shell_integration_tests {
                         local_src.path().to_string_lossy().as_ref(),
                         remote_path,
                         Some(&progress),
+                        &tokio_util::sync::CancellationToken::new(),
                     )
                     .await
                     .expect("upload");
@@ -880,6 +881,7 @@ mod shell_integration_tests {
                         remote_path,
                         downloaded.path().to_string_lossy().as_ref(),
                         Some(&progress),
+                        &tokio_util::sync::CancellationToken::new(),
                     )
                     .await
                     .expect("download");

@@ -470,6 +470,7 @@ pub fn run() {
             commands::download_remote_file,
             commands::download_remote_file_confined,
             commands::upload_remote_file,
+            commands::cancel_transfer,
             commands::delete_remote_item,
             commands::create_remote_directory,
             commands::rename_remote_item,
