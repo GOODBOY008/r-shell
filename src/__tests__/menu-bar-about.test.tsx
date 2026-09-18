@@ -51,10 +51,12 @@ describe('MenuBar About dialog', () => {
     render(<MenuBar />);
 
     openMenu('Help');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'About r-shell' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'About R-Shell' }));
 
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toBeTruthy();
+    // Brand name comes from the shared app.title key (R-Shell, not a hardcoded string)
+    expect(screen.getByText('R-Shell')).toBeTruthy();
     expect(screen.getByText('Version:')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('2.9.3')).toBeTruthy());
   });
@@ -65,7 +67,7 @@ describe('MenuBar About dialog', () => {
     render(<MenuBar />);
 
     openMenu('Help');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'About r-shell' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'About R-Shell' }));
 
     await screen.findByRole('dialog');
     await waitFor(() => expect(screen.getByText('—')).toBeTruthy());
@@ -81,7 +83,7 @@ describe('MenuBar About dialog', () => {
     render(<MenuBar />);
 
     openMenu('Help');
-    fireEvent.click(screen.getByRole('menuitem', { name: 'About r-shell' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'About R-Shell' }));
 
     await screen.findByRole('dialog');
     await waitFor(() => expect(screen.getByText('—')).toBeTruthy());

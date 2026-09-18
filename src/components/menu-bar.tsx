@@ -563,12 +563,12 @@ export function MenuBar({
         </TooltipProvider>
       </div>
 
-      {/* About dialog (opened from Help → About r-shell) */}
+      {/* About dialog (opened from Help → About R-Shell) */}
       <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
         <DialogContent className="sm:max-w-[320px]">
           <DialogHeader>
             <DialogTitle>{t('menuBar.about')}</DialogTitle>
-            <DialogDescription>r-shell</DialogDescription>
+            <DialogDescription>{t('app.title')}</DialogDescription>
           </DialogHeader>
           <div className="text-sm">
             {t('aboutDialog.version')}: <span className="font-mono">{appVersion ?? '—'}</span>
