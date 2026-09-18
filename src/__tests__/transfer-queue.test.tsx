@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 function makeTransfer(id: string): TransferItem {
   return {
     id,
+    connectionId: 'conn-1',
     fileName: 'rule-view.svg',
     direction: 'download',
     sourcePath: '/remote/rule-view.svg',

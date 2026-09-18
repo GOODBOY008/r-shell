@@ -18,7 +18,7 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { classifyFileByExtension, type FileViewKind } from "@/lib/editor-config";
-import { makeNoopProgressChannel } from "@/lib/transfer-progress";
+import { submit, getTransferById } from "@/lib/transfer-queue-service";
 import {
   EDITOR_WINDOW_CHANGED_EVENT,
   type EditorWindowEventPayload,
@@ -161,12 +161,21 @@ export function FileEditorView({
       // Use the user's home directory as a base for the temp download
       const homeDir = await invoke<string>("get_home_directory");
       const localPath = `${homeDir}/.rshell-preview-${fileName}`;
-      const result = await invoke<{ success: boolean; error?: string }>(
-        "download_remote_file",
-        { connectionId, remotePath: filePath, localPath, onProgress: makeNoopProgressChannel() },
-      );
-      if (!result.success) {
-        throw new Error(result.error ?? "Download failed");
+      // Routed through the global queue service so the download serializes
+      // with other transfers and is cancellable like any other.
+      const transfer = submit({
+        connectionId,
+        fileName,
+        direction: "download",
+        sourcePath: filePath,
+        destinationPath: localPath,
+        totalBytes: 0,
+      });
+      const outcome = await transfer.done;
+      if (outcome !== "completed") {
+        throw new Error(outcome === "cancelled"
+          ? "Download cancelled"
+          : getTransferById(transfer.id)?.error ?? "Download failed");
       }
       await invoke<void>("open_in_os", { path: localPath });
       toast.success(t('fileEditorView.openedWithOs', { fileName }));

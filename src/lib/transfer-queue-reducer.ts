@@ -10,8 +10,23 @@ export type TransferStatus =
 
 export type TransferDirection = "upload" | "download";
 
+/**
+ * Parameters for the confined download command
+ * (`download_remote_file_confined`) — the path-validated variant the dialogs
+ * use. When present on an item, the transfer service invokes the confined
+ * command instead of `download_remote_file`.
+ */
+export interface ConfinedDownloadPaths {
+  remoteRoot: string;
+  destinationRoot: string;
+  remoteRelativePath: string;
+  destinationRelativePath: string;
+}
+
 export interface TransferItem {
   id: string;
+  /** Owning connection — the global queue interleaves connections. */
+  connectionId: string;
   fileName: string;
   direction: TransferDirection;
   sourcePath: string;
@@ -24,19 +39,24 @@ export interface TransferItem {
   error?: string;
   startedAt?: number;
   completedAt?: number;
+  /** Confined-download variant parameters (see ConfinedDownloadPaths). */
+  confined?: ConfinedDownloadPaths;
 }
 
+export type EnqueueTransferInput = {
+  /** Pre-allocated id (used by submit()); generated when omitted. */
+  id?: string;
+  connectionId: string;
+  fileName: string;
+  direction: TransferDirection;
+  sourcePath: string;
+  destinationPath: string;
+  totalBytes: number;
+  confined?: ConfinedDownloadPaths;
+};
+
 export type TransferAction =
-  | {
-      type: "ENQUEUE";
-      items: Array<{
-        fileName: string;
-        direction: TransferDirection;
-        sourcePath: string;
-        destinationPath: string;
-        totalBytes: number;
-      }>;
-    }
+  | { type: "ENQUEUE"; items: EnqueueTransferInput[] }
   | { type: "START"; id: string }
   | {
       type: "PROGRESS";
@@ -73,7 +93,8 @@ export function transferQueueReducer(
   switch (action.type) {
     case "ENQUEUE": {
       const newItems: TransferItem[] = action.items.map((item) => ({
-        id: generateTransferId(),
+        id: item.id ?? generateTransferId(),
+        connectionId: item.connectionId,
         fileName: item.fileName,
         direction: item.direction,
         sourcePath: item.sourcePath,
@@ -83,6 +104,7 @@ export function transferQueueReducer(
         bytesTransferred: 0,
         totalBytes: item.totalBytes,
         speed: 0,
+        ...(item.confined ? { confined: item.confined } : {}),
       }));
       return [...state, ...newItems];
     }
@@ -96,8 +118,11 @@ export function transferQueueReducer(
     }
 
     case "PROGRESS": {
+      // State-machine guard: progress events are only meaningful while the
+      // transfer is actually running. A late event for an item the user
+      // cancelled (or that already settled) must not resurrect it.
       return state.map((item) =>
-        item.id === action.id
+        item.id === action.id && item.status === "transferring"
           ? {
               ...item,
               progress: action.progress,
@@ -112,8 +137,11 @@ export function transferQueueReducer(
     }
 
     case "COMPLETE": {
+      // Guarded: only a transferring item can complete. Without this, a
+      // success resolving after a quick cancel flips the item back to
+      // "completed" (and its toast fires).
       return state.map((item) =>
-        item.id === action.id
+        item.id === action.id && item.status === "transferring"
           ? {
               ...item,
               status: "completed" as const,
@@ -130,8 +158,10 @@ export function transferQueueReducer(
     }
 
     case "FAIL": {
+      // Guarded: a late failure (e.g. the 120 s request timeout landing on an
+      // already-cancelled item) must not overwrite the cancelled state.
       return state.map((item) =>
-        item.id === action.id
+        item.id === action.id && item.status === "transferring"
           ? {
               ...item,
               status: "failed" as const,
@@ -188,6 +218,11 @@ export function transferQueueReducer(
 }
 
 // ---- Selectors ----
+
+/** True once an item has reached a final status (no further transitions). */
+export function isTerminalStatus(status: TransferStatus): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
 
 export function getActiveTransferCount(state: TransferItem[]): number {
   return state.filter(
