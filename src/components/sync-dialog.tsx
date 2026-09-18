@@ -11,7 +11,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { makeRawProgressChannel } from "@/lib/transfer-progress";
+import { submit, getTransferById, type SubmittedTransfer } from "@/lib/transfer-queue-service";
 import {
   Dialog,
   DialogContent,
@@ -146,6 +146,9 @@ export function SyncDialog({
     ...INITIAL_SYNC_PROGRESS,
   });
   const cancelRef = useRef(false);
+  // The in-flight transfer submitted to the global queue service, so the
+  // Cancel button can stop it for real (backend cancel_transfer).
+  const activeTransferRef = useRef<SubmittedTransfer | null>(null);
 
   // Filter for result table
   const [showSkipped, setShowSkipped] = useState(false);
@@ -312,24 +315,41 @@ export function SyncDialog({
           case "upload": {
             const srcPath = pathJoin(localPath, entry.relativePath);
             const destPath = pathJoin(remotePath, entry.relativePath);
-            const baseBytes = bytesTransferred;
-            const onProgress = makeRawProgressChannel((event) => {
-              setProgress((p) => ({
-                ...p,
-                bytesTransferred: baseBytes + event.transferred,
-              }));
-            });
-            const result = await invoke<{
-              success: boolean;
-              error?: string;
-            }>("upload_remote_file", {
-              connectionId,
-              localPath: srcPath,
-              remotePath: destPath,
-              onProgress,
-            });
-            if (!result.success) {
-              throw new Error(result.error ?? "Upload failed");
+            const transfer = submit(
+              {
+                connectionId,
+                fileName: entry.relativePath,
+                direction: "upload",
+                sourcePath: srcPath,
+                destinationPath: destPath,
+                totalBytes: entry.localSize ?? 0,
+              },
+              {
+                onRawProgress: (event) => {
+                  const baseBytes = bytesTransferred;
+                  setProgress((p) => ({
+                    ...p,
+                    bytesTransferred: baseBytes + event.transferred,
+                  }));
+                },
+              },
+            );
+            activeTransferRef.current = transfer;
+            let outcome: "completed" | "failed" | "cancelled";
+            try {
+              outcome = await transfer.done;
+            } finally {
+              activeTransferRef.current = null;
+            }
+            if (outcome === "cancelled") {
+              setProgress((p) => ({ ...p, phase: "cancelled" }));
+              toast.info(t('syncDialog.syncCancelled'));
+              return;
+            }
+            if (outcome === "failed") {
+              throw new Error(
+                getTransferById(transfer.id)?.error ?? "Upload failed",
+              );
             }
             bytesTransferred += entry.localSize ?? 0;
             break;
@@ -340,26 +360,47 @@ export function SyncDialog({
             break;
           }
           case "download": {
-            const baseBytes = bytesTransferred;
-            const onProgress = makeRawProgressChannel((event) => {
-              setProgress((p) => ({
-                ...p,
-                bytesTransferred: baseBytes + event.transferred,
-              }));
-            });
-            const result = await invoke<{
-              success: boolean;
-              error?: string;
-            }>("download_remote_file_confined", {
-              connectionId,
-              remoteRoot: remotePath,
-              destinationRoot: localPath,
-              remoteRelativePath: entry.relativePath,
-              destinationRelativePath: entry.relativePath,
-              onProgress,
-            });
-            if (!result.success) {
-              throw new Error(result.error ?? "Download failed");
+            const transfer = submit(
+              {
+                connectionId,
+                fileName: entry.relativePath,
+                direction: "download",
+                sourcePath: pathJoin(remotePath, entry.relativePath),
+                destinationPath: pathJoin(localPath, entry.relativePath),
+                totalBytes: entry.remoteSize ?? 0,
+                confined: {
+                  remoteRoot: remotePath,
+                  destinationRoot: localPath,
+                  remoteRelativePath: entry.relativePath,
+                  destinationRelativePath: entry.relativePath,
+                },
+              },
+              {
+                onRawProgress: (event) => {
+                  const baseBytes = bytesTransferred;
+                  setProgress((p) => ({
+                    ...p,
+                    bytesTransferred: baseBytes + event.transferred,
+                  }));
+                },
+              },
+            );
+            activeTransferRef.current = transfer;
+            let outcome: "completed" | "failed" | "cancelled";
+            try {
+              outcome = await transfer.done;
+            } finally {
+              activeTransferRef.current = null;
+            }
+            if (outcome === "cancelled") {
+              setProgress((p) => ({ ...p, phase: "cancelled" }));
+              toast.info(t('syncDialog.syncCancelled'));
+              return;
+            }
+            if (outcome === "failed") {
+              throw new Error(
+                getTransferById(transfer.id)?.error ?? "Download failed",
+              );
             }
             bytesTransferred += entry.remoteSize ?? 0;
             break;
@@ -803,6 +844,9 @@ export function SyncDialog({
               size="sm"
               onClick={() => {
                 cancelRef.current = true;
+                // Stop the in-flight transfer for real; the loop stops at
+                // the next iteration via cancelRef.
+                activeTransferRef.current?.cancel();
               }}
             >
               <X className="h-4 w-4 mr-1" />

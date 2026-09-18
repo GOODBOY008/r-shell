@@ -93,6 +93,7 @@ describe('SyncDialog remote downloads', () => {
         destinationRoot: 'C:/Downloads/release',
         remoteRelativePath: 'nested/report.txt',
         destinationRelativePath: 'nested/report.txt',
+        transferId: expect.anything(),
         onProgress: expect.anything(),
       });
     });

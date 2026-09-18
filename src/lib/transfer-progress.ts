@@ -45,12 +45,15 @@ export class TransferSpeedTracker {
  * Build an IPC channel that streams a single transfer's progress into the
  * queue reducer as PROGRESS actions (drives the progress bar, speed and ETA).
  * Pass it as the `onProgress` argument of `download_remote_file` /
- * `upload_remote_file`.
+ * `upload_remote_file`. The optional `onRawProgress` hook additionally
+ * receives the unprocessed events (dialogs fold them into cumulative byte
+ * totals while the queue item still shows its own progress).
  */
 export function makeTransferProgressChannel(
   dispatch: React.Dispatch<TransferAction>,
   id: string,
   fallbackTotal: number,
+  onRawProgress?: (event: TransferProgressEvent) => void,
 ): Channel<TransferProgressEvent> {
   const tracker = new TransferSpeedTracker();
   const channel = new Channel<TransferProgressEvent>();
@@ -69,6 +72,7 @@ export function makeTransferProgressChannel(
       speed,
       totalBytes: total > 0 ? total : undefined,
     });
+    onRawProgress?.(event);
   };
   return channel;
 }

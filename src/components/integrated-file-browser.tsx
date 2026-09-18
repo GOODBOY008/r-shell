@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
@@ -8,11 +8,7 @@ import { Button } from './ui/button';
 import { Toggle } from './ui/toggle';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
-import {
-  transferQueueReducer,
-  getNextQueuedTransfer,
-} from '@/lib/transfer-queue-reducer';
-import { makeTransferProgressChannel } from '@/lib/transfer-progress';
+import { useTransferQueue, onItemSettled } from '@/lib/transfer-queue-service';
 import {
   buildDirectoryUploadPlan,
   buildFileUploadItems,
@@ -123,9 +119,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-  const [transfers, dispatchTransfer] = useReducer(transferQueueReducer, []);
+  // Global transfer queue — the transfer-queue-service owns the execution
+  // loop; this component only enqueues and reacts to settled items.
+  const { transfers, dispatch: dispatchTransfer } = useTransferQueue();
   const [queueExpanded, setQueueExpanded] = useState(false);
-  const processTransferRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showLoadingOverlay, setShowLoadingOverlay] = useState(false);
@@ -405,98 +402,42 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     };
   }, [resizingColumn]);
 
-  // Transfer processing loop — modeled on file-browser-view.tsx
+  // Transfer completion reactions — the queue service drives the invokes;
+  // this component refreshes the listing and raises toasts for its own
+  // connection's transfers.
   useEffect(() => {
-    const nextItem = getNextQueuedTransfer(transfers);
-    if (!nextItem || processTransferRef.current) return;
-
-    processTransferRef.current = true;
-    dispatchTransfer({ type: "START", id: nextItem.id });
-
-    const doTransfer = async () => {
-      const onProgress = makeTransferProgressChannel(
-        dispatchTransfer,
-        nextItem.id,
-        nextItem.totalBytes,
-      );
-      try {
-        if (nextItem.direction === "upload") {
-          const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
-            "upload_remote_file",
-            {
-              connectionId,
-              localPath: nextItem.sourcePath,
-              remotePath: nextItem.destinationPath,
-              onProgress,
-            },
-          );
-          if (result.success) {
-            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
-            toast.success(t('fileBrowser.toast.uploaded', { name: nextItem.fileName }));
-            void loadFiles();
-          } else {
-            dispatchTransfer({
-              type: "FAIL",
-              id: nextItem.id,
-              error: result.error ?? "Upload failed",
-            });
-            toast.error(t('fileBrowser.toast.uploadFailed', { name: nextItem.fileName }), {
-              description: result.error ?? "Unknown error",
-            });
-          }
+    return onItemSettled((item) => {
+      if (item.connectionId !== connectionId) return;
+      if (item.status === 'completed') {
+        if (item.direction === 'upload') {
+          toast.success(t('fileBrowser.toast.uploaded', { name: item.fileName }));
+          void loadFiles();
         } else {
-          const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
-            "download_remote_file",
-            {
-              connectionId,
-              remotePath: nextItem.sourcePath,
-              localPath: nextItem.destinationPath,
-              onProgress,
+          const destPath = item.destinationPath;
+          const destDir = destPath.substring(0, destPath.lastIndexOf('/')) || '/';
+          toast.success(t('fileBrowser.toast.downloaded', { name: item.fileName }), {
+            duration: 5000,
+            action: {
+              label: t('fileBrowser.transfer.openFile'),
+              onClick: () => { void invoke('open_in_os', { path: destPath }).catch(() => {}); },
             },
-          );
-          if (result.success) {
-            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
-            const destPath = nextItem.destinationPath;
-            const destDir = destPath.substring(0, destPath.lastIndexOf("/")) || "/";
-            toast.success(t('fileBrowser.toast.downloaded', { name: nextItem.fileName }), {
-              duration: 5000,
-              action: {
-                label: t('fileBrowser.transfer.openFile'),
-                onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
-              },
-              cancel: {
-                label: t('fileBrowser.transfer.showInFolder'),
-                onClick: () => { void invoke("open_in_os", { path: destDir }).catch(() => {}); },
-              },
-            });
-          } else {
-            dispatchTransfer({
-              type: "FAIL",
-              id: nextItem.id,
-              error: result.error ?? "Download failed",
-            });
-            toast.error(t('fileBrowser.toast.downloadFailed', { name: nextItem.fileName }), {
-              description: result.error ?? "Unknown error",
-            });
-          }
+            cancel: {
+              label: t('fileBrowser.transfer.showInFolder'),
+              onClick: () => { void invoke('open_in_os', { path: destDir }).catch(() => {}); },
+            },
+          });
         }
-      } catch (err) {
-        dispatchTransfer({
-          type: "FAIL",
-          id: nextItem.id,
-          error: err instanceof Error ? err.message : String(err),
+      } else if (item.status === 'failed') {
+        const toastKey = item.direction === 'upload'
+          ? t('fileBrowser.toast.uploadFailed', { name: item.fileName })
+          : t('fileBrowser.toast.downloadFailed', { name: item.fileName });
+        toast.error(toastKey, {
+          description: item.error ?? 'Unknown error',
         });
-        toast.error(t('fileBrowser.toast.transferFailed', { name: nextItem.fileName }), {
-          description: err instanceof Error ? err.message : String(err),
-        });
-      } finally {
-        processTransferRef.current = false;
       }
-    };
-
-    void doTransfer();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn; adding it would cause infinite re-renders
-  }, [transfers, connectionId]);
+  }, [connectionId, t]);
 
   const handleResizeStart = (columnName: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -923,7 +864,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
       dispatchTransfer({
         type: "ENQUEUE",
-        items: buildFileUploadItems(paths, currentPath),
+        items: buildFileUploadItems(paths, currentPath).map((item) => ({
+          ...item,
+          connectionId,
+        })),
       });
       toast.info(t('fileBrowser.toast.queuedUpload', { count: paths.length }));
     } catch (error) {
@@ -988,7 +932,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       if (queuedItems.length > 0) {
         dispatchTransfer({
           type: "ENQUEUE",
-          items: queuedItems,
+          items: queuedItems.map((item: UploadQueueInput) => ({
+            ...item,
+            connectionId,
+          })),
         });
         toast.info(
           t('fileBrowser.toast.queuedFolderUpload', { count: queuedItems.length, folderCount: directoryPaths.length, createdCount: createdDirectoryCount }),
@@ -1015,6 +962,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       dispatchTransfer({
         type: "ENQUEUE",
         items: [{
+          connectionId,
           fileName: file.name,
           direction: "download" as const,
           sourcePath: file.path,
@@ -1045,6 +993,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       dispatchTransfer({
         type: "ENQUEUE",
         items: filesToDownload.map((f) => ({
+          connectionId,
           fileName: f.name,
           direction: "download" as const,
           sourcePath: f.path,
@@ -1373,7 +1322,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       }
 
       if (plan.items.length > 0) {
-        dispatchTransfer({ type: "ENQUEUE", items: plan.items });
+        dispatchTransfer({
+          type: "ENQUEUE",
+          items: plan.items.map((item) => ({ ...item, connectionId })),
+        });
         toast.info(
           t('fileBrowser.toast.queuedUploadToPath', { count: plan.items.length, path: currentPath }) +
             (createdDirectoryCount > 0
