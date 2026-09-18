@@ -3,10 +3,11 @@ import { render, screen, act, waitFor } from '@testing-library/react';
 
 // ── Hoisted mocks (must exist before vi.mock factories run) ─────────────────
 
-const { mockInvoke, mockListen, mockRelaunch, mockToast } = vi.hoisted(() => ({
+const { mockInvoke, mockListen, mockRelaunch, mockGetVersion, mockToast } = vi.hoisted(() => ({
   mockInvoke: vi.fn(),
   mockListen: vi.fn(),
   mockRelaunch: vi.fn(),
+  mockGetVersion: vi.fn(),
   mockToast: {
     loading: vi.fn(),
     dismiss: vi.fn(),
@@ -22,6 +23,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: unknown[]) => mockListen(...args),
+}));
+
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: (...args: unknown[]) => mockGetVersion(...args),
 }));
 
 vi.mock('@tauri-apps/plugin-process', () => ({
@@ -88,6 +93,7 @@ describe('UpdateChecker', () => {
     vi.clearAllMocks();
     localStorage.clear();
     progressListener = null;
+    mockGetVersion.mockResolvedValue('2.9.3');
 
     // Default backend behavior: eligible context, no update available.
     mockInvoke.mockImplementation((cmd: string) => {
@@ -173,7 +179,9 @@ describe('UpdateChecker', () => {
       await waitFor(() =>
         expect(mockInvoke).toHaveBeenCalledWith('updater_check', expect.anything())
       );
-      expect(mockToast.success).toHaveBeenCalledWith("You're up to date!");
+      // The up-to-date toast includes the running version (issue #166):
+      // beforeEach mocks getVersion to resolve, so the ref is populated
+      expect(mockToast.success).toHaveBeenCalledWith('R-Shell 2.9.3 is the latest version.');
     });
 
     it('shows no toast on silent auto-check when no update', async () => {
@@ -349,6 +357,21 @@ describe('UpdateChecker', () => {
       // Resolve
       await act(async () => { resolveCheck!(null); });
       expect(mockToast.dismiss).toHaveBeenCalledWith('update-check');
+      expect(mockToast.success).toHaveBeenCalledWith('R-Shell 2.9.3 is the latest version.');
+    });
+
+    it('falls back to the generic up-to-date toast when getVersion fails', async () => {
+      mockGetVersion.mockRejectedValue(new Error('not available'));
+
+      const { rerender } = render(<UpdateChecker checkSignal={0} />);
+      // Let the auto-check (and the failed version lookup) settle
+      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+      mockToast.success.mockClear();
+
+      // Manual check → no update
+      rerender(<UpdateChecker checkSignal={1} />);
+      await act(async () => { await new Promise(r => setTimeout(r, 50)); });
+
       expect(mockToast.success).toHaveBeenCalledWith("You're up to date!");
     });
 

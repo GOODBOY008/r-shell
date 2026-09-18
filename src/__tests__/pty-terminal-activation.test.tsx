@@ -120,6 +120,8 @@ vi.mock('@xterm/addon-search', () => ({
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(async (command: string) => (command === 'get_websocket_endpoint' ? { port: 9001, token: 'test-token' } : undefined)),
+  // MenuBar's About dialog checks the runtime; this test doesn't exercise it
+  isTauri: () => false,
 }));
 
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({

@@ -374,6 +374,7 @@
     "advanced": {
       "title": "Ustawienia zaawansowane",
       "desc": "Skonfiguruj opcje zaawansowane i diagnostyczne.",
+      "version": "Wersja",
       "logLevel": "Poziom logowania",
       "maxLogSize": "Maksymalny rozmiar logu: {{size}} MB",
       "checkUpdates": "Sprawdzaj aktualizacje",
@@ -548,12 +549,13 @@
     "disconnect": "Rozłącz",
     "undo": "Cofnij",
     "redo": "Ponów",
-    "about": "R-shell — informacje",
+    "about": "R-Shell — informacje",
+    "help": "Pomoc",
     "services": "Usługi",
-    "hide": "Ukryj r-shell",
+    "hide": "Ukryj R-Shell",
     "hideOthers": "Ukryj pozostałe",
     "showAll": "Pokaż wszystko",
-    "quit": "Zakończ r-shell",
+    "quit": "Zakończ R-Shell",
     "minimize": "Minimalizuj",
     "zoom": "Powiększ",
     "fullscreen": "Przejdź na pełny ekran",
@@ -569,6 +571,9 @@
     "toggleZenMode": "Przełącz tryb zen",
     "closeTab": "Zamknij kartę",
     "window": "Okno"
+  },
+  "aboutDialog": {
+    "version": "Wersja"
   },
   "toolbar": {
     "newConnection": "Nowe połączenie",

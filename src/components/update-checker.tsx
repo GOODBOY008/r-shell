@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 // relaunch() calls the process plugin's restart command (process:allow-restart capability)
@@ -81,6 +82,10 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const lastSignalRef = useRef<number | undefined>(checkSignal);
   const busyRef = useRef(false);
+  // Running app version, used to include it in the "up to date" toast. Kept in
+  // a ref so the checkForUpdates closure always reads the latest value and a
+  // failed lookup just falls back to the generic message.
+  const currentVersionRef = useRef<string | null>(null);
   // Environment facts from the backend (Homebrew detection + channel gating).
   // The Rust side re-checks Caskroom on every updater_check, so a stale ref
   // only costs a wasted round-trip, never a wrong install path.
@@ -96,6 +101,14 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
     setProgress(0);
     setError(null);
     setDialogOpen(false);
+  }, []);
+
+  // Load the running app version once so the "up to date" toast can include
+  // it; a failed lookup (browser dev mode) just keeps the generic message.
+  useEffect(() => {
+    getVersion()
+      .then((version) => { currentVersionRef.current = version; })
+      .catch(() => { currentVersionRef.current = null; });
   }, []);
 
   const checkForUpdates = useCallback(async (manual: boolean) => {
@@ -135,7 +148,13 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       } else {
         setStatus('idle');
         if (manual) {
-          toast.success(t('updateChecker.upToDate'));
+          // Prefer the versioned message so the user learns which release
+          // they are on; falls back to the generic text if getVersion failed.
+          toast.success(
+            currentVersionRef.current
+              ? t('updateChecker.upToDateDesc', { version: currentVersionRef.current })
+              : t('updateChecker.upToDate')
+          );
         }
       }
     } catch (caught) {
