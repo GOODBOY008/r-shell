@@ -15,6 +15,7 @@ import { Button } from '../ui/button';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import type { TerminalTab } from '../../lib/terminal-group-types';
+import { isTerminalTabVisible } from '../../lib/terminal-group-reducer';
 import { PtyTerminal } from '../pty-terminal';
 import { FileBrowserView } from '../file-browser-view';
 import { DesktopViewer } from '../desktop-viewer';
@@ -57,6 +58,19 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
+  const isVisible = isTerminalTabVisible(state, tab.id);
+  const isTerminal = tab.tabType === undefined || tab.tabType === 'terminal';
+  const isViewingTerminal = isVisible && isTerminal && tab.connectionStatus !== 'pending';
+
+  // This content owner survives grid host reparenting. A layout-only host remount
+  // must not acknowledge hidden output; only a committed visible terminal does.
+  useLayoutEffect(() => {
+    if (isViewingTerminal) dispatch({ type: 'ACKNOWLEDGE_TAB_OUTPUT', tabId: tab.id });
+  }, [dispatch, isViewingTerminal, tab.id]);
+
+  const handleOutput = useCallback(() => {
+    dispatch({ type: 'MARK_TAB_UNREAD_OUTPUT', tabId: tab.id, reconnectCount: tab.reconnectCount });
+  }, [dispatch, tab.id, tab.reconnectCount]);
 
   const handleActivateGroup = useCallback(() => {
     if (groupId && state.activeGroupId !== groupId) {
@@ -180,6 +194,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         username={tab.username}
         themeKey={themeKey}
         isActive={isActive}
+        onOutput={!isVisible && !tab.hasUnreadOutput ? handleOutput : undefined}
         onConnectionStatusChange={handleConnectionStatusChange}
         onDetach={handleDetach}
       />

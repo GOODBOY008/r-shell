@@ -1195,6 +1195,7 @@
   },
   "terminal": {
     "search": "Szukaj...",
+    "unreadOutput": "Nieprzeczytane dane wyjściowe terminala",
     "groupAriaLabel": "Grupa terminali {{id}}",
     "a11y": {
       "tabMovedToPosition": "Przeniesiono na pozycję {{position}} z {{total}}",

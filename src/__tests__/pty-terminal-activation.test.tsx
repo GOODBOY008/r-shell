@@ -192,7 +192,10 @@ vi.mock('sonner', () => ({
   },
 }));
 
-function renderTerminal(isActive: boolean) {
+function renderTerminal(
+  isActive: boolean,
+  props: Partial<React.ComponentProps<typeof PtyTerminal>> = {},
+) {
   return render(
     <PtyTerminal
       connectionId="connection-1"
@@ -200,6 +203,7 @@ function renderTerminal(isActive: boolean) {
       host="127.0.0.1"
       username="root"
       isActive={isActive}
+      {...props}
     />,
   );
 }
@@ -571,5 +575,119 @@ describe('PtyTerminal activation', () => {
     expect(handled).toBe(true);
     expect(preventDefault).not.toHaveBeenCalled();
     expect(readTextMock).not.toHaveBeenCalled();
+  });
+
+  it('reports non-empty PTY bytes in both wire formats, including incomplete UTF-8', async () => {
+    const onOutput = vi.fn();
+    renderTerminal(false, { onOutput });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const ws = mocks.webSockets[0];
+    ws.send.mockClear();
+    // A partial character is still real received output, even before decoding emits text.
+    sendOutputFrame(ws, new Uint8Array([0xe4]));
+    expect(onOutput).toHaveBeenLastCalledWith('connection-1');
+    expect(sentMessagesOfType(ws, 'Resume')).toHaveLength(1);
+    sendOutputFrame(ws, new Uint8Array([0xb8, 0xad]));
+    ws.onmessage({ data: JSON.stringify({ type: 'Output', connection_id: 'connection-1', data: [65] }) });
+    expect(onOutput).toHaveBeenCalledTimes(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(mocks.terminals[0].write).toHaveBeenCalledWith('中A', expect.any(Function));
+    expect(sentMessagesOfType(ws, 'Resume')).toHaveLength(3);
+  });
+
+  it('does not report empty, malformed, foreign-session or locally generated output', async () => {
+    const onOutput = vi.fn();
+    renderTerminal(false, { onOutput });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const ws = mocks.webSockets[0];
+    ws.onopen();
+    sendOutputFrame(ws, new Uint8Array());
+    ws.onmessage({ data: new Uint8Array([1, 0, 20]).buffer });
+    ws.onmessage({ data: new Uint8Array([0, 0, 0, 65]).buffer });
+    const foreignId = new TextEncoder().encode('connection-2');
+    const foreign = new Uint8Array(4 + foreignId.length);
+    foreign.set([1, 0, foreignId.length]);
+    foreign.set(foreignId, 3);
+    foreign[foreign.length - 1] = 65;
+    ws.onmessage({ data: foreign.buffer });
+    for (const msg of [
+      { type: 'Output', connection_id: 'connection-1', data: [] },
+      { type: 'Output', connection_id: 'connection-2', data: [65] },
+      { type: 'Output', connection_id: 'connection-1', data: 'not bytes' },
+      { type: 'Success', message: 'PTY connection started' },
+      { type: 'PtyStarted', connection_id: 'connection-1', generation: 1, reattached: true },
+      { type: 'Error', message: 'synthetic status message' },
+    ]) ws.onmessage({ data: JSON.stringify(msg) });
+    expect(onOutput).not.toHaveBeenCalled();
+  });
+
+  it('uses the latest output callback without recreating xterm, WebSocket or StartPty', async () => {
+    const first = vi.fn();
+    const latest = vi.fn();
+    const view = renderTerminal(false, { onOutput: first });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const ws = mocks.webSockets[0];
+    ws.onopen();
+    sendOutputFrame(ws, new Uint8Array([65]));
+    expect(first).toHaveBeenCalledOnce();
+    const startCount = sentMessagesOfType(ws, 'StartPty').length;
+    expect(startCount).toBe(1);
+    view.rerender(<PtyTerminal connectionId="connection-1" connectionName="SSH Server"
+      host="127.0.0.1" username="root" isActive={false} onOutput={latest} />);
+    sendOutputFrame(ws, new Uint8Array([66]));
+    expect(first).toHaveBeenCalledOnce();
+    expect(latest).toHaveBeenCalledWith('connection-1');
+    view.rerender(<PtyTerminal connectionId="connection-1" connectionName="SSH Server"
+      host="127.0.0.1" username="root" isActive />);
+    sendOutputFrame(ws, new Uint8Array([67]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    expect(latest).toHaveBeenCalledOnce();
+    expect(mocks.terminals).toHaveLength(1);
+    expect(mocks.webSockets).toHaveLength(1);
+    expect(mocks.terminals[0].dispose).not.toHaveBeenCalled();
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(sentMessagesOfType(ws, 'StartPty')).toHaveLength(startCount);
+    expect(sentMessagesOfType(ws, 'Close')).toHaveLength(0);
+  });
+
+  it('ignores an obsolete WebSocket handler after terminal remount', async () => {
+    const oldOutput = vi.fn();
+    const newOutput = vi.fn();
+    const oldView = renderTerminal(false, { onOutput: oldOutput });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const oldHandler = mocks.webSockets[0].onmessage;
+    oldView.unmount();
+    renderTerminal(false, { onOutput: newOutput, connectionId: 'connection-2' });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    oldHandler({ data: JSON.stringify({ type: 'Output', connection_id: 'connection-1', data: [65] }) });
+    expect(oldOutput).not.toHaveBeenCalled();
+    expect(newOutput).not.toHaveBeenCalled();
+    mocks.webSockets[1].onmessage({ data: JSON.stringify({ type: 'Output', connection_id: 'connection-2', data: [66] }) });
+    expect(newOutput).toHaveBeenCalledWith('connection-2');
+  });
+
+  it('revokes the output callback at the unmount commit, before passive PTY cleanup', async () => {
+    const onOutput = vi.fn();
+    let lateOutput: (() => void) | undefined;
+    function Harness({ mounted }: { mounted: boolean }) {
+      React.useLayoutEffect(() => {
+        if (!mounted) {
+          // This is the gap after child layout cleanup but before its passive cleanup.
+          expect(mocks.terminals[0].dispose).not.toHaveBeenCalled();
+          lateOutput?.();
+        }
+      }, [mounted]);
+      return mounted ? <PtyTerminal connectionId="connection-1" connectionName="SSH Server"
+        host="127.0.0.1" username="root" isActive={false} onOutput={onOutput} /> : null;
+    }
+    const view = render(<Harness mounted />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const oldHandler = mocks.webSockets[0].onmessage;
+    lateOutput = () => oldHandler({
+      data: JSON.stringify({ type: 'Output', connection_id: 'connection-1', data: [65] }),
+    });
+    view.rerender(<Harness mounted={false} />);
+    expect(onOutput).not.toHaveBeenCalled();
+    expect(mocks.terminals[0].dispose).toHaveBeenCalledOnce();
   });
 });

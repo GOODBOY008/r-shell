@@ -1147,6 +1147,7 @@
   },
   "terminal": {
     "search": "搜索...",
+    "unreadOutput": "终端有未读输出",
     "groupAriaLabel": "终端组 {{id}}",
     "a11y": {
       "tabMovedToPosition": "已移到第 {{position}} 位（共 {{total}} 个标签页）",
