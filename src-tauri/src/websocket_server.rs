@@ -89,11 +89,19 @@ pub enum WsMessage {
     /// Start a desktop streaming session
     StartDesktop {
         connection_id: String,
+        #[serde(default)]
         width: u16,
+        #[serde(default)]
         height: u16,
     },
     /// Desktop session started confirmation
     DesktopStarted {
+        connection_id: String,
+        width: u16,
+        height: u16,
+    },
+    /// Remote desktop size changed (reactivation or resize took effect)
+    DesktopResized {
         connection_id: String,
         width: u16,
         height: u16,
@@ -110,6 +118,17 @@ pub enum WsMessage {
         x: u16,
         y: u16,
         button_mask: u8,
+    },
+    /// Explicit button transition from the frontend. `button` is the DOM
+    /// button index (0 left / 1 middle / 2 right); the handler maps it to
+    /// the RDP mask bit. Stateless on the wire — immune to dropped events
+    /// during a reconnect.
+    DesktopPointerButton {
+        connection_id: String,
+        x: u16,
+        y: u16,
+        button: u8,
+        pressed: bool,
     },
     /// Clipboard update (bidirectional)
     ClipboardUpdate { connection_id: String, text: String },
@@ -157,6 +176,8 @@ const PTY_WS_DROP_GRACE: Duration = Duration::from_secs(5 * 60);
 
 /// Command byte that identifies a binary terminal-input frame from the frontend.
 const BINARY_INPUT_CMD: u8 = 0x00;
+/// Command byte that identifies a binary desktop frame sent to the frontend.
+const BINARY_DESKTOP_CMD: u8 = 0x02;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -288,6 +309,33 @@ fn decode_input_frame(data: &[u8]) -> Option<(String, &[u8])> {
     }
     let connection_id = String::from_utf8_lossy(&data[3..payload_offset]).to_string();
     Some((connection_id, &data[payload_offset..]))
+}
+
+/// Encode a binary desktop frame:
+///   [0x02][id_len: u16 BE][connection_id bytes]
+///   [x: u16 BE][y: u16 BE][w: u16 BE][h: u16 BE]
+///   [rgba bytes]
+fn encode_desktop_frame(
+    connection_id: &str,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    rgba: &[u8],
+) -> Vec<u8> {
+    let id_bytes = connection_id.as_bytes();
+    let id_len = id_bytes.len().min(u16::MAX as usize);
+    let header_size = 1 + 2 + id_len + 8; // cmd + id_len + id + x/y/w/h
+    let mut frame = Vec::with_capacity(header_size + rgba.len());
+    frame.push(BINARY_DESKTOP_CMD);
+    frame.extend_from_slice(&(id_len as u16).to_be_bytes());
+    frame.extend_from_slice(&id_bytes[..id_len]);
+    frame.extend_from_slice(&x.to_be_bytes());
+    frame.extend_from_slice(&y.to_be_bytes());
+    frame.extend_from_slice(&w.to_be_bytes());
+    frame.extend_from_slice(&h.to_be_bytes());
+    frame.extend_from_slice(rgba);
+    frame
 }
 
 /// Send a JSON control message with a timeout.
@@ -859,17 +907,87 @@ impl WebSocketServer {
                     .connection_manager
                     .get_desktop_connection(&connection_id)
                     .await;
+                tracing::info!("get_desktop_connection result: found={}", client.is_some());
                 if let Some(client) = client {
                     let (w, h) = {
                         let c = client.read().await;
                         c.desktop_size()
                     };
+                    tracing::info!("Desktop size: {}x{}", w, h);
                     let started = WsMessage::DesktopStarted {
                         connection_id: connection_id.clone(),
                         width: w,
                         height: h,
                     };
-                    send_control(&tx, &started).await?;
+                    tracing::info!("Sending DesktopStarted message for {}", connection_id);
+                    let result = send_control(&tx, &started).await;
+                    tracing::info!("send_control result: {:?}", result);
+                    result?;
+
+                    // Spawn frame streaming: start_frame_loop + binary forwarder
+                    let (event_tx, mut event_rx) =
+                        mpsc::unbounded_channel::<crate::desktop_protocol::DesktopEvent>();
+                    let desktop_cancel = CancellationToken::new();
+
+                    // Spawn the frame loop on the connection manager
+                    let cm = self.connection_manager.clone();
+                    let cid = connection_id.clone();
+                    let cancel_clone = desktop_cancel.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = cm.start_desktop_stream(&cid, event_tx, cancel_clone).await
+                        {
+                            tracing::error!("Desktop frame loop error for {}: {}", cid, e);
+                        }
+                    });
+
+                    // Spawn a forwarder that drains event_rx and dispatches:
+                    //  - Frame    → binary desktop-frame message
+                    //  - Resized  → JSON DesktopResized control message
+                    let tx_clone = tx.clone();
+                    let cid = connection_id.clone();
+                    tokio::spawn(async move {
+                        use crate::desktop_protocol::DesktopEvent;
+                        while let Some(ev) = event_rx.recv().await {
+                            match ev {
+                                DesktopEvent::Frame(frame) => {
+                                    let binary = encode_desktop_frame(
+                                        &cid,
+                                        frame.x,
+                                        frame.y,
+                                        frame.width,
+                                        frame.height,
+                                        &frame.rgba_data,
+                                    );
+                                    if tx_clone.send(Message::Binary(binary.into())).await.is_err() {
+                                        break;
+                                    }
+                                }
+                                DesktopEvent::Resized { width, height } => {
+                                    let msg = WsMessage::DesktopResized {
+                                        connection_id: cid.clone(),
+                                        width,
+                                        height,
+                                    };
+                                    let closed = send_control(&tx_clone, &msg)
+                                        .await
+                                        .map(|o| o == SendOutcome::Closed)
+                                        .unwrap_or(true);
+                                    if closed {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        // The frame channel closed without the frontend asking:
+                        // the RDP session loop exited on its own (server
+                        // disconnect, protocol error). Tell the viewer so it
+                        // shows the reconnect panel instead of a frozen frame.
+                        let ended = WsMessage::Error {
+                            message: format!("desktop_session_ended: {cid}"),
+                            code: None,
+                        };
+                        let _ = send_control(&tx_clone, &ended).await;
+                    });
                 } else {
                     let error = WsMessage::Error {
                         message: format!("Desktop connection not found: {}", connection_id),
@@ -904,6 +1022,9 @@ impl WebSocketServer {
                 y,
                 button_mask,
             } => {
+                if button_mask != 0 {
+                    tracing::info!("WS pointer event: x={} y={} mask={:#04x}", x, y, button_mask);
+                }
                 if let Some(client) = self
                     .connection_manager
                     .get_desktop_connection(&connection_id)
@@ -912,6 +1033,39 @@ impl WebSocketServer {
                     let c = client.read().await;
                     if let Err(e) = c.send_pointer(x, y, button_mask).await {
                         tracing::error!("Failed to send desktop pointer event: {}", e);
+                    }
+                }
+                Ok(PtyLifecycleEvent::None)
+            }
+
+            WsMessage::DesktopPointerButton {
+                connection_id,
+                x,
+                y,
+                button,
+                pressed,
+            } => {
+                // DOM button index → RDP mask bit: 0 left, 1 middle, 2 right.
+                let mask_bit = match button {
+                    0 => 0x01u8,
+                    1 => 0x04,
+                    2 => 0x02,
+                    other => {
+                        tracing::debug!("Desktop pointer button: unmapped index {other}");
+                        return Ok(PtyLifecycleEvent::None);
+                    }
+                };
+                if pressed {
+                    tracing::info!("WS pointer button down: x={} y={} bit={:#04x}", x, y, mask_bit);
+                }
+                if let Some(client) = self
+                    .connection_manager
+                    .get_desktop_connection(&connection_id)
+                    .await
+                {
+                    let c = client.read().await;
+                    if let Err(e) = c.send_pointer_button(x, y, mask_bit, pressed).await {
+                        tracing::error!("Failed to send desktop pointer button: {}", e);
                     }
                 }
                 Ok(PtyLifecycleEvent::None)

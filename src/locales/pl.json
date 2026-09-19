@@ -1187,6 +1187,7 @@
     "sendCtrlAltDel": "Wyślij Ctrl+Alt+Del",
     "exitFullScreen": "Zakończ tryb pełnoekranowy",
     "fullScreen": "Pełny ekran",
+    "popOutWindow": "Otwórz w osobnym oknie",
     "disconnect": "Rozłącz"
   },
   "sidebar": {
@@ -1380,7 +1381,14 @@
     "failedToDisconnect": "Nie udało się rozłączyć",
     "desktopDisconnected": "Rozłączono pulpit zdalny",
     "reconnect": "Połącz ponownie",
-    "connectingTo": "Łączenie z {{name}}..."
+    "connectingTo": "Łączenie z {{name}}...",
+    "openedInWindow": "Pulpit otwarty w osobnym oknie",
+    "backToTab": "Pokaż w karcie",
+    "failedToOpenWindow": "Nie udało się otworzyć osobnego okna",
+    "failedToCloseWindow": "Nie udało się zamknąć osobnego okna",
+    "focusWindow": "Przełącz na okno",
+    "disconnect": "Rozłącz",
+    "failedToFocus": "Nie udało się przełączyć na okno"
   },
   "errorBoundary": {
     "somethingWentWrong": "Coś poszło nie tak",
