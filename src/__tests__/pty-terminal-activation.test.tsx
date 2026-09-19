@@ -1,6 +1,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { invoke } from '@tauri-apps/api/core';
 import { PtyTerminal } from '../components/pty-terminal';
 import { MenuBar } from '../components/menu-bar';
 import { dispatchTerminalCommand } from '../lib/terminal-commands';
@@ -689,5 +690,62 @@ describe('PtyTerminal activation', () => {
     view.rerender(<Harness mounted={false} />);
     expect(onOutput).not.toHaveBeenCalled();
     expect(mocks.terminals[0].dispose).toHaveBeenCalledOnce();
+  });
+
+  // Gates the bridge endpoint IPC so connectWebSocket() parks at its last
+  // await; the effect can then be cleaned up before the continuation resumes.
+  async function withGatedEndpoint(run: (releaseEndpoint: () => void) => Promise<void>) {
+    const originalInvoke = vi.mocked(invoke).getMockImplementation();
+    let releaseEndpoint: () => void = () => {};
+    const endpointGate = new Promise<void>((resolve) => { releaseEndpoint = resolve; });
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'get_websocket_endpoint'
+        ? await endpointGate.then(() => ({ port: 9001, token: 'test-token' }))
+        : undefined,
+    );
+    try {
+      await run(releaseEndpoint);
+    } finally {
+      vi.mocked(invoke).mockImplementation(originalInvoke!);
+    }
+  }
+
+  it('does not create a socket after unmount while the bridge endpoint request is in flight', async () => {
+    await withGatedEndpoint(async (releaseEndpoint) => {
+      const onConnectionStatusChange = vi.fn();
+      const view = renderTerminal(false, { onConnectionStatusChange });
+      await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+      expect(mocks.webSockets).toHaveLength(0);
+      const statusCallsAtUnmount = onConnectionStatusChange.mock.calls.length;
+      view.unmount();
+      releaseEndpoint();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+      // The parked continuation resumed into a cleaned-up effect: no orphan
+      // socket, no phantom StartPty, and no status emitted after unmount.
+      expect(mocks.webSockets).toHaveLength(0);
+      expect(onConnectionStatusChange.mock.calls).toHaveLength(statusCallsAtUnmount);
+    });
+  });
+
+  it('drops a pre-cleanup connection attempt instead of creating a stale socket on effect re-run', async () => {
+    await withGatedEndpoint(async (releaseEndpoint) => {
+      const view = renderTerminal(false);
+      await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+      // Changing a connection prop re-runs the terminal effect while the
+      // first attempt is still parked at the endpoint await.
+      view.rerender(<PtyTerminal connectionId="connection-1" connectionName="SSH Server"
+        host="127.0.0.1" username="root2" isActive={false} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+      expect(mocks.webSockets).toHaveLength(0);
+      releaseEndpoint();
+      await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+      // Only the replacement attempt may create a socket — the stale one must
+      // not overwrite wsRef, or this very frame would be dropped by the
+      // onmessage identity check.
+      expect(mocks.webSockets).toHaveLength(1);
+      sendOutputFrame(mocks.webSockets[0], new Uint8Array([65]));
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      expect(mocks.terminals[1].write).toHaveBeenCalledWith('A', expect.any(Function));
+    });
   });
 });

@@ -686,7 +686,10 @@ export function PtyTerminal({
       let startPtyDims: { cols: number; rows: number } | null = null;
       // CRITICAL: Wait for terminal to be properly sized before starting PTY
       await waitForProperSize();
-      
+      // waitForProperSize stops polling without resolving once !isRunning, but
+      // its resolution can race the cleanup within the same tick.
+      if (!isRunning) return;
+
       // Notify parent that we're connecting
       if (connectionStatusRef.current !== 'connecting') {
         connectionStatusRef.current = 'connecting';
@@ -695,6 +698,13 @@ export function PtyTerminal({
       
       // Port + per-launch bridge token from the backend (issue #138).
       const wsUrl = await getWebSocketUrl();
+      // The endpoint IPC has no deadline, so this continuation can resume after
+      // cleanup (unmount or an effect re-run). Creating a socket now would leak
+      // it past cleanup: its onopen would send a phantom StartPty with a live
+      // handshake watchdog, and on an effect re-run it would overwrite the
+      // replacement socket in wsRef — whose output the identity check in
+      // onmessage would then silently drop.
+      if (!isRunning) return;
       console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
       const ws = new WebSocket(wsUrl);
       // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of
