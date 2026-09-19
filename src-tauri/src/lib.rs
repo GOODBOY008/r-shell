@@ -9,6 +9,7 @@ mod proxy;
 mod quit_guard;
 mod rdp_client;
 mod sftp_client;
+mod sftp_transfer;
 mod ssh;
 mod vnc_client;
 mod websocket_server;

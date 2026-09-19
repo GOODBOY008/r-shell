@@ -196,9 +196,63 @@ describe("transfer-queue-reducer", () => {
       });
       expect(next[0].status).toBe("completed");
       expect(next[0].progress).toBe(100);
-      // Note: COMPLETE sets progress=100 but does not update bytesTransferred
-      expect(next[0].bytesTransferred).toBe(500);
+      // COMPLETE finalizes byte accounting from the known total
+      expect(next[0].bytesTransferred).toBe(1000);
+      expect(next[0].speed).toBe(0);
       expect(next[0].completedAt).toBeDefined();
+    });
+
+    it("keeps transferred bytes when the total is unknown (0)", () => {
+      // FTP SIZE / SFTP fstat unavailable: the queue never learns the total,
+      // but the progress channel still records the bytes actually moved.
+      const state = [
+        makeItem({
+          id: "t1",
+          status: "transferring",
+          totalBytes: 0,
+          bytesTransferred: 12345,
+          progress: 100,
+        }),
+      ];
+      const next = transferQueueReducer(state, {
+        type: "COMPLETE",
+        id: "t1",
+      });
+      expect(next[0].status).toBe("completed");
+      expect(next[0].progress).toBe(100);
+      expect(next[0].bytesTransferred).toBe(12345);
+    });
+  });
+
+  describe("PROGRESS totalBytes override", () => {
+    it("adopts the backend-provided total when it differs from the enqueued size", () => {
+      const state = [
+        makeItem({ id: "t1", status: "transferring", totalBytes: 100 }),
+      ];
+      const next = transferQueueReducer(state, {
+        type: "PROGRESS",
+        id: "t1",
+        progress: 10,
+        bytesTransferred: 300,
+        speed: 50,
+        totalBytes: 3000,
+      });
+      expect(next[0].totalBytes).toBe(3000);
+      expect(next[0].bytesTransferred).toBe(300);
+    });
+
+    it("keeps the enqueued total when the backend total is absent", () => {
+      const state = [
+        makeItem({ id: "t1", status: "transferring", totalBytes: 100 }),
+      ];
+      const next = transferQueueReducer(state, {
+        type: "PROGRESS",
+        id: "t1",
+        progress: 10,
+        bytesTransferred: 10,
+        speed: 5,
+      });
+      expect(next[0].totalBytes).toBe(100);
     });
   });
 

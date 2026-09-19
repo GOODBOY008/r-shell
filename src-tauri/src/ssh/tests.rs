@@ -217,8 +217,8 @@ mod tests {
     // sshd disconnect on the blank password itself — so the "none" fallback
     // branch has no OpenSSH fixture and is kept deliberately simple.
     fn empty_password_endpoint() -> (String, u16) {
-        let host = std::env::var("RSHELL_EMPTY_PASS_HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let host =
+            std::env::var("RSHELL_EMPTY_PASS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = std::env::var("RSHELL_EMPTY_PASS_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
@@ -605,8 +605,8 @@ mod shell_integration_tests {
     // RSHELL_DEFAULT_KEY_PORT. Targets Unix hosts: $HOME repointing is how the
     // default-key resolution (dirs::home_dir) picks up the temp key.
     fn default_key_endpoint() -> (String, u16) {
-        let host = std::env::var("RSHELL_DEFAULT_KEY_HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let host =
+            std::env::var("RSHELL_DEFAULT_KEY_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
         let port = std::env::var("RSHELL_DEFAULT_KEY_PORT")
             .ok()
             .and_then(|p| p.parse().ok())
@@ -630,14 +630,17 @@ mod shell_integration_tests {
         let home = tempfile::tempdir().expect("tempdir for fake HOME");
         let ssh_dir = home.path().join(".ssh");
         std::fs::create_dir_all(&ssh_dir).expect("create $HOME/.ssh");
-        let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("docker/default-key-sshd/id_rsa");
+        let fixture_key =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docker/default-key-sshd/id_rsa");
         std::fs::copy(&fixture_key, ssh_dir.join("id_rsa")).expect("copy fixture key to fake HOME");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(ssh_dir.join("id_rsa"), std::fs::Permissions::from_mode(0o600))
-                .expect("chmod 600 the fixture key");
+            std::fs::set_permissions(
+                ssh_dir.join("id_rsa"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .expect("chmod 600 the fixture key");
         }
 
         struct RestoreHome(Option<std::ffi::OsString>);
@@ -740,6 +743,176 @@ mod shell_integration_tests {
             msg.contains(&wrong_key_path) && msg.contains("authorized"),
             "error should name the attempted key file, got: {msg}"
         );
+    }
+
+    // ── Streaming transfer engine (progress + throughput) ────────────────────
+    // Reuses the default-key fixture (src-tauri/docker/default-key-sshd on
+    // :2224). Exercises the pipelined download/upload paths end-to-end:
+    // byte-for-byte round trip, progress events (monotonic, final == size),
+    // and prints observed throughput with --nocapture.
+    mod transfer_engine {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        /// FNV-1a fold — cheap mismatch diagnostics; the test still does a
+        /// full byte-for-byte comparison.
+        fn fold_hash(data: &[u8]) -> u64 {
+            data.iter().fold(0xcbf29ce484222325u64, |h, b| {
+                (h ^ *b as u64).wrapping_mul(0x100000001b3)
+            })
+        }
+
+        async fn fixture_client() -> SshClient {
+            let (host, port) = super::default_key_endpoint();
+            let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("docker/default-key-sshd/id_rsa");
+            let mut client = SshClient::new();
+            client
+                .connect(&SshConfig {
+                    host,
+                    port,
+                    username: "testuser".to_string(),
+                    auth_method: AuthMethod::PublicKey {
+                        key_path: fixture_key.to_string_lossy().into_owned(),
+                        passphrase: None,
+                    },
+                    compression: false,
+                    keepalive_interval: None,
+                    keepalive_max: None,
+                    proxy: None,
+                    host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                    tunnel: None,
+                })
+                .await
+                .expect("connect to default-key fixture");
+            client
+        }
+
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_transfer_roundtrip_with_progress() {
+            let mut client = fixture_client().await;
+            let size: u64 = 256 * 1024 * 1024;
+
+            // Deterministic payload (not zeros — zeros would hide offset bugs
+            // only partially; a pseudo-random pattern catches any mismatch).
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let remote_path = "/tmp/rshell-transfer-e2e.bin";
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+
+            // Upload with progress
+            let up_bytes = Arc::new(AtomicU64::new(0));
+            let up_total = Arc::new(AtomicU64::new(0));
+            let up_events = Arc::new(AtomicU64::new(0));
+            {
+                let (up_bytes, up_total, up_events) =
+                    (up_bytes.clone(), up_total.clone(), up_events.clone());
+                let progress = move |transferred: u64, total: u64| {
+                    up_bytes.store(transferred, Ordering::Relaxed);
+                    up_total.store(total, Ordering::Relaxed);
+                    up_events.fetch_add(1, Ordering::Relaxed);
+                };
+                let started = Instant::now();
+                let n = client
+                    .upload_file_with_progress(
+                        local_src.path().to_string_lossy().as_ref(),
+                        remote_path,
+                        Some(&progress),
+                    )
+                    .await
+                    .expect("upload");
+                let elapsed = started.elapsed().as_secs_f64();
+                println!(
+                    "upload: {n} bytes in {elapsed:.2}s = {:.1} MB/s",
+                    n as f64 / 1024.0 / 1024.0 / elapsed
+                );
+                assert_eq!(n, size);
+            }
+            assert_eq!(
+                up_bytes.load(Ordering::Relaxed),
+                size,
+                "final upload progress"
+            );
+            assert_eq!(up_total.load(Ordering::Relaxed), size, "upload total");
+            assert!(
+                up_events.load(Ordering::Relaxed) >= 2,
+                "progress events must stream (got {})",
+                up_events.load(Ordering::Relaxed)
+            );
+
+            // Download with progress
+            let down_bytes = Arc::new(AtomicU64::new(0));
+            let down_events = Arc::new(AtomicU64::new(0));
+            let seen_monotonic = Arc::new(AtomicBool::new(true));
+            {
+                let (down_bytes, down_events, seen_monotonic) = (
+                    down_bytes.clone(),
+                    down_events.clone(),
+                    seen_monotonic.clone(),
+                );
+                let progress = move |transferred: u64, _total: u64| {
+                    if transferred < down_bytes.load(Ordering::Relaxed) {
+                        seen_monotonic.store(false, Ordering::Relaxed);
+                    }
+                    down_bytes.store(transferred, Ordering::Relaxed);
+                    down_events.fetch_add(1, Ordering::Relaxed);
+                };
+                let started = Instant::now();
+                let n = client
+                    .download_file_with_progress(
+                        remote_path,
+                        downloaded.path().to_string_lossy().as_ref(),
+                        Some(&progress),
+                    )
+                    .await
+                    .expect("download");
+                let elapsed = started.elapsed().as_secs_f64();
+                println!(
+                    "download: {n} bytes in {elapsed:.2}s = {:.1} MB/s",
+                    n as f64 / 1024.0 / 1024.0 / elapsed
+                );
+                assert_eq!(n, size);
+            }
+            assert!(
+                seen_monotonic.load(Ordering::Relaxed),
+                "progress must be monotonic"
+            );
+            assert_eq!(
+                down_bytes.load(Ordering::Relaxed),
+                size,
+                "final download progress"
+            );
+            assert!(down_events.load(Ordering::Relaxed) >= 2);
+
+            // Byte-for-byte round trip
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(got.len(), size as usize);
+            assert_eq!(fold_hash(&got), expected_hash, "round trip hash must match");
+            assert_eq!(got.as_slice(), payload, "round trip must be byte-exact");
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
+        }
     }
 }
 

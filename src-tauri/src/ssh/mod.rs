@@ -933,126 +933,111 @@ impl SshClient {
     }
 
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {
-        if let Some(session) = &self.session {
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
+        self.download_file_with_progress(remote_path, local_path, None)
+            .await
+    }
 
-            // Open remote file for reading
-            let mut remote_file = sftp.open(remote_path).await?;
-
-            // Read file content
-            let mut buffer = Vec::new();
-            let mut temp_buf = vec![0u8; 8192];
-            let mut total_bytes = 0u64;
-
-            loop {
-                let n = remote_file.read(&mut temp_buf).await?;
-                if n == 0 {
-                    break;
-                }
-                buffer.extend_from_slice(&temp_buf[..n]);
-                total_bytes += n as u64;
-            }
-
-            // Write to local file
-            tokio::fs::write(local_path, buffer).await?;
-
-            Ok(total_bytes)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
-        }
+    /// Download via the pipelined streaming engine (`sftp_transfer`), with
+    /// optional progress callbacks. Keeps whole files out of memory.
+    pub async fn download_file_with_progress(
+        &self,
+        remote_path: &str,
+        local_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+    ) -> Result<u64> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
+        crate::sftp_transfer::download_file(session, remote_path, local_path, progress).await
     }
 
     pub async fn download_file_to_memory(&self, remote_path: &str) -> Result<Vec<u8>> {
-        if let Some(session) = &self.session {
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
+        let sftp = self.open_sftp_session_with_transfer_timeout().await?;
 
-            // Open remote file for reading
-            let mut remote_file = sftp.open(remote_path).await?;
+        // Open remote file for reading
+        let mut remote_file = sftp
+            .open(remote_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open remote file '{}': {}", remote_path, e))?;
 
-            // Read file content
-            let mut buffer = Vec::new();
-            let mut temp_buf = vec![0u8; 8192];
+        let mut buffer = Vec::new();
+        let mut temp_buf = vec![0u8; 32768];
 
-            loop {
-                let n = remote_file.read(&mut temp_buf).await?;
-                if n == 0 {
-                    break;
-                }
-                buffer.extend_from_slice(&temp_buf[..n]);
+        loop {
+            let n = remote_file.read(&mut temp_buf).await?;
+            if n == 0 {
+                break;
             }
-
-            Ok(buffer)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
+            buffer.extend_from_slice(&temp_buf[..n]);
         }
+
+        Ok(buffer)
     }
 
     pub async fn upload_file(&self, local_path: &str, remote_path: &str) -> Result<u64> {
-        if let Some(session) = &self.session {
-            // Read local file
-            let data = tokio::fs::read(local_path).await?;
-            let total_bytes = data.len() as u64;
+        self.upload_file_with_progress(local_path, remote_path, None)
+            .await
+    }
 
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
+    /// Upload via the pipelined streaming engine (`sftp_transfer`), with
+    /// optional progress callbacks. Streams from disk instead of loading the
+    /// whole file into memory.
+    pub async fn upload_file_with_progress(
+        &self,
+        local_path: &str,
+        remote_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+    ) -> Result<u64> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
+        crate::sftp_transfer::upload_file(session, local_path, remote_path, progress).await
+    }
 
-            // Create remote file for writing
-            let mut remote_file = sftp.create(remote_path).await?;
-
-            // Write data in chunks
-            let mut offset = 0;
-            let chunk_size = 8192;
-
-            while offset < data.len() {
-                let end = std::cmp::min(offset + chunk_size, data.len());
-                remote_file.write_all(&data[offset..end]).await?;
-                offset = end;
-            }
-
-            remote_file.flush().await?;
-
-            Ok(total_bytes)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
-        }
+    /// Open an SFTP subsystem session for small one-shot operations (viewer
+    /// reads, editor saves). Uses the transfer request timeout so a
+    /// momentarily stalled server doesn't abort the read.
+    async fn open_sftp_session_with_transfer_timeout(&self) -> Result<SftpSession> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
+        let channel = session.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        let config = russh_sftp::client::Config {
+            request_timeout_secs: crate::sftp_transfer::REQUEST_TIMEOUT_SECS,
+            ..russh_sftp::client::Config::default()
+        };
+        Ok(SftpSession::new_with_config(channel.into_stream(), config).await?)
     }
 
     pub async fn upload_file_from_bytes(&self, data: &[u8], remote_path: &str) -> Result<u64> {
-        if let Some(session) = &self.session {
-            let total_bytes = data.len() as u64;
-
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
-
-            // Create remote file for writing
-            let mut remote_file = sftp.create(remote_path).await?;
-
-            // Write data in chunks
-            let mut offset = 0;
-            let chunk_size = 8192;
-
-            while offset < data.len() {
-                let end = std::cmp::min(offset + chunk_size, data.len());
-                remote_file.write_all(&data[offset..end]).await?;
-                offset = end;
-            }
-
-            remote_file.flush().await?;
-
-            Ok(total_bytes)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
+        if !self.is_connected() {
+            return Err(anyhow::anyhow!("Not connected"));
         }
+        let total_bytes = data.len() as u64;
+
+        let sftp = self.open_sftp_session_with_transfer_timeout().await?;
+
+        // Create remote file for writing
+        let mut remote_file = sftp.create(remote_path).await?;
+
+        // Write data in chunks large enough for the session's internal
+        // write pipeline to keep several requests in flight
+        let mut offset = 0;
+        let chunk_size = 256 * 1024;
+
+        while offset < data.len() {
+            let end = std::cmp::min(offset + chunk_size, data.len());
+            remote_file.write_all(&data[offset..end]).await?;
+            offset = end;
+        }
+
+        remote_file.flush().await?;
+
+        Ok(total_bytes)
     }
 }
 

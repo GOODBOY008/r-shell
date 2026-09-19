@@ -4,6 +4,7 @@ use crate::os_detect::{self, OsInfo};
 use crate::os_keypath::resolve_private_key_path;
 use crate::proxy::{ProxyConfig, ProxyType};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
+use crate::sftp_transfer;
 use crate::ssh::{AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -2543,13 +2544,26 @@ pub async fn list_remote_files(
     }
 }
 
+/// Build a boxed progress callback that forwards transfer progress to the
+/// frontend over the invoke's IPC channel.
+fn transfer_progress_callback(
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
+) -> Box<dyn Fn(u64, u64) + Send + Sync> {
+    Box::new(move |transferred: u64, total: u64| {
+        let _ = on_progress.send(sftp_transfer::TransferProgress { transferred, total });
+    })
+}
+
 async fn download_remote_file_to_path(
     connection_id: &str,
     remote_path: &str,
     local_path: &str,
     state: &Arc<ConnectionManager>,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
 ) -> Result<FileTransferResponse, String> {
     let conn_type = state.get_connection_type(connection_id).await;
+    let progress = transfer_progress_callback(on_progress);
+    let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
 
     let result = match conn_type.as_deref() {
         Some("SFTP") => {
@@ -2558,7 +2572,9 @@ async fn download_remote_file_to_path(
             let client = connections
                 .get(connection_id)
                 .ok_or("SFTP connection not found".to_string())?;
-            client.download_file(remote_path, local_path).await
+            client
+                .download_file_with_progress(remote_path, local_path, progress_ref)
+                .await
         }
         Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
@@ -2566,7 +2582,9 @@ async fn download_remote_file_to_path(
             let client = connections
                 .get_mut(connection_id)
                 .ok_or("FTP connection not found".to_string())?;
-            client.download_file(remote_path, local_path).await
+            client
+                .download_file_with_progress(remote_path, local_path, progress_ref)
+                .await
         }
         Some(other) => return Err(format!("Unsupported protocol: {}", other)),
         None => {
@@ -2577,7 +2595,9 @@ async fn download_remote_file_to_path(
                 .await
                 .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
             let client = connection.read().await;
-            client.download_file(remote_path, local_path).await
+            client
+                .download_file_with_progress(remote_path, local_path, progress_ref)
+                .await
         }
     };
 
@@ -2602,9 +2622,17 @@ pub async fn download_remote_file(
     connection_id: String,
     remote_path: String,
     local_path: String,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
-    download_remote_file_to_path(&connection_id, &remote_path, &local_path, state.inner()).await
+    download_remote_file_to_path(
+        &connection_id,
+        &remote_path,
+        &local_path,
+        state.inner(),
+        on_progress,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2614,6 +2642,7 @@ pub async fn download_remote_file_confined(
     destination_root: String,
     remote_relative_path: String,
     destination_relative_path: String,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
     validate_remote_relative_path(&remote_relative_path)?;
@@ -2634,7 +2663,14 @@ pub async fn download_remote_file_confined(
         )
     };
 
-    download_remote_file_to_path(&connection_id, &remote_path, local_path, state.inner()).await
+    download_remote_file_to_path(
+        &connection_id,
+        &remote_path,
+        local_path,
+        state.inner(),
+        on_progress,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2642,9 +2678,12 @@ pub async fn upload_remote_file(
     connection_id: String,
     local_path: String,
     remote_path: String,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
     let conn_type = state.get_connection_type(&connection_id).await;
+    let progress = transfer_progress_callback(on_progress);
+    let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
 
     let result = match conn_type.as_deref() {
         Some("SFTP") => {
@@ -2653,7 +2692,9 @@ pub async fn upload_remote_file(
             let client = connections
                 .get(&connection_id)
                 .ok_or("SFTP connection not found".to_string())?;
-            client.upload_file(&local_path, &remote_path).await
+            client
+                .upload_file_with_progress(&local_path, &remote_path, progress_ref)
+                .await
         }
         Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
@@ -2661,7 +2702,9 @@ pub async fn upload_remote_file(
             let client = connections
                 .get_mut(&connection_id)
                 .ok_or("FTP connection not found".to_string())?;
-            client.upload_file(&local_path, &remote_path).await
+            client
+                .upload_file_with_progress(&local_path, &remote_path, progress_ref)
+                .await
         }
         Some(other) => return Err(format!("Unsupported protocol: {}", other)),
         None => {
@@ -2672,7 +2715,9 @@ pub async fn upload_remote_file(
                 .await
                 .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
             let client = connection.read().await;
-            client.upload_file(&local_path, &remote_path).await
+            client
+                .upload_file_with_progress(&local_path, &remote_path, progress_ref)
+                .await
         }
     };
 
@@ -4014,12 +4059,8 @@ fn homebrew_managed() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    let home = std::env::var("HOME")
-        .ok()
-        .map(std::path::PathBuf::from);
-    app_bundle_dir(&exe).is_some_and(|bundle| {
-        bundle_in_applications(bundle, home.as_deref())
-    })
+    let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+    app_bundle_dir(&exe).is_some_and(|bundle| bundle_in_applications(bundle, home.as_deref()))
 }
 
 /// True when the startup auto-check for updates must be skipped. Dev/e2e
@@ -4219,9 +4260,13 @@ mod updater_tests {
         let installed = std::path::Path::new("/Applications/r-shell.app/Contents/MacOS/r-shell");
         let bundle = app_bundle_dir(installed).unwrap();
         assert_eq!(bundle, std::path::Path::new("/Applications/r-shell.app"));
-        assert!(bundle_in_applications(bundle, Some(std::path::Path::new("/Users/dev"))));
+        assert!(bundle_in_applications(
+            bundle,
+            Some(std::path::Path::new("/Users/dev"))
+        ));
 
-        let user_apps = std::path::Path::new("/Users/dev/Applications/r-shell.app/Contents/MacOS/r-shell");
+        let user_apps =
+            std::path::Path::new("/Users/dev/Applications/r-shell.app/Contents/MacOS/r-shell");
         assert!(bundle_in_applications(
             app_bundle_dir(user_apps).unwrap(),
             Some(std::path::Path::new("/Users/dev"))

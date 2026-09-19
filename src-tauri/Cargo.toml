@@ -69,6 +69,13 @@ panic = "abort"        # Smaller binary size
 opt-level = 0          # No optimization for faster compile
 debug = true           # Include debug info
 
+# Keep dependencies optimized in dev builds: at opt-level 0 the SSH crypto
+# stack caps transfer throughput at a few MB/s no matter how fast the
+# transfer engine is. The r-shell crate itself stays unoptimized, so
+# incremental rebuilds during `pnpm tauri dev` remain fast.
+[profile.dev.package."*"]
+opt-level = 3
+
 # Optional: Super optimized release
 [profile.release-optimized]
 inherits = "release"

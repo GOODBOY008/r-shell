@@ -44,6 +44,8 @@ export type TransferAction =
       progress: number;
       bytesTransferred: number;
       speed: number;
+      /** Authoritative total from the backend (overrides the enqueued size). */
+      totalBytes?: number;
     }
   | { type: "COMPLETE"; id: string }
   | { type: "FAIL"; id: string; error: string }
@@ -101,6 +103,9 @@ export function transferQueueReducer(
               progress: action.progress,
               bytesTransferred: action.bytesTransferred,
               speed: action.speed,
+              ...(action.totalBytes !== undefined
+                ? { totalBytes: action.totalBytes }
+                : {}),
             }
           : item,
       );
@@ -113,6 +118,11 @@ export function transferQueueReducer(
               ...item,
               status: "completed" as const,
               progress: 100,
+              speed: 0,
+              // When the total is unknown (0), keep the bytes actually moved
+              // rather than reporting a 0-byte completed transfer.
+              bytesTransferred:
+                item.totalBytes > 0 ? item.totalBytes : item.bytesTransferred,
               completedAt: Date.now(),
             }
           : item,

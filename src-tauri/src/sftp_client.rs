@@ -5,7 +5,6 @@ use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::ssh::{Client, HostKeyPolicy, TunnelConfig};
 
@@ -298,60 +297,47 @@ impl StandaloneSftpClient {
     }
 
     /// Download a remote file to a local path. Returns bytes downloaded.
+    ///
+    /// Uses the pipelined streaming engine on a dedicated SFTP channel so
+    /// large transfers neither buffer the whole file in memory nor stall the
+    /// shared listing session.
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {
-        let sftp = self
-            .sftp
+        self.download_file_with_progress(remote_path, local_path, None)
+            .await
+    }
+
+    pub async fn download_file_with_progress(
+        &self,
+        remote_path: &str,
+        local_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+    ) -> Result<u64> {
+        let session = self
+            .session
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
-
-        let mut remote_file = sftp
-            .open(remote_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to open remote file '{}': {}", remote_path, e))?;
-
-        let mut buffer = Vec::new();
-        let mut temp_buf = vec![0u8; 32768];
-        let mut total_bytes = 0u64;
-
-        loop {
-            let n = remote_file.read(&mut temp_buf).await?;
-            if n == 0 {
-                break;
-            }
-            buffer.extend_from_slice(&temp_buf[..n]);
-            total_bytes += n as u64;
-        }
-
-        tokio::fs::write(local_path, buffer).await?;
-        Ok(total_bytes)
+        crate::sftp_transfer::download_file(session, remote_path, local_path, progress).await
     }
 
     /// Upload a local file to a remote path. Returns bytes uploaded.
+    ///
+    /// Streams from disk through the pipelined transfer engine.
     pub async fn upload_file(&self, local_path: &str, remote_path: &str) -> Result<u64> {
-        let sftp = self
-            .sftp
+        self.upload_file_with_progress(local_path, remote_path, None)
+            .await
+    }
+
+    pub async fn upload_file_with_progress(
+        &self,
+        local_path: &str,
+        remote_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+    ) -> Result<u64> {
+        let session = self
+            .session
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
-
-        let data = tokio::fs::read(local_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read local file '{}': {}", local_path, e))?;
-        let total_bytes = data.len() as u64;
-
-        let mut remote_file = sftp.create(remote_path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to create remote file '{}': {}", remote_path, e)
-        })?;
-
-        let chunk_size = 32768;
-        let mut offset = 0;
-        while offset < data.len() {
-            let end = std::cmp::min(offset + chunk_size, data.len());
-            remote_file.write_all(&data[offset..end]).await?;
-            offset = end;
-        }
-        remote_file.flush().await?;
-
-        Ok(total_bytes)
+        crate::sftp_transfer::upload_file(session, local_path, remote_path, progress).await
     }
 
     /// Create a directory on the remote server.
