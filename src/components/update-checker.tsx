@@ -102,6 +102,10 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // The auto toast's "Download update" action also opens the dialog from
+  // outside the component tree (sonner holds the onClick), so it routes
+  // through the same restore-on-reopen effect as the MenuBar pill signal.
+  const [toastOpenSignal, setToastOpenSignal] = useState(0);
   const [announcement, setAnnouncement] = useState<UpdateAnnouncement | null>(null);
   // Synchronous mirror of `announcement`, read inside async callbacks where
   // the state closure may be stale (and after `setStatus('checking')`).
@@ -113,6 +117,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
   }, []);
   const lastSignalRef = useRef<number | undefined>(checkSignal);
   const lastOpenSignalRef = useRef<number | undefined>(openDialogSignal);
+  const lastToastOpenSignalRef = useRef(0);
   const busyRef = useRef(false);
   // Running app version, used to include it in the "up to date" toast. Kept in
   // a ref so the checkForUpdates closure always reads the latest value and a
@@ -207,7 +212,11 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
             // Explicit close button: the user must be able to dismiss an
             // auto-discovered update without acting on it.
             closeButton: true,
-            action: { label: t('updateChecker.downloadUpdate'), onClick: () => setDialogOpen(true) },
+            // Route through the shared open path instead of setDialogOpen: a
+            // "Later" dismissal may have cleared the dialog state since the
+            // toast was shown, and the reopened dialog needs the same
+            // version/ready restore the pill click gets.
+            action: { label: t('updateChecker.downloadUpdate'), onClick: () => setToastOpenSignal((n) => n + 1) },
           });
         }
         setStatus(stillReady ? 'ready' : 'available');
@@ -401,10 +410,20 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
       if (context.autoCheckDisabled || context.homebrewManaged || !isAutoCheckEnabled()) return;
       // VS Code-style delayed first check: avoids racing the startup
       // connection-restore traffic and a not-yet-ready network at launch.
-      firstCheckTimer = setTimeout(() => void checkForUpdates(false), FIRST_CHECK_DELAY_MS);
+      // Both timer callbacks re-read the preference on every fire: turning
+      // "Check for updates" off in Settings mid-session must silence the
+      // pending first check and all periodic re-checks, not just future
+      // schedulings (the timers themselves keep running as no-ops).
+      firstCheckTimer = setTimeout(() => {
+        if (!isAutoCheckEnabled()) return;
+        void checkForUpdates(false);
+      }, FIRST_CHECK_DELAY_MS);
       // Long-lived sessions re-check periodically; a launch-only check would
       // miss every release published after startup.
-      interval = setInterval(() => void checkForUpdates(false), AUTO_CHECK_INTERVAL_MS);
+      interval = setInterval(() => {
+        if (!isAutoCheckEnabled()) return;
+        void checkForUpdates(false);
+      }, AUTO_CHECK_INTERVAL_MS);
     };
 
     invoke<UpdateContext>('get_update_context')
@@ -432,22 +451,26 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
     }
   }, [checkSignal, checkForUpdates]);
 
-  // MenuBar pill click → open the update dialog. The dialog-close reset
-  // clears updateInfo, so restore it from latestUpdateRef to keep the
-  // version text accurate after a "Later" dismissal.
+  // Outside entry points (MenuBar pill click, auto toast action) → open the
+  // update dialog. The dialog-close reset clears updateInfo, so restore it
+  // from latestUpdateRef to keep the version text accurate after a "Later"
+  // dismissal — whichever entry point was used.
   useEffect(() => {
-    if (typeof openDialogSignal === 'number' && lastOpenSignalRef.current !== openDialogSignal) {
-      lastOpenSignalRef.current = openDialogSignal;
-      if (!updateInfo && latestUpdateRef.current) {
-        setUpdateInfo(latestUpdateRef.current);
-        // A ready announcement restores the dialog into the ready state so
-        // it matches the pill ("Restart to Update") instead of offering a
-        // redundant download.
-        setStatus(announcement?.ready ? 'ready' : 'available');
-      }
-      setDialogOpen(true);
+    const pillSignal =
+      typeof openDialogSignal === 'number' && lastOpenSignalRef.current !== openDialogSignal;
+    const toastSignal = lastToastOpenSignalRef.current !== toastOpenSignal;
+    if (!pillSignal && !toastSignal) return;
+    if (pillSignal) lastOpenSignalRef.current = openDialogSignal;
+    if (toastSignal) lastToastOpenSignalRef.current = toastOpenSignal;
+    if (!updateInfo && latestUpdateRef.current) {
+      setUpdateInfo(latestUpdateRef.current);
+      // A ready announcement restores the dialog into the ready state so it
+      // matches the pill ("Restart to Update") instead of offering a
+      // redundant download.
+      setStatus(announcement?.ready ? 'ready' : 'available');
     }
-  }, [openDialogSignal, updateInfo, announcement]);
+    setDialogOpen(true);
+  }, [openDialogSignal, toastOpenSignal, updateInfo, announcement]);
 
   // Surface availability outside the dialog (MenuBar pill). The announcement
   // outlives dialog closes so the pill persists until the update is handled.

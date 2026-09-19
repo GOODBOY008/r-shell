@@ -148,6 +148,37 @@ describe('UpdateChecker', () => {
       expect(mockInvoke).not.toHaveBeenCalledWith('updater_check', expect.anything());
     });
 
+    it('skips the pending first check when the preference is turned off before it fires', async () => {
+      // The preference must be honored at fire time, not only when the
+      // timers are created: opting out in Settings during the 30s window
+      // still has to cancel the pending first check.
+      render(<UpdateChecker />);
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ checkUpdates: false }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(FIRST_CHECK_DELAY_MS + 5_000); });
+      expect(mockInvoke).toHaveBeenCalledWith('get_update_context');
+      expect(mockInvoke).not.toHaveBeenCalledWith('updater_check', expect.anything());
+    });
+
+    it('stops periodic re-checks when the preference is turned off mid-session', async () => {
+      render(<UpdateChecker />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(FIRST_CHECK_DELAY_MS); });
+      const checkCallCount = () =>
+        mockInvoke.mock.calls.filter(([cmd]) => cmd === 'updater_check').length;
+      expect(checkCallCount()).toBe(1);
+
+      // User turns "Check for updates" off while the app stays open: the
+      // 6-hour interval keeps existing but must become a no-op.
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ checkUpdates: false }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_CHECK_INTERVAL_MS); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_CHECK_INTERVAL_MS); });
+      expect(checkCallCount()).toBe(1);
+
+      // Re-enabling the preference resumes the checks without a remount.
+      localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ checkUpdates: true }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(AUTO_CHECK_INTERVAL_MS); });
+      expect(checkCallCount()).toBe(2);
+    });
+
     it('never auto-checks on a Homebrew-managed install', async () => {
       mockInvoke.mockImplementation((cmd: string) => {
         if (cmd === 'get_update_context') return Promise.resolve(makeContext({ homebrewManaged: true }));
@@ -949,6 +980,29 @@ describe('UpdateChecker', () => {
       expect(screen.getByText('Update ready to install')).toBeTruthy();
       expect(screen.getByText('Restart now')).toBeTruthy();
       expect(screen.queryByText('Download update')).toBeNull();
+    });
+
+    it('restores the dialog state when reopened from the toast action after a Later dismissal', async () => {
+      // The toast lives 30s and can outlive a "Later" dismissal: pill opens
+      // the dialog, Later clears updateInfo/status, then the still-visible
+      // toast action reopens it — it must go through the same restore path
+      // as the pill and show the version metadata again, not a blank idle
+      // prompt.
+      setupAutoCheck(makeUpdateMeta('2.0.0'));
+      const { rerender } = render(<UpdateChecker openDialogSignal={0} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(FIRST_CHECK_DELAY_MS); });
+      expect(mockToast.info).toHaveBeenCalledTimes(1);
+
+      rerender(<UpdateChecker openDialogSignal={1} />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+      await act(async () => { screen.getByText('Later').click(); });
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      const [, opts] = mockToast.info.mock.calls[0];
+      await act(async () => { opts.action.onClick(); });
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(screen.getByText(/Version 2.0.0/)).toBeTruthy();
+      expect(screen.getByText('Download update')).toBeTruthy();
     });
   });
 
