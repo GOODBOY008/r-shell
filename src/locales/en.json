@@ -1159,6 +1159,7 @@
   },
   "terminal": {
     "search": "Search...",
+    "unreadOutput": "Unread terminal output",
     "groupAriaLabel": "Terminal group {{id}}",
     "a11y": {
       "tabMovedToPosition": "Moved to position {{position}} of {{total}}",

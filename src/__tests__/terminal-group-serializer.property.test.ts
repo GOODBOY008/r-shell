@@ -25,6 +25,7 @@ const arbitraryTerminalTab: fc.Arbitrary<TerminalTab> = fc.record({
   originalConnectionId: fc.option(fc.uuid(), { nil: undefined }),
   connectionStatus: fc.constantFrom('connected', 'connecting', 'disconnected'),
   reconnectCount: fc.nat({ max: 5 }),
+  hasUnreadOutput: fc.constant(false),
 });
 
 const arbitraryTerminalGroup: fc.Arbitrary<TerminalGroup> = fc
@@ -90,6 +91,23 @@ const arbitraryTerminalGroupState: fc.Arbitrary<TerminalGroupState> = fc
 // ── Property Tests ──
 
 describe('terminal-group-serializer property tests', () => {
+  it('discards unread flags across arbitrary split layouts while preserving all persisted fields', () => {
+    fc.assert(fc.property(arbitraryTerminalGroupState, fc.boolean(), (state, unread) => {
+      const runtime = {
+        ...state,
+        groups: Object.fromEntries(Object.entries(state.groups).map(([id, group]) => [id, {
+          ...group, tabs: group.tabs.map((tab) => ({ ...tab, hasUnreadOutput: unread })),
+        }])),
+      };
+      const json = serialize(runtime);
+      expect(json).not.toContain('hasUnreadOutput');
+      // The original generated state is fully read; every other field must round-trip.
+      expect(deserialize(json)).toEqual(state);
+      expect(Object.values(runtime.groups).flatMap((group) => group.tabs)
+        .every((tab) => tab.hasUnreadOutput === unread)).toBe(true);
+    }), { numRuns: 100 });
+  });
+
   // Feature: terminal-split-view, Property 9: 布局状态序列化往返一致性
   // **Validates: Requirements 3.5, 3.6, 3.7**
   it('Property 9: serialize then deserialize produces equivalent state', () => {

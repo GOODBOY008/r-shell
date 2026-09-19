@@ -28,6 +28,8 @@ interface PtyTerminalProps {
   appearanceKey?: number;
   themeKey?: number;
   isActive?: boolean;
+  /** Non-empty PTY output only, not local status banners or scrollback rendering. */
+  onOutput?: (connectionId: string) => void;
   onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => void;
   /** Xshell-style detach (Ctrl+A then D): keep the session alive in the background. */
   onDetach?: (connectionId: string) => void;
@@ -115,6 +117,7 @@ export function PtyTerminal({
   appearanceKey = 0,
   themeKey = 0,
   isActive = true,
+  onOutput,
   onConnectionStatusChange,
   onDetach,
 }: PtyTerminalProps) {
@@ -124,6 +127,15 @@ export function PtyTerminal({
   const fitRef = React.useRef<FitAddon | null>(null);
   const searchRef = React.useRef<SearchAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
+  const onOutputRef = React.useRef(onOutput);
+  // Update at commit time, before another output event can observe old visibility.
+  // Callback changes must never restart the terminal/WS creation effect below.
+  React.useLayoutEffect(() => {
+    onOutputRef.current = onOutput;
+    // Revoke at the unmount commit, not only in passive WS cleanup: the same
+    // tab id may already have been reopened when an old socket event arrives.
+    return () => { onOutputRef.current = undefined; };
+  }, [onOutput]);
   const rendererRef = React.useRef<string>('canvas');
   const webglAddonRef = React.useRef<WebglAddon | null>(null);
   // Lazy WebGL controls, populated by the terminal-creation effect so the
@@ -674,7 +686,10 @@ export function PtyTerminal({
       let startPtyDims: { cols: number; rows: number } | null = null;
       // CRITICAL: Wait for terminal to be properly sized before starting PTY
       await waitForProperSize();
-      
+      // waitForProperSize stops polling without resolving once !isRunning, but
+      // its resolution can race the cleanup within the same tick.
+      if (!isRunning) return;
+
       // Notify parent that we're connecting
       if (connectionStatusRef.current !== 'connecting') {
         connectionStatusRef.current = 'connecting';
@@ -683,6 +698,13 @@ export function PtyTerminal({
       
       // Port + per-launch bridge token from the backend (issue #138).
       const wsUrl = await getWebSocketUrl();
+      // The endpoint IPC has no deadline, so this continuation can resume after
+      // cleanup (unmount or an effect re-run). Creating a socket now would leak
+      // it past cleanup: its onopen would send a phantom StartPty with a live
+      // handshake watchdog, and on an effect re-run it would overwrite the
+      // replacement socket in wsRef — whose output the identity check in
+      // onmessage would then silently drop.
+      if (!isRunning) return;
       console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
       const ws = new WebSocket(wsUrl);
       // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of
@@ -825,6 +847,7 @@ export function PtyTerminal({
       };
 
       ws.onmessage = (event) => {
+        if (!isRunning || wsRef.current !== ws) return;
         // Binary frames carry raw PTY output.
         // Format: [0x01][id_len: u16 BE][connection_id bytes][payload bytes]
         if (event.data instanceof ArrayBuffer) {
@@ -837,6 +860,7 @@ export function PtyTerminal({
           if (frameConnectionId !== connectionId) return;
           const payload = data.subarray(payloadOffset);
           if (payload.length === 0) return;
+          onOutputRef.current?.(connectionId);
           enqueueOutput(outputDecoder.decode(payload, { stream: true }));
           return;
         }
@@ -929,11 +953,17 @@ export function PtyTerminal({
               break;
             }
               
-            case 'Output':
-              if (msg.data && msg.data.length > 0) {
-                enqueueOutput(new TextDecoder().decode(new Uint8Array(msg.data)));
+            case 'Output': {
+              const output = msg as { connection_id?: string; data?: number[] };
+              // Keep legacy connection-scoped JSON frames without an id working,
+              // but never attribute an explicitly foreign session's bytes to this tab.
+              if ((output.connection_id === undefined || output.connection_id === connectionId) &&
+                  Array.isArray(output.data) && output.data.length > 0) {
+                onOutputRef.current?.(connectionId);
+                enqueueOutput(new TextDecoder().decode(new Uint8Array(output.data)));
               }
               break;
+            }
               
             case 'Error': {
               console.error('[PTY Terminal] Error:', msg.message);

@@ -690,3 +690,131 @@ describe('tabToGroupMap consistency', () => {
     expect(next.tabToGroupMap['b']).not.toBe('1');
   });
 });
+
+describe('transient unread terminal output', () => {
+  const output = (tabId: string, reconnectCount = 0) =>
+    ({ type: 'MARK_TAB_UNREAD_OUTPUT', tabId, reconnectCount } as const);
+  const viewed = (tabId: string) => ({ type: 'ACKNOWLEDGE_TAB_OUTPUT', tabId } as const);
+  const getTab = (state: TerminalGroupState, tabId: string) =>
+    state.groups[state.tabToGroupMap[tabId]]?.tabs.find((tab) => tab.id === tabId);
+  const initial = () => stateWithTabs('1', [makeTab('a'), makeTab('b'), makeTab('c')], 'a');
+
+  it('marks hidden output once without mutating the input', () => {
+    const state = initial();
+    const next = terminalGroupReducer(state, output('b'));
+    expect(getTab(next, 'b')?.hasUnreadOutput).toBe(true);
+    expect(getTab(state, 'b')?.hasUnreadOutput).toBeFalsy();
+    expect(getTab(next, 'a')).toBe(getTab(state, 'a'));
+    expect(terminalGroupReducer(next, output('b'))).toBe(next);
+  });
+
+  it('ignores output from a visible terminal and from unknown or non-terminal tabs', () => {
+    const state = initial();
+    state.groups['1'].tabs.push({ ...makeTab('files'), tabType: 'file-browser' });
+    state.tabToGroupMap.files = '1';
+    for (const id of ['a', 'missing', 'files']) {
+      expect(terminalGroupReducer(state, output(id))).toBe(state);
+    }
+  });
+
+  it('acknowledges only after the terminal is selected and actually viewed', () => {
+    const unread = terminalGroupReducer(initial(), output('b'));
+    expect(terminalGroupReducer(unread, viewed('b'))).toBe(unread);
+    const selected = terminalGroupReducer(unread, { type: 'ACTIVATE_TAB', groupId: '1', tabId: 'b' });
+    // Selection can be batched with another selection before a portal is shown.
+    expect(getTab(selected, 'b')?.hasUnreadOutput).toBe(true);
+    const read = terminalGroupReducer(selected, viewed('b'));
+    expect(getTab(read, 'b')?.hasUnreadOutput).toBe(false);
+    expect(terminalGroupReducer(read, output('b'))).toBe(read);
+  });
+
+  it('ignores stale acknowledgements after switching away again', () => {
+    let state = terminalGroupReducer(initial(), output('b'));
+    state = terminalGroupReducer(state, { type: 'ACTIVATE_TAB', groupId: '1', tabId: 'b' });
+    state = terminalGroupReducer(state, { type: 'ACTIVATE_TAB', groupId: '1', tabId: 'a' });
+    expect(terminalGroupReducer(state, viewed('b'))).toBe(state);
+    expect(getTab(state, 'b')?.hasUnreadOutput).toBe(true);
+  });
+
+  it('treats both split panes as visible regardless of keyboard focus', () => {
+    let state = terminalGroupReducer(initial(), {
+      type: 'SPLIT_GROUP', groupId: '1', direction: 'right', newTab: makeTab('d'),
+    });
+    expect(state.activeGroupId).toBe('2');
+    for (const id of ['a', 'd']) expect(terminalGroupReducer(state, output(id))).toBe(state);
+    state = terminalGroupReducer(state, output('b'));
+    expect(getTab(state, 'b')?.hasUnreadOutput).toBe(true);
+    expect(getTab(state, 'a')?.hasUnreadOutput).toBeFalsy();
+    expect(getTab(state, 'd')?.hasUnreadOutput).toBeFalsy();
+  });
+
+  it('does not mistake an active tab in an unrendered group for a visible tab', () => {
+    const state = initial();
+    state.groups.orphan = { id: 'orphan', tabs: [makeTab('hidden')], activeTabId: 'hidden' };
+    state.tabToGroupMap.hidden = 'orphan';
+    const next = terminalGroupReducer(state, output('hidden'));
+    expect(getTab(next, 'hidden')?.hasUnreadOutput).toBe(true);
+    expect(terminalGroupReducer(next, viewed('hidden'))).toBe(next);
+  });
+
+  it('keeps unread attached to the tab when reordering', () => {
+    const unread = terminalGroupReducer(initial(), output('b'));
+    const next = terminalGroupReducer(unread, { type: 'REORDER_TAB', groupId: '1', fromIndex: 1, toIndex: 2 });
+    expect(next.groups['1'].tabs.map((tab) => tab.id)).toEqual(['a', 'c', 'b']);
+    expect(getTab(next, 'b')).toBe(getTab(unread, 'b'));
+    expect(getTab(next, 'c')?.hasUnreadOutput).toBeFalsy();
+  });
+
+  it('moves unread with the tab, then clears it only when the destination is viewed', () => {
+    let state = terminalGroupReducer(initial(), { type: 'SPLIT_GROUP', groupId: '1', direction: 'right', newTab: makeTab('d') });
+    state = terminalGroupReducer(state, output('b'));
+    state = terminalGroupReducer(state, output('c'));
+    state = terminalGroupReducer(state, { type: 'MOVE_TAB', sourceGroupId: '1', targetGroupId: '2', tabId: 'b' });
+    expect(state.tabToGroupMap.b).toBe('2');
+    expect(getTab(state, 'b')?.hasUnreadOutput).toBe(true);
+    state = terminalGroupReducer(state, viewed('b'));
+    expect(getTab(state, 'b')?.hasUnreadOutput).toBe(false);
+    expect(getTab(state, 'c')?.hasUnreadOutput).toBe(true);
+    expect(getTab(state, 'd')?.hasUnreadOutput).toBeFalsy();
+  });
+
+  it('ignores late output and acknowledgements after closing a tab', () => {
+    const unread = terminalGroupReducer(initial(), output('b'));
+    const closed = terminalGroupReducer(unread, { type: 'REMOVE_TAB', groupId: '1', tabId: 'b' });
+    expect(closed.tabToGroupMap.b).toBeUndefined();
+    expect(closed.groups['1'].tabs.some((tab) => tab.id === 'b')).toBe(false);
+    expect(terminalGroupReducer(closed, output('b'))).toBe(closed);
+    expect(terminalGroupReducer(closed, viewed('b'))).toBe(closed);
+  });
+
+  it('preserves hidden unread across reconnect and rejects old reconnect generations', () => {
+    let state = terminalGroupReducer(initial(), output('b'));
+    state = terminalGroupReducer(state, { type: 'RECONNECT_TAB', tabId: 'b' });
+    expect(getTab(state, 'b')?.hasUnreadOutput).toBe(true);
+    expect(getTab(state, 'a')?.hasUnreadOutput).toBeFalsy();
+    let fresh = terminalGroupReducer(initial(), { type: 'RECONNECT_TAB', tabId: 'b' });
+    expect(terminalGroupReducer(fresh, output('b', 0))).toBe(fresh);
+    fresh = terminalGroupReducer(fresh, output('b', 1));
+    expect(getTab(fresh, 'b')?.hasUnreadOutput).toBe(true);
+  });
+
+  it('does not acknowledge pending placeholders or clear on unrelated actions', () => {
+    let state = terminalGroupReducer(initial(), output('b'));
+    state = terminalGroupReducer(state, { type: 'UPDATE_TAB_NAME', tabId: 'b', name: 'renamed' });
+    state = terminalGroupReducer(state, { type: 'UPDATE_TAB_STATUS', tabId: 'b', status: 'pending' });
+    state = terminalGroupReducer(state, { type: 'UPDATE_GRID_SIZES', path: [], sizes: [100] });
+    state = terminalGroupReducer(state, { type: 'ACTIVATE_GROUP', groupId: '1' });
+    expect(getTab(state, 'b')?.hasUnreadOutput).toBe(true);
+    state = terminalGroupReducer(state, { type: 'ACTIVATE_TAB', groupId: '1', tabId: 'b' });
+    expect(terminalGroupReducer(state, viewed('b'))).toBe(state);
+  });
+
+  it('restores layout structure but resets transient unread without mutating the source', () => {
+    const saved = terminalGroupReducer(initial(), output('b'));
+    const restored = terminalGroupReducer(createDefaultState(), { type: 'RESTORE_LAYOUT', state: saved });
+    expect(restored.groups['1'].tabs.map((tab) => tab.hasUnreadOutput)).toEqual([false, false, false]);
+    expect(restored.gridLayout).toEqual(saved.gridLayout);
+    expect(restored.tabToGroupMap).toEqual(saved.tabToGroupMap);
+    expect(getTab(saved, 'b')?.hasUnreadOutput).toBe(true);
+  });
+});

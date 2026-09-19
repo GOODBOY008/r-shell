@@ -1,4 +1,5 @@
 import type { TerminalGroupState, GridNode } from './terminal-group-types';
+import { resetUnreadOutput } from './terminal-group-reducer';
 
 export const STORAGE_KEY = 'r-shell-terminal-groups';
 export const STATE_VERSION = 1;
@@ -14,7 +15,13 @@ interface SerializedState {
  * serialize — wrap state in a versioned envelope and JSON.stringify
  */
 export function serialize(state: TerminalGroupState): string {
-  const envelope: SerializedState = { version: STATE_VERSION, data: state };
+  // Filter at the tab boundary so neither direct serialize() calls nor saveState()
+  // can persist runtime activity. Do not mutate live tabs when removing the field.
+  const groups = Object.fromEntries(Object.entries(state.groups).map(([id, group]) => [id, {
+    ...group,
+    tabs: group.tabs.map(({ hasUnreadOutput: _hasUnreadOutput, ...tab }) => tab),
+  }]));
+  const envelope: SerializedState = { version: STATE_VERSION, data: { ...state, groups } };
   return JSON.stringify(envelope);
 }
 
@@ -27,7 +34,7 @@ export function deserialize(json: string): TerminalGroupState | null {
     if (!isSerializedState(parsed)) return null;
     if (parsed.version !== STATE_VERSION) return null;
     if (!isValidState(parsed.data)) return null;
-    return parsed.data;
+    return resetUnreadOutput(parsed.data);
   } catch {
     return null;
   }
