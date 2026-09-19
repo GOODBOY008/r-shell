@@ -4,12 +4,14 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   createLayoutShortcuts,
   createSplitViewShortcuts,
+  DEFAULT_APP_KEYBOARD_SHORTCUTS,
   DEFAULT_LAYOUT_SHORTCUTS,
   DEFAULT_SPLIT_VIEW_SHORTCUTS,
   formatKeyboardShortcut,
   KeyboardShortcut,
   loadKeyboardShortcutSettings,
   parseKeyboardShortcut,
+  toAccelerator,
   useKeyboardShortcuts,
 } from '../lib/keyboard-shortcuts';
 
@@ -21,6 +23,8 @@ function createMockActions() {
     closeTab: vi.fn(),
     nextTab: vi.fn(),
     prevTab: vi.fn(),
+    moveTabLeft: vi.fn(),
+    moveTabRight: vi.fn(),
   };
 }
 
@@ -40,11 +44,12 @@ function findShortcut(
 describe('createSplitViewShortcuts', () => {
   // Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7
 
-  it('returns 14 shortcuts total', () => {
+  it('returns 16 shortcuts total', () => {
     const actions = createMockActions();
     const shortcuts = createSplitViewShortcuts(actions);
     // 1 splitRight + 1 splitDown + 9 focusGroup + 1 closeTab + 1 nextTab + 1 prevTab
-    expect(shortcuts).toHaveLength(14);
+    // + 1 moveTabLeft + 1 moveTabRight
+    expect(shortcuts).toHaveLength(16);
   });
 
   // Requirement 5.1: Ctrl+\ splits right
@@ -145,6 +150,35 @@ describe('createSplitViewShortcuts', () => {
     expect(shortcut).toBeDefined();
     shortcut!.handler();
     expect(actions.prevTab).toHaveBeenCalledOnce();
+  });
+
+  // Browser convention: Ctrl+Shift+PageUp/PageDown reorder tabs
+  it('Ctrl+Shift+PageUp triggers moveTabLeft', () => {
+    const actions = createMockActions();
+    const shortcuts = createSplitViewShortcuts(actions);
+    const shortcut = findShortcut(shortcuts, 'PageUp', { ctrlKey: true, shiftKey: true });
+
+    expect(shortcut).toBeDefined();
+    shortcut!.handler();
+    expect(actions.moveTabLeft).toHaveBeenCalledOnce();
+  });
+
+  it('Ctrl+Shift+PageDown triggers moveTabRight', () => {
+    const actions = createMockActions();
+    const shortcuts = createSplitViewShortcuts(actions);
+    const shortcut = findShortcut(shortcuts, 'PageDown', { ctrlKey: true, shiftKey: true });
+
+    expect(shortcut).toBeDefined();
+    shortcut!.handler();
+    expect(actions.moveTabRight).toHaveBeenCalledOnce();
+  });
+
+  it('move tab shortcuts fire even while a terminal has focus', () => {
+    const actions = createMockActions();
+    const shortcuts = createSplitViewShortcuts(actions);
+    const shortcut = findShortcut(shortcuts, 'PageUp', { ctrlKey: true, shiftKey: true });
+
+    expect(shortcut!.ignoreInTerminal).toBeFalsy();
   });
 
   // Requirement 5.6: Non-existent group index is a no-op (caller responsibility)
@@ -311,5 +345,85 @@ describe('formatKeyboardShortcut', () => {
     expect(formatKeyboardShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar, false)).toBe('Ctrl+B');
     expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘+⇧+→');
     expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥+W');
+  });
+
+  it('shows ⌃ for macOS menu-degraded chords (Zen/sidebar and explicit-Cmd spellings)', () => {
+    const platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    try {
+      // The degraded branch (new in this PR): ⌘Z/⌘M belong to the native menu,
+      // the binding fires as the physical-Control variant — labels show ⌃.
+      expect(formatKeyboardShortcut('Ctrl+Z', true)).toBe('⌃+Z');
+      expect(formatKeyboardShortcut('Ctrl+Shift+Z', true)).toBe('⌃+⇧+Z');
+      expect(formatKeyboardShortcut('Ctrl+M', true)).toBe('⌃+M');
+      // An explicit-Cmd spelling of the same chords degrades identically.
+      expect(formatKeyboardShortcut('Cmd+Z', true)).toBe('⌃+Z');
+      expect(formatKeyboardShortcut('Cmd+Shift+Z', true)).toBe('⌃+⇧+Z');
+      expect(formatKeyboardShortcut('Super+Z', true)).toBe('⌃+Z');
+      // Non-degraded chords keep their ⌘ labels, explicit-Cmd included.
+      expect(formatKeyboardShortcut('Ctrl+B', true)).toBe('⌘+B');
+      expect(formatKeyboardShortcut('Cmd+W', true)).toBe('⌘+W');
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+});
+
+describe('toAccelerator', () => {
+  it('converts ctrl to CommandOrControl', () => {
+    expect(toAccelerator('Ctrl+N')).toBe('CommandOrControl+N');
+    expect(toAccelerator('ctrl+n')).toBe('CommandOrControl+N');
+  });
+
+  it('converts every default shortcut to a plugin accelerator', () => {
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession)).toBe('CommandOrControl+N');
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession)).toBe('CommandOrControl+W');
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab)).toBe('CommandOrControl+Tab');
+    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab)).toBe('CommandOrControl+Shift+Tab');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar)).toBe('CommandOrControl+B');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel)).toBe('CommandOrControl+J');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar)).toBe('CommandOrControl+M');
+    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode)).toBe('CommandOrControl+Z');
+  });
+
+  it('maps symbol keys to their accelerator names', () => {
+    expect(toAccelerator('Ctrl+\\')).toBe('CommandOrControl+Backslash');
+    expect(toAccelerator('Ctrl+Space')).toBe('CommandOrControl+Space');
+    expect(toAccelerator('Alt+`')).toBe('Option+Backquote');
+    expect(toAccelerator('Ctrl+-')).toBe('CommandOrControl+Minus');
+    expect(toAccelerator('Ctrl+=')).toBe('CommandOrControl+Equal');
+    expect(toAccelerator('Ctrl+,')).toBe('CommandOrControl+Comma');
+    expect(toAccelerator('Ctrl+.')).toBe('CommandOrControl+Period');
+    expect(toAccelerator('Ctrl+/')).toBe('CommandOrControl+Slash');
+    expect(toAccelerator('Ctrl+;')).toBe('CommandOrControl+Semicolon');
+    expect(toAccelerator('Ctrl+\'')).toBe('CommandOrControl+Quote');
+    expect(toAccelerator('Ctrl+[')).toBe('CommandOrControl+BracketLeft');
+    expect(toAccelerator('Ctrl+]')).toBe('CommandOrControl+BracketRight');
+  });
+
+  it('maps digits and named keys verbatim (uppercased)', () => {
+    expect(toAccelerator('Ctrl+1')).toBe('CommandOrControl+1');
+    expect(toAccelerator('Ctrl+9')).toBe('CommandOrControl+9');
+    expect(toAccelerator('Ctrl+Enter')).toBe('CommandOrControl+Enter');
+    expect(toAccelerator('Ctrl+Escape')).toBe('CommandOrControl+Escape');
+    expect(toAccelerator('Ctrl+PageUp')).toBe('CommandOrControl+PageUp');
+    expect(toAccelerator('Ctrl+ArrowDown')).toBe('CommandOrControl+ArrowDown');
+    expect(toAccelerator('Ctrl+F13')).toBe('CommandOrControl+F13');
+    expect(toAccelerator('Ctrl+Backspace')).toBe('CommandOrControl+Backspace');
+  });
+
+  it('converts global (Meta/Cmd) to Command', () => {
+    expect(toAccelerator('Cmd+X')).toBe('Command+X');
+    expect(toAccelerator('Meta+Shift+X')).toBe('Shift+Command+X');
+  });
+
+  it('keeps modifier order fixed regardless of input order', () => {
+    expect(toAccelerator('Shift+Ctrl+Alt+X')).toBe('CommandOrControl+Shift+Option+X');
+  });
+
+  it('returns null for shortcuts without any modifier', () => {
+    expect(toAccelerator('N')).toBeNull();
+    expect(toAccelerator('F5')).toBeNull();
+    expect(toAccelerator('')).toBeNull();
+    expect(toAccelerator('Nonsense+Input')).toBeNull();
   });
 });

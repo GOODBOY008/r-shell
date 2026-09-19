@@ -1,5 +1,5 @@
 use crate::connection_manager::ConnectionManager;
-use crate::WEBSOCKET_PORT;
+use crate::{WEBSOCKET_PORT, WEBSOCKET_TOKEN};
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex, Semaphore};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::http::StatusCode;
+use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,6 +44,16 @@ pub enum WsMessage {
     Pause { connection_id: String },
     /// Resume output (flow control - like ttyd)
     Resume { connection_id: String },
+    /// Detach the session into the background (Xshell-style Ctrl+A+D).
+    /// The SSH connection and PTY channel stay alive; only streaming stops.
+    /// A later StartPty re-attaches to the same session.
+    Detach {
+        connection_id: String,
+        /// If provided, the detach is only applied when the generation matches
+        /// the current session (mirrors Close semantics).
+        #[serde(default)]
+        generation: Option<u64>,
+    },
     /// Close PTY connection
     Close {
         connection_id: String,
@@ -52,7 +64,14 @@ pub enum WsMessage {
         generation: Option<u64>,
     },
     /// Error message
-    Error { message: String },
+    Error {
+        message: String,
+        /// Machine-readable classification (see [`error_code`]) so the
+        /// frontend can react without string-matching human messages.
+        /// Absent for legacy/unclassified errors.
+        #[serde(default)]
+        code: Option<String>,
+    },
     /// Success confirmation
     Success { message: String },
     /// PTY session started — includes the generation counter so the frontend
@@ -60,6 +79,10 @@ pub enum WsMessage {
     PtyStarted {
         connection_id: String,
         generation: u64,
+        /// True when an existing parked/detached session was re-attached
+        /// (same remote shell continues) rather than a fresh shell started.
+        #[serde(default)]
+        reattached: bool,
     },
 
     // ===== Desktop (RDP/VNC) messages =====
@@ -126,6 +149,15 @@ const CONTROL_SEND_TIMEOUT_MS: u64 = 100;
 /// Command byte that identifies a binary PTY output frame sent to the frontend.
 const BINARY_OUTPUT_CMD: u8 = 0x01;
 
+/// How long a PTY stays parked after its WebSocket drops, waiting for the
+/// frontend to reconnect and re-attach (issue #95 asked for 1–5 minutes).
+/// Within this window a StartPty resumes the same remote shell; after it,
+/// the session is expired (the SSH connection itself is left for SFTP).
+const PTY_WS_DROP_GRACE: Duration = Duration::from_secs(5 * 60);
+
+/// Command byte that identifies a binary terminal-input frame from the frontend.
+const BINARY_INPUT_CMD: u8 = 0x00;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -137,6 +169,10 @@ type WsTx = mpsc::Sender<Message>;
 /// ready, bounding the WKWebView message queue to INITIAL_WINDOW frames.
 type OutputCredits = Arc<Semaphore>;
 type OutputControls = Arc<Mutex<HashMap<String, OutputCredits>>>;
+/// Per-connection reader-cancellation tokens. Cancelling a token stops the
+/// PTY reader task without killing the underlying SSH/PTY session — this is
+/// what makes Xshell-style Detach possible.
+type ReaderTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 
 #[derive(Debug, PartialEq, Eq)]
 enum SendOutcome {
@@ -160,6 +196,65 @@ enum PtyLifecycleEvent {
     },
 }
 
+/// Machine-readable error codes carried on `WsMessage::Error` so the frontend
+/// can classify failures deterministically instead of matching message text.
+pub mod error_code {
+    /// The SSH session itself is dead (transport dropped / stale client
+    /// evicted). A WebSocket-only retry cannot recover; the frontend should
+    /// escalate to a full reconnect (re-authentication).
+    pub const SSH_SESSION_DEAD: &str = "ssh_session_dead";
+}
+
+/// Error returned to the frontend over the WebSocket, optionally carrying a
+/// machine-readable [`error_code`].
+#[derive(Debug)]
+struct WsError {
+    code: Option<&'static str>,
+    message: String,
+}
+
+impl WsError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    fn coded(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code: Some(code),
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for WsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            Some(code) => write!(f, "[{}] {}", code, self.message),
+            None => write!(f, "{}", self.message),
+        }
+    }
+}
+
+impl From<anyhow::Error> for WsError {
+    fn from(e: anyhow::Error) -> Self {
+        WsError::new(e.to_string())
+    }
+}
+
+impl From<crate::connection_manager::PtyStartError> for WsError {
+    fn from(e: crate::connection_manager::PtyStartError) -> Self {
+        match e {
+            crate::connection_manager::PtyStartError::SshSessionDead(msg) => {
+                WsError::coded(error_code::SSH_SESSION_DEAD, msg)
+            }
+            crate::connection_manager::PtyStartError::Other(e) => WsError::new(e.to_string()),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
@@ -175,6 +270,24 @@ fn encode_output_frame(connection_id: &str, data: &[u8]) -> Vec<u8> {
     frame.extend_from_slice(&id_bytes[..id_len]);
     frame.extend_from_slice(data);
     frame
+}
+
+/// Decode a binary terminal-input frame from the frontend:
+///   [0x00][id_len: u16 BE][connection_id bytes][payload bytes]
+/// The id is length-prefixed (unlike the old fixed 36-byte layout) so any
+/// connection id works, including duplicate-session ids with timestamp
+/// suffixes. Returns `None` when the frame is malformed.
+fn decode_input_frame(data: &[u8]) -> Option<(String, &[u8])> {
+    if data.len() < 3 || data[0] != BINARY_INPUT_CMD {
+        return None;
+    }
+    let id_len = ((data[1] as usize) << 8) | data[2] as usize;
+    let payload_offset = 3 + id_len;
+    if data.len() < payload_offset {
+        return None;
+    }
+    let connection_id = String::from_utf8_lossy(&data[3..payload_offset]).to_string();
+    Some((connection_id, &data[payload_offset..]))
 }
 
 /// Send a JSON control message with a timeout.
@@ -252,6 +365,8 @@ impl WebSocketServer {
         let listener = listener
             .ok_or_else(|| anyhow::anyhow!("Failed to bind to any port in range 9001-9010"))?;
 
+        // The bridge token must exist before the first client can connect.
+        WEBSOCKET_TOKEN.get_or_init(generate_bridge_token);
         // Store the bound port in the global atomic for frontend to query
         WEBSOCKET_PORT.store(bound_port, Ordering::SeqCst);
         tracing::info!("WebSocket port stored: {}", bound_port);
@@ -276,13 +391,36 @@ impl WebSocketServer {
 
     /// Handle a single WebSocket connection
     async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
-        let ws_stream = accept_async(stream).await?;
+        // Authenticate the handshake before any protocol message is read: the
+        // listener is on loopback, but loopback is reachable by every local
+        // process and, through the browser, by every web page the user has
+        // open. Without this, `StartPty`/`Input` with a known connection id
+        // would hand a foreign client a shell on the user's SSH session.
+        let expected = WEBSOCKET_TOKEN.get().cloned().unwrap_or_default();
+        let ws_stream = accept_hdr_async(stream, |req: &Request, res: Response| {
+            let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+            match validate_handshake(origin, req.uri().query(), &expected) {
+                Ok(()) => Ok(res),
+                Err(reason) => {
+                    tracing::warn!(
+                        "Rejected WebSocket handshake: {} (origin={:?})",
+                        reason,
+                        origin
+                    );
+                    let mut response = ErrorResponse::new(Some(reason.to_string()));
+                    *response.status_mut() = StatusCode::FORBIDDEN;
+                    Err(response)
+                }
+            }
+        })
+        .await?;
         let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
         // Bounded channel: when full the PTY reader blocks, providing backpressure
         // all the way back to the SSH channel and the remote process.
         let (tx, mut rx) = mpsc::channel::<Message>(WS_OUTPUT_QUEUE_CAPACITY);
         let output_controls: OutputControls = Arc::new(Mutex::new(HashMap::new()));
+        let reader_tokens: ReaderTokens = Arc::new(Mutex::new(HashMap::new()));
         let mut active_pty_generations: HashMap<String, u64> = HashMap::new();
 
         // Forward messages from the bounded channel to the WebSocket.
@@ -304,21 +442,20 @@ impl WebSocketServer {
                         continue;
                     }
                     match data[0] {
-                        0x00 => {
-                            if data.len() < 37 {
-                                tracing::warn!("Binary INPUT message too short");
-                                continue;
+                        0x00 => match decode_input_frame(&data) {
+                            Some((connection_id, payload)) => {
+                                if let Err(e) = self
+                                    .connection_manager
+                                    .write_to_pty(&connection_id, payload.to_vec())
+                                    .await
+                                {
+                                    tracing::error!("Failed to write to PTY: {}", e);
+                                }
                             }
-                            let connection_id = String::from_utf8_lossy(&data[1..37]).to_string();
-                            let input_data = data[37..].to_vec();
-                            if let Err(e) = self
-                                .connection_manager
-                                .write_to_pty(&connection_id, input_data)
-                                .await
-                            {
-                                tracing::error!("Failed to write to PTY: {}", e);
+                            None => {
+                                tracing::warn!("Malformed binary INPUT message");
                             }
-                        }
+                        },
                         _ => {
                             tracing::warn!("Unknown binary command: {}", data[0]);
                         }
@@ -331,13 +468,19 @@ impl WebSocketServer {
                         Err(e) => {
                             let error = WsMessage::Error {
                                 message: format!("Invalid message format: {}", e),
+                                code: None,
                             };
                             let _ = send_control(&tx, &error).await?;
                             continue;
                         }
                     };
                     match self
-                        .handle_message(ws_msg, tx.clone(), output_controls.clone())
+                        .handle_message(
+                            ws_msg,
+                            tx.clone(),
+                            output_controls.clone(),
+                            reader_tokens.clone(),
+                        )
                         .await
                     {
                         Ok(PtyLifecycleEvent::Started { connection_id, generation }) => {
@@ -350,12 +493,14 @@ impl WebSocketServer {
                             ) {
                                 active_pty_generations.remove(&connection_id);
                                 output_controls.lock().await.remove(&connection_id);
+                                reader_tokens.lock().await.remove(&connection_id);
                             }
                         }
                         Ok(PtyLifecycleEvent::None) => {}
                         Err(e) => {
                             let error = WsMessage::Error {
-                                message: format!("Error handling message: {}", e),
+                                message: format!("Error handling message: {}", e.message),
+                                code: e.code.map(|code| code.to_string()),
                             };
                             let _ = send_control(&tx, &error).await?;
                         }
@@ -373,22 +518,42 @@ impl WebSocketServer {
             }
         }
 
-        // Clean up all active PTY sessions so the SSH channel and reader task
-        // are torn down promptly when the browser tab closes.
+        // A WebSocket drop is usually transient (the frontend reconnects and
+        // re-issues StartPty), so park each PTY in the detached registry
+        // instead of killing it: the remote shell keeps running and a
+        // reconnect within the grace period re-attaches to the same session.
+        // An explicit Close (or a Detach) was already handled per-message;
+        // anything still active here only lost its transport. If nothing
+        // reattaches before the grace timer fires, the session is expired.
         for (connection_id, generation) in active_pty_generations {
+            // Stop this socket's streaming reader without killing the
+            // underlying SSH/PTY session.
+            if let Some(reader_cancel) = reader_tokens.lock().await.get(&connection_id) {
+                reader_cancel.cancel();
+            }
             if let Err(e) = self
                 .connection_manager
-                .close_pty_connection(&connection_id, Some(generation))
+                .detach_pty_connection(&connection_id, Some(generation))
                 .await
             {
                 tracing::warn!(
-                    "Failed to close PTY session {} on WebSocket cleanup: {}",
+                    "Failed to park PTY session {} on WebSocket cleanup: {}",
                     connection_id,
                     e
                 );
+                continue;
             }
+            let connection_manager = self.connection_manager.clone();
+            let id = connection_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(PTY_WS_DROP_GRACE).await;
+                if connection_manager.expire_detached_session(&id, PTY_WS_DROP_GRACE).await {
+                    tracing::info!("Grace period expired for parked PTY {}", id);
+                }
+            });
         }
         output_controls.lock().await.clear();
+        reader_tokens.lock().await.clear();
         ws_sender_task.abort();
 
         Ok(())
@@ -400,7 +565,8 @@ impl WebSocketServer {
         msg: WsMessage,
         tx: WsTx,
         output_controls: OutputControls,
-    ) -> Result<PtyLifecycleEvent> {
+        reader_tokens: ReaderTokens,
+    ) -> Result<PtyLifecycleEvent, WsError> {
         match msg {
             WsMessage::StartPty {
                 connection_id,
@@ -414,7 +580,7 @@ impl WebSocketServer {
                     rows
                 );
 
-                let generation = self
+                let (generation, reattached) = self
                     .connection_manager
                     .start_pty_connection(&connection_id, cols, rows)
                     .await?;
@@ -426,6 +592,24 @@ impl WebSocketServer {
                     .ok_or_else(|| {
                         anyhow::anyhow!("PTY session disappeared immediately after creation")
                     })?;
+
+                // Per-reader cancellation token. The PTY reader task selects on
+                // this token so it can be stopped without killing the SSH/PTY
+                // session — required for Xshell-style Detach (Ctrl+A+D).
+                let reader_cancel = CancellationToken::new();
+                reader_tokens
+                    .lock()
+                    .await
+                    .insert(connection_id.clone(), reader_cancel.clone());
+
+                // When the *session* is cancelled (normal close), also cancel
+                // the reader so the task stops promptly.
+                let session_cancel = cancel_token.clone();
+                let reader_cancel_link = reader_cancel.clone();
+                tokio::spawn(async move {
+                    session_cancel.cancelled().await;
+                    reader_cancel_link.cancel();
+                });
 
                 // Credit semaphore: 0 initial permits.  The PTY reader acquires
                 // 1 permit before each flush; the frontend grants permits via
@@ -441,6 +625,7 @@ impl WebSocketServer {
                 let started = WsMessage::PtyStarted {
                     connection_id: connection_id.clone(),
                     generation,
+                    reattached,
                 };
                 send_control(&tx, &started).await?;
 
@@ -453,13 +638,17 @@ impl WebSocketServer {
 
                 tokio::spawn(async move {
                     let mut accumulated = Vec::with_capacity(OUTPUT_FLUSH_BYTES);
-                    let mut last_flush = tokio::time::Instant::now();
 
                     loop {
-                        // --- Read from PTY (1 ms poll) ---
+                        // --- Read from PTY (event-driven) ---
+                        // With nothing pending, block until data arrives — an
+                        // idle terminal consumes zero wakeups (this used to be
+                        // a 1 ms poll, ~1000 wakeups/s per PTY). While data
+                        // is pending unflushed, arm the flush-interval
+                        // deadline so small chunks still ship within 10 ms.
                         let read_result = tokio::select! {
                             biased;
-                            _ = cancel_token.cancelled() => {
+                            _ = reader_cancel.cancelled() => {
                                 tracing::info!(
                                     "PTY reader task cancelled for {}",
                                     connection_id_clone
@@ -469,70 +658,68 @@ impl WebSocketServer {
                                     &tx_clone,
                                     &connection_id_clone,
                                     &mut accumulated,
-                                    &cancel_token,
+                                    &reader_cancel,
                                 ).await;
                                 return;
                             }
-                            result = connection_manager.read_from_pty(&connection_id_clone) => result,
+                            result = connection_manager.read_from_pty(
+                                &connection_id_clone,
+                                if accumulated.is_empty() {
+                                    None
+                                } else {
+                                    Some(Duration::from_millis(OUTPUT_FLUSH_INTERVAL_MS as u64))
+                                },
+                            ) => result,
                         };
 
                         match read_result {
-                            Ok(data) if data.is_empty() => {
-                                // 1 ms poll returned nothing — flush if interval elapsed.
-                                if !accumulated.is_empty()
-                                    && last_flush.elapsed().as_millis()
-                                        >= OUTPUT_FLUSH_INTERVAL_MS
+                            // Deadline elapsed with pending data — time to flush.
+                            Ok(None) => {
+                                // Wait for 1 frontend ACK before sending.
+                                let ok = tokio::select! {
+                                    biased;
+                                    _ = reader_cancel.cancelled() => false,
+                                    r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
+                                };
+                                if !ok {
+                                    break;
+                                }
+                                if flush_output(
+                                    &tx_clone,
+                                    &connection_id_clone,
+                                    &mut accumulated,
+                                    &reader_cancel,
+                                )
+                                .await
+                                    == SendOutcome::Closed
                                 {
-                                    // Wait for 1 frontend ACK before sending.
-                                    let ok = tokio::select! {
-                                        biased;
-                                        _ = cancel_token.cancelled() => false,
-                                        r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
-                                    };
-                                    if !ok {
-                                        break;
-                                    }
-                                    if flush_output(
-                                        &tx_clone,
-                                        &connection_id_clone,
-                                        &mut accumulated,
-                                        &cancel_token,
-                                    )
-                                    .await
-                                        == SendOutcome::Closed
-                                    {
-                                        break;
-                                    }
-                                    last_flush = tokio::time::Instant::now();
+                                    break;
                                 }
                             }
-                            Ok(data) => {
+                            Ok(Some(data)) => {
                                 accumulated.extend_from_slice(&data);
-                                if accumulated.len() >= OUTPUT_FLUSH_BYTES
-                                    || last_flush.elapsed().as_millis()
-                                        >= OUTPUT_FLUSH_INTERVAL_MS
+                                if accumulated.len() < OUTPUT_FLUSH_BYTES {
+                                    continue; // keep batching until size or deadline
+                                }
+                                // Wait for 1 frontend ACK before sending.
+                                let ok = tokio::select! {
+                                    biased;
+                                    _ = reader_cancel.cancelled() => false,
+                                    r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
+                                };
+                                if !ok {
+                                    break;
+                                }
+                                if flush_output(
+                                    &tx_clone,
+                                    &connection_id_clone,
+                                    &mut accumulated,
+                                    &reader_cancel,
+                                )
+                                .await
+                                    == SendOutcome::Closed
                                 {
-                                    // Wait for 1 frontend ACK before sending.
-                                    let ok = tokio::select! {
-                                        biased;
-                                        _ = cancel_token.cancelled() => false,
-                                        r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
-                                    };
-                                    if !ok {
-                                        break;
-                                    }
-                                    if flush_output(
-                                        &tx_clone,
-                                        &connection_id_clone,
-                                        &mut accumulated,
-                                        &cancel_token,
-                                    )
-                                    .await
-                                        == SendOutcome::Closed
-                                    {
-                                        break;
-                                    }
-                                    last_flush = tokio::time::Instant::now();
+                                    break;
                                 }
                             }
                             Err(e) => {
@@ -543,6 +730,7 @@ impl WebSocketServer {
                                 );
                                 let error_msg = WsMessage::Error {
                                     message: format!("Connection lost: {}", e),
+                                    code: None,
                                 };
                                 let _ = send_control(&tx_clone, &error_msg).await;
                                 break;
@@ -578,8 +766,12 @@ impl WebSocketServer {
                 rows,
             } => {
                 tracing::info!("Resizing terminal {}: {}x{}", connection_id, cols, rows);
+                // Retry while the session is still being (re)started — a resize
+                // racing StartPty's channel setup must not be lost, or the
+                // remote shell redraws wrapped lines with a stale width and the
+                // display diverges from the input buffer (issue #88).
                 self.connection_manager
-                    .resize_pty(&connection_id, cols, rows)
+                    .resize_pty_with_retry(&connection_id, cols, rows)
                     .await?;
                 let response = WsMessage::Success {
                     message: format!("Terminal resized: {}x{}", cols, rows),
@@ -626,6 +818,36 @@ impl WebSocketServer {
                 })
             }
 
+            WsMessage::Detach {
+                connection_id,
+                generation,
+            } => {
+                tracing::info!(
+                    "Detaching PTY connection: {} (gen: {:?})",
+                    connection_id,
+                    generation
+                );
+                // Stop the reader task so it no longer streams to this WS.
+                // The session itself is NOT cancelled — it stays alive in the
+                // backend so a later StartPty can re-attach to it.
+                if let Some(reader_cancel) = reader_tokens.lock().await.get(&connection_id) {
+                    reader_cancel.cancel();
+                }
+                self.connection_manager
+                    .detach_pty_connection(&connection_id, generation)
+                    .await?;
+                let response = WsMessage::Success {
+                    message: format!("PTY connection detached: {}", connection_id),
+                };
+                send_control(&tx, &response).await?;
+                // Treat like Closed so the WS-local bookkeeping (active
+                // generation, credits, reader token) is removed.
+                Ok(PtyLifecycleEvent::Closed {
+                    connection_id,
+                    generation,
+                })
+            }
+
             // ===== Desktop (RDP/VNC) message handling =====
             WsMessage::StartDesktop {
                 connection_id,
@@ -651,6 +873,7 @@ impl WebSocketServer {
                 } else {
                     let error = WsMessage::Error {
                         message: format!("Desktop connection not found: {}", connection_id),
+                        code: None,
                     };
                     send_control(&tx, &error).await?;
                 }
@@ -746,5 +969,210 @@ impl WebSocketServer {
                 Ok(PtyLifecycleEvent::None)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_code;
+    use super::{decode_input_frame, WsError, WsMessage, BINARY_INPUT_CMD};
+    use crate::connection_manager::PtyStartError;
+
+    #[test]
+    fn test_error_message_serde_round_trips_code() {
+        let msg: WsMessage = serde_json::from_str(
+            r#"{"type":"Error","message":"SSH session dead","code":"ssh_session_dead"}"#,
+        )
+        .unwrap();
+        match msg {
+            WsMessage::Error { message, code } => {
+                assert_eq!(message, "SSH session dead");
+                assert_eq!(code.as_deref(), Some(error_code::SSH_SESSION_DEAD));
+            }
+            other => panic!("expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_error_message_serde_without_code_is_backward_compatible() {
+        let msg: WsMessage = serde_json::from_str(r#"{"type":"Error","message":"boom"}"#).unwrap();
+        match msg {
+            WsMessage::Error { code, .. } => assert_eq!(code, None),
+            other => panic!("expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_decode_input_frame_parses_length_prefixed_ids() {
+        // Ids of any length work, including duplicate-session ids with
+        // timestamp suffixes that broke the old fixed 36-byte layout.
+        let id = "conn-1-dup-1724412345678";
+        let payload = b"ls -al\r";
+        let mut frame = vec![BINARY_INPUT_CMD];
+        frame.extend_from_slice(&(id.len() as u16).to_be_bytes());
+        frame.extend_from_slice(id.as_bytes());
+        frame.extend_from_slice(payload);
+
+        let (parsed_id, parsed_payload) = decode_input_frame(&frame).unwrap();
+        assert_eq!(parsed_id, id);
+        assert_eq!(parsed_payload, payload);
+    }
+
+    #[test]
+    fn test_decode_input_frame_rejects_malformed_frames() {
+        // Wrong command byte.
+        assert!(decode_input_frame(&[0x01, 0, 1, b'a']).is_none());
+        // Truncated header.
+        assert!(decode_input_frame(&[BINARY_INPUT_CMD, 0]).is_none());
+        // Declared id length exceeds the frame.
+        assert!(decode_input_frame(&[BINARY_INPUT_CMD, 0, 9, b'a']).is_none());
+        // Id-only frame with empty payload is valid.
+        let frame = [BINARY_INPUT_CMD, 0, 1, b'a'];
+        let (id, payload) = decode_input_frame(&frame).unwrap();
+        assert_eq!(id, "a");
+        assert!(payload.is_empty());
+    }
+
+    #[test]
+    fn test_ws_error_from_pty_start_error_maps_codes() {
+        let coded = WsError::from(PtyStartError::SshSessionDead("dead".to_string()));
+        assert_eq!(coded.code, Some(error_code::SSH_SESSION_DEAD));
+        assert_eq!(coded.message, "dead");
+
+        let uncoded = WsError::from(PtyStartError::Other(anyhow::anyhow!("misc")));
+        assert_eq!(uncoded.code, None);
+        assert_eq!(uncoded.message, "misc");
+    }
+}
+
+// ── Handshake authentication (issue #138) ───────────────────────────────────
+
+/// Origins the app's own webview reports, per platform. Anything else is a
+/// foreign page that happens to be able to reach 127.0.0.1.
+const ALLOWED_ORIGINS: &[&str] = &[
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+];
+
+/// The Vite dev server, only in debug builds.
+#[cfg(debug_assertions)]
+const DEV_ORIGINS: &[&str] = &["http://localhost:1420", "http://127.0.0.1:1420"];
+#[cfg(not(debug_assertions))]
+const DEV_ORIGINS: &[&str] = &[];
+
+/// 32 random bytes, base64url without padding — URL-safe, so the frontend can
+/// pass it verbatim as a query parameter.
+fn generate_bridge_token() -> String {
+    use base64::Engine;
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// Compare without leaking where the first differing byte is.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// Decide whether a WebSocket upgrade request may proceed.
+///
+/// - The `token` query parameter must equal the per-launch token. A missing
+///   or empty expected token (server not initialised) rejects everything.
+/// - If the client sent an `Origin` header it must be one of the app's own
+///   origins. Non-browser clients send none and rely on the token alone.
+pub(crate) fn validate_handshake(
+    origin: Option<&str>,
+    query: Option<&str>,
+    expected_token: &str,
+) -> Result<(), &'static str> {
+    if expected_token.is_empty() {
+        return Err("bridge token not initialised");
+    }
+    if let Some(origin) = origin {
+        let allowed = ALLOWED_ORIGINS
+            .iter()
+            .chain(DEV_ORIGINS.iter())
+            .any(|o| o.eq_ignore_ascii_case(origin));
+        if !allowed {
+            return Err("origin not allowed");
+        }
+    }
+    let presented = query.and_then(|q| q.split('&').find_map(|kv| kv.strip_prefix("token=")));
+    match presented {
+        Some(t) if constant_time_eq(t.as_bytes(), expected_token.as_bytes()) => Ok(()),
+        Some(_) => Err("invalid token"),
+        None => Err("missing token"),
+    }
+}
+
+#[cfg(test)]
+mod handshake_tests {
+    use super::*;
+
+    const TOKEN: &str = "s3cr3t-t0k3n_ABC";
+
+    #[test]
+    fn accepts_app_origin_with_valid_token() {
+        assert_eq!(
+            validate_handshake(Some("tauri://localhost"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Ok(())
+        );
+        assert_eq!(
+            validate_handshake(Some("http://tauri.localhost"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn accepts_non_browser_client_with_valid_token() {
+        // No Origin header: a native client, allowed on the strength of the token.
+        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_ABC"), TOKEN), Ok(()));
+    }
+
+    #[test]
+    fn rejects_foreign_origin_even_with_valid_token() {
+        assert_eq!(
+            validate_handshake(Some("https://evil.example"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Err("origin not allowed")
+        );
+        assert_eq!(
+            validate_handshake(Some("null"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Err("origin not allowed")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_wrong_or_empty_token() {
+        assert_eq!(validate_handshake(None, None, TOKEN), Err("missing token"));
+        assert_eq!(validate_handshake(None, Some(""), TOKEN), Err("missing token"));
+        assert_eq!(validate_handshake(None, Some("token="), TOKEN), Err("invalid token"));
+        assert_eq!(validate_handshake(None, Some("token=nope"), TOKEN), Err("invalid token"));
+        // Prefix / superstring must not pass.
+        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_AB"), TOKEN), Err("invalid token"));
+        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_ABCD"), TOKEN), Err("invalid token"));
+    }
+
+    #[test]
+    fn finds_token_among_other_query_parameters() {
+        assert_eq!(validate_handshake(None, Some("x=1&token=s3cr3t-t0k3n_ABC&y=2"), TOKEN), Ok(()));
+    }
+
+    #[test]
+    fn rejects_everything_when_server_token_is_unset() {
+        assert_eq!(validate_handshake(None, Some("token="), ""), Err("bridge token not initialised"));
+    }
+
+    #[test]
+    fn generated_token_is_long_urlsafe_and_unique() {
+        let a = generate_bridge_token();
+        let b = generate_bridge_token();
+        assert_eq!(a.len(), 43); // 32 bytes → 43 base64url chars without padding
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert_ne!(a, b);
     }
 }

@@ -35,6 +35,12 @@ import {
 } from './ui/alert-dialog';
 import { ConnectionStorageManager } from '../lib/connection-storage';
 import {
+  applyCollapsedState,
+  collectCollapsedFolderIds,
+  loadCollapsedFolderIds,
+  saveCollapsedFolderIds,
+} from '../lib/folder-expansion';
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -43,6 +49,16 @@ import {
 } from './ui/context-menu';
 import { toast } from 'sonner';
 import { DEFAULT_APP_KEYBOARD_SHORTCUTS, formatKeyboardShortcut } from '../lib/keyboard-shortcuts';
+
+export interface DetachedSession {
+  connectionId: string;
+  name: string;
+  host?: string;
+  username?: string;
+  protocol?: string;
+  originalConnectionId?: string;
+  detachedAt?: number;
+}
 
 interface ConnectionNode {
   id: string;
@@ -72,6 +88,10 @@ interface ConnectionManagerProps {
   onDuplicateConnection?: (connection: ConnectionNode) => void;
   recentConnections?: { id: string; name: string; host: string; username: string; port?: number; lastConnected?: string }[];
   onQuickConnect?: (connectionId: string) => void;
+  /** Xshell-style detached (background) sessions — reattach or terminate. */
+  detachedSessions?: DetachedSession[];
+  onReattachSession?: (session: DetachedSession) => void;
+  onCloseDetachedSession?: (connectionId: string) => void;
 }
 
 type DropPosition = 'before' | 'after' | 'inside';
@@ -89,6 +109,9 @@ export function ConnectionManager({
   onDuplicateConnection,
   recentConnections = [],
   onQuickConnect,
+  detachedSessions = [],
+  onReattachSession,
+  onCloseDetachedSession,
 }: ConnectionManagerProps) {
   const { t } = useTranslation();
   const newConnectionShortcut = formatKeyboardShortcut(
@@ -96,9 +119,28 @@ export function ConnectionManager({
     navigator.platform.toUpperCase().includes('MAC'),
   );
   // Load connections from storage
+  // The storage backend returns every folder expanded; reapply the folders
+  // the user collapsed so the tree survives rebuilds and app restarts.
   const loadConnections = (): ConnectionNode[] => {
     const tree = ConnectionStorageManager.buildConnectionTree(activeConnections);
-    return tree.length > 0 ? tree : [];
+    return tree.length > 0 ? applyCollapsedState(tree, loadCollapsedFolderIds()) : [];
+  };
+
+  // Relative "n min/hours ago" (shared with the welcome screen) for recent
+  // timestamps; a fixed YYYY-MM-DD HH:mm date beyond a day — locale-default
+  // formatting is ambiguous (08/05 vs 05/08) and verbose.
+  const formatLastConnected = (iso: string): string => {
+    const then = new Date(iso).getTime();
+    if (Number.isNaN(then)) return '';
+    const elapsedMs = Date.now() - then;
+    if (elapsedMs < 60_000) return t('welcome.timeAgo.justNow');
+    const minutes = Math.floor(elapsedMs / 60_000);
+    if (minutes < 60) return t('welcome.timeAgo.minutes', { count: minutes });
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return t('welcome.timeAgo.hours', { count: hours });
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
 
   const [connections, setConnections] = useState<ConnectionNode[]>(loadConnections());
@@ -163,24 +205,15 @@ export function ConnectionManager({
       // Load the full connection data to get authentication credentials
       const connectionData = ConnectionStorageManager.getConnection(node.id);
       if (connectionData) {
+        // Duplicate from the full saved record so advanced/protocol-specific
+        // fields are carried over (previously only auth + proxy were copied,
+        // silently dropping ftpsEnabled, SSH keepalive/compression, RDP/VNC
+        // settings, and favorite/color/tags/description). saveConnection is a
+        // full spread of Omit<ConnectionData,'id'|'createdAt'>.
+        const { id: _id, createdAt: _createdAt, ...rest } = connectionData;
         const duplicated = ConnectionStorageManager.saveConnection({
-          name: `${node.name} (Copy)`,
-          host: node.host,
-          port: node.port || 22,
-          username: node.username || '',
-          protocol: node.protocol || 'SSH',
-          folder: connectionData.folder || 'All Connections',
-          // Copy authentication credentials
-          authMethod: connectionData.authMethod,
-          password: connectionData.password,
-          privateKeyPath: connectionData.privateKeyPath,
-          passphrase: connectionData.passphrase,
-          // Copy proxy settings
-          proxyType: connectionData.proxyType,
-          proxyHost: connectionData.proxyHost,
-          proxyPort: connectionData.proxyPort,
-          proxyUsername: connectionData.proxyUsername,
-          proxyPassword: connectionData.proxyPassword,
+          ...rest,
+          name: `${connectionData.name}${t('connectionManager.copySuffix')}`,
         });
         setConnections(loadConnections());
         toast.success(t('connectionManager.duplicated', { name: duplicated.name }));
@@ -613,7 +646,10 @@ export function ConnectionManager({
         return node;
       });
     };
-    setConnections(updateNode(connections));
+    const next = updateNode(connections);
+    // Persist on every change (folders that no longer exist drop out here).
+    saveCollapsedFolderIds(collectCollapsedFolderIds(next));
+    setConnections(next);
   };
 
   const getIcon = (node: ConnectionNode) => {
@@ -701,9 +737,6 @@ export function ConnectionManager({
 
         <div className="relative">
           {getIcon(node)}
-          {isConnected && (
-            <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 rounded-full border border-card" />
-          )}
         </div>
         <span className="text-sm flex-1">{node.name}</span>
       </div>
@@ -904,6 +937,44 @@ export function ConnectionManager({
             </Tooltip>
           </TooltipProvider>
         </div>
+        {detachedSessions.length > 0 && (
+          <div className="border-b border-border px-3 py-2">
+            <div className="flex items-center gap-2 mb-1.5">
+              <Monitor className="w-3.5 h-3.5 text-muted-foreground" />
+              <h4 className="text-xs font-medium text-muted-foreground flex-1">
+                {t('connectionManager.detachedSessions')}
+              </h4>
+              <span className="text-[10px] text-muted-foreground">{detachedSessions.length}</span>
+            </div>
+            <div className="space-y-1">
+              {detachedSessions.map((session) => (
+                <div
+                  key={session.connectionId}
+                  className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60 cursor-pointer group"
+                  onClick={() => onReattachSession?.(session)}
+                  title={t('connectionManager.reattachSession')}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium truncate">{session.name}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">
+                      {session.username ? `${session.username}@` : ''}{session.host || ''}
+                    </div>
+                  </div>
+                  <button
+                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCloseDetachedSession?.(session.connectionId);
+                    }}
+                    title={t('connectionManager.closeDetachedSession')}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div
           ref={treeContainerRef}
           data-conn-tree-container="true"
@@ -947,19 +1018,11 @@ export function ConnectionManager({
                   </Badge>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">{t('connectionDetails.status')}</span>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${selectedConnection.isConnected ? 'bg-green-500' : 'bg-gray-500'}`} />
-                    <span className="text-xs">{selectedConnection.isConnected ? t('connectionDetails.connected') : t('connectionDetails.disconnected')}</span>
-                  </div>
-                </div>
-
                 {selectedConnection.lastConnected && (
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-medium">{t('connectionDetails.lastConnected')}</span>
                     <span className="text-xs">
-                      {new Date(selectedConnection.lastConnected).toLocaleString()}
+                      {formatLastConnected(selectedConnection.lastConnected)}
                     </span>
                   </div>
                 )}

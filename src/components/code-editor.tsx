@@ -246,7 +246,7 @@ export function CodeEditor({
   return (
     <div
       ref={containerRef}
-      className={`overflow-auto border rounded-md ${className}`}
+      className={`overflow-auto border border-border rounded-md ${className}`}
       style={{
         height: "100%",
         fontSize: `${editorConfig.fontSize}px`,

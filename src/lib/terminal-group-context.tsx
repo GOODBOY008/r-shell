@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useReducer, useEffect, useRef, useMemo } from 'react';
 import type { TerminalGroupState, TerminalGroupAction, TerminalGroup, TerminalTab } from './terminal-group-types';
 import { terminalGroupReducer, createDefaultState } from './terminal-group-reducer';
-import { saveState, loadState, migrateFromLegacy } from './terminal-group-serializer';
+import { saveState, loadState, migrateFromLegacy, STORAGE_KEY } from './terminal-group-serializer';
+import { isRestoreSessionsOnStartupEnabled } from './startup-restore';
 
 interface TerminalGroupContextType {
   state: TerminalGroupState;
@@ -25,6 +26,21 @@ const TerminalGroupContext = createContext<TerminalGroupContextType | null>(null
 
 function initializeState(): TerminalGroupState {
   migrateFromLegacy();
+
+  // The user opted out of session restore ("Reconnect Sessions on Startup"
+  // off, issue #126): start with a fresh, empty workspace instead of reopening
+  // the previous session's tabs. The persisted layout is discarded too, so a
+  // later re-enable of the setting can never resurrect stale tabs saved
+  // before it was switched off.
+  if (!isRestoreSessionsOnStartupEnabled()) {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Storage unavailable — starting from the default state is still correct.
+    }
+    return createDefaultState();
+  }
+
   const loaded = loadState();
   if (!loaded) return createDefaultState();
 

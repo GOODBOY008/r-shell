@@ -4,9 +4,13 @@
  * Bug: a connection configured with a proxy lost its proxy settings after
  * a failed connect — the Edit dialog showed empty proxy fields because the
  * proxy was never persisted to connection storage.
+ *
+ * Secret handling: stored secrets are ciphertext (sealed via the Rust
+ * credential_seal command). The edit dialog never echoes them back — blank
+ * fields mean "keep the stored value", typed values are sealed on save.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConnectionDialog } from '../components/connection-dialog';
 import { ConnectionStorageManager } from '../lib/connection-storage';
 
@@ -16,8 +20,18 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
 });
 
+// Deterministic test-double for credential_seal/open.
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(),
+  invoke: vi.fn(async (command: string, args: { secret?: string; sealed?: string }) => {
+    if (command === 'credential_seal') {
+      return `v1:test:${btoa(encodeURIComponent(args.secret ?? ''))}`;
+    }
+    if (command === 'credential_open') {
+      const payload = (args.sealed ?? '').split(':')[2] ?? '';
+      return decodeURIComponent(atob(payload));
+    }
+    return {};
+  }),
 }));
 
 vi.mock('sonner', () => ({
@@ -31,6 +45,7 @@ vi.mock('../lib/connection-profiles', () => ({
 }));
 
 import { invoke } from '@tauri-apps/api/core';
+import { sealSecret } from '../lib/credential-crypto';
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -70,32 +85,66 @@ function activateTab(name: string) {
   fireEvent.mouseDown(screen.getByRole('tab', { name }));
 }
 
+/** The stored value must be ciphertext (v1 sealed), never the plaintext. */
+function expectSealed(value: unknown, plaintext: string): void {
+  expect(typeof value).toBe('string');
+  expect(value as string).toMatch(/^v1:/);
+  expect(value as string).not.toContain(plaintext);
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
 });
 
 describe('ConnectionDialog proxy persistence', () => {
-  it('persists proxy config when the edited connection is saved', () => {
-    // Seed a connection without proxy (realistic: proxy was never stored before)
-    ConnectionStorageManager.saveConnectionWithId('conn-1', baseConnection);
-
-    renderDialog({
-      editingConnection: { ...baseConnection, ...proxyConfig },
+  it('persists proxy config when the edited connection is saved', async () => {
+    // Seed a connection whose stored secrets are already sealed (the normal
+    // post-migration state) plus a plaintext-free proxy password.
+    ConnectionStorageManager.saveConnectionWithId('conn-1', {
+      ...baseConnection,
+      password: await sealSecret('secret'),
+      proxyPassword: await sealSecret('proxypass'),
     });
 
+    renderDialog({
+      editingConnection: {
+        ...baseConnection,
+        ...proxyConfig,
+        // The dialog model receives the stored (sealed) values.
+        password: await sealSecret('secret'),
+        proxyPassword: await sealSecret('proxypass'),
+      },
+    });
+
+    // Leave the secret fields blank (keep stored values) and save.
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // handleSave is async (seals secrets via IPC) — wait for the persist.
+    await waitFor(() => {
+      expect(ConnectionStorageManager.getConnection('conn-1')?.proxyType).toBe('http');
+    });
 
     const stored = ConnectionStorageManager.getConnection('conn-1');
     expect(stored?.proxyType).toBe('http');
     expect(stored?.proxyHost).toBe('proxy.example.com');
     expect(stored?.proxyPort).toBe(3128);
     expect(stored?.proxyUsername).toBe('proxyuser');
-    expect(stored?.proxyPassword).toBe('proxypass');
+    // Blank field on save = keep the stored (sealed) proxy password.
+    expectSealed(stored?.proxyPassword, 'proxypass');
+    expectSealed(stored?.password, 'secret');
   });
 
   it('keeps proxy config when a new connection fails to connect', async () => {
-    mockInvoke.mockResolvedValueOnce({ success: false, error: 'connection refused' });
+    mockInvoke.mockImplementation(async (command: string, args?: { secret?: string }) => {
+      if (command === 'credential_seal') {
+        return `v1:test:${btoa(encodeURIComponent(args?.secret ?? ''))}`;
+      }
+      if (command === 'ssh_connect') {
+        return { success: false, error: 'connection refused' };
+      }
+      return {};
+    });
 
     renderDialog();
 
@@ -150,12 +199,19 @@ describe('ConnectionDialog proxy persistence', () => {
     expect(connections[0].proxyHost).toBe('proxy.example.com');
     expect(connections[0].proxyPort).toBe(3128);
     expect(connections[0].proxyUsername).toBe('proxyuser');
-    expect(connections[0].proxyPassword).toBe('proxypass');
+    // The typed proxy password was sealed for storage — never plaintext.
+    expectSealed(connections[0].proxyPassword, 'proxypass');
   });
 
-  it('shows saved proxy values in the proxy tab when editing', () => {
+  it('does not echo the stored proxy password back into the form', () => {
     renderDialog({
-      editingConnection: { ...baseConnection, ...proxyConfig },
+      editingConnection: {
+        ...baseConnection,
+        ...proxyConfig,
+        // Stored values arrive sealed (from the stripped storage model).
+        proxyPassword: 'v1:test:cHJveHlwYXNz',
+        password: 'v1:test:c2VjcmV0',
+      },
     });
 
     activateTab('Proxy');
@@ -163,6 +219,7 @@ describe('ConnectionDialog proxy persistence', () => {
     expect((screen.getByLabelText('Proxy Host') as HTMLInputElement).value).toBe('proxy.example.com');
     expect((screen.getByLabelText('Proxy Port') as HTMLInputElement).value).toBe('3128');
     expect((screen.getByLabelText('Proxy Username') as HTMLInputElement).value).toBe('proxyuser');
-    expect((screen.getByLabelText('Proxy Password') as HTMLInputElement).value).toBe('proxypass');
+    // The stored secret is NOT echoed — the field stays blank with a hint.
+    expect((screen.getByLabelText('Proxy Password') as HTMLInputElement).value).toBe('');
   });
 });

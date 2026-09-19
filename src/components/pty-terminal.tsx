@@ -1,21 +1,23 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
-import { invoke } from '@tauri-apps/api/core';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
+import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar, type TerminalSearchState } from './terminal/terminal-search-bar';
 import { toast } from 'sonner';
 import { signalReady } from '../lib/restoration-manager';
+import i18n from '../lib/i18n';
 import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
 import { registerTerminalWorkingDirectoryHandler } from '../lib/terminal-working-directory';
 import { TERMINAL_COMMAND_EVENT, type TerminalCommandDetail } from '../lib/terminal-commands';
+import { registerDetachHandler } from '../lib/terminal-detach-registry';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
@@ -26,7 +28,54 @@ interface PtyTerminalProps {
   appearanceKey?: number;
   themeKey?: number;
   isActive?: boolean;
+  /** Non-empty PTY output only, not local status banners or scrollback rendering. */
+  onOutput?: (connectionId: string) => void;
   onConnectionStatusChange?: (connectionId: string, status: 'connected' | 'connecting' | 'disconnected' | 'pending') => void;
+  /** Xshell-style detach (Ctrl+A then D): keep the session alive in the background. */
+  onDetach?: (connectionId: string) => void;
+}
+
+// ---------------------------------------------------------------------------
+// ssh_session_dead escalation budget
+//
+// When the backend reports the SSH session itself died (backend error code
+// `ssh_session_dead`), a WebSocket-only retry cannot recover — the correct
+// response is a full reconnect (disconnect + re-authenticate), which runs in
+// App.tsx via onReconnectTab and remounts this component. Because each
+// escalation remounts PtyTerminal (resetting its refs), the attempt budget
+// must live at module level: auto-escalate at most ESCALATION_LIMIT times per
+// connection per window, then fall back to asking the user to reconnect
+// manually. Each failed re-auth leaves the tab disconnected (no remount), so
+// this guard mainly protects against pathological remount loops.
+// ---------------------------------------------------------------------------
+const SSH_DEAD_ESCALATION_LIMIT = 2;
+const SSH_DEAD_ESCALATION_WINDOW_MS = 10 * 60 * 1000;
+const sshDeadEscalations = new Map<string, { count: number; windowStart: number }>();
+
+/** Claim one auto-escalation attempt for this connection. Returns false when
+ *  the budget is exhausted (caller should surface a manual-reconnect hint). */
+function claimSshDeadEscalation(connectionId: string): boolean {
+  const now = Date.now();
+  // Opportunistic pruning: tab ids include unique suffixes (e.g.
+  // `${id}-dup-${Date.now()}`), so stale entries would otherwise accumulate
+  // for the app's lifetime. Only paid once the map grows past a small bound.
+  if (sshDeadEscalations.size > 64) {
+    for (const [key, entry] of sshDeadEscalations) {
+      if (now - entry.windowStart > SSH_DEAD_ESCALATION_WINDOW_MS) {
+        sshDeadEscalations.delete(key);
+      }
+    }
+  }
+  const entry = sshDeadEscalations.get(connectionId);
+  if (!entry || now - entry.windowStart > SSH_DEAD_ESCALATION_WINDOW_MS) {
+    sshDeadEscalations.set(connectionId, { count: 1, windowStart: now });
+    return true;
+  }
+  if (entry.count >= SSH_DEAD_ESCALATION_LIMIT) {
+    return false;
+  }
+  entry.count += 1;
+  return true;
 }
 
 /**
@@ -38,12 +87,27 @@ interface PtyTerminalProps {
  * Communication is done via WebSocket for low-latency bidirectional streaming.
  */
 
-/** Per-session output cap. When cumulative bytes written to xterm exceed this
- *  value the scrollback is cleared automatically so V8 heap stays bounded.
- *  2 MB of decoded text ≈ ~25k typical 80-char terminal lines. Kept low to
- *  prevent V8 heap fragmentation and WebGL texture-cache bloat during
- *  sustained high-throughput output (e.g. `yes`). */
-const SESSION_OUTPUT_LIMIT_BYTES = 2 * 1024 * 1024;
+/**
+ * How long a pane stays hidden before its WebGL context is released.
+ *
+ * Releasing on every hide (#105) made each tab switch tear the renderer down
+ * and rebuild it on return — measured at ~1.2 s per switch on a 248×45 grid
+ * (issue #134). The reason to release at all is to stop panes hidden for hours
+ * from holding GPU contexts the browser may evict; a grace period keeps quick
+ * switching free while long-hidden panes still let go of the GPU.
+ */
+const HIDDEN_WEBGL_RELEASE_MS = 60_000;
+
+function isAutoReconnectEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return true;
+    const settings = JSON.parse(raw) as { autoReconnect?: unknown };
+    return settings.autoReconnect !== false;
+  } catch {
+    return true;
+  }
+}
 
 export function PtyTerminal({
   connectionId,
@@ -53,21 +117,48 @@ export function PtyTerminal({
   appearanceKey = 0,
   themeKey = 0,
   isActive = true,
-  onConnectionStatusChange
+  onOutput,
+  onConnectionStatusChange,
+  onDetach,
 }: PtyTerminalProps) {
-  const { t } = useTranslation();
   const { onReconnectTab, onWorkingDirectoryChange } = useTerminalCallbacks();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
   const searchRef = React.useRef<SearchAddon | null>(null);
   const wsRef = React.useRef<WebSocket | null>(null);
+  const onOutputRef = React.useRef(onOutput);
+  // Update at commit time, before another output event can observe old visibility.
+  // Callback changes must never restart the terminal/WS creation effect below.
+  React.useLayoutEffect(() => {
+    onOutputRef.current = onOutput;
+    // Revoke at the unmount commit, not only in passive WS cleanup: the same
+    // tab id may already have been reopened when an old socket event arrives.
+    return () => { onOutputRef.current = undefined; };
+  }, [onOutput]);
   const rendererRef = React.useRef<string>('canvas');
   const webglAddonRef = React.useRef<WebglAddon | null>(null);
+  // Lazy WebGL controls, populated by the terminal-creation effect so the
+  // activation effect can load/release the renderer without re-running the
+  // whole session setup.
+  const webglControlsRef = React.useRef<{ ensure: () => void; release: () => void } | null>(null);
+  // Pending grace-period release of this pane's WebGL context (see
+  // HIDDEN_WEBGL_RELEASE_MS); cancelled when the pane becomes visible again.
+  const webglReleaseTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Mirrors the latest `isActive` prop for non-effect code paths (the
+  // ResizeObserver completing a pending activation).
+  const isActiveStateRef = React.useRef(isActive);
+  // Set by the activation effect while an activation is pending; lets the
+  // ResizeObserver finish an activation on a 0×0 → non-zero transition.
+  const activateTerminalRef = React.useRef<(() => void) | null>(null);
   const clipboardAddonRef = React.useRef<ClipboardAddon | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const initialIsActiveRef = React.useRef(isActive);
-  const wasActiveRef = React.useRef(isActive);
+  // Starts false even for active mounts: every pane — including one that
+  // mounts active behind a still-0×0 container — must pass through the
+  // activation effect's measured fit + refresh + focus before the latch is
+  // consumed (issue #87).
+  const wasActiveRef = React.useRef(false);
   
   // Search bar state
   const [searchVisible, setSearchVisible] = React.useState(false);
@@ -89,6 +180,11 @@ export function PtyTerminal({
   
   // PTY session generation — used in Close to avoid stale-close races
   const ptyGenerationRef = React.useRef<number | null>(null);
+
+  // Set once this mount has already escalated a `ssh_session_dead` error to a
+  // full reconnect — prevents duplicate App-level reconnects if more coded
+  // errors arrive before the component remounts.
+  const sshDeadEscalatedRef = React.useRef(false);
   
   // Reconnect key — incrementing this forces the main effect to tear down and rebuild
   const [reconnectKey, setReconnectKey] = React.useState(0);
@@ -101,9 +197,29 @@ export function PtyTerminal({
   const autoReconnectAfterDropRef = React.useRef(0);
   const MAX_AUTO_RECONNECT_AFTER_DROP = 5;
 
-  // Cumulative bytes written to xterm this session — reset on clear.
-  const sessionOutputRef = React.useRef(0);
   const inputEncoderRef = React.useRef(new TextEncoder());
+  // Encoded connection id for the binary input fast path — computed once per
+  // connection, not per keystroke (hot path: must stay allocation-light).
+  const connectionIdBytes = React.useMemo(
+    () => inputEncoderRef.current.encode(connectionId),
+    [connectionId],
+  );
+
+  // Xshell-style Ctrl+A prefix: after Ctrl+A, a following 'd' detaches the
+  // session into the background. Any other key flushes the buffered Ctrl+A
+  // (\x01) to the remote so tmux/screen users are unaffected.
+  const prefixArmedRef = React.useRef(false);
+  const prefixTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const PREFIX_TIMEOUT_MS = 1500;
+  // Set once a detach has been requested — the cleanup must skip sending Close
+  // so the backend keeps the detached session alive.
+  const detachedRef = React.useRef(false);
+  // Latest onDetach prop — the key-handler closure is attached once, so it must
+  // read the current prop through a ref to avoid stale-closure detaches.
+  const onDetachRef = React.useRef(onDetach);
+  React.useEffect(() => {
+    onDetachRef.current = onDetach;
+  }, [onDetach]);
 
   const sendInputToPty = React.useCallback((data: string): boolean => {
     const ws = wsRef.current;
@@ -111,14 +227,70 @@ export function PtyTerminal({
       return false;
     }
 
-    const dataBytes = Array.from(inputEncoderRef.current.encode(data));
-    ws.send(JSON.stringify({
-      type: 'Input',
-      connection_id: connectionId,
-      data: dataBytes,
-    }));
+    // Binary fast path — frame format mirrors the backend's decoder:
+    //   [0x00][id_len: u16 BE][connection_id bytes][payload bytes]
+    // One TypedArray per keystroke instead of a boxed number array plus a
+    // JSON string; the backend skips JSON parsing entirely.
+    const payload = inputEncoderRef.current.encode(data);
+    const idBytes = connectionIdBytes;
+    const frame = new Uint8Array(3 + idBytes.length + payload.length);
+    frame[0] = 0x00;
+    frame[1] = idBytes.length >> 8;
+    frame[2] = idBytes.length & 0xff;
+    frame.set(idBytes, 3);
+    frame.set(payload, 3 + idBytes.length);
+    ws.send(frame);
     return true;
+  }, [connectionIdBytes]);
+
+  const flushPrefixCtrlA = React.useCallback(() => {
+    if (prefixArmedRef.current) {
+      sendInputToPty('\x01');
+    }
+  }, [sendInputToPty]);
+
+  const armPrefix = React.useCallback(() => {
+    prefixArmedRef.current = true;
+    if (prefixTimerRef.current) clearTimeout(prefixTimerRef.current);
+    prefixTimerRef.current = setTimeout(() => {
+      // Timeout: forward the buffered Ctrl+A to the remote (no detach).
+      flushPrefixCtrlA();
+      prefixArmedRef.current = false;
+      prefixTimerRef.current = null;
+    }, PREFIX_TIMEOUT_MS);
+  }, [flushPrefixCtrlA]);
+
+  const sendDetach = React.useCallback(() => {
+    if (detachedRef.current) return;
+    detachedRef.current = true;
+
+    // Tell the backend to move this PTY session into the detached registry.
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const detachMsg: Record<string, unknown> = {
+        type: 'Detach',
+        connection_id: connectionId,
+      };
+      if (ptyGenerationRef.current !== null) {
+        detachMsg.generation = ptyGenerationRef.current;
+      }
+      ws.send(JSON.stringify(detachMsg));
+    }
   }, [connectionId]);
+
+  const handleDetach = React.useCallback(() => {
+    if (detachedRef.current) return;
+    sendDetach();
+    onDetachRef.current?.(connectionId);
+  }, [connectionId, sendDetach]);
+
+  // Let tab-bar context menus (outside the terminal tree) trigger a detach
+  // through this component, which owns the WebSocket + PTY generation.
+  // Note: only sends the WS handshake — App's handleDetachTab does the
+  // tab-removal, so this must NOT call onDetach (would recurse).
+  React.useEffect(() => {
+    return registerDetachHandler(connectionId, sendDetach);
+  }, [connectionId, sendDetach]);
 
   const pasteClipboardIntoPty = React.useCallback(async () => {
     try {
@@ -126,14 +298,14 @@ export function PtyTerminal({
       if (!text) return;
       const term = xtermRef.current;
       if (!term) {
-        toast.error(t('ptyTerminal.terminalNotConnected'));
+        toast.error(i18n.t('ptyTerminal.terminalNotConnected'));
         return;
       }
       // term.paste() routes through xterm's onData handler,
       // which calls sendInputToPty with proper bracketed paste wrapping
       term.paste(text);
     } catch (_error) {
-      toast.error(t('ptyTerminal.failedToReadClipboard'));
+      toast.error(i18n.t('ptyTerminal.failedToReadClipboard'));
     }
   }, []);
 
@@ -178,18 +350,35 @@ export function PtyTerminal({
     clipboardAddonRef.current = clipboardAddon;
     
     term.open(terminalRef.current);
-    
-    // Load WebGL renderer for better performance
-    // NOTE: WebGL doesn't support transparency, so skip it when background image is set
-    if (!appearance.backgroundImage) {
+
+    // --- Lazy WebGL renderer lifecycle ---
+    // Every mounted terminal used to create a WebGL context at mount and
+    // hold it for its whole life — including hidden panes. With many tabs
+    // the live contexts exceeded Chromium's budget and the oldest (hidden)
+    // ones were evicted overnight, leaving permanently black "input-dead"
+    // panes: under WebGL, text exists only as pixels on the GL canvas. The
+    // addon is now loaded only while the pane is visible; hidden panes use
+    // the DOM renderer (xterm v6 core's `_createRenderer()` builds
+    // `DomRenderer` — the same renderer the WebglAddon restores on dispose),
+    // whose text lives as DOM rows and survives the pane being hidden.
+    const ensureWebglRenderer = () => {
+      if (webglAddonRef.current) return;
+      // WebGL can't render transparency, so background images stay on canvas.
+      if (hadBackgroundImageRef.current) return;
       try {
         const webglAddon = new WebglAddon();
-        // Dispose listener — xterm calls this when the addon is disposed
         webglAddon.onContextLoss(() => {
-          webglAddon.dispose();
+          // Disposing restores xterm's DOM renderer, but that path is
+          // best-effort — force a full repaint so the pane can never stay
+          // black after losing its context.
+          try { webglAddon.dispose(); } catch { /* already disposed */ }
           webglAddonRef.current = null;
           rendererRef.current = 'canvas';
-          console.warn('[PTY Terminal] WebGL context lost, falling back to canvas');
+          console.warn('[PTY Terminal] WebGL context lost, fell back to canvas');
+          fitRef.current?.fit();
+          if (term.rows > 0) {
+            term.refresh(0, term.rows - 1);
+          }
         });
         term.loadAddon(webglAddon);
         webglAddonRef.current = webglAddon;
@@ -199,11 +388,22 @@ export function PtyTerminal({
         rendererRef.current = 'canvas';
         console.warn('[PTY Terminal] WebGL not supported, falling back to canvas:', e);
       }
-    } else {
+    };
+    const releaseWebglRenderer = () => {
+      const addon = webglAddonRef.current;
+      if (!addon) return;
+      webglAddonRef.current = null;
       rendererRef.current = 'canvas';
-      console.log('[PTY Terminal] Using canvas renderer (background image requires transparency)');
+      try { addon.dispose(); } catch { /* already disposed */ }
+      console.log('[PTY Terminal] WebGL renderer released (tab hidden)');
+    };
+    webglControlsRef.current = { ensure: ensureWebglRenderer, release: releaseWebglRenderer };
+    if (initialIsActiveRef.current) {
+      ensureWebglRenderer();
+    } else {
+      console.log('[PTY Terminal] Using canvas renderer (hidden tab; WebGL loads on activation)');
     }
-    
+
     fitAddon.fit();
 
     // Store refs
@@ -262,7 +462,43 @@ export function PtyTerminal({
       const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
       const modKey = isMac ? event.metaKey : event.ctrlKey;
       const key = event.key.toLowerCase();
-      
+
+      // Xshell-style Ctrl+A prefix (Ctrl+A then D detaches; any other key
+      // forwards the buffered Ctrl+A to the remote so tmux/screen users are
+      // unaffected). Uses raw Ctrl (not Cmd on macOS) to match Xshell.
+      if (event.ctrlKey && !event.metaKey && key === 'a') {
+        event.preventDefault();
+        if (prefixArmedRef.current) {
+          // Ctrl+A twice sends a literal \x01 (readline: start-of-line) and
+          // re-arms the prefix.
+          flushPrefixCtrlA();
+        }
+        armPrefix();
+        return false;
+      }
+
+      if (prefixArmedRef.current && !event.metaKey) {
+        // A key was pressed after Ctrl+A within the timeout window.
+        if (prefixTimerRef.current) {
+          clearTimeout(prefixTimerRef.current);
+          prefixTimerRef.current = null;
+        }
+
+        if (key === 'd' && !event.altKey) {
+          // Ctrl+A then D → detach the session into the background.
+          prefixArmedRef.current = false;
+          event.preventDefault();
+          handleDetach();
+          return false;
+        }
+
+        // Any other key: forward the buffered Ctrl+A to the remote, then let
+        // xterm process this key normally (e.g. Ctrl+A then 'p' sends \x01p).
+        flushPrefixCtrlA();
+        prefixArmedRef.current = false;
+        // Fall through to the normal key handling below.
+      }
+
       // Handle copy shortcut
       if (modKey && key === 'c' && term.hasSelection()) {
         // Allow copy to happen
@@ -280,14 +516,14 @@ export function PtyTerminal({
         setSearchFocusTrigger(prev => prev + 1);
         return false;
       }
-      
-      // Handle select all shortcut
-      if (modKey && key === 'a') {
+
+      // Handle select all shortcut (Cmd+A on macOS — Ctrl+A is the prefix key)
+      if (isMac && event.metaKey && key === 'a') {
         event.preventDefault();
         term.selectAll();
         return false;
       }
-      
+
       // Handle F3 for search navigation
       if (event.key === 'F3') {
         event.preventDefault();
@@ -363,13 +599,24 @@ export function PtyTerminal({
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.writeln(`\x1b[1;36m  ${connectionName}\x1b[0m`);
     term.writeln(`\x1b[90m  ${username}@${host}\x1b[0m`);
-    term.writeln(`\x1b[90m  Renderer: ${rendererRef.current.toUpperCase()}\x1b[0m`);
+    term.writeln(`\x1b[90m  ${i18n.t('ptyTerminal.renderer', { renderer: rendererRef.current.toUpperCase() })}\x1b[0m`);
     term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
     term.write('\r\n');
-    term.writeln('\x1b[33m🚀 Starting interactive shell (WebSocket + PTY mode)...\x1b[0m');
+    term.writeln(`\x1b[33m${i18n.t('ptyTerminal.startingShell')}\x1b[0m`);
     term.write('\r\n');
 
     let isRunning = true;
+    // Last dims known to have been delivered to the PTY. The onResize handler
+    // only forwards actual changes, so a resize must always update this —
+    // otherwise every subsequent fit would re-send the same size (issue #88).
+    let lastSentCols = term.cols;
+    let lastSentRows = term.rows;
+    // A resize observed while the WebSocket was not OPEN (reconnect backoff,
+    // initial CONNECTING window). It must be flushed on the next open instead
+    // of being dropped — a PTY left at the old size makes bash redraw wrapped
+    // lines with a stale width model and the display silently loses characters
+    // while the remote input buffer keeps them (issue #88).
+    let pendingResize: { cols: number; rows: number } | null = null;
     // Tracks whether a PTY session has been successfully established in this
     // effect run. Reset to false when we initiate an auto-reconnect after a
     // drop so the reconnect loop can function normally.
@@ -377,12 +624,25 @@ export function PtyTerminal({
     // Set when a drop triggers auto-reconnect, so the Success message can
     // warn the user that a fresh shell was started.
     let isReconnectAfterDrop = false;
+    // Captured by Success ('PTY connection started') and consumed by
+    // PtyStarted, which is the only message that knows whether the backend
+    // re-attached a parked session (reattached: true) or started fresh.
+    let startedAfterReconnect = false;
 
     // RAF write batching state — lifted to effect scope so cleanup can cancel.
     let writeBuffer = '';
-    let watermark = 0;
+    let bufferedFrameCount = 0;
     let rafId: number | null = null;
-    let creditsGranted = 0;
+
+    // StartPty handshake watchdog. If the backend never confirms the PTY
+    // (Success/PtyStarted) within this window — e.g. the ssh_session_dead
+    // error frame was lost, or the socket silently stalled — trigger the same
+    // full-reconnect escalation the coded error would have, instead of
+    // waiting for the WS retry loop to burn out and leaving the tab unusable
+    // until a manual reconnect.
+    const START_PTY_WATCHDOG_MS = 8000;
+    let startPtyWatchdog: ReturnType<typeof setTimeout> | null = null;
+    let ptyHandshakeDone = false;
     
     // CRITICAL: Wait for terminal to have proper dimensions before connecting
     // Hidden terminals (display: none) may have cols=10, rows=5 which breaks PTY
@@ -420,26 +680,33 @@ export function PtyTerminal({
 
     // Connect to WebSocket server
     const connectWebSocket = async () => {
+      // Dims carried by the StartPty currently in flight — PtyStarted compares
+      // them against the terminal's dims to detect a fit that raced the
+      // handshake and re-syncs the PTY (issue #88).
+      let startPtyDims: { cols: number; rows: number } | null = null;
       // CRITICAL: Wait for terminal to be properly sized before starting PTY
       await waitForProperSize();
-      
+      // waitForProperSize stops polling without resolving once !isRunning, but
+      // its resolution can race the cleanup within the same tick.
+      if (!isRunning) return;
+
       // Notify parent that we're connecting
       if (connectionStatusRef.current !== 'connecting') {
         connectionStatusRef.current = 'connecting';
         onConnectionStatusChange?.(connectionId, 'connecting');
       }
       
-      // Get the dynamically assigned WebSocket port from the backend
-      let wsPort = 9001; // fallback default
-      try {
-        wsPort = await invoke<number>('get_websocket_port');
-        console.log(`[PTY Terminal] [${connectionId}] WebSocket port: ${wsPort}`);
-      } catch (e) {
-        console.warn(`[PTY Terminal] [${connectionId}] Failed to get WebSocket port, using default:`, e);
-      }
-      
+      // Port + per-launch bridge token from the backend (issue #138).
+      const wsUrl = await getWebSocketUrl();
+      // The endpoint IPC has no deadline, so this continuation can resume after
+      // cleanup (unmount or an effect re-run). Creating a socket now would leak
+      // it past cleanup: its onopen would send a phantom StartPty with a live
+      // handshake watchdog, and on an effect re-run it would overwrite the
+      // replacement socket in wsRef — whose output the identity check in
+      // onmessage would then silently drop.
+      if (!isRunning) return;
       console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
-      const ws = new WebSocket(`ws://127.0.0.1:${wsPort}`);
+      const ws = new WebSocket(wsUrl);
       // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of
       // encoding Vec<u8> as integer arrays.  The backend sends binary output
       // frames with the format: [0x01][id_len: u16 BE][connection_id][payload]
@@ -451,21 +718,72 @@ export function PtyTerminal({
 
       ws.onopen = () => {
         console.log(`[PTY Terminal] [${connectionId}] WebSocket connected`);
-        term.writeln('\x1b[32m✓ WebSocket connected\x1b[0m');
-        
-        // Start PTY session
+        term.writeln(`\x1b[32m${i18n.t('ptyTerminal.webSocketConnected')}\x1b[0m`);
+
+        // Start PTY session.
+        // Capture the dims the PTY is created with — PtyStarted compares them
+        // against the current terminal dims to detect a fit that raced this
+        // handshake (issue #88).
+        const startCols = term.cols;
+        const startRows = term.rows;
+        startPtyDims = { cols: startCols, rows: startRows };
         const startMsg = {
           type: 'StartPty',
           connection_id: connectionId,
-          cols: term.cols,
-          rows: term.rows,
+          cols: startCols,
+          rows: startRows,
         };
-        console.log(`[PTY Terminal] [${connectionId}] Starting PTY connection with ${term.cols}x${term.rows}`);
+        console.log(`[PTY Terminal] [${connectionId}] Starting PTY connection with ${startCols}x${startRows}`);
         ws.send(JSON.stringify(startMsg));
+
+        ptyHandshakeDone = false;
+        if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
+        startPtyWatchdog = setTimeout(() => {
+          startPtyWatchdog = null;
+          if (ptyHandshakeDone) return;
+          console.warn(
+            `[PTY Terminal] [${connectionId}] StartPty handshake watchdog fired (no Success/PtyStarted within ${START_PTY_WATCHDOG_MS}ms) — escalating to full reconnect`,
+          );
+          reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
+          autoReconnectAfterDropRef.current = MAX_AUTO_RECONNECT_AFTER_DROP;
+          if (connectionStatusRef.current !== 'disconnected') {
+            connectionStatusRef.current = 'disconnected';
+            onConnectionStatusChange?.(connectionId, 'disconnected');
+          }
+          if (!sshDeadEscalatedRef.current) {
+            sshDeadEscalatedRef.current = true;
+            if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
+              term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
+              void onReconnectTab(connectionId);
+            } else {
+              term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
+            }
+          }
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.close();
+          }
+        }, START_PTY_WATCHDOG_MS);
+
+        // Flush a resize that was observed while this socket was not OPEN yet
+        // (issue #88): dropping it would leave the PTY at a stale size, and
+        // bash keeps redrawing wrapped lines with the old width — characters
+        // then silently disappear from the display while they remain in the
+        // remote input buffer. When the pending dims match the StartPty dims
+        // there is nothing to do — StartPty already created the session at
+        // that size.
+        if (pendingResize) {
+          const { cols, rows } = pendingResize;
+          pendingResize = null;
+          if (cols !== startCols || rows !== startRows) {
+            ws.send(JSON.stringify({ type: 'Resize', connection_id: connectionId, cols, rows }));
+          }
+          lastSentCols = cols;
+          lastSentRows = rows;
+        }
       };
 
       // =========================================================================
-      // RAF-Based Write Batching + Watermark Flow Control
+      // RAF-Based Write Batching + Credit Flow Control
       //
       // Based on xterm.js best practices:
       // - http://xtermjs.org/docs/guides/flowcontrol/
@@ -479,21 +797,8 @@ export function PtyTerminal({
       // Solution:
       // 1. Accumulate all incoming frames in a string buffer.
       // 2. Flush once per requestAnimationFrame (~60 writes/s instead of 100+).
-      // 3. Use watermark-based flow control: send Resume credits only when the
-      //    pending byte count drops below LOW_WATER, avoiding per-frame ACKs.
+      // 3. Return exactly one credit per frame after xterm processes the batch.
       // =========================================================================
-
-      /** High watermark (bytes): above this, the buffer is considered "full" and
-       *  we stop granting credits until xterm drains below LOW_WATER.  128 KB
-       *  keeps the emulator snappy for keystrokes under fast input (xterm guide
-       *  recommends ≤ 500 KB for responsiveness). */
-      const HIGH_WATER = 128 * 1024;
-      /** Low watermark (bytes): below this, we grant a batch of credits to the
-       *  backend so it can send more data. */
-      const LOW_WATER = 16 * 1024;
-      /** How many credits to grant each time watermark drops below LOW_WATER.
-       *  Keeps the pipeline flowing without flooding the WS receive queue. */
-      const CREDIT_BATCH = 4;
 
       const grantCredits = (count: number) => {
         if (ws.readyState === WebSocket.OPEN) {
@@ -502,7 +807,6 @@ export function PtyTerminal({
           for (let i = 0; i < count; i++) {
             ws.send(msg);
           }
-          creditsGranted += count;
         }
       };
 
@@ -511,31 +815,14 @@ export function PtyTerminal({
         if (!writeBuffer) return;
 
         const data = writeBuffer;
+        const frameCount = bufferedFrameCount;
         writeBuffer = '';
-
-        // Enforce per-session memory cap so xterm's scrollback buffer can't
-        // grow without bound on sustained high-throughput output (e.g. `yes`).
-        sessionOutputRef.current += data.length;
-        if (sessionOutputRef.current >= SESSION_OUTPUT_LIMIT_BYTES) {
-          term.reset();
-          term.clear();
-          sessionOutputRef.current = 0;
-          term.writeln('\x1b[33m[Output limit reached \u2014 scrollback cleared to free memory]\x1b[0m');
-        }
+        bufferedFrameCount = 0;
 
         // Single write per animation frame — the key optimisation.
         // Reduces term.write() calls from hundreds/s to ~60/s.
         term.write(data, () => {
-          // xterm finished processing this batch — update watermark
-          watermark = Math.max(watermark - data.length, 0);
-
-          // Watermark-based flow control: grant credits only when the
-          // pending buffer has drained below LOW_WATER.  Skip granting
-          // if watermark is still above HIGH_WATER (buffer still full).
-          if (watermark < LOW_WATER && watermark < HIGH_WATER && creditsGranted < CREDIT_BATCH * 2) {
-            grantCredits(CREDIT_BATCH);
-            creditsGranted = 0; // reset counter after granting
-          }
+          grantCredits(frameCount);
         });
 
         // If more data arrived during the write, schedule another flush
@@ -545,14 +832,22 @@ export function PtyTerminal({
       };
 
       const enqueueOutput = (text: string) => {
+        // A streaming decoder can retain an incomplete UTF-8 sequence without
+        // producing text. It has already consumed the frame, so return that
+        // credit immediately to avoid stalling on multi-frame characters.
+        if (!text) {
+          grantCredits(1);
+          return;
+        }
         writeBuffer += text;
-        watermark += text.length;
+        bufferedFrameCount += 1;
         if (rafId === null) {
           rafId = requestAnimationFrame(flushWriteBuffer);
         }
       };
 
       ws.onmessage = (event) => {
+        if (!isRunning || wsRef.current !== ws) return;
         // Binary frames carry raw PTY output.
         // Format: [0x01][id_len: u16 BE][connection_id bytes][payload bytes]
         if (event.data instanceof ArrayBuffer) {
@@ -565,6 +860,7 @@ export function PtyTerminal({
           if (frameConnectionId !== connectionId) return;
           const payload = data.subarray(payloadOffset);
           if (payload.length === 0) return;
+          onOutputRef.current?.(connectionId);
           enqueueOutput(outputDecoder.decode(payload, { stream: true }));
           return;
         }
@@ -576,14 +872,21 @@ export function PtyTerminal({
             case 'Success':
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
               if (msg.message.includes('PTY connection started')) {
+                ptyHandshakeDone = true;
+                if (startPtyWatchdog) {
+                  clearTimeout(startPtyWatchdog);
+                  startPtyWatchdog = null;
+                }
+                // Captured for PtyStarted: at that point these flags have
+                // already been reset, but only PtyStarted knows whether the
+                // backend re-attached a parked session or started a fresh
+                // shell.
+                startedAfterReconnect = hasEverConnected || isReconnectAfterDrop;
                 reconnectAttemptsRef.current = 0;
                 autoReconnectAfterDropRef.current = 0; // Reset drop-reconnect counter on success
-                if (hasEverConnected || isReconnectAfterDrop) {
-                  // Reconnected after a drop — warn that a fresh shell was started
-                  term.writeln('\x1b[33m⚠ Previous session lost. New shell session started.\x1b[0m');
-                } else {
-                  term.writeln('\x1b[32m✓ PTY connection started\x1b[0m');
-                  term.writeln('\x1b[90mYou can now use interactive commands: vim, less, more, top, etc.\x1b[0m');
+                if (!startedAfterReconnect) {
+                  term.writeln(`\x1b[32m${i18n.t('ptyTerminal.ptyStarted')}\x1b[0m`);
+                  term.writeln(`\x1b[90m${i18n.t('ptyTerminal.interactiveHint')}\x1b[0m`);
                 }
                 hasEverConnected = true;
                 isReconnectAfterDrop = false;
@@ -594,31 +897,107 @@ export function PtyTerminal({
                 }
               }
               break;
-            
+
             case 'PtyStarted': {
               if (msg.connection_id === connectionId && typeof msg.generation === 'number') {
+                ptyHandshakeDone = true;
+                if (startPtyWatchdog) {
+                  clearTimeout(startPtyWatchdog);
+                  startPtyWatchdog = null;
+                }
                 ptyGenerationRef.current = msg.generation;
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
                 signalReady(connectionId);
                 // Credit-based flow control: seed the pipeline with initial
                 // credits so the PTY reader can start sending immediately.
-                // Ongoing credits are managed by the watermark-based flow
-                // control in the flush callback above.
+                // Ongoing credits are returned by the flush callback above.
                 const INITIAL_WINDOW = 2;
                 grantCredits(INITIAL_WINDOW);
+                // Issue #88 self-heal: if the terminal was refitted while the
+                // StartPty handshake was in flight (backend applies StartPty
+                // only after the SSH channel setup, which includes a shell
+                // probe), the PTY was created with stale dims. Re-sync now —
+                // otherwise bash redraws wrapped lines with the stale width
+                // and the display diverges from the remote input buffer.
+                // The lastSent guard skips resizes that were already delivered
+                // (directly or via the pending-resize flush) so we never emit
+                // a redundant SIGWINCH here.
+                const needsResizeSync =
+                  startPtyDims !== null &&
+                  (term.cols !== startPtyDims.cols || term.rows !== startPtyDims.rows) &&
+                  (term.cols !== lastSentCols || term.rows !== lastSentRows);
+                if (needsResizeSync) {
+                  const ws = wsRef.current;
+                  if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                      type: 'Resize',
+                      connection_id: connectionId,
+                      cols: term.cols,
+                      rows: term.rows,
+                    }));
+                    lastSentCols = term.cols;
+                    lastSentRows = term.rows;
+                  }
+                }
+                startPtyDims = null;
+                if (msg.reattached) {
+                  // The backend re-attached a parked session — the same
+                  // remote shell continues (transient WebSocket drop).
+                  term.writeln(`\x1b[32m${i18n.t('ptyTerminal.sessionRestored')}\x1b[0m`);
+                } else if (startedAfterReconnect) {
+                  // A fresh shell was started after a drop — the previous
+                  // session's state is gone.
+                  term.writeln(`\x1b[33m${i18n.t('ptyTerminal.previousSessionLost')}\x1b[0m`);
+                }
               }
               break;
             }
               
-            case 'Output':
-              if (msg.data && msg.data.length > 0) {
-                enqueueOutput(new TextDecoder().decode(new Uint8Array(msg.data)));
+            case 'Output': {
+              const output = msg as { connection_id?: string; data?: number[] };
+              // Keep legacy connection-scoped JSON frames without an id working,
+              // but never attribute an explicitly foreign session's bytes to this tab.
+              if ((output.connection_id === undefined || output.connection_id === connectionId) &&
+                  Array.isArray(output.data) && output.data.length > 0) {
+                onOutputRef.current?.(connectionId);
+                enqueueOutput(new TextDecoder().decode(new Uint8Array(output.data)));
               }
               break;
+            }
               
             case 'Error': {
               console.error('[PTY Terminal] Error:', msg.message);
-              term.write(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m\r\n`);
+              const errorCode: string | undefined = msg.code;
+
+              // The backend detected the SSH session itself is dead (stale
+              // client already evicted server-side). Retrying the WebSocket
+              // can never recover this — escalate once to a full reconnect
+              // (disconnect + re-authenticate) via the App-level handler,
+              // within the module-level budget.
+              if (errorCode === 'ssh_session_dead') {
+                // Stop both frontend retry loops; recovery is App-driven now.
+                reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
+                autoReconnectAfterDropRef.current = MAX_AUTO_RECONNECT_AFTER_DROP;
+                if (connectionStatusRef.current !== 'disconnected') {
+                  connectionStatusRef.current = 'disconnected';
+                  onConnectionStatusChange?.(connectionId, 'disconnected');
+                }
+                if (!sshDeadEscalatedRef.current) {
+                  sshDeadEscalatedRef.current = true;
+                  if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
+                    term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
+                    void onReconnectTab(connectionId);
+                  } else {
+                    term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
+                  }
+                }
+                if (ws.readyState === WebSocket.OPEN) {
+                  ws.close();
+                }
+                break;
+              }
+
+              term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.error', { message: msg.message })}\x1b[0m\r\n`);
               const errorMsgLower = msg.message.toLowerCase();
               // Permanent failures (SSH session gone on the backend) — stop the
               // retry loop immediately instead of burning through all 5 attempts.
@@ -653,7 +1032,7 @@ export function PtyTerminal({
 
       ws.onerror = (error) => {
         console.error('[PTY Terminal] WebSocket error:', error);
-        term.write('\r\n\x1b[31m[WebSocket error]\x1b[0m\r\n');
+        term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.webSocketError')}\x1b[0m\r\n`);
         // Report disconnected status on WebSocket error
         if (connectionStatusRef.current !== 'disconnected') {
           connectionStatusRef.current = 'disconnected';
@@ -663,7 +1042,27 @@ export function PtyTerminal({
 
       ws.onclose = () => {
         console.log('[PTY Terminal] WebSocket closed');
+        // Closed as part of a ssh_session_dead escalation — App.tsx owns
+        // recovery now. Don't print auto-reconnect banners on top of the
+        // escalation message or schedule WS retries next to it.
+        if (sshDeadEscalatedRef.current) {
+          return;
+        }
+        // If the session was detached (Ctrl+A+D), the backend now owns it —
+        // don't auto-reconnect. The tab is being removed by the App.
+        if (detachedRef.current) {
+          return;
+        }
         if (isRunning) {
+          if (!isAutoReconnectEnabled()) {
+            term.write(`\r\n\x1b[31m[${i18n.t('ptyTerminal.connectionClosedManualReconnect')}]\x1b[0m\r\n`);
+            if (connectionStatusRef.current !== 'disconnected') {
+              connectionStatusRef.current = 'disconnected';
+              onConnectionStatusChange?.(connectionId, 'disconnected');
+            }
+            return;
+          }
+
           // If a session was successfully established, a WS drop means the
           // remote shell is gone (e.g. sleep/wake cycle, server timeout).
           // Auto-reconnect with exponential backoff so the user doesn't have
@@ -672,7 +1071,7 @@ export function PtyTerminal({
             const dropAttempt = autoReconnectAfterDropRef.current;
             if (dropAttempt >= MAX_AUTO_RECONNECT_AFTER_DROP) {
               // Exhausted auto-reconnect attempts — ask user to act manually.
-              term.write('\r\n\x1b[31m[Connection lost. Auto-reconnect failed after ' + MAX_AUTO_RECONNECT_AFTER_DROP + ' attempts. Use right-click → Reconnect.]\x1b[0m\r\n');
+              term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.autoReconnectFailed', { attempts: MAX_AUTO_RECONNECT_AFTER_DROP })}\x1b[0m\r\n`);
               if (connectionStatusRef.current !== 'disconnected') {
                 connectionStatusRef.current = 'disconnected';
                 onConnectionStatusChange?.(connectionId, 'disconnected');
@@ -683,7 +1082,7 @@ export function PtyTerminal({
             const delay = Math.min(2000 * Math.pow(2, dropAttempt), 30000);
             autoReconnectAfterDropRef.current = dropAttempt + 1;
 
-            term.write(`\r\n\x1b[33m[Connection lost. Reconnecting in ${Math.round(delay / 1000)}s (attempt ${dropAttempt + 1}/${MAX_AUTO_RECONNECT_AFTER_DROP})...]\x1b[0m\r\n`);
+            term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.reconnectingAfterDrop', { seconds: Math.round(delay / 1000), attempt: dropAttempt + 1, max: MAX_AUTO_RECONNECT_AFTER_DROP })}\x1b[0m\r\n`);
             if (connectionStatusRef.current !== 'connecting') {
               connectionStatusRef.current = 'connecting';
               onConnectionStatusChange?.(connectionId, 'connecting');
@@ -707,7 +1106,7 @@ export function PtyTerminal({
           const attempts = reconnectAttemptsRef.current;
           
           if (attempts >= MAX_RECONNECT_ATTEMPTS) {
-            term.write('\r\n\x1b[31m[Connection failed permanently. Use right-click → Reconnect to retry.]\x1b[0m\r\n');
+            term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.reconnectFailedPermanently')}\x1b[0m\r\n`);
             if (connectionStatusRef.current !== 'disconnected') {
               connectionStatusRef.current = 'disconnected';
               onConnectionStatusChange?.(connectionId, 'disconnected');
@@ -722,7 +1121,7 @@ export function PtyTerminal({
             connectionStatusRef.current = 'connecting';
             onConnectionStatusChange?.(connectionId, 'connecting');
           }
-          term.write(`\r\n\x1b[33m[Connection closed. Reconnecting in ${Math.round(delay / 1000)}s (attempt ${attempts + 1}/${MAX_RECONNECT_ATTEMPTS})...]\x1b[0m\r\n`);
+          term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.reconnectingAfterClose', { seconds: Math.round(delay / 1000), attempt: attempts + 1, max: MAX_RECONNECT_ATTEMPTS })}\x1b[0m\r\n`);
           setTimeout(() => {
             if (isRunning) {
               connectWebSocket();
@@ -743,16 +1142,17 @@ export function PtyTerminal({
     // identical resize signals when the layout is settling (e.g. after closing
     // an adjacent terminal group). Each redundant SIGWINCH causes the remote
     // shell to redraw its prompt, producing the repeated "root@host:~#" lines.
-    let lastSentCols = term.cols;
-    let lastSentRows = term.rows;
     const resizeDisposable = term.onResize(({ cols, rows }) => {
       if (cols === lastSentCols && rows === lastSentRows) return;
-      lastSentCols = cols;
-      lastSentRows = rows;
       checkScrollability(); // row count changed — re-evaluate scrollability
 
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) {
+        lastSentCols = cols;
+        lastSentRows = rows;
+        // A direct send supersedes anything stashed for the next open — the
+        // newest dims have already been delivered.
+        pendingResize = null;
         const resizeMsg = {
           type: 'Resize',
           connection_id: connectionId,
@@ -761,6 +1161,14 @@ export function PtyTerminal({
         };
         ws.send(JSON.stringify(resizeMsg));
         console.log(`[PTY Terminal] Terminal resized to ${cols}x${rows}`);
+      } else {
+        // The socket is down (reconnect backoff, CONNECTING window). Stash the
+        // dims — `ws.onopen` flushes them after StartPty. Updating the
+        // lastSent bookkeeping here would make the resize unrecoverable: the
+        // PTY keeps the old size and bash redraws wrapped lines with a stale
+        // width model, so characters silently vanish from the display while
+        // they remain in the remote input buffer (issue #88).
+        pendingResize = { cols, rows };
       }
     });
 
@@ -802,6 +1210,20 @@ export function PtyTerminal({
         if (entry.contentRect.width > 100 && entry.contentRect.height > 100) {
           debouncedFit();
         }
+        // A 0×0 → non-zero transition can be the first reliable visibility
+        // signal (e.g. after display sleep/wake). If an activation is still
+        // pending — its rAF retry budget may have expired while the pane was
+        // hidden — finish it now. Any non-zero size counts: deeply split
+        // panes can legitimately be narrower than debouncedFit's 100px
+        // threshold, and activation must not inherit it.
+        if (
+          isActiveStateRef.current &&
+          !wasActiveRef.current &&
+          entry.contentRect.width > 0 &&
+          entry.contentRect.height > 0
+        ) {
+          activateTerminalRef.current?.();
+        }
       }
     });
     
@@ -818,6 +1240,12 @@ export function PtyTerminal({
       console.log(`[PTY Terminal] [${connectionId}] Cleaning up`);
       isRunning = false;
 
+      // Cancel the pending StartPty handshake watchdog, if any.
+      if (startPtyWatchdog) {
+        clearTimeout(startPtyWatchdog);
+        startPtyWatchdog = null;
+      }
+
       // Cancel any pending RAF write batch and discard queued data so no
       // stale writes reach a terminal that is about to be disposed.
       if (rafId !== null) {
@@ -825,12 +1253,14 @@ export function PtyTerminal({
         rafId = null;
       }
       writeBuffer = '';
-      watermark = 0;
+      bufferedFrameCount = 0;
 
       // Close PTY connection via WebSocket — include generation so the
       // backend can ignore this close if a newer session already exists.
+      // If the session was detached (Ctrl+A+D), skip the Close message so the
+      // backend keeps the PTY + SSH connection alive in the background.
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN && !detachedRef.current) {
         const closeMsg: Record<string, unknown> = {
           type: 'Close',
           connection_id: connectionId,
@@ -839,6 +1269,10 @@ export function PtyTerminal({
           closeMsg.generation = ptyGenerationRef.current;
         }
         ws.send(JSON.stringify(closeMsg));
+        ws.close();
+      } else if (ws) {
+        // Detached (or already-closed) — just tear down the WebSocket without
+        // sending Close; the backend owns the detached session now.
         ws.close();
       }
       ptyGenerationRef.current = null;
@@ -867,13 +1301,23 @@ export function PtyTerminal({
         selectionDoc.removeEventListener('mousemove', detectStuckSelectionDrag, true);
       }
       if (fitTimer) clearTimeout(fitTimer);
+      if (prefixTimerRef.current) {
+        clearTimeout(prefixTimerRef.current);
+        prefixTimerRef.current = null;
+      }
+      prefixArmedRef.current = false;
       
       // Dispose WebGL addon FIRST so GPU textures are released before the
       // terminal canvas is removed from the DOM.
+      if (webglReleaseTimerRef.current) {
+        clearTimeout(webglReleaseTimerRef.current);
+        webglReleaseTimerRef.current = null;
+      }
       if (webglAddonRef.current) {
         try { webglAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
         webglAddonRef.current = null;
       }
+      webglControlsRef.current = null;
       if (clipboardAddonRef.current) {
         try { clipboardAddonRef.current.dispose(); } catch (_e) { /* already disposed */ }
         clipboardAddonRef.current = null;
@@ -909,30 +1353,72 @@ export function PtyTerminal({
   React.useEffect(() => {
     if (!isActive) {
       wasActiveRef.current = false;
+      isActiveStateRef.current = false;
+      // Release this pane's WebGL context only once it has stayed hidden for
+      // the grace period — visible panes get the GPU; long-hidden panes keep
+      // their text via the DOM renderer (xterm v6 core's `_createRenderer()`
+      // → `DomRenderer`, restored on dispose). Releasing immediately on every
+      // hide was what made tab switching slow (issue #134).
+      if (webglReleaseTimerRef.current) clearTimeout(webglReleaseTimerRef.current);
+      webglReleaseTimerRef.current = setTimeout(() => {
+        webglReleaseTimerRef.current = null;
+        webglControlsRef.current?.release();
+      }, HIDDEN_WEBGL_RELEASE_MS);
       return;
+    }
+
+    // Visible again before the grace period elapsed: keep the live renderer,
+    // so the switch costs neither a dispose nor a rebuild.
+    if (webglReleaseTimerRef.current) {
+      clearTimeout(webglReleaseTimerRef.current);
+      webglReleaseTimerRef.current = null;
     }
 
     if (wasActiveRef.current) {
+      isActiveStateRef.current = true;
       return;
     }
+    isActiveStateRef.current = true;
 
-    wasActiveRef.current = true;
-
-    const frameId = window.requestAnimationFrame(() => {
+    // Retry until the container has a real size, then fit + full refresh +
+    // focus — and only then consume the activation latch. A single rAF was
+    // not enough: after display sleep/wake or slow layout the portal host
+    // can still be 0×0 in the first frame(s), and the old code consumed the
+    // latch before checking, leaving the pane blank and unfocused forever.
+    let attempts = 0;
+    const MAX_ACTIVATE_ATTEMPTS = 120; // ~2s at 60fps
+    let rafId = 0;
+    const tryActivate = () => {
       const term = xtermRef.current;
       const fitAddon = fitRef.current;
       const container = containerRef.current;
       if (!term || !fitAddon || !container) return;
-      if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
 
+      if (container.offsetWidth <= 0 || container.offsetHeight <= 0) {
+        attempts += 1;
+        if (attempts < MAX_ACTIVATE_ATTEMPTS) {
+          rafId = window.requestAnimationFrame(tryActivate);
+        }
+        return;
+      }
+
+      wasActiveRef.current = true;
+      // Make sure a working renderer is in place before repainting — this
+      // loads WebGL for a pane that just became visible.
+      webglControlsRef.current?.ensure();
       fitAddon.fit();
       if (term.rows > 0) {
         term.refresh(0, term.rows - 1);
       }
       term.focus();
-    });
+    };
+    activateTerminalRef.current = tryActivate;
+    rafId = window.requestAnimationFrame(tryActivate);
 
-    return () => window.cancelAnimationFrame(frameId);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      activateTerminalRef.current = null;
+    };
   }, [isActive]);
 
   // Context menu handlers
@@ -941,9 +1427,9 @@ export function PtyTerminal({
     if (term?.hasSelection()) {
       const selection = term.getSelection();
       writeClipboardText(selection).then(() => {
-        toast.success(t('ptyTerminal.copiedToClipboard'));
+        toast.success(i18n.t('ptyTerminal.copiedToClipboard'));
       }).catch(() => {
-        toast.error(t('ptyTerminal.failedToCopyClipboard'));
+        toast.error(i18n.t('ptyTerminal.failedToCopyClipboard'));
       });
     }
   }, []);
@@ -1000,9 +1486,30 @@ export function PtyTerminal({
     searchStateRef.current = state;
   }, []);
 
+  // Quick Commands panel: type snippet text into this terminal. Uses
+  // term.paste() so multi-line commands get the same newline normalization
+  // and bracketed-paste wrapping as a real clipboard paste; `execute`
+  // appends Enter so the command runs immediately.
+  const handleSendText = React.useCallback((text: string, execute: boolean) => {
+    if (!text) return;
+    const term = xtermRef.current;
+    const ws = wsRef.current;
+    if (!term || !ws || ws.readyState !== WebSocket.OPEN) {
+      toast.error(i18n.t('ptyTerminal.terminalNotConnected'));
+      return;
+    }
+    // Flush a pending Xshell-style Ctrl+A prefix so the buffered \x01 reaches
+    // the remote instead of being swallowed by (or merged into) the snippet.
+    flushPrefixCtrlA();
+    term.paste(text);
+    if (execute) {
+      sendInputToPty('\r');
+    }
+  }, [flushPrefixCtrlA, sendInputToPty]);
+
   React.useEffect(() => {
     const handleTerminalCommand = (event: Event) => {
-      const { tabId, command } = (event as CustomEvent<TerminalCommandDetail>).detail;
+      const { tabId, command, text, execute } = (event as CustomEvent<TerminalCommandDetail>).detail;
       if (tabId !== connectionId) return;
 
       switch (command) {
@@ -1013,12 +1520,13 @@ export function PtyTerminal({
         case 'find-next': handleFindNext(); break;
         case 'find-previous': handleFindPrevious(); break;
         case 'clear-screen': handleClear(); break;
+        case 'send-text': handleSendText(text ?? '', execute !== false); break;
       }
     };
 
     window.addEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
     return () => window.removeEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
-  }, [connectionId, handleClear, handleCopy, handleFindNext, handleFindPrevious, handlePaste, handleSearch, handleSelectAll]);
+  }, [connectionId, handleClear, handleCopy, handleFindNext, handleFindPrevious, handlePaste, handleSearch, handleSelectAll, handleSendText]);
 
   const handleReconnect = React.useCallback(() => {
     if (onReconnectTab) {
@@ -1027,7 +1535,7 @@ export function PtyTerminal({
       void onReconnectTab(connectionId);
     } else {
       // Fallback: reconnect only the WebSocket/PTY loop (no SSH re-auth).
-      toast.info(t('ptyTerminal.reconnectingTerminal'));
+      toast.info(i18n.t('ptyTerminal.reconnectingTerminal'));
       reconnectAttemptsRef.current = 0;
       connectionStatusRef.current = 'connecting';
       onConnectionStatusChange?.(connectionId, 'connecting');
@@ -1062,9 +1570,9 @@ export function PtyTerminal({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       
-      toast.success(t('ptyTerminal.outputSaved'));
+      toast.success(i18n.t('ptyTerminal.outputSaved'));
     } catch (error) {
-      toast.error(t('ptyTerminal.failedToSaveOutput'));
+      toast.error(i18n.t('ptyTerminal.failedToSaveOutput'));
       console.error('Save error:', error);
     }
   }, []);
@@ -1081,6 +1589,7 @@ export function PtyTerminal({
       onSelectAll={handleSelectAll}
       onSaveToFile={handleSaveToFile}
       onReconnect={handleReconnect}
+      onDetach={handleDetach}
       hasSelection={hasSelection}
       searchActive={searchVisible}
     >

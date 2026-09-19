@@ -24,6 +24,20 @@ export const BUMP_TYPES = [...STABLE_BUMP_TYPES, 'prerelease', 'stable'];
 export const PRERELEASE_IDENTIFIER_RE = /^[0-9A-Za-z-]+$/;
 export const DEFAULT_PRERELEASE_IDENTIFIER = 'beta';
 
+/**
+ * Release channels. `stable` is the regular release line; `current` is the
+ * evolution line, versions like `3.0.0-current.<N>` (fixed base, counter
+ * moves, per the Homebrew dual-baseline design).
+ */
+export const CHANNELS = ['stable', 'current'];
+export const DEFAULT_CHANNEL = 'stable';
+
+/** True for evolution-line versions like "3.0.0-current.2". */
+export function isCurrentLineVersion(version) {
+  const parsed = parseVersion(version);
+  return parsed.prerelease !== null && /^current\.\d+$/.test(parsed.prerelease);
+}
+
 // ---------------------------------------------------------------------------
 // Pure version math
 // ---------------------------------------------------------------------------
@@ -85,25 +99,46 @@ export function nextPrereleaseTag(current, identifier) {
 /**
  * Compute the next version for a bump. Throws for impossible transitions
  * (e.g. `stable` from a version that is already stable).
+ *
+ * `options.channel` (default 'stable') selects the release line. On the
+ * `current` channel a stable bump type (`major`/`minor`/`patch`) lands on
+ * `<base>-current.<N>`:
+ *   - from a stable version, the bump type opens the line's base
+ *     (`3.0.0` + minor -> `3.1.0-current.1`);
+ *   - from a `-current.<N>` version, the base stays fixed for the whole line
+ *     and the bump type is ignored - only the counter moves, and `N` is
+ *     `currentTagCount + 1` (the caller counts the existing `v<base>-current.*`
+ *     git tags; counting lives in the CLI because this module stays pure).
  */
-export function computeNextVersion(currentVersion, bumpType, identifier) {
+export function computeNextVersion(currentVersion, bumpType, identifier, { channel = DEFAULT_CHANNEL, currentTagCount = 0 } = {}) {
+  if (channel === 'current' && !STABLE_BUMP_TYPES.includes(bumpType)) {
+    throw new Error(
+      `--channel current only supports major, minor, or patch bumps (got '${bumpType}')`
+    );
+  }
   const parsed = parseVersion(currentVersion);
   const base = baseVersion(parsed);
   const isPrerelease = parsed.prerelease !== null;
 
+  let nextBase;
   switch (bumpType) {
     case 'major':
-      return `${parsed.major + 1}.0.0`;
+      nextBase = `${parsed.major + 1}.0.0`;
+      break;
     case 'minor':
-      return `${parsed.major}.${parsed.minor + 1}.0`;
+      nextBase = `${parsed.major}.${parsed.minor + 1}.0`;
+      break;
     case 'patch':
-      return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+      nextBase = `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+      break;
     case 'prerelease': {
       if (isPrerelease) {
-        return `${base}-${nextPrereleaseTag(parsed.prerelease, identifier)}`;
+        nextBase = `${base}-${nextPrereleaseTag(parsed.prerelease, identifier)}`;
+      } else {
+        // From a stable release, open a new prerelease line for the next minor.
+        nextBase = `${parsed.major}.${parsed.minor + 1}.0-${nextPrereleaseTag(null, identifier)}`;
       }
-      // From a stable release, open a new prerelease line for the next minor.
-      return `${parsed.major}.${parsed.minor + 1}.0-${nextPrereleaseTag(null, identifier)}`;
+      break;
     }
     case 'stable': {
       if (!isPrerelease) {
@@ -111,11 +146,24 @@ export function computeNextVersion(currentVersion, bumpType, identifier) {
           `Version ${currentVersion} is already stable. Use patch, minor, or major to bump it.`
         );
       }
-      return base;
+      nextBase = base;
+      break;
     }
     default:
       throw new Error(`Unknown bump type: ${bumpType}`);
   }
+
+  if (channel === 'current') {
+    // Already on the evolution line: the base stays fixed for the whole line
+    // and only the -current.N counter moves (bumpType is ignored - promotion
+    // to a new base happens on the stable channel).
+    if (isCurrentLineVersion(currentVersion)) {
+      nextBase = base;
+    }
+    return `${nextBase}-current.${Number(currentTagCount) + 1}`;
+  }
+
+  return nextBase;
 }
 
 // ---------------------------------------------------------------------------
@@ -277,26 +325,30 @@ function spliceSection(changelog, insertAt, section) {
 /**
  * Add or update the CHANGELOG section for the bumped version.
  *
- * - Stable bumps (major/minor/patch) always insert a fresh section.
- * - Prerelease / stable-finalize bumps reuse the section for the same release
- *   line: rename an existing base ("## [2.8.0]") or current prerelease
- *   ("## [2.8.0-beta.2]") header so the notes drafted for one version carry
+ * - Stable bumps on the stable channel (major/minor/patch) always insert a
+ *   fresh section.
+ * - Prerelease / stable-finalize bumps and every `current`-channel bump reuse
+ *   the section for the same release line: rename an existing base
+ *   ("## [2.8.0]") or current prerelease ("## [2.8.0-beta.2]"/"##
+ *   [3.0.0-current.1]") header so the notes drafted for one version carry
  *   over instead of accumulating duplicate sections.
  *
  * Throws when the new version's section is missing afterwards, so a broken
  * changelog format fails the bump instead of silently skipping the update.
  */
-export function updateChangelog(changelog, currentVersion, newVersion, date, bumpType, skipChangelog) {
+export function updateChangelog(changelog, currentVersion, newVersion, date, bumpType, skipChangelog, { channel = DEFAULT_CHANNEL } = {}) {
   if (skipChangelog) {
     return changelog;
   }
 
-  if (STABLE_BUMP_TYPES.includes(bumpType)) {
+  const reuseLine = channel === 'current' || !STABLE_BUMP_TYPES.includes(bumpType);
+  if (!reuseLine) {
     if (!sectionExists(changelog, newVersion)) {
       changelog = insertSection(changelog, newVersion, date);
     }
   } else {
-    // prerelease / stable: reuse the same release line's section when possible.
+    // prerelease / stable / current-channel: reuse the same release line's
+    // section when possible.
     if (sectionExists(changelog, newVersion)) {
       return changelog;
     }

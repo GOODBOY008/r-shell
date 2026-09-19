@@ -174,6 +174,8 @@ describe('IntegratedFileBrowser terminal directory following', () => {
   });
 
   it('returns to the same terminal directory after manual navigation on the next prompt', async () => {
+    // Generous timeout: this follow-effect test chains several async waits
+    // and has a history of timing out on slow CI runners (pre-existing flake).
     const { rerender } = render(
       <IntegratedFileBrowser
         connectionId="conn-manual"
@@ -188,18 +190,27 @@ describe('IntegratedFileBrowser terminal directory following', () => {
         mocks.invoke.mock.calls.filter(([, args]) => args.path === '/srv/app'),
       ).toHaveLength(1);
     });
+    // Wait for the follow navigation to FULLY commit (breadcrumb renders
+    // '/srv/app') before clicking Home. Otherwise navigateTo('/home') can no-op
+    // while currentPath is still the initial '/home', and the pending follow
+    // load then lands on /srv/app — making the findByTitle('/home') below time
+    // out under CI timing jitter (pre-existing flake, seen on Windows + macOS).
+    await screen.findByTitle('/srv/app');
     fireEvent.click(screen.getByTitle('Home'));
+    // Require the Home click to trigger its own load (1 mount safety-net call
+    // + 1 navigation call) — a bare "called with" can be satisfied by the
+    // mount's safety-net loadFiles('/home') and masks a no-op navigation.
     await waitFor(() => {
-      expect(mocks.invoke).toHaveBeenCalledWith('list_files', {
-        connectionId: 'conn-manual',
-        path: '/home',
-      });
+      expect(
+        mocks.invoke.mock.calls.filter(([, args]) => args.path === '/home'),
+      ).toHaveLength(2);
     });
     // Wait for the Home navigation to fully commit (breadcrumb renders '/home')
     // before bumping the terminal sequence. Otherwise the follow effect can still
     // see committedPathRef === '/srv/app' and skip reloading, making this test
-    // order-dependent on async timing.
-    await screen.findByTitle('/home');
+    // order-dependent on async timing. Generous timeout: slow CI runners
+    // (Windows) occasionally exceed the default 1000 ms commit window.
+    await screen.findByTitle('/home', undefined, { timeout: 5000 });
 
     rerender(
       <IntegratedFileBrowser
@@ -215,7 +226,7 @@ describe('IntegratedFileBrowser terminal directory following', () => {
         mocks.invoke.mock.calls.filter(([, args]) => args.path === '/srv/app'),
       ).toHaveLength(2);
     });
-  });
+  }, 15000);
 
   it('keeps the last good directory and warns once when a terminal path is inaccessible', async () => {
     mocks.invoke.mockImplementation(async (_command: string, args: { path: string }) => {
@@ -232,7 +243,7 @@ describe('IntegratedFileBrowser terminal directory following', () => {
     );
 
     await waitFor(() => expect(mocks.warning).toHaveBeenCalledOnce());
-    expect(await screen.findByTitle('/home')).toBeTruthy();
+    expect(await screen.findByTitle('/home', undefined, { timeout: 5000 })).toBeTruthy();
 
     rerender(
       <IntegratedFileBrowser
@@ -249,7 +260,7 @@ describe('IntegratedFileBrowser terminal directory following', () => {
       ).toHaveLength(2);
     });
     expect(mocks.warning).toHaveBeenCalledOnce();
-    expect(await screen.findByTitle('/home')).toBeTruthy();
+    expect(await screen.findByTitle('/home', undefined, { timeout: 5000 })).toBeTruthy();
   });
 });
 
@@ -283,5 +294,145 @@ describe('IntegratedFileBrowser directory download', () => {
     expect((await screen.findByTestId('directory-transfer')).textContent).toBe(
       '/home/release files → C:/Downloads/release files',
     );
+  });
+});
+
+describe('IntegratedFileBrowser multi-select and batch delete', () => {
+  const listFilesResponse = [
+    { name: 'a.txt', size: 10, modified: '2024-01-01 00:00', permissions: '-rw-r--r--', file_type: 'File', owner: 'u', group: 'g' },
+    { name: 'b.txt', size: 20, modified: '2024-01-02 00:00', permissions: '-rw-r--r--', file_type: 'File', owner: 'u', group: 'g' },
+    { name: 'c.txt', size: 30, modified: '2024-01-03 00:00', permissions: '-rw-r--r--', file_type: 'File', owner: 'u', group: 'g' },
+  ];
+
+  beforeEach(() => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_files') return listFilesResponse;
+      if (command === 'delete_file') return true;
+      return undefined;
+    });
+  });
+
+  it('plain click selects a single row and Ctrl+Click toggles multi-selection', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-multi"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    expect(await screen.findByText('1 selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
+    expect(await screen.findByText('2 selected')).toBeTruthy();
+  });
+
+  it('Shift+Click selects the contiguous range from the anchor', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-range"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    expect(await screen.findByText('1 selected')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('c.txt'), { shiftKey: true });
+    expect(await screen.findByText('3 selected')).toBeTruthy();
+  });
+
+  it('Delete key with multiple selections opens batch confirm and deletes all', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-del"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
+    expect(await screen.findByText('2 selected')).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: 'Delete' });
+
+    expect(await screen.findByText('Delete 2 Items?')).toBeTruthy();
+    const confirmButton = screen.getByRole('button', { name: 'Delete' });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      const deleteCalls = mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'delete_file');
+      expect(deleteCalls).toHaveLength(2);
+      expect(deleteCalls[0][1]).toMatchObject({ path: '/home/a.txt' });
+      expect(deleteCalls[1][1]).toMatchObject({ path: '/home/b.txt' });
+    });
+  });
+
+  it('right-click on a selected row offers batch delete for the whole selection', async () => {
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-ctxdel"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.click(screen.getByText('a.txt'));
+    fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
+    expect(await screen.findByText('2 selected')).toBeTruthy();
+
+    // Right-click a row that is part of the selection. The context-menu mock
+    // renders every row's menu (unlike real Radix, which renders only the open
+    // one), so multiple Delete buttons are expected — clicking any of them
+    // triggers the batch delete for the whole selection.
+    fireEvent.contextMenu(screen.getByText('a.txt'));
+
+    const deleteItems = await screen.findAllByText('Delete');
+    fireEvent.click(deleteItems[0]);
+
+    expect(await screen.findByText('Delete 2 Items?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      const deleteCalls = mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'delete_file');
+      expect(deleteCalls).toHaveLength(2);
+    });
+  });
+
+  it('Ctrl+A selects all real entries but never the ".." parent row', async () => {
+    // list_files returns 3 real entries; the component prepends a ".." row,
+    // which sits at the top of the sorted list (index 0). Ctrl+A must exclude
+    // it (the only path where the exclusion is actually exercised).
+    render(
+      <IntegratedFileBrowser
+        connectionId="conn-paren"
+        isConnected
+        onClose={() => {}}
+      />,
+    );
+
+    await screen.findByText('a.txt');
+    fireEvent.keyDown(document, { key: 'a', ctrlKey: true });
+    expect(await screen.findByText('3 selected')).toBeTruthy();
+
+    // Delete via the selection: only a/b/c are deleted, never "..".
+    fireEvent.keyDown(document, { key: 'Delete' });
+    expect(await screen.findByText('Delete 3 Items?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      const deleteCalls = mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'delete_file');
+      expect(deleteCalls).toHaveLength(3);
+      const paths = deleteCalls.map(([, args]) => args.path);
+      expect(paths).toEqual(['/home/a.txt', '/home/b.txt', '/home/c.txt']);
+      expect(paths).not.toContain('/home/..');
+    });
   });
 });

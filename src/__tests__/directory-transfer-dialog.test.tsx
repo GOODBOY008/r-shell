@@ -10,9 +10,10 @@ const mocks = vi.hoisted(() => ({
   error: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: mocks.invoke,
-}));
+vi.mock('@tauri-apps/api/core', async () => {
+  const { ChannelStub } = await import('./helpers/tauri-channel-stub');
+  return { invoke: mocks.invoke, Channel: ChannelStub };
+});
 
 vi.mock('sonner', () => ({
   toast: {
@@ -100,6 +101,8 @@ describe('DirectoryTransferDialog download', () => {
       destinationRoot: 'C:/Downloads',
       remoteRelativePath: '子目录/report 1.txt',
       destinationRelativePath: 'release files/子目录/report 1.txt',
+      transferId: expect.anything(),
+      onProgress: expect.anything(),
     });
     expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file_confined', {
       connectionId: 'conn-1',
@@ -107,6 +110,8 @@ describe('DirectoryTransferDialog download', () => {
       destinationRoot: 'C:/Downloads',
       remoteRelativePath: 'README.md',
       destinationRelativePath: 'release files/README.md',
+      transferId: expect.anything(),
+      onProgress: expect.anything(),
     });
     expect(mocks.success).toHaveBeenCalledOnce();
   });
@@ -148,6 +153,8 @@ describe('DirectoryTransferDialog download', () => {
       destinationRoot: 'C:/Downloads',
       remoteRelativePath: 'nested\\..\\outside.txt',
       destinationRelativePath: 'release/nested\\..\\outside.txt',
+      transferId: expect.anything(),
+      onProgress: expect.anything(),
     });
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'download_remote_file')).toBe(false);
     expect(mocks.success).not.toHaveBeenCalled();

@@ -22,6 +22,8 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
+            tunnel: None,
         }
     }
 
@@ -32,6 +34,29 @@ mod tests {
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 22);
         assert_eq!(config.username, "testuser");
+        assert!(config.tunnel.is_none());
+    }
+
+    // Unit test - tunnel config carries the jump host credentials
+    #[test]
+    fn test_tunnel_config_creation() {
+        let config = SshConfig {
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
+            tunnel: Some(crate::ssh::TunnelConfig {
+                host: "bastion.example.com".to_string(),
+                port: 2222,
+                username: "jumpuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "jumppass".to_string(),
+                },
+            }),
+            ..create_test_config()
+        };
+
+        let tunnel = config.tunnel.as_ref().unwrap();
+        assert_eq!(tunnel.host, "bastion.example.com");
+        assert_eq!(tunnel.port, 2222);
+        assert_eq!(tunnel.username, "jumpuser");
     }
 
     // Note: The following tests are integration tests that require a running SSH server.
@@ -103,6 +128,8 @@ mod tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
+            tunnel: None,
         };
 
         let result = client_write.connect(&config).await;
@@ -170,6 +197,95 @@ mod tests {
         // Disconnect
         client_write.disconnect().await.ok();
     }
+
+    // ============ Passwordless-host integration tests (issue #122) ============
+    // Fixture: src-tauri/docker/empty-password-sshd/Dockerfile — an Alpine
+    // OpenSSH server with user 'pi' whose password is EMPTY and
+    // PermitEmptyPasswords enabled, mirroring the Raspberry Pi style devices
+    // users report. Build & run:
+    //   docker build -t rshell-empty-pass-sshd src-tauri/docker/empty-password-sshd
+    //   docker run -d --name rshell-sshd-empty -p 2222:22 rshell-empty-pass-sshd
+    // The endpoint is overridable via RSHELL_EMPTY_PASS_HOST /
+    // RSHELL_EMPTY_PASS_PORT (mirrors the RSHELL_TEST_SSH_* pattern).
+    //
+    // Note on coverage: authenticate_session sends the blank password request
+    // first (PermitEmptyPasswords hosts accept it directly), then falls back
+    // to the SSH "none" method for hosts that need no credentials at all.
+    // OpenSSH cannot be configured to reject a blank password while GRANTING
+    // "none" — empty-password accounts grant "none" together with
+    // PermitEmptyPasswords, and an explicit AuthenticationMethods list makes
+    // sshd disconnect on the blank password itself — so the "none" fallback
+    // branch has no OpenSSH fixture and is kept deliberately simple.
+    fn empty_password_endpoint() -> (String, u16) {
+        let host =
+            std::env::var("RSHELL_EMPTY_PASS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("RSHELL_EMPTY_PASS_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(2222);
+        (host, port)
+    }
+
+    const EMPTY_PASS_USER: &str = "pi";
+
+    fn empty_password_config(host: &str, port: u16, password: &str) -> SshConfig {
+        SshConfig {
+            host: host.to_string(),
+            port,
+            username: EMPTY_PASS_USER.to_string(),
+            auth_method: AuthMethod::Password {
+                password: password.to_string(),
+            },
+            compression: true,
+            keepalive_interval: None,
+            keepalive_max: None,
+            proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
+            tunnel: None,
+        }
+    }
+
+    // The exact path r-shell takes for a stored connection with a blank
+    // password: authenticate_session sends the empty-password request first;
+    // hosts with PermitEmptyPasswords accept it directly.
+    #[tokio::test]
+    #[ignore]
+    async fn test_empty_password_connect() {
+        let (host, port) = empty_password_endpoint();
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        let mut client_write = client.write().await;
+
+        let result = client_write
+            .connect(&empty_password_config(&host, port, ""))
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Blank-password connect should succeed: {:?}",
+            result.err()
+        );
+
+        client_write.disconnect().await.ok();
+    }
+
+    // Control group: a wrong password must still be rejected by the server,
+    // proving the empty-password success above is meaningful.
+    #[tokio::test]
+    #[ignore]
+    async fn test_empty_password_host_rejects_wrong_password() {
+        let (host, port) = empty_password_endpoint();
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        let mut client_write = client.write().await;
+
+        let result = client_write
+            .connect(&empty_password_config(&host, port, "definitely-wrong"))
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Wrong password should not authenticate on an empty-password host"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -177,10 +293,35 @@ mod shell_integration_tests {
     use crate::sftp_client::list_sftp_dir;
     use crate::ssh::{
         bash_shell_integration_command, bash_version_from_probe, AuthMethod, BashVersion,
-        PtySession, SshClient, SshConfig,
+        PtySession, SshClient, SshConfig, TunnelConfig,
     };
     use std::time::Duration;
     use tokio::time::{timeout, Instant};
+
+    /// Test SSH server endpoint, overridable for local runs (e.g. a container
+    /// mapped to 127.0.0.1:2222). The tunnelled test uses the same server as
+    /// both jump host and final target.
+    fn test_server_endpoint() -> (String, u16) {
+        let host =
+            std::env::var("RSHELL_TEST_SSH_HOST").unwrap_or_else(|_| "rshell-test-ssh".to_string());
+        let port = std::env::var("RSHELL_TEST_SSH_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(22);
+        (host, port)
+    }
+
+    /// Final-target endpoint as seen *from inside the jump host*: the same
+    /// server, but on its internal SSH port. When the test server is reachable
+    /// from the host on a forwarded port (e.g. 127.0.0.1:2222 → container 22),
+    /// the tunnel target must still use the in-container port 22.
+    fn test_target_endpoint(jump_host: &str) -> (String, u16) {
+        let port = std::env::var("RSHELL_TEST_TARGET_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(22);
+        (jump_host.to_string(), port)
+    }
 
     #[test]
     fn parses_major_and_minor_from_bash_probe_results() {
@@ -284,6 +425,55 @@ mod shell_integration_tests {
 
     #[tokio::test]
     #[ignore]
+    async fn docker_ssh_resize_propagates_to_remote_shell() {
+        // Issue #88: the PTY size must track the terminal's size at all
+        // times. A resize that never reaches the remote tty leaves bash
+        // redrawing wrapped command lines with a stale width model — the
+        // display then silently diverges from the remote input buffer (the
+        // user sees one command but executes another). This guards the
+        // end-to-end resize path: window_change must reach the remote shell
+        // and `stty size` must report the new geometry.
+        let (host, port) = test_server_endpoint();
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "testpass".to_string(),
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                tunnel: None,
+            })
+            .await
+            .expect("connect to Docker SSH server");
+
+        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let _ = read_until(&pty, b"\x1b\\").await; // first prompt is up
+
+        pty.resize_tx
+            .send((120, 40))
+            .await
+            .expect("send resize request");
+
+        // `stty size` prints "<rows> <cols>" — expect the new geometry.
+        let mut input = b"stty size".to_vec();
+        input.push(b'\n');
+        pty.input_tx.send(input).await.expect("send stty command");
+        let output = read_until(&pty, b"40 120").await;
+        assert!(
+            String::from_utf8_lossy(&output).contains("40 120"),
+            "remote tty should report the resized geometry"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
     async fn docker_ssh_reports_cwd_and_lists_sftp_directories() {
         let mut client = SshClient::new();
         client
@@ -299,6 +489,8 @@ mod shell_integration_tests {
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
                 proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                tunnel: None,
             })
             .await
             .expect("connect to Docker SSH server");
@@ -339,6 +531,390 @@ mod shell_integration_tests {
         assert!(nested_entries
             .iter()
             .any(|entry| entry.name == "report 1.txt"));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn docker_ssh_tunnel_connects_terminal_and_sftp_through_jump_host() {
+        let (host, port) = test_server_endpoint();
+        let (target_host, target_port) = test_target_endpoint(&host);
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host: target_host,
+                port: target_port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::Password {
+                    password: "testpass".to_string(),
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                tunnel: Some(TunnelConfig {
+                    host,
+                    port,
+                    username: "testuser".to_string(),
+                    auth_method: AuthMethod::Password {
+                        password: "testpass".to_string(),
+                    },
+                }),
+            })
+            .await
+            .expect("connect through SSH tunnel to Docker SSH server");
+
+        // The terminal session must work over the tunnel (OSC 7 cwd report).
+        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let initial_output = read_until(&pty, b"\x1b\\").await;
+        assert!(
+            String::from_utf8_lossy(&initial_output).contains("/home/testuser"),
+            "initial OSC 7 should report the login directory over the tunnel"
+        );
+
+        // Create a marker file through the tunnelled shell (synchronised via
+        // `send_and_expect_cwd`, which only returns after the command ran),
+        // then verify it is visible over tunnelled SFTP. Data-independent so
+        // the test runs on any test server.
+        let marker = "/home/testuser/tunnel-e2e-marker.txt";
+        send_and_expect_cwd(&pty, &format!("touch {marker}; cd ~"), "/home/testuser").await;
+        let sftp = client
+            .open_sftp_session()
+            .await
+            .expect("open SFTP over tunnel");
+        let home_entries = list_sftp_dir(&sftp, "/home/testuser")
+            .await
+            .expect("list home directory over tunnelled SFTP");
+        assert!(
+            home_entries
+                .iter()
+                .any(|entry| entry.name == "tunnel-e2e-marker.txt"),
+            "marker file created over the tunnel should be visible over SFTP"
+        );
+
+        send_and_expect_cwd(&pty, &format!("rm {marker}; cd ~"), "/home/testuser").await;
+    }
+
+    // ── Default-key fallback (issue #103) ─────────────────────────────────────
+    // Fixture: src-tauri/docker/default-key-sshd/Dockerfile — an Alpine OpenSSH
+    // server with user 'testuser' whose ONLY credential is the committed E2E
+    // keypair (PasswordAuthentication no). Build & run:
+    //   docker build -t rshell-default-key-sshd src-tauri/docker/default-key-sshd
+    //   docker run -d --name rshell-sshd-default-key -p 2224:22 rshell-default-key-sshd
+    // The endpoint is overridable via RSHELL_DEFAULT_KEY_HOST /
+    // RSHELL_DEFAULT_KEY_PORT. Targets Unix hosts: $HOME repointing is how the
+    // default-key resolution (dirs::home_dir) picks up the temp key.
+    fn default_key_endpoint() -> (String, u16) {
+        let host =
+            std::env::var("RSHELL_DEFAULT_KEY_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("RSHELL_DEFAULT_KEY_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(2224);
+        (host, port)
+    }
+
+    /// Serialises ignored docker tests that repoint $HOME — a process-wide env
+    /// var other tests could otherwise observe while running in parallel.
+    static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    // The exact path a user hits when creating a connection with publickey auth
+    // and no key path: commands.rs resolves the empty key path via
+    // resolve_private_key_path(None), which falls back to $HOME/.ssh/id_rsa.
+    // The fallback target here matches the server's authorized_keys, so the
+    // connection must authenticate end-to-end with the default key.
+    #[tokio::test]
+    #[ignore]
+    async fn docker_ssh_default_keypath_fallback() {
+        let _guard = HOME_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().expect("tempdir for fake HOME");
+        let ssh_dir = home.path().join(".ssh");
+        std::fs::create_dir_all(&ssh_dir).expect("create $HOME/.ssh");
+        let fixture_key =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docker/default-key-sshd/id_rsa");
+        std::fs::copy(&fixture_key, ssh_dir.join("id_rsa")).expect("copy fixture key to fake HOME");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(
+                ssh_dir.join("id_rsa"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .expect("chmod 600 the fixture key");
+        }
+
+        struct RestoreHome(Option<std::ffi::OsString>);
+        impl Drop for RestoreHome {
+            fn drop(&mut self) {
+                match &self.0 {
+                    Some(home) => std::env::set_var("HOME", home),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+        let previous_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        let _restore = RestoreHome(previous_home);
+
+        // The exact production resolution for an empty key path.
+        let resolved =
+            crate::os_keypath::resolve_private_key_path(None).expect("default key resolves");
+        assert_eq!(
+            resolved,
+            ssh_dir.join("id_rsa").to_string_lossy(),
+            "fallback must pick $HOME/.ssh/id_rsa"
+        );
+
+        let (host, port) = default_key_endpoint();
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::PublicKey {
+                    key_path: resolved,
+                    passphrase: None,
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                tunnel: None,
+            })
+            .await
+            .expect("connect using the default-key fallback");
+
+        let output = client
+            .execute_command("echo default-keypath-e2e-ok")
+            .await
+            .expect("run command over the fallback connection");
+        assert!(
+            output.contains("default-keypath-e2e-ok"),
+            "command output: {output}"
+        );
+
+        client.disconnect().await.ok();
+    }
+
+    // Regression for the review comment on the default-key fallback: when a
+    // real key is rejected by the server, the error must name the key file
+    // that was attempted — otherwise a user whose default key is not
+    // authorized cannot tell which of their identities the server rejected.
+    #[tokio::test]
+    #[ignore]
+    async fn docker_ssh_auth_failure_names_attempted_key() {
+        use russh_keys::{encode_pkcs8_pem, key::KeyPair};
+        use std::io::Write;
+
+        let (host, port) = default_key_endpoint();
+
+        // A fresh key the fixture server does NOT authorize.
+        let key = KeyPair::generate_ed25519().expect("generate unauthorized key");
+        let mut pem = Vec::new();
+        encode_pkcs8_pem(&key, &mut pem).expect("encode unauthorized key");
+        let mut wrong_key = tempfile::NamedTempFile::new().expect("temp unauthorized key");
+        wrong_key.write_all(&pem).expect("write unauthorized key");
+        let wrong_key_path = wrong_key.path().to_string_lossy().into_owned();
+
+        let mut client = SshClient::new();
+        let err = client
+            .connect(&SshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::PublicKey {
+                    key_path: wrong_key_path.clone(),
+                    passphrase: None,
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                tunnel: None,
+            })
+            .await
+            .expect_err("an unauthorized key must be rejected");
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&wrong_key_path) && msg.contains("authorized"),
+            "error should name the attempted key file, got: {msg}"
+        );
+    }
+
+    // ── Streaming transfer engine (progress + throughput) ────────────────────
+    // Reuses the default-key fixture (src-tauri/docker/default-key-sshd on
+    // :2224). Exercises the pipelined download/upload paths end-to-end:
+    // byte-for-byte round trip, progress events (monotonic, final == size),
+    // and prints observed throughput with --nocapture.
+    mod transfer_engine {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        /// FNV-1a fold — cheap mismatch diagnostics; the test still does a
+        /// full byte-for-byte comparison.
+        fn fold_hash(data: &[u8]) -> u64 {
+            data.iter().fold(0xcbf29ce484222325u64, |h, b| {
+                (h ^ *b as u64).wrapping_mul(0x100000001b3)
+            })
+        }
+
+        async fn fixture_client() -> SshClient {
+            let (host, port) = super::default_key_endpoint();
+            let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("docker/default-key-sshd/id_rsa");
+            let mut client = SshClient::new();
+            client
+                .connect(&SshConfig {
+                    host,
+                    port,
+                    username: "testuser".to_string(),
+                    auth_method: AuthMethod::PublicKey {
+                        key_path: fixture_key.to_string_lossy().into_owned(),
+                        passphrase: None,
+                    },
+                    compression: false,
+                    keepalive_interval: None,
+                    keepalive_max: None,
+                    proxy: None,
+                    host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                    tunnel: None,
+                })
+                .await
+                .expect("connect to default-key fixture");
+            client
+        }
+
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_transfer_roundtrip_with_progress() {
+            let mut client = fixture_client().await;
+            let size: u64 = 256 * 1024 * 1024;
+
+            // Deterministic payload (not zeros — zeros would hide offset bugs
+            // only partially; a pseudo-random pattern catches any mismatch).
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let remote_path = "/tmp/rshell-transfer-e2e.bin";
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+
+            // Upload with progress
+            let up_bytes = Arc::new(AtomicU64::new(0));
+            let up_total = Arc::new(AtomicU64::new(0));
+            let up_events = Arc::new(AtomicU64::new(0));
+            {
+                let (up_bytes, up_total, up_events) =
+                    (up_bytes.clone(), up_total.clone(), up_events.clone());
+                let progress = move |transferred: u64, total: u64| {
+                    up_bytes.store(transferred, Ordering::Relaxed);
+                    up_total.store(total, Ordering::Relaxed);
+                    up_events.fetch_add(1, Ordering::Relaxed);
+                };
+                let started = Instant::now();
+                let n = client
+                    .upload_file_with_progress(
+                        local_src.path().to_string_lossy().as_ref(),
+                        remote_path,
+                        Some(&progress),
+                        &tokio_util::sync::CancellationToken::new(),
+                    )
+                    .await
+                    .expect("upload");
+                let elapsed = started.elapsed().as_secs_f64();
+                println!(
+                    "upload: {n} bytes in {elapsed:.2}s = {:.1} MB/s",
+                    n as f64 / 1024.0 / 1024.0 / elapsed
+                );
+                assert_eq!(n, size);
+            }
+            assert_eq!(
+                up_bytes.load(Ordering::Relaxed),
+                size,
+                "final upload progress"
+            );
+            assert_eq!(up_total.load(Ordering::Relaxed), size, "upload total");
+            assert!(
+                up_events.load(Ordering::Relaxed) >= 2,
+                "progress events must stream (got {})",
+                up_events.load(Ordering::Relaxed)
+            );
+
+            // Download with progress
+            let down_bytes = Arc::new(AtomicU64::new(0));
+            let down_events = Arc::new(AtomicU64::new(0));
+            let seen_monotonic = Arc::new(AtomicBool::new(true));
+            {
+                let (down_bytes, down_events, seen_monotonic) = (
+                    down_bytes.clone(),
+                    down_events.clone(),
+                    seen_monotonic.clone(),
+                );
+                let progress = move |transferred: u64, _total: u64| {
+                    if transferred < down_bytes.load(Ordering::Relaxed) {
+                        seen_monotonic.store(false, Ordering::Relaxed);
+                    }
+                    down_bytes.store(transferred, Ordering::Relaxed);
+                    down_events.fetch_add(1, Ordering::Relaxed);
+                };
+                let started = Instant::now();
+                let n = client
+                    .download_file_with_progress(
+                        remote_path,
+                        downloaded.path().to_string_lossy().as_ref(),
+                        Some(&progress),
+                        &tokio_util::sync::CancellationToken::new(),
+                    )
+                    .await
+                    .expect("download");
+                let elapsed = started.elapsed().as_secs_f64();
+                println!(
+                    "download: {n} bytes in {elapsed:.2}s = {:.1} MB/s",
+                    n as f64 / 1024.0 / 1024.0 / elapsed
+                );
+                assert_eq!(n, size);
+            }
+            assert!(
+                seen_monotonic.load(Ordering::Relaxed),
+                "progress must be monotonic"
+            );
+            assert_eq!(
+                down_bytes.load(Ordering::Relaxed),
+                size,
+                "final download progress"
+            );
+            assert!(down_events.load(Ordering::Relaxed) >= 2);
+
+            // Byte-for-byte round trip
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(got.len(), size as usize);
+            assert_eq!(fold_hash(&got), expected_hash, "round trip hash must match");
+            assert_eq!(got.as_slice(), payload, "round trip must be byte-exact");
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
+        }
     }
 }
 
@@ -432,6 +1008,8 @@ mod key_loading_tests {
             keepalive_interval: None,
             keepalive_max: None,
             proxy: None,
+            host_key_policy: crate::ssh::HostKeyPolicy::default(),
+            tunnel: None,
         };
 
         let mut client = SshClient::new();

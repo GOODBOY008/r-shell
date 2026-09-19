@@ -1,9 +1,15 @@
 use anyhow::Result;
-use async_std::io::ReadExt;
+use async_std::io::{ReadExt, WriteExt as FtpStreamWriteExt};
 use serde::Deserialize;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt as TokioReadExt, AsyncWriteExt as TokioWriteExt};
 
 use crate::sftp_client::{FileEntry, FileEntryType};
+use crate::sftp_transfer::{ProgressCallback, CANCEL_ERROR, PROGRESS_INTERVAL};
+use tokio_util::sync::CancellationToken;
+
+/// Data chunk moved per loop iteration for FTP transfers.
+const FTP_CHUNK_SIZE: usize = 256 * 1024;
 
 /// Configuration for an FTP/FTPS connection.
 #[derive(Debug, Clone, Deserialize)]
@@ -195,40 +201,158 @@ impl FtpClient {
 
     /// Download a remote file to a local path. Returns bytes downloaded.
     pub async fn download_file(&mut self, remote_path: &str, local_path: &str) -> Result<u64> {
-        let data: Vec<u8> = ftp_stream!(self, s => {
-            let mut data_stream = s.retr_as_stream(remote_path).await.map_err(|e| {
-                anyhow::anyhow!("Failed to download file '{}': {}", remote_path, e)
-            })?;
-            let mut buf = Vec::new();
-            data_stream.read_to_end(&mut buf).await.map_err(|e| {
-                anyhow::anyhow!("Failed to read download stream: {}", e)
-            })?;
+        self.download_file_with_progress(remote_path, local_path, None, &CancellationToken::new())
+            .await
+    }
+
+    /// Download with progress callbacks, streaming to disk instead of
+    /// buffering the whole file in memory. Cancelling `cancel` aborts the
+    /// RETR promptly; the partial local file is kept.
+    pub async fn download_file_with_progress(
+        &mut self,
+        remote_path: &str,
+        local_path: &str,
+        progress: ProgressCallback<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<u64> {
+        // SIZE is advisory (and may be unsupported); the transfer itself is
+        // streamed until EOF either way.
+        let total: u64 = tokio::select! {
+            // The stream-kind match must await inside the macro body (the two
+            // stream variants produce distinct opaque future types), so the
+            // whole thing is wrapped in an async block for select!.
+            size = async {
+                Ok::<usize, anyhow::Error>(ftp_stream!(self, s => s.size(remote_path).await)?)
+            } => {
+                size.map(|s| s as u64).unwrap_or(0)
+            }
+            _ = cancel.cancelled() => return Err(anyhow::anyhow!(CANCEL_ERROR)),
+        };
+
+        let mut file = tokio::fs::File::create(local_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create local file '{}': {}", local_path, e))?;
+
+        let mut last_emit = Instant::now() - PROGRESS_INTERVAL;
+        let mut emit = |transferred: u64, force: bool| {
+            if let Some(cb) = progress {
+                if force || last_emit.elapsed() >= PROGRESS_INTERVAL {
+                    cb(transferred, total);
+                    last_emit = Instant::now();
+                }
+            }
+        };
+        emit(0, true);
+
+        let transferred: u64 = ftp_stream!(self, s => {
+            let mut data_stream = tokio::select! {
+                r = s.retr_as_stream(remote_path) => r.map_err(|e| {
+                    anyhow::anyhow!("Failed to download file '{}': {}", remote_path, e)
+                })?,
+                _ = cancel.cancelled() => return Err(anyhow::anyhow!(CANCEL_ERROR)),
+            };
+            let mut buf = vec![0u8; FTP_CHUNK_SIZE];
+            let mut transferred: u64 = 0;
+            loop {
+                let n = tokio::select! {
+                    r = data_stream.read(&mut buf) => r.map_err(|e| {
+                        anyhow::anyhow!("Failed to read download stream: {}", e)
+                    })?,
+                    _ = cancel.cancelled() => {
+                        // Abandon the RETR without finalizing it; the partial
+                        // local file stays (page-cache writes need no flush).
+                        // The control connection may need a reconnect after.
+                        return Err(anyhow::anyhow!(CANCEL_ERROR));
+                    }
+                };
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buf[..n]).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to write local file: {}", e)
+                })?;
+                transferred += n as u64;
+                emit(transferred, false);
+            }
             s.finalize_retr_stream(data_stream).await.map_err(|e| {
                 anyhow::anyhow!("Failed to finalize download: {}", e)
             })?;
-            buf
+            transferred
         });
 
-        let total_bytes = data.len() as u64;
-        tokio::fs::write(local_path, data).await?;
-        Ok(total_bytes)
+        file.flush().await?;
+        emit(transferred, true);
+        Ok(transferred)
     }
 
     /// Upload a local file to a remote path. Returns bytes uploaded.
     pub async fn upload_file(&mut self, local_path: &str, remote_path: &str) -> Result<u64> {
-        let data = tokio::fs::read(local_path)
+        self.upload_file_with_progress(local_path, remote_path, None, &CancellationToken::new())
+            .await
+    }
+
+    /// Upload with progress callbacks, streaming from disk. Cancelling
+    /// `cancel` aborts the STOR promptly; the remote file may remain partial.
+    pub async fn upload_file_with_progress(
+        &mut self,
+        local_path: &str,
+        remote_path: &str,
+        progress: ProgressCallback<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<u64> {
+        let mut local = tokio::fs::File::open(local_path)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read local file '{}': {}", local_path, e))?;
-        let total_bytes = data.len() as u64;
+        let total = local.metadata().await.map(|m| m.len()).unwrap_or(0);
 
-        ftp_stream!(self, s => {
-            let mut reader = async_std::io::Cursor::new(data);
-            s.put_file(remote_path, &mut reader).await.map_err(|e| {
-                anyhow::anyhow!("Failed to upload file '{}': {}", remote_path, e)
-            })?
+        let mut last_emit = Instant::now() - PROGRESS_INTERVAL;
+        let mut emit = |transferred: u64, force: bool| {
+            if let Some(cb) = progress {
+                if force || last_emit.elapsed() >= PROGRESS_INTERVAL {
+                    cb(transferred, total);
+                    last_emit = Instant::now();
+                }
+            }
+        };
+        emit(0, true);
+
+        let transferred: u64 = ftp_stream!(self, s => {
+            let mut writer = tokio::select! {
+                r = s.put_with_stream(remote_path) => r.map_err(|e| {
+                    anyhow::anyhow!("Failed to upload file '{}': {}", remote_path, e)
+                })?,
+                _ = cancel.cancelled() => return Err(anyhow::anyhow!(CANCEL_ERROR)),
+            };
+            let mut buf = vec![0u8; FTP_CHUNK_SIZE];
+            let mut transferred: u64 = 0;
+            loop {
+                let n = local.read(&mut buf).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to read local file: {}", e)
+                })?;
+                if n == 0 {
+                    break;
+                }
+                tokio::select! {
+                    r = writer.write_all(&buf[..n]) => r.map_err(|e| {
+                        anyhow::anyhow!("Failed to write upload stream: {}", e)
+                    })?,
+                    _ = cancel.cancelled() => {
+                        // Abandon the STOR without finalizing it; the control
+                        // connection may need a reconnect afterwards.
+                        return Err(anyhow::anyhow!(CANCEL_ERROR));
+                    }
+                }
+                transferred += n as u64;
+                emit(transferred, false);
+            }
+            s.finalize_put_stream(writer).await.map_err(|e| {
+                anyhow::anyhow!("Failed to finalize upload: {}", e)
+            })?;
+            transferred
         });
 
-        Ok(total_bytes)
+        emit(transferred, true);
+        Ok(transferred)
     }
 
     /// Create a directory on the remote server.
@@ -425,7 +549,9 @@ fn is_date_field(s: Option<&&str>) -> bool {
         // HH:MM — two colon-separated numeric parts.
         let parts: Vec<&str> = s.split(':').collect();
         parts.len() == 2
-            && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
     } else {
         // YYYY — a 4-digit year.
         s.len() == 4 && s.bytes().all(|b| b.is_ascii_digit())
@@ -435,9 +561,18 @@ fn is_date_field(s: Option<&&str>) -> bool {
 /// Parse FTP `ls` date fields ("Mon DD HH:MM" or "Mon DD YYYY") into "yyyy-mm-dd hh:mm:ss".
 fn parse_ftp_modified(month_str: &str, day_str: &str, time_or_year: &str) -> Option<String> {
     let month_num = match month_str {
-        "Jan" => 1u32, "Feb" => 2, "Mar" => 3, "Apr" => 4,
-        "May" => 5, "Jun" => 6, "Jul" => 7, "Aug" => 8,
-        "Sep" => 9, "Oct" => 10, "Nov" => 11, "Dec" => 12,
+        "Jan" => 1u32,
+        "Feb" => 2,
+        "Mar" => 3,
+        "Apr" => 4,
+        "May" => 5,
+        "Jun" => 6,
+        "Jul" => 7,
+        "Aug" => 8,
+        "Sep" => 9,
+        "Oct" => 10,
+        "Nov" => 11,
+        "Dec" => 12,
         _ => return None,
     };
     let day: u32 = day_str.parse().unwrap_or(1);
@@ -457,13 +592,18 @@ fn parse_ftp_modified(month_str: &str, day_str: &str, time_or_year: &str) -> Opt
             let mut rem = days as i64;
             loop {
                 let dy = if is_leap_year(y) { 366 } else { 365 };
-                if rem < dy { break; }
+                if rem < dy {
+                    break;
+                }
                 rem -= dy;
                 y += 1;
             }
             y as u32
         };
-        Some(format!("{:04}-{:02}-{:02} {:02}:{:02}:00", current_year, month_num, day, hh, mm))
+        Some(format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:00",
+            current_year, month_num, day, hh, mm
+        ))
     } else {
         // Older file: "YYYY" — time is 00:00:00
         let year: u32 = time_or_year.parse().unwrap_or(1970);
@@ -766,7 +906,11 @@ mod tests {
         assert_eq!(entry.group.as_deref(), Some("root"));
         // Time-format date must keep its time-of-day, not bleed into the name.
         assert!(
-            entry.modified.as_deref().unwrap_or("").ends_with(" 12:32:00"),
+            entry
+                .modified
+                .as_deref()
+                .unwrap_or("")
+                .ends_with(" 12:32:00"),
             "modified should keep 12:32:00, got: {:?}",
             entry.modified
         );

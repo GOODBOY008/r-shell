@@ -1,6 +1,8 @@
 import { useCallback, type KeyboardEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
+import { openAppSettings } from '../../lib/app-events';
 import { GroupTabBar } from './group-tab-bar';
 import { TerminalTabPortalHost } from './terminal-tab-portals';
 import { WelcomeScreen } from '../welcome-screen';
@@ -10,8 +12,9 @@ interface TerminalGroupViewProps {
 }
 
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
+  const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onDuplicateTab, onNewTab, onReconnectTab, closeTabShortcut } = useTerminalCallbacks();
+  const { onDuplicateTab, onNewTab, onReconnectTab, onCloseTab, onCloseAllTabs, closeTabShortcut, onDetachTab } = useTerminalCallbacks();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
 
@@ -72,7 +75,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
       className={containerClass}
       onMouseDownCapture={handleMouseDown}
       onKeyDown={handleKeyDown}
-      aria-label={`Terminal group ${groupId}`}
+      aria-label={t('terminal.groupAriaLabel', { id: groupId })}
     >
       <GroupTabBar
         groupId={groupId}
@@ -81,11 +84,17 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         onReconnect={handleReconnect}
         onDuplicateTab={onDuplicateTab}
         onNewTab={onNewTab}
+        onCloseTab={onCloseTab}
+        onCloseAllTabs={onCloseAllTabs}
         closeTabShortcut={closeTabShortcut}
+        onDetachTab={onDetachTab}
       />
       <div className="flex-1 relative overflow-hidden">
         {showWelcome ? (
-          <WelcomeScreen onNewConnection={() => {}} onOpenSettings={() => {}} />
+          <WelcomeScreen
+            onNewConnection={() => onNewTab?.()}
+            onOpenSettings={openAppSettings}
+          />
         ) : (
           group.tabs.map((tab) => (
             <TerminalTabPortalHost

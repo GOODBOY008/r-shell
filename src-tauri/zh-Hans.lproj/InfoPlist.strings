@@ -1,0 +1,3 @@
+/* Localized Info.plist keys for simplified Chinese (zh-Hans). */
+CFBundleDisplayName = "r-shell";
+CFBundleName = "r-shell";

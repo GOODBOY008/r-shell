@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   parseVersion,
   isPrereleaseVersion,
+  isCurrentLineVersion,
   baseVersion,
   nextPrereleaseTag,
   computeNextVersion,
@@ -9,6 +10,7 @@ import {
   insertSection,
   STABLE_BUMP_TYPES,
   BUMP_TYPES,
+  CHANNELS,
   parsePackageJsonVersion,
   parseCargoTomlVersion,
   parseCargoLockVersion,
@@ -439,5 +441,103 @@ describe('verify-release-tag (verifyTagAgainstFiles)', () => {
     expect(result.ok).toBe(false);
     expect(result.mismatches).toEqual([]);
     expect(result.error).toContain('Invalid release tag');
+  });
+});
+
+describe('current channel (evolution line)', () => {
+  it('exposes the expected channel set', () => {
+    expect(CHANNELS).toEqual(['stable', 'current']);
+  });
+
+  it.each([
+    ['3.0.0-current.1', true],
+    ['3.0.0-current.42', true],
+    ['3.0.0', false],
+    ['2.8.0-beta.1', false],
+    ['2.8.0-rc.1', false],
+    ['3.0.0-current.x', false],
+  ])('isCurrentLineVersion(%s) -> %s', (version, expected) => {
+    expect(isCurrentLineVersion(version)).toBe(expected);
+  });
+
+  it.each([
+    // from a stable version, the bump type opens the line's base
+    ['2.9.3', 'major', 0, '3.0.0-current.1'],
+    ['2.9.3', 'minor', 0, '2.10.0-current.1'],
+    ['2.9.3', 'patch', 0, '2.9.4-current.1'],
+    // from a -current.N version the base is fixed and the bump type is ignored
+    ['3.0.0-current.2', 'minor', 2, '3.0.0-current.3'],
+    ['3.0.0-current.2', 'patch', 2, '3.0.0-current.3'],
+    ['3.0.0-current.2', 'major', 2, '3.0.0-current.3'],
+    // the counter continues from the tag count, not from the current suffix
+    ['3.0.0-current.7', 'minor', 3, '3.0.0-current.4'],
+    // without git tags the counter restarts at .1
+    ['3.0.0-current.2', 'minor', 0, '3.0.0-current.1'],
+  ])('%s %s (tags=%s) -> %s', (current, bumpType, tagCount, expected) => {
+    expect(
+      computeNextVersion(current, bumpType, undefined, { channel: 'current', currentTagCount: tagCount })
+    ).toBe(expected);
+  });
+
+  it('leaves stable-channel bumps untouched by current-channel options', () => {
+    expect(computeNextVersion('2.9.3', 'minor', undefined, { channel: 'stable' })).toBe('2.10.0');
+    expect(computeNextVersion('2.9.3', 'minor', undefined, { currentTagCount: 5 })).toBe('2.10.0');
+  });
+
+  it.each([
+    ['prerelease'],
+    ['stable'],
+  ])('rejects %s bumps on the current channel', (bumpType) => {
+    // A prerelease bump would silently produce a mixed-suffix version and a
+    // stable bump would never finalize, so the lib refuses the combination
+    // (the CLI validates the same thing up front).
+    expect(() =>
+      computeNextVersion('2.9.3', bumpType, 'beta', { channel: 'current', currentTagCount: 0 })
+    ).toThrow('current');
+  });
+});
+
+describe('updateChangelog (current channel)', () => {
+  const FIXTURE = `# Changelog
+
+## [2.9.3] - 2026-09-14
+
+### Fixed
+
+- released fix
+`;
+
+  it('renames the current-line section when iterating', () => {
+    const withCurrent = `# Changelog
+
+## [3.0.0-current.1] - 2026-09-18
+
+### Added
+
+- evolution feature
+
+## [2.9.3] - 2026-09-14
+`;
+    const out = updateChangelog(
+      withCurrent, '3.0.0-current.1', '3.0.0-current.2', '2026-09-19', 'minor', false, { channel: 'current' }
+    );
+    expect(out).toContain('## [3.0.0-current.2] - 2026-09-19');
+    expect(out).not.toContain('## [3.0.0-current.1] - 2026-09-18');
+    expect(out).toContain('evolution feature');
+    expect(out).toContain('## [2.9.3] - 2026-09-14');
+  });
+
+  it('inserts a fresh section when the current line opens from a stable release', () => {
+    const out = updateChangelog(
+      FIXTURE, '2.9.3', '3.0.0-current.1', '2026-09-19', 'minor', false, { channel: 'current' }
+    );
+    expect(out).toContain('## [3.0.0-current.1] - 2026-09-19');
+    expect(out).toContain('## [2.9.3] - 2026-09-14');
+    expect(out.indexOf('## [3.0.0-current.1]')).toBeLessThan(out.indexOf('## [2.9.3]'));
+  });
+
+  it('keeps stable-channel minor bumps inserting fresh sections', () => {
+    const out = updateChangelog(FIXTURE, '2.9.3', '2.10.0', '2026-09-19', 'minor', false);
+    expect(out).toContain('## [2.10.0] - 2026-09-19');
   });
 });

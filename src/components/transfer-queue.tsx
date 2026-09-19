@@ -30,6 +30,7 @@ import type {
   TransferAction,
 } from "@/lib/transfer-queue-reducer";
 import { getActiveTransferCount } from "@/lib/transfer-queue-reducer";
+import { cancelTransfer } from "@/lib/transfer-queue-service";
 import { formatSize } from "@/lib/file-entry-types";
 
 // ---------- Legacy type export for backward compatibility ----------
@@ -113,7 +114,7 @@ export function TransferQueue({
     <Collapsible
       open={expanded}
       onOpenChange={onToggleExpanded}
-      className="border-t bg-muted/30"
+      className="border-t border-border bg-muted/30"
     >
       <CollapsibleTrigger asChild>
         <button className="flex items-center justify-between w-full px-3 py-1 text-xs hover:bg-muted/50 transition">
@@ -156,13 +157,13 @@ export function TransferQueue({
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ScrollArea className="max-h-40">
+        <ScrollArea className="max-h-40 overflow-hidden [&>[data-slot=scroll-area-viewport]]:max-h-40">
           {transfers.length === 0 ? (
             <div className="flex items-center justify-center h-12 text-xs text-muted-foreground">
               {t('transferQueue.noTransfers')}
             </div>
           ) : (
-            <div className="divide-y divide-border/40">
+            <div className="divide-y divide-border">
               {transfers.map((item) => (
                 <div
                   key={item.id}
@@ -278,9 +279,7 @@ export function TransferQueue({
                       size="icon"
                       className="h-5 w-5 shrink-0"
                       title={t('transferQueue.cancel')}
-                      onClick={() =>
-                        dispatch({ type: "CANCEL", id: item.id })
-                      }
+                      onClick={() => cancelTransfer(item.id)}
                     >
                       <X className="h-3 w-3" />
                     </Button>

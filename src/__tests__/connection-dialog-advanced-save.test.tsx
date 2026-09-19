@@ -4,7 +4,7 @@
  * were updated in local component state but never written to storage.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConnectionDialog, type ConnectionConfig } from '../components/connection-dialog';
 import { ConnectionStorageManager } from '../lib/connection-storage';
 
@@ -69,6 +69,11 @@ describe('ConnectionDialog advanced tab save', () => {
     // Save
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
+    // handleSave is async (seals secrets via IPC) — wait for the persist.
+    await waitFor(() => {
+      expect(ConnectionStorageManager.updateConnection).toHaveBeenCalled();
+    });
+
     expect(ConnectionStorageManager.updateConnection).toHaveBeenCalledWith(
       'conn-1',
       expect.objectContaining({
@@ -126,6 +131,11 @@ describe('ConnectionDialog advanced tab save', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // handleSave is async (seals secrets via IPC) — wait for the persist.
+    await waitFor(() => {
+      expect(ConnectionStorageManager.updateConnection).toHaveBeenCalled();
+    });
 
     expect(ConnectionStorageManager.updateConnection).toHaveBeenCalledWith(
       'conn-2',

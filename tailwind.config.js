@@ -1,3 +1,5 @@
+import tailwindcssAnimate from 'tailwindcss-animate';
+
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: ["class"],
@@ -54,6 +56,9 @@ export default {
         border: 'var(--border)',
         input: 'var(--input)',
         'input-background': 'var(--input-background)',
+        switch: {
+          background: 'var(--switch-background)',
+        },
         ring: 'var(--ring)',
         chart: {
           '1': 'var(--chart-1)',
@@ -117,5 +122,5 @@ export default {
       },
     }
   },
-  plugins: [],
+  plugins: [tailwindcssAnimate],
 }

@@ -26,6 +26,7 @@ node scripts/bump-version.mjs prerelease beta
 node scripts/bump-version.mjs stable
 node scripts/bump-version.mjs minor --dry-run   # preview without writing
 node scripts/bump-version.mjs minor --yes       # skip the confirmation prompt
+node scripts/bump-version.mjs minor --channel current   # evolution line (3.0.0-current.<N>)
 ```
 
 **Features:**
@@ -35,8 +36,8 @@ node scripts/bump-version.mjs minor --yes       # skip the confirmation prompt
 - ✅ `--dry-run` preview that writes nothing
 - ✅ Preflight guardrails: refuses to bump with a dirty tree or out-of-sync version files (`--force` to bypass)
 - ✅ Automatic git commit
-- ✅ CHANGELOG.md template generation (inserts a section, or renames the release-line section on prerelease/stable)
-- ✅ Stable (`major`/`minor`/`patch`) and tagged prerelease (`prerelease`/`stable`) bumps
+- ✅ CHANGELOG.md template generation (inserts a section, or renames the release-line section on prerelease/stable/current-channel bumps)
+- ✅ Stable (`major`/`minor`/`patch`), tagged prerelease (`prerelease`/`stable`), and evolution-line (`--channel current`) bumps
 - ✅ Cargo.lock updated by rewriting the root package entry (no full `cargo build` needed; falls back to `cargo build` and verifies the result)
 
 ### Bump Types
@@ -46,6 +47,15 @@ node scripts/bump-version.mjs minor --yes       # skip the confirmation prompt
 - `stable` — finalize a prerelease to its base version (`2.8.0-beta.3 -> 2.8.0`). Errors if the current version is already stable.
 
 For `prerelease` / `stable`, the CHANGELOG section for the release line is **renamed** (e.g. `## [2.8.0-beta.2]` → `## [2.8.0-beta.3]`, or → `## [2.8.0]` on finalize, preserving the date) instead of inserting a new one each time, so draft notes carry over without accumulating duplicate sections. Insertion follows Keep a Changelog: right after the `Unreleased` section, or at the top when no `Unreleased` section exists.
+
+### Release Channels (`--channel`)
+
+- `stable` (default) — the regular release line.
+- `current` — the **evolution line**: versions like `3.0.0-current.<N>` (see the [Homebrew dual-baseline design](../docs/superpowers/specs/2026-09-12-homebrew-official-dual-baseline-design.md)). Only `major`/`minor`/`patch` bumps are allowed there:
+  - From a stable version, the bump type opens the line's base (`2.9.3` + `major` → `3.0.0-current.1`).
+  - From a `-current.<N>` version, the base stays fixed for the whole line and the bump type is ignored — only the counter moves, continuing from the existing `v<base>-current.*` git tags (`+1`). Promotion to a new base happens on the stable channel.
+  - The CHANGELOG section for the line is renamed on each current bump (`## [3.0.0-current.2]` → `## [3.0.0-current.3]`), just like prereleases.
+  - Tag as `vX.Y.Z-current.<N>`; the Release workflow builds the evolution-line matrix and publishes it as a prerelease with its own `current.json` updater manifest, so it never hijacks the stable channel or Homebrew cask.
 
 ### verify-release-tag.mjs
 
@@ -81,6 +91,7 @@ Accepts `vX.Y.Z` and `vX.Y.Z-<prerelease>` tags; rejects build metadata and malf
 
 `bump-version.mjs` supports:
 
+- `--channel <stable|current>`: select the release channel (see above); only `major`/`minor`/`patch` bumps are valid on `current`
 - `--dry-run`: print the plan without writing anything or prompting
 - `--yes` / `-y`: skip the interactive confirmation prompt
 - `--force`: bypass the preflight guardrails (dirty tree, version drift)

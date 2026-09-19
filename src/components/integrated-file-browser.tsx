@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useReducer, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
@@ -8,10 +8,7 @@ import { Button } from './ui/button';
 import { Toggle } from './ui/toggle';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
-import {
-  transferQueueReducer,
-  getNextQueuedTransfer,
-} from '@/lib/transfer-queue-reducer';
+import { useTransferQueue, onItemSettled } from '@/lib/transfer-queue-service';
 import {
   buildDirectoryUploadPlan,
   buildFileUploadItems,
@@ -122,9 +119,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
-  const [transfers, dispatchTransfer] = useReducer(transferQueueReducer, []);
+  // Global transfer queue — the transfer-queue-service owns the execution
+  // loop; this component only enqueues and reacts to settled items.
+  const { transfers, dispatch: dispatchTransfer } = useTransferQueue();
   const [queueExpanded, setQueueExpanded] = useState(false);
-  const processTransferRef = useRef(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showLoadingOverlay, setShowLoadingOverlay] = useState(false);
@@ -157,7 +155,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [clipboard, setClipboard] = useState<{ files: FileItem[], operation: 'copy' | 'cut' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [newFileName, setNewFileName] = useState('');
-  const [deletingFile, setDeletingFile] = useState<FileItem | null>(null);
+  const [deletingFiles, setDeletingFiles] = useState<FileItem[] | null>(null);
   const [directoryTransfer, setDirectoryTransfer] = useState<{
     sourcePath: string;
     destinationRoot: string;
@@ -328,7 +326,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             break;
           case 'a':
             event.preventDefault();
-            setSelectedFiles(new Set(files.map(f => f.name)));
+            // Select all real entries, never the ".." parent row.
+            setSelectedFiles(new Set(files.filter(f => f.name !== '..').map(f => f.name)));
             break;
           case 'r':
             event.preventDefault();
@@ -337,8 +336,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         }
       } else if (event.key === 'Delete' && selectedFiles.size > 0) {
         event.preventDefault();
-        const selectedFileItems = files.filter(f => selectedFiles.has(f.name));
-        selectedFileItems.forEach(handleDeleteFile);
+        handleDeleteSelected();
       } else if (event.key === 'F2' && selectedFiles.size === 1) {
         event.preventDefault();
         const selectedFile = files.find(f => selectedFiles.has(f.name));
@@ -404,91 +402,42 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     };
   }, [resizingColumn]);
 
-  // Transfer processing loop — modeled on file-browser-view.tsx
+  // Transfer completion reactions — the queue service drives the invokes;
+  // this component refreshes the listing and raises toasts for its own
+  // connection's transfers.
   useEffect(() => {
-    const nextItem = getNextQueuedTransfer(transfers);
-    if (!nextItem || processTransferRef.current) return;
-
-    processTransferRef.current = true;
-    dispatchTransfer({ type: "START", id: nextItem.id });
-
-    const doTransfer = async () => {
-      try {
-        if (nextItem.direction === "upload") {
-          const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
-            "upload_remote_file",
-            {
-              connectionId,
-              localPath: nextItem.sourcePath,
-              remotePath: nextItem.destinationPath,
-            },
-          );
-          if (result.success) {
-            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
-            toast.success(t('fileBrowser.toast.uploaded', { name: nextItem.fileName }));
-            void loadFiles();
-          } else {
-            dispatchTransfer({
-              type: "FAIL",
-              id: nextItem.id,
-              error: result.error ?? "Upload failed",
-            });
-            toast.error(t('fileBrowser.toast.uploadFailed', { name: nextItem.fileName }), {
-              description: result.error ?? "Unknown error",
-            });
-          }
+    return onItemSettled((item) => {
+      if (item.connectionId !== connectionId) return;
+      if (item.status === 'completed') {
+        if (item.direction === 'upload') {
+          toast.success(t('fileBrowser.toast.uploaded', { name: item.fileName }));
+          void loadFiles();
         } else {
-          const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
-            "download_remote_file",
-            {
-              connectionId,
-              remotePath: nextItem.sourcePath,
-              localPath: nextItem.destinationPath,
+          const destPath = item.destinationPath;
+          const destDir = destPath.substring(0, destPath.lastIndexOf('/')) || '/';
+          toast.success(t('fileBrowser.toast.downloaded', { name: item.fileName }), {
+            duration: 5000,
+            action: {
+              label: t('fileBrowser.transfer.openFile'),
+              onClick: () => { void invoke('open_in_os', { path: destPath }).catch(() => {}); },
             },
-          );
-          if (result.success) {
-            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
-            const destPath = nextItem.destinationPath;
-            const destDir = destPath.substring(0, destPath.lastIndexOf("/")) || "/";
-            toast.success(t('fileBrowser.toast.downloaded', { name: nextItem.fileName }), {
-              duration: 5000,
-              action: {
-                label: t('fileBrowser.transfer.openFile'),
-                onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
-              },
-              cancel: {
-                label: t('fileBrowser.transfer.showInFolder'),
-                onClick: () => { void invoke("open_in_os", { path: destDir }).catch(() => {}); },
-              },
-            });
-          } else {
-            dispatchTransfer({
-              type: "FAIL",
-              id: nextItem.id,
-              error: result.error ?? "Download failed",
-            });
-            toast.error(t('fileBrowser.toast.downloadFailed', { name: nextItem.fileName }), {
-              description: result.error ?? "Unknown error",
-            });
-          }
+            cancel: {
+              label: t('fileBrowser.transfer.showInFolder'),
+              onClick: () => { void invoke('open_in_os', { path: destDir }).catch(() => {}); },
+            },
+          });
         }
-      } catch (err) {
-        dispatchTransfer({
-          type: "FAIL",
-          id: nextItem.id,
-          error: err instanceof Error ? err.message : String(err),
+      } else if (item.status === 'failed') {
+        const toastKey = item.direction === 'upload'
+          ? t('fileBrowser.toast.uploadFailed', { name: item.fileName })
+          : t('fileBrowser.toast.downloadFailed', { name: item.fileName });
+        toast.error(toastKey, {
+          description: item.error ?? 'Unknown error',
         });
-        toast.error(t('fileBrowser.toast.transferFailed', { name: nextItem.fileName }), {
-          description: err instanceof Error ? err.message : String(err),
-        });
-      } finally {
-        processTransferRef.current = false;
       }
-    };
-
-    void doTransfer();
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn; adding it would cause infinite re-renders
-  }, [transfers, connectionId]);
+  }, [connectionId, t]);
 
   const handleResizeStart = (columnName: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -836,10 +785,39 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
+  // Index (within the current sorted list) of the last plain click, used as
+  // the anchor for Shift+Click range selection. Reset when the list changes.
+  const lastSelectedIndexRef = useRef<number | null>(null);
+
   const handleFileSelect = (fileName: string, event: React.MouseEvent) => {
-    // Only select/deselect if Ctrl (Windows/Linux) or Cmd (Mac) is pressed
+    event.preventDefault();
+    event.stopPropagation();
+    const index = sortedFiles.findIndex((f) => f.name === fileName);
+    const lastIndex = lastSelectedIndexRef.current;
+
+    if (event.shiftKey && lastIndex !== null && index !== -1) {
+      // Shift+Click: select the contiguous range from the anchor to this row,
+      // excluding the ".." parent row which is never part of a selection.
+      const [start, end] = lastIndex <= index ? [lastIndex, index] : [index, lastIndex];
+      const rangeNames = sortedFiles
+        .slice(start, end + 1)
+        .map((f) => f.name)
+        .filter((name) => name !== '..');
+      const newSelected = new Set(selectedFiles);
+      rangeNames.forEach((name) => newSelected.add(name));
+      // Keep non-range selections only when Ctrl/Cmd is also held; a plain
+      // Shift+Click behaves like the platform default and replaces the range.
+      if (!event.ctrlKey && !event.metaKey) {
+        setSelectedFiles(new Set(rangeNames));
+      } else {
+        setSelectedFiles(newSelected);
+      }
+      return;
+    }
+
     if (event.ctrlKey || event.metaKey) {
-      event.stopPropagation();
+      // Ctrl/Cmd + Click: toggle this row in/out of the selection and move
+      // the range anchor so a following Shift+Click ranges from this row.
       const newSelected = new Set(selectedFiles);
       if (newSelected.has(fileName)) {
         newSelected.delete(fileName);
@@ -847,23 +825,30 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         newSelected.add(fileName);
       }
       setSelectedFiles(newSelected);
+      lastSelectedIndexRef.current = index;
+    } else {
+      // Plain click: single-select this row (keeps double-click navigation).
+      setSelectedFiles(new Set([fileName]));
+      lastSelectedIndexRef.current = index;
     }
-    // If not holding Ctrl/Cmd, do nothing (allow double-click to handle navigation)
   };
 
   const handleFileClick = (file: FileItem, event: React.MouseEvent) => {
-    console.log('handleFileClick called', { file, ctrlKey: event.ctrlKey, metaKey: event.metaKey });
-    
-    if (event.ctrlKey || event.metaKey) {
-      // Ctrl/Cmd + Click: toggle selection
+    // The ".." row is navigation-only: it is never selectable, and any click
+    // (plain or modifier) navigates back to the parent directory.
+    if (file.name === '..') {
+      navigateTo(file.path);
+      setSelectedFiles(new Set());
+      lastSelectedIndexRef.current = null;
+      return;
+    }
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      // Ctrl/Cmd/Shift + Click: toggle / range selection.
       handleFileSelect(file.name, event);
     } else {
-      // Regular click on directory: navigate into it
-      if (file.type === 'directory') {
-        console.log('Click - navigating to directory:', file.path);
-        navigateTo(file.path);
-      }
-      // Regular click on file: do nothing (or optionally preview)
+      // Plain click on a folder or file: single-select it. Opening a folder
+      // (drilling in) happens on double-click via handleFileDoubleClick.
+      handleFileSelect(file.name, event);
     }
   };
 
@@ -879,7 +864,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
       dispatchTransfer({
         type: "ENQUEUE",
-        items: buildFileUploadItems(paths, currentPath),
+        items: buildFileUploadItems(paths, currentPath).map((item) => ({
+          ...item,
+          connectionId,
+        })),
       });
       toast.info(t('fileBrowser.toast.queuedUpload', { count: paths.length }));
     } catch (error) {
@@ -944,7 +932,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       if (queuedItems.length > 0) {
         dispatchTransfer({
           type: "ENQUEUE",
-          items: queuedItems,
+          items: queuedItems.map((item: UploadQueueInput) => ({
+            ...item,
+            connectionId,
+          })),
         });
         toast.info(
           t('fileBrowser.toast.queuedFolderUpload', { count: queuedItems.length, folderCount: directoryPaths.length, createdCount: createdDirectoryCount }),
@@ -971,6 +962,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       dispatchTransfer({
         type: "ENQUEUE",
         items: [{
+          connectionId,
           fileName: file.name,
           direction: "download" as const,
           sourcePath: file.path,
@@ -984,8 +976,16 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   };
 
   const handleDownloadMultiple = async (selectedFileItems: FileItem[]) => {
+    // Batch download is scoped to files. If the selection contains folders,
+    // tell the user they are skipped instead of silently dropping them.
     const filesToDownload = selectedFileItems.filter(f => f.type === 'file');
-    if (filesToDownload.length === 0) return;
+    const skippedDirs = selectedFileItems.filter(f => f.type === 'directory').length;
+    if (filesToDownload.length === 0) {
+      if (skippedDirs > 0) {
+        toast.info(t('fileBrowser.toast.downloadFoldersNotSupported'));
+      }
+      return;
+    }
     try {
       const destDir = await tauriOpen({ directory: true });
       if (!destDir) return;
@@ -993,6 +993,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       dispatchTransfer({
         type: "ENQUEUE",
         items: filesToDownload.map((f) => ({
+          connectionId,
           fileName: f.name,
           direction: "download" as const,
           sourcePath: f.path,
@@ -1000,7 +1001,16 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           totalBytes: f.size,
         })),
       });
-      toast.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
+      if (skippedDirs > 0) {
+        toast.info(
+          t('fileBrowser.toast.downloadedFilesSkippedFolders', {
+            count: filesToDownload.length,
+            folders: skippedDirs,
+          }),
+        );
+      } else {
+        toast.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
+      }
     } catch (error) {
       console.error('Download dialog error:', error);
     }
@@ -1043,41 +1053,60 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   function handleDeleteFile(file: FileItem) {
     console.log('[FileBrowser] Opening delete confirmation for:', file.name);
-    setDeletingFile(file);
+    setDeletingFiles([file]);
   };
 
-  const confirmDeleteFile = async () => {
-    if (!deletingFile) return;
-    
-    console.log('[FileBrowser] Confirming delete for:', deletingFile.name);
-    try {
-      const filePath = deletingFile.path;
-      console.log('[FileBrowser] Deleting file', { 
-        filePath,
-        isDirectory: deletingFile.type === 'directory',
-        connectionId
-      });
+  function handleDeleteSelected() {
+    const selectedItems = files.filter(f => selectedFiles.has(f.name) && f.name !== '..');
+    if (selectedItems.length === 0) return;
+    console.log('[FileBrowser] Opening delete confirmation for', selectedItems.length, 'items');
+    setDeletingFiles(selectedItems);
+  }
 
-      await invoke<boolean>('delete_file', {
-        connectionId,
-        path: filePath,
-        isDirectory: deletingFile.type === 'directory'
-      });
-      
-      toast.success(t('fileBrowser.toast.deleted', { name: deletingFile.name }));
-      setDeletingFile(null);
-      void loadFiles();
-    } catch (error) {
-      console.error('[FileBrowser] Failed to delete file:', error);
-      toast.error(t('fileBrowser.toast.deleteFailed'), {
-        description: error instanceof Error ? error.message : t('fileBrowser.toast.deleteFailedDesc'),
-      });
+  const confirmDeleteFile = async () => {
+    if (!deletingFiles || deletingFiles.length === 0) return;
+
+    console.log('[FileBrowser] Confirming delete for', deletingFiles.length, 'items:', deletingFiles.map(f => f.name));
+    const failed: string[] = [];
+
+    for (const file of deletingFiles) {
+      try {
+        console.log('[FileBrowser] Deleting file', {
+          filePath: file.path,
+          isDirectory: file.type === 'directory',
+          connectionId,
+        });
+        await invoke<boolean>('delete_file', {
+          connectionId,
+          path: file.path,
+          isDirectory: file.type === 'directory',
+        });
+      } catch (error) {
+        console.error('[FileBrowser] Failed to delete file:', error);
+        failed.push(file.name);
+      }
     }
+
+    if (deletingFiles.length === 1 && failed.length === 0) {
+      toast.success(t('fileBrowser.toast.deleted', { name: deletingFiles[0].name }));
+    } else if (failed.length === 0) {
+      toast.success(t('fileBrowser.toast.deletedMultiple', { count: deletingFiles.length }));
+    } else if (failed.length === deletingFiles.length) {
+      toast.error(t('fileBrowser.toast.deleteFailed'), {
+        description: t('fileBrowser.toast.deleteFailedDesc'),
+      });
+    } else {
+      toast.error(t('fileBrowser.toast.deleteSomeFailed', { failed: failed.length, total: deletingFiles.length }));
+    }
+
+    setDeletingFiles(null);
+    setSelectedFiles(new Set());
+    void loadFiles();
   };
 
   const cancelDeleteFile = () => {
     console.log('[FileBrowser] User cancelled deletion');
-    setDeletingFile(null);
+    setDeletingFiles(null);
   };
 
   function handleCopyFiles(files: FileItem[]) {
@@ -1166,7 +1195,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   };
 
   const handleFileInfo = (file: FileItem) => {
-    toast.info(`File: ${file.name}\nSize: ${formatFileSize(file.size)}\nModified: ${formatDate(file.modified)}\nPermissions: ${file.permissions}`);
+    toast.info(t('fileBrowser.toast.fileInfo', {
+      name: file.name,
+      size: formatFileSize(file.size),
+      modified: formatDate(file.modified),
+      permissions: file.permissions,
+    }));
   };
 
   const handleNewFile = async () => {
@@ -1288,7 +1322,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       }
 
       if (plan.items.length > 0) {
-        dispatchTransfer({ type: "ENQUEUE", items: plan.items });
+        dispatchTransfer({
+          type: "ENQUEUE",
+          items: plan.items.map((item) => ({ ...item, connectionId })),
+        });
         toast.info(
           t('fileBrowser.toast.queuedUploadToPath', { count: plan.items.length, path: currentPath }) +
             (createdDirectoryCount > 0
@@ -1374,6 +1411,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     return sortDirection === 'asc' ? comparison : -comparison;
   });
 
+  // Reset the Shift+Click range anchor whenever the visible list changes
+  // (files, search, or sort), so stale indexes never mis-select rows.
+  useEffect(() => {
+    lastSelectedIndexRef.current = null;
+  }, [files, searchTerm, sortField, sortDirection]);
+
   // Count actual files/folders (excluding ".." navigation entry)
   const actualItemCount = filteredFiles.filter(file => file.name !== '..').length;
   
@@ -1400,10 +1443,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   }
 
   return (
-    <div className={`h-full flex flex-col bg-background border-t ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
+    <div className={`h-full flex flex-col bg-background border-t border-border ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
       {/* File Browser Toolbar */}
       <div className="relative z-10 pt-2 pb-1">
-        <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border/70 bg-background/90 px-1.5 py-1 text-xs shadow-sm backdrop-blur-sm scrollbar-none">
+        <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border bg-background/90 px-1.5 py-1 text-xs shadow-sm backdrop-blur-sm scrollbar-none">
           {/* Back */}
           <Button
             variant="ghost"
@@ -1450,7 +1493,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
           {/* Breadcrumb / Editable address bar */}
           <div
-            className="mx-1 flex h-6 min-w-0 flex-1 cursor-text items-center rounded-md border border-border/50 bg-muted/50 px-1.5 shadow-inner group hover:border-border"
+            className="mx-1 flex h-6 min-w-0 flex-1 cursor-text items-center rounded-md border border-border bg-muted/50 px-1.5 shadow-inner group hover:border-border"
             onClick={() => {
               if (!isEditingPath) {
                 setEditPathValue(currentPath);
@@ -1536,15 +1579,23 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               placeholder={t('fileBrowser.searchFiles')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="h-6 border-border/60 bg-background/70 text-xs shadow-none placeholder:text-muted-foreground/70 focus-visible:bg-background"
+              className="h-6 border-border bg-background/70 text-xs shadow-none placeholder:text-muted-foreground/70 focus-visible:bg-background"
             />
           </div>
 
           <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">{t('fileBrowser.items', { count: actualItemCount })}</span>
 
           {selectedFiles.size > 0 && (
-            <span className="shrink-0 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+            <span
+              className="shrink-0 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary"
+              title={t('fileBrowser.multiSelectHint')}
+            >
               {t('fileBrowser.selected', { count: selectedFiles.size })}
+            </span>
+          )}
+          {selectedFiles.size === 1 && (
+            <span className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground/70">
+              {t('fileBrowser.multiSelectHint')}
             </span>
           )}
         </div>
@@ -1585,7 +1636,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
             <div
               ref={dropZoneRef}
-              className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border/70 bg-background shadow-sm"
+              className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border bg-background shadow-sm"
               // Required on Linux/WebKit2GTK: without preventDefault the browser
               // never signals "drop accepted", so Tauri's native drop signal
               // never fires. Also suppresses the browser's default file-open
@@ -1595,7 +1646,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               {/* Loading overlay */}
               {showLoadingOverlay && files.length > 0 && (
                 <div className="absolute inset-0 z-40 flex items-center justify-center bg-background/50 pointer-events-none">
-                  <div className="flex flex-col items-center gap-1.5 bg-background/90 rounded-lg px-4 py-3 shadow-sm border border-border/50">
+                  <div className="flex flex-col items-center gap-1.5 bg-background/90 rounded-lg px-4 py-3 shadow-sm border border-border">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                     <span className="text-[10px] text-muted-foreground">{t('fileBrowser.loading')}</span>
                   </div>
@@ -1607,17 +1658,17 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 <div className="absolute inset-0 bg-accent/20 border-2 border-dashed border-primary z-50 flex items-center justify-center pointer-events-none">
                   <div className="bg-background/90 rounded-lg p-6 shadow-lg">
                     <Upload className="h-12 w-12 mx-auto mb-3 text-primary" />
-                    <p className="font-medium">Drop files or folders to upload</p>
-                    <p className="text-sm text-muted-foreground mt-1">Upload to {currentPath}</p>
+                    <p className="font-medium">{t('fileBrowser.dropOverlay')}</p>
+                    <p className="text-sm text-muted-foreground mt-1">{t('fileBrowser.dropUploadTo', { path: currentPath })}</p>
                   </div>
                 </div>
               )}
 
               {/* Column Headers — outside ScrollArea so they never move */}
-              <div className="flex shrink-0 border-b bg-muted/30 px-2 py-1 backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
+              <div className="flex shrink-0 border-b border-border bg-muted/30 px-2 py-1 backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
                 {/* Name header */}
                 <div
-                  className={`flex items-center relative cursor-pointer select-none border-r border-border/20 pr-2 ${sortField === 'name' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center relative cursor-pointer select-none border-r border-border pr-2 ${sortField === 'name' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.name}px` }}
                   onClick={() => handleSort('name')}
                 >
@@ -1635,7 +1686,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
                 {/* Size header */}
                 <div
-                  className={`flex items-center justify-end relative cursor-pointer select-none border-r border-border/20 px-2 ${sortField === 'size' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center justify-end relative cursor-pointer select-none border-r border-border px-2 ${sortField === 'size' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.size}px` }}
                   onClick={() => handleSort('size')}
                 >
@@ -1653,7 +1704,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
                 {/* Modified header */}
                 <div
-                  className={`flex items-center relative cursor-pointer select-none border-r border-border/20 px-2 ${sortField === 'modified' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center relative cursor-pointer select-none border-r border-border px-2 ${sortField === 'modified' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.modified}px` }}
                   onClick={() => handleSort('modified')}
                 >
@@ -1671,7 +1722,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
                 {/* Permissions header */}
                 <div
-                  className={`flex items-center relative cursor-pointer select-none border-r border-border/20 px-2 ${sortField === 'permissions' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                  className={`flex items-center relative cursor-pointer select-none border-r border-border px-2 ${sortField === 'permissions' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
                   style={{ width: `${columnWidths.permissions}px` }}
                   onClick={() => handleSort('permissions')}
                 >
@@ -1731,7 +1782,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                         }}>
                           <ContextMenuTrigger asChild>
                             <div
-                              className={`flex items-center px-2 py-1 cursor-pointer transition-colors duration-100 rounded-md mx-1 my-px ${
+                              className={`select-none flex items-center px-2 py-1 cursor-pointer transition-colors duration-100 rounded-md mx-1 my-px ${
                                 isSel
                                   ? 'bg-accent/80 ring-1 ring-inset ring-accent-foreground/10'
                                   : isParent
@@ -1743,7 +1794,9 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                               onClick={(e) => handleFileClick(file, e)}
                               onDoubleClick={() => handleFileDoubleClick(file)}
                               onContextMenu={() => {
-                                if (!selectedFiles.has(file.name)) {
+                                // Right-clicking a non-selected row singles it out,
+                                // except the ".." parent row, which is never selectable.
+                                if (file.name !== '..' && !selectedFiles.has(file.name)) {
                                   setSelectedFiles(new Set([file.name]));
                                 }
                               }}
@@ -1787,11 +1840,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Eye className="mr-2 h-4 w-4" />
-                        Open
+                        {t('fileBrowser.contextMenu.open')}
                       </ContextMenuItem>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Edit className="mr-2 h-4 w-4" />
-                        Edit
+                        {t('fileBrowser.contextMenu.edit')}
                       </ContextMenuItem>
                       {onOpenInLogMonitor && (
                         <ContextMenuItem onClick={() => {
@@ -1813,7 +1866,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     <>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
                         <Folder className="mr-2 h-4 w-4" />
-                        Open Folder
+                        {t('fileBrowser.contextMenu.openFolder')}
                       </ContextMenuItem>
                       <ContextMenuItem onClick={() => handleDownloadDirectory(file)}>
                         <FolderDown className="mr-2 h-4 w-4" />
@@ -1826,18 +1879,18 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                   {/* Common actions */}
                   {file.name !== '..' && (
                     <>
-                      <ContextMenuItem onClick={() => handleCopyFiles([file])}>
+                      <ContextMenuItem onClick={() => handleCopyFiles(selectedFiles.has(file.name) && selectedFiles.size > 1 ? files.filter(f => selectedFiles.has(f.name) && f.name !== '..') : [file])}>
                         <Copy className="mr-2 h-4 w-4" />
                         {t('fileBrowser.contextMenu.copy')}
                       </ContextMenuItem>
-                      <ContextMenuItem onClick={() => handleCutFiles([file])}>
+                      <ContextMenuItem onClick={() => handleCutFiles(selectedFiles.has(file.name) && selectedFiles.size > 1 ? files.filter(f => selectedFiles.has(f.name) && f.name !== '..') : [file])}>
                         <Scissors className="mr-2 h-4 w-4" />
                         {t('fileBrowser.contextMenu.cut')}
                       </ContextMenuItem>
                       {clipboard && (
                         <ContextMenuItem onClick={handlePasteFiles}>
                           <ClipboardPaste className="mr-2 h-4 w-4" />
-                          {t('fileBrowser.contextMenu.paste')} {clipboard.files.length} item(s)
+                          {t('fileBrowser.contextMenu.pasteWithCount', { count: clipboard.files.length })}
                         </ContextMenuItem>
                       )}
                       <ContextMenuSeparator />
@@ -1854,19 +1907,17 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                     </>
                   )}
 
-                  {/* Download for files */}
+                  {/* Download */}
                   {file.type === 'file' && (
                     <>
-                      <ContextMenuItem onClick={() => handleDownload(file)}>
+                      <ContextMenuItem
+                        onClick={() => selectedFiles.size > 1 && selectedFiles.has(file.name)
+                          ? handleDownloadMultiple(files.filter(f => selectedFiles.has(f.name) && f.name !== '..'))
+                          : handleDownload(file)}
+                      >
                         <Download className="mr-2 h-4 w-4" />
                         {t('fileBrowser.contextMenu.download')}
                       </ContextMenuItem>
-                      {selectedFiles.size > 1 && (
-                        <ContextMenuItem onClick={() => handleDownloadMultiple(files.filter(f => selectedFiles.has(f.name)))}>
-                          <Download className="mr-2 h-4 w-4" />
-                          {t('fileBrowser.downloadSelected', { count: selectedFiles.size })}
-                        </ContextMenuItem>
-                      )}
                       <ContextMenuSeparator />
                     </>
                   )}
@@ -1885,9 +1936,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                   {file.name !== '..' && (
                     <>
                       <ContextMenuSeparator />
-                      <ContextMenuItem 
+                      <ContextMenuItem
                         className="text-destructive focus:text-destructive"
-                        onClick={() => handleDeleteFile(file)}
+                        onClick={() => selectedFiles.size > 1 && selectedFiles.has(file.name)
+                          ? handleDeleteSelected()
+                          : handleDeleteFile(file)}
                       >
                         <Trash2 className="mr-2 h-4 w-4" />
                         {t('fileBrowser.contextMenu.delete')}
@@ -1917,7 +1970,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 <>
                   <ContextMenuItem onClick={handlePasteFiles}>
                     <ClipboardPaste className="mr-2 h-4 w-4" />
-                    {t('fileBrowser.contextMenu.paste')} {clipboard.files.length} item(s)
+                    {t('fileBrowser.contextMenu.pasteWithCount', { count: clipboard.files.length })}
                   </ContextMenuItem>
                   <ContextMenuSeparator />
                 </>
@@ -1946,7 +1999,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               </ScrollArea>
 
               {/* Status footer */}
-              <div className="flex items-center justify-between px-3 py-1 text-[10px] text-muted-foreground border-t bg-muted/20 shrink-0">
+              <div className="flex items-center justify-between px-3 py-1 text-[10px] text-muted-foreground border-t border-border bg-muted/20 shrink-0">
                 <span>
                   {t('fileBrowser.status.items', { dirs: statusStats.dirs, files: statusStats.fileCount })}
                 </span>
@@ -1985,16 +2038,38 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       )}
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog open={!!deletingFile} onOpenChange={(open) => !open && setDeletingFile(null)}>
+      <AlertDialog open={!!deletingFiles} onOpenChange={(open) => !open && setDeletingFiles(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{deletingFile?.type === 'directory' ? t('fileBrowser.deleteFolderTitle') : t('fileBrowser.deleteFileTitle')}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deletingFiles && deletingFiles.length > 1
+                ? t('fileBrowser.deleteMultipleTitle', { count: deletingFiles.length })
+                : deletingFiles?.[0]?.type === 'directory'
+                  ? t('fileBrowser.deleteFolderTitle')
+                  : t('fileBrowser.deleteFileTitle')}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {t('fileBrowser.deleteConfirm', { name: deletingFile?.name })}
-              {deletingFile?.type === 'directory' && (
-                <span className="block mt-2 text-destructive font-medium">
-                  {t('fileBrowser.deleteFolderWarning')}
+              {deletingFiles && deletingFiles.length > 1 ? (
+                <span>
+                  {t('fileBrowser.deleteMultipleConfirm', { count: deletingFiles.length })}
+                  {deletingFiles.some(f => f.type === 'directory') && (
+                    <span className="block mt-2 text-destructive font-medium">
+                      {t('fileBrowser.deleteFolderWarning')}
+                    </span>
+                  )}
+                  <span className="mt-2 block max-h-40 overflow-y-auto rounded border border-border bg-muted/40 p-2 text-xs">
+                    {deletingFiles.map(f => f.name).join(', ')}
+                  </span>
                 </span>
+              ) : (
+                <>
+                  {t('fileBrowser.deleteConfirm', { name: deletingFiles?.[0]?.name })}
+                  {deletingFiles?.[0]?.type === 'directory' && (
+                    <span className="block mt-2 text-destructive font-medium">
+                      {t('fileBrowser.deleteFolderWarning')}
+                    </span>
+                  )}
+                </>
               )}
               {t('fileBrowser.cannotBeUndone')}
             </AlertDialogDescription>

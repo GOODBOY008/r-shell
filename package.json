@@ -1,7 +1,7 @@
 {
   "name": "r-shell",
   "private": true,
-  "version": "2.7.0",
+  "version": "2.9.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -69,10 +69,13 @@
     "@radix-ui/react-toggle-group": "^1.1.12",
     "@radix-ui/react-tooltip": "^1.2.9",
     "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-autostart": "^2.2.0",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-fs": "^2.3.0",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.2",
     "@tauri-apps/plugin-opener": "^2.5.4",
+    "@tauri-apps/plugin-positioner": "^2.3.3",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@xterm/addon-clipboard": "^0.2.0",
@@ -101,6 +104,7 @@
     "recharts": "^2.15.4",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
+    "tailwindcss-animate": "^1.0.7",
     "vaul": "^1.1.2"
   },
   "devDependencies": {

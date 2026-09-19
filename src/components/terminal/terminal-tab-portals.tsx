@@ -10,9 +10,12 @@ import React, {
 } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
+import { RefreshCw } from 'lucide-react';
+import { Button } from '../ui/button';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import type { TerminalTab } from '../../lib/terminal-group-types';
+import { isTerminalTabVisible } from '../../lib/terminal-group-reducer';
 import { PtyTerminal } from '../pty-terminal';
 import { FileBrowserView } from '../file-browser-view';
 import { DesktopViewer } from '../desktop-viewer';
@@ -51,10 +54,23 @@ function useThemeKey(): number {
 function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: number }) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onReconnectTab } = useTerminalCallbacks();
+  const { onReconnectTab, onDetachTab, failedPendingTabIds } = useTerminalCallbacks();
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
+  const isVisible = isTerminalTabVisible(state, tab.id);
+  const isTerminal = tab.tabType === undefined || tab.tabType === 'terminal';
+  const isViewingTerminal = isVisible && isTerminal && tab.connectionStatus !== 'pending';
+
+  // This content owner survives grid host reparenting. A layout-only host remount
+  // must not acknowledge hidden output; only a committed visible terminal does.
+  useLayoutEffect(() => {
+    if (isViewingTerminal) dispatch({ type: 'ACKNOWLEDGE_TAB_OUTPUT', tabId: tab.id });
+  }, [dispatch, isViewingTerminal, tab.id]);
+
+  const handleOutput = useCallback(() => {
+    dispatch({ type: 'MARK_TAB_UNREAD_OUTPUT', tabId: tab.id, reconnectCount: tab.reconnectCount });
+  }, [dispatch, tab.id, tab.reconnectCount]);
 
   const handleActivateGroup = useCallback(() => {
     if (groupId && state.activeGroupId !== groupId) {
@@ -69,6 +85,39 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
     }
     dispatch({ type: 'RECONNECT_TAB', tabId: tab.id });
   }, [dispatch, onReconnectTab, tab.id]);
+
+  const handleDetach = useCallback(() => {
+    if (onDetachTab) {
+      void onDetachTab(tab.id);
+      return;
+    }
+    // Fallback: no App-level handler — nothing to do.
+  }, [onDetachTab, tab.id]);
+
+  const handleReconnectKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLDivElement>) => {
+      const isTerminalTab = tab.tabType === undefined || tab.tabType === 'terminal';
+      if (
+        !isTerminalTab ||
+        !isActive ||
+        tab.connectionStatus !== 'disconnected' ||
+        event.repeat ||
+        event.nativeEvent.isComposing ||
+        event.keyCode === 229 ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.key.toLowerCase() !== 'r'
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      handleReconnect();
+    },
+    [handleReconnect, isActive, tab.connectionStatus, tab.tabType],
+  );
 
   const handleConnectionStatusChange = useCallback(
     (
@@ -114,10 +163,24 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
       />
     );
   } else if (tab.connectionStatus === 'pending') {
+    // A `pending` tab whose latest connect attempt failed is not waiting for
+    // anything: offer an explicit Connect action instead of the pulsing
+    // placeholder.
+    const hasFailedConnect = failedPendingTabIds?.has(tab.id) ?? false;
     content = (
       <div className="h-full w-full flex items-center justify-center bg-muted/30">
-        <div className="text-center text-muted-foreground">
-          <div className="animate-pulse">{t('app.waitingForConnection')}</div>
+        <div className="text-center text-muted-foreground space-y-3">
+          {hasFailedConnect ? (
+            <>
+              <div>{t('app.connectFailedHint')}</div>
+              <Button size="sm" variant="outline" onClick={handleReconnect}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                {t('app.connectNow')}
+              </Button>
+            </>
+          ) : (
+            <div className="animate-pulse">{t('app.waitingForConnection')}</div>
+          )}
         </div>
       </div>
     );
@@ -131,7 +194,9 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         username={tab.username}
         themeKey={themeKey}
         isActive={isActive}
+        onOutput={!isVisible && !tab.hasUnreadOutput ? handleOutput : undefined}
         onConnectionStatusChange={handleConnectionStatusChange}
+        onDetach={handleDetach}
       />
     );
   }
@@ -144,6 +209,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
       className="h-full w-full"
       onMouseDownCapture={handleActivateGroup}
       onFocusCapture={handleActivateGroup}
+      onKeyDown={handleReconnectKeyDown}
     >
       {content}
     </div>

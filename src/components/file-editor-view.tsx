@@ -1,11 +1,28 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { emit, listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { Save, RefreshCw, FileWarning, ExternalLink, Image as ImageIcon, FileArchive, Download } from "lucide-react";
-import { Button } from "./ui/button";
+import { Button, buttonVariants } from "./ui/button";
 import { CodeEditor } from "./code-editor";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { classifyFileByExtension, type FileViewKind } from "@/lib/editor-config";
+import { submit, getTransferById } from "@/lib/transfer-queue-service";
+import {
+  EDITOR_WINDOW_CHANGED_EVENT,
+  type EditorWindowEventPayload,
+} from "@/lib/editor-windows-store";
 
 interface Base64FileResponse {
   data: string;
@@ -22,6 +39,12 @@ interface FileEditorViewProps {
   fileName: string;
   /** Whether the underlying SSH connection is alive */
   isConnected: boolean;
+  /**
+   * When true (file-viewer window), this component owns the window close
+   * guard: unsaved changes trigger a save/discard prompt, and open/close
+   * events are reported so the main window can track and restore editors.
+   */
+  guardWindowClose?: boolean;
 }
 
 export function FileEditorView({
@@ -29,6 +52,7 @@ export function FileEditorView({
   filePath,
   fileName,
   isConnected,
+  guardWindowClose = false,
 }: FileEditorViewProps) {
   const { t } = useTranslation();
   const [content, setContent] = useState("");
@@ -39,6 +63,22 @@ export function FileEditorView({
   const dirty = content !== savedContent;
   const contentRef = useRef(content);
   contentRef.current = content;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  // Unsaved-changes confirmation before closing the window or quitting the
+  // app (both reuse the same dialog; the mode picks the action wiring).
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmMode, setConfirmMode] = useState<"close" | "quit">("close");
+  const allowCloseRef = useRef(false);
+  // Label of the Tauri window hosting this editor (for the backend quit
+  // guard); null outside a Tauri webview (browser dev mode / tests).
+  const windowLabel = useMemo(() => {
+    try {
+      return getCurrentWindow().label;
+    } catch {
+      return null;
+    }
+  }, []);
 
   // File-type classification
   const fileKind: FileViewKind = classifyFileByExtension(fileName);
@@ -94,7 +134,7 @@ export function FileEditorView({
     }
   }, [isConnected, loadFile]);
 
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (): Promise<boolean> => {
     setSaving(true);
     try {
       await invoke<boolean>("create_file", {
@@ -104,9 +144,11 @@ export function FileEditorView({
       });
       setSavedContent(contentRef.current);
       toast.success(t('fileEditorView.fileSaved', { fileName }));
+      return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(t('fileEditorView.failedToSave'), { description: msg });
+      return false;
     } finally {
       setSaving(false);
     }
@@ -119,12 +161,21 @@ export function FileEditorView({
       // Use the user's home directory as a base for the temp download
       const homeDir = await invoke<string>("get_home_directory");
       const localPath = `${homeDir}/.rshell-preview-${fileName}`;
-      const result = await invoke<{ success: boolean; error?: string }>(
-        "download_remote_file",
-        { connectionId, remotePath: filePath, localPath },
-      );
-      if (!result.success) {
-        throw new Error(result.error ?? "Download failed");
+      // Routed through the global queue service so the download serializes
+      // with other transfers and is cancellable like any other.
+      const transfer = submit({
+        connectionId,
+        fileName,
+        direction: "download",
+        sourcePath: filePath,
+        destinationPath: localPath,
+        totalBytes: 0,
+      });
+      const outcome = await transfer.done;
+      if (outcome !== "completed") {
+        throw new Error(outcome === "cancelled"
+          ? "Download cancelled"
+          : getTransferById(transfer.id)?.error ?? "Download failed");
       }
       await invoke<void>("open_in_os", { path: localPath });
       toast.success(t('fileEditorView.openedWithOs', { fileName }));
@@ -149,9 +200,116 @@ export function FileEditorView({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleSave, fileKind]);
 
+  // Report this editor to the main window (for tracking/restore).
+  const emitWindowEvent = useCallback((event: "opened" | "closed") => {
+    const payload: EditorWindowEventPayload = { event, connectionId, filePath, fileName };
+    void emit(EDITOR_WINDOW_CHANGED_EVENT, payload).catch(() => {});
+  }, [connectionId, filePath, fileName]);
+
+  useEffect(() => {
+    if (!guardWindowClose) return;
+    emitWindowEvent("opened");
+  }, [guardWindowClose, emitWindowEvent]);
+
+  // Window close guard: unsaved changes prompt to save/discard, and the
+  // window's open/closed state is reported for persistence and restore.
+  useEffect(() => {
+    if (!guardWindowClose) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    const handleCloseRequested = (event: { preventDefault: () => void }) => {
+      if (disposed || allowCloseRef.current) {
+        return;
+      }
+      if (!dirtyRef.current) {
+        // No unsaved changes — close normally, but keep tracking accurate.
+        emitWindowEvent("closed");
+        return;
+      }
+      event.preventDefault();
+      setConfirmMode("close");
+      setConfirmOpen(true);
+    };
+
+    try {
+      getCurrentWindow()
+        .onCloseRequested(handleCloseRequested)
+        .then((fn) => {
+          unlisten = fn;
+        })
+        .catch(() => {});
+    } catch {
+      // Not running inside a Tauri webview (e.g. browser dev mode).
+    }
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [guardWindowClose, emitWindowEvent]);
+
+  // Report dirty state to the backend quit guard (quit_guard.rs) so an app
+  // quit can prompt instead of silently discarding edits. Runs on mount and
+  // on every flip, including the false→true→false sequence of a save during
+  // a pending quit, which is what lets the quit proceed.
+  useEffect(() => {
+    if (!guardWindowClose || windowLabel === null) return;
+    invoke("editor_dirty_changed", { label: windowLabel, dirty }).catch(() => {});
+  }, [guardWindowClose, windowLabel, dirty]);
+
+  // App quit while this editor is dirty: the backend emits `confirm-quit`
+  // (see quit_guard.rs) and waits for every dirty editor to resolve. Save
+  // resolves via the dirty flip above; Discard closes this window (its
+  // destruction resolves); Cancel aborts the whole quit.
+  useEffect(() => {
+    if (!guardWindowClose) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen("confirm-quit", () => {
+      if (!disposed && dirtyRef.current) {
+        setConfirmMode("quit");
+        setConfirmOpen(true);
+      }
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [guardWindowClose]);
+
+  const handleSaveAndClose = useCallback(async () => {
+    const saved = await handleSave();
+    if (!saved) {
+      return; // Save failed — keep the window open (failure toast already shown).
+    }
+    allowCloseRef.current = true;
+    emitWindowEvent("closed");
+    try {
+      void getCurrentWindow().close().catch(() => {});
+    } catch {
+      // Not inside a Tauri webview.
+    }
+  }, [handleSave, emitWindowEvent]);
+
+  const handleDiscardAndClose = useCallback(() => {
+    allowCloseRef.current = true;
+    emitWindowEvent("closed");
+    try {
+      void getCurrentWindow().close().catch(() => {});
+    } catch {
+      // Not inside a Tauri webview.
+    }
+  }, [emitWindowEvent]);
+
   // ---------- Shared header toolbar ----------
   const renderToolbar = (showSaveButton: boolean) => (
-    <div className="flex items-center gap-2 px-2 py-1 border-b bg-muted/30 text-xs shrink-0">
+    <div className="flex items-center gap-2 px-2 py-1 border-b border-border bg-muted/30 text-xs shrink-0">
       <span className="font-mono text-muted-foreground truncate flex-1" title={filePath}>
         {filePath}
       </span>
@@ -315,6 +473,49 @@ export function FileEditorView({
           filename={fileName}
         />
       </div>
+      {/* Unsaved-changes confirmation, shared by window close ("close") and
+          app quit ("quit" — emitted by the backend quit guard) */}
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('fileEditorView.unsavedTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('fileEditorView.unsavedDescription', { fileName })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                if (confirmMode === "quit") {
+                  invoke("cancel_app_quit").catch(() => {});
+                }
+              }}
+            >
+              {t('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => void handleDiscardAndClose()}
+            >
+              {t('fileEditorView.discardAndClose')}
+            </AlertDialogAction>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirmMode === "quit") {
+                  // Just save: the backend quit completes when the dirty flag
+                  // flips (editor_dirty_changed). A failed save keeps dirty
+                  // set, so the quit stays parked and the window stays open.
+                  void handleSave();
+                } else {
+                  void handleSaveAndClose();
+                }
+              }}
+            >
+              {t('common.save')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

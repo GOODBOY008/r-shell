@@ -88,11 +88,14 @@ pnpm run version:stable
 
 # Verify a tag matches every version file before tagging
 pnpm run version:verify "v0.8.0-beta.1"
+
+# Evolution line / current channel (2.9.3 → 3.0.0-current.1; counter-only afterwards)
+pnpm run version:major -- --channel current
 ```
 - Script updates: package.json, Cargo.toml, Cargo.lock (root package entry, `cargo build` fallback), tauri.conf.json, CHANGELOG.md
 - Auto-creates git commit with template CHANGELOG entry
 - Enforces preflight guardrails (version-drift + dirty-tree checks); `--dry-run` previews, `--yes` skips confirmation, `--force` bypasses guardrails
-- See `.github/skills/release-version/SKILL.md` for the full release guide (stable and tagged prereleases)
+- See `.github/skills/release-version/SKILL.md` for the full release guide (stable, tagged prereleases, and the `--channel current` evolution line)
 
 ### Adding Tauri Commands
 1. Define function in [commands.rs](src-tauri/src/commands.rs) with `#[tauri::command]`

@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { submit, getTransferById, type SubmittedTransfer } from "@/lib/transfer-queue-service";
 import {
   Dialog,
   DialogContent,
@@ -145,6 +146,9 @@ export function SyncDialog({
     ...INITIAL_SYNC_PROGRESS,
   });
   const cancelRef = useRef(false);
+  // The in-flight transfer submitted to the global queue service, so the
+  // Cancel button can stop it for real (backend cancel_transfer).
+  const activeTransferRef = useRef<SubmittedTransfer | null>(null);
 
   // Filter for result table
   const [showSkipped, setShowSkipped] = useState(false);
@@ -247,6 +251,7 @@ export function SyncDialog({
     connectionId,
     onLoadLocalDir,
     onLoadRemoteDir,
+    t,
   ]);
 
   // ── Execute sync ──
@@ -310,16 +315,41 @@ export function SyncDialog({
           case "upload": {
             const srcPath = pathJoin(localPath, entry.relativePath);
             const destPath = pathJoin(remotePath, entry.relativePath);
-            const result = await invoke<{
-              success: boolean;
-              error?: string;
-            }>("upload_remote_file", {
-              connectionId,
-              localPath: srcPath,
-              remotePath: destPath,
-            });
-            if (!result.success) {
-              throw new Error(result.error ?? "Upload failed");
+            const transfer = submit(
+              {
+                connectionId,
+                fileName: entry.relativePath,
+                direction: "upload",
+                sourcePath: srcPath,
+                destinationPath: destPath,
+                totalBytes: entry.localSize ?? 0,
+              },
+              {
+                onRawProgress: (event) => {
+                  const baseBytes = bytesTransferred;
+                  setProgress((p) => ({
+                    ...p,
+                    bytesTransferred: baseBytes + event.transferred,
+                  }));
+                },
+              },
+            );
+            activeTransferRef.current = transfer;
+            let outcome: "completed" | "failed" | "cancelled";
+            try {
+              outcome = await transfer.done;
+            } finally {
+              activeTransferRef.current = null;
+            }
+            if (outcome === "cancelled") {
+              setProgress((p) => ({ ...p, phase: "cancelled" }));
+              toast.info(t('syncDialog.syncCancelled'));
+              return;
+            }
+            if (outcome === "failed") {
+              throw new Error(
+                getTransferById(transfer.id)?.error ?? "Upload failed",
+              );
             }
             bytesTransferred += entry.localSize ?? 0;
             break;
@@ -330,18 +360,47 @@ export function SyncDialog({
             break;
           }
           case "download": {
-            const result = await invoke<{
-              success: boolean;
-              error?: string;
-            }>("download_remote_file_confined", {
-              connectionId,
-              remoteRoot: remotePath,
-              destinationRoot: localPath,
-              remoteRelativePath: entry.relativePath,
-              destinationRelativePath: entry.relativePath,
-            });
-            if (!result.success) {
-              throw new Error(result.error ?? "Download failed");
+            const transfer = submit(
+              {
+                connectionId,
+                fileName: entry.relativePath,
+                direction: "download",
+                sourcePath: pathJoin(remotePath, entry.relativePath),
+                destinationPath: pathJoin(localPath, entry.relativePath),
+                totalBytes: entry.remoteSize ?? 0,
+                confined: {
+                  remoteRoot: remotePath,
+                  destinationRoot: localPath,
+                  remoteRelativePath: entry.relativePath,
+                  destinationRelativePath: entry.relativePath,
+                },
+              },
+              {
+                onRawProgress: (event) => {
+                  const baseBytes = bytesTransferred;
+                  setProgress((p) => ({
+                    ...p,
+                    bytesTransferred: baseBytes + event.transferred,
+                  }));
+                },
+              },
+            );
+            activeTransferRef.current = transfer;
+            let outcome: "completed" | "failed" | "cancelled";
+            try {
+              outcome = await transfer.done;
+            } finally {
+              activeTransferRef.current = null;
+            }
+            if (outcome === "cancelled") {
+              setProgress((p) => ({ ...p, phase: "cancelled" }));
+              toast.info(t('syncDialog.syncCancelled'));
+              return;
+            }
+            if (outcome === "failed") {
+              throw new Error(
+                getTransferById(transfer.id)?.error ?? "Download failed",
+              );
             }
             bytesTransferred += entry.remoteSize ?? 0;
             break;
@@ -349,7 +408,7 @@ export function SyncDialog({
         }
       } catch (err) {
         errorCount++;
-        toast.error(`Failed: ${entry.relativePath}`, {
+        toast.error(t('syncDialog.toastFailed', { path: entry.relativePath }), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -366,11 +425,11 @@ export function SyncDialog({
 
     if (errorCount === 0) {
       toast.success(
-        `Sync complete: ${processedItems} item(s) synchronized`,
+        t('syncDialog.toastComplete', { count: processedItems }),
       );
     } else {
       toast.warning(
-        `Sync finished with ${errorCount} error(s) out of ${processedItems} items`,
+        t('syncDialog.toastFinishedWithErrors', { errorCount, processedItems }),
       );
     }
 
@@ -383,6 +442,7 @@ export function SyncDialog({
     onCreateRemoteDir,
     onDeleteRemoteItem,
     onSyncComplete,
+    t,
   ]);
 
   // ── Toggle check on entry ──
@@ -421,7 +481,7 @@ export function SyncDialog({
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <ArrowRightLeft className="h-5 w-5" />
-            Directory Synchronization
+            {t('syncDialog.title')}
           </DialogTitle>
         </DialogHeader>
 
@@ -429,7 +489,7 @@ export function SyncDialog({
         <div className="grid grid-cols-2 gap-3 text-xs shrink-0">
           <div>
             <Label className="text-muted-foreground text-[10px]">
-              Local Directory
+              {t('syncDialog.localDirectory')}
             </Label>
             <div className="mt-0.5 px-2 py-1 bg-muted/50 rounded text-xs font-mono truncate">
               {localPath}
@@ -437,7 +497,7 @@ export function SyncDialog({
           </div>
           <div>
             <Label className="text-muted-foreground text-[10px]">
-              Remote Directory
+              {t('syncDialog.remoteDirectory')}
             </Label>
             <div className="mt-0.5 px-2 py-1 bg-muted/50 rounded text-xs font-mono truncate">
               {remotePath}
@@ -446,7 +506,7 @@ export function SyncDialog({
         </div>
 
         {/* ── Configuration ── */}
-        <div className="space-y-3 border rounded-md p-3 shrink-0">
+        <div className="space-y-3 border border-border rounded-md p-3 shrink-0">
           <div className="flex items-center gap-4 flex-wrap">
             {/* Direction */}
             <div className="flex items-center gap-2">
@@ -466,10 +526,10 @@ export function SyncDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="local-to-remote">
-                    Local → Remote
+                    {t('syncDialog.directionLocalToRemote')}
                   </SelectItem>
                   <SelectItem value="remote-to-local">
-                    Remote → Local
+                    {t('syncDialog.directionRemoteToLocal')}
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -477,7 +537,7 @@ export function SyncDialog({
 
             {/* Criteria */}
             <div className="flex items-center gap-2">
-              <Label className="text-xs whitespace-nowrap">Compare by</Label>
+              <Label className="text-xs whitespace-nowrap">{t('syncDialog.compareBy')}</Label>
               <Select
                 value={config.criteria}
                 onValueChange={(v) =>
@@ -492,10 +552,10 @@ export function SyncDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="size">Size only</SelectItem>
-                  <SelectItem value="modified">Date only</SelectItem>
+                  <SelectItem value="size">{t('syncDialog.criteriaSize')}</SelectItem>
+                  <SelectItem value="modified">{t('syncDialog.criteriaDate')}</SelectItem>
                   <SelectItem value="size+modified">
-                    Size + Date
+                    {t('syncDialog.criteriaSizeDate')}
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -514,7 +574,7 @@ export function SyncDialog({
                 disabled={isBusy}
               />
               <Label htmlFor="sync-recursive" className="text-xs">
-                Recursive (include subdirectories)
+                {t('syncDialog.recursive')}
               </Label>
             </div>
 
@@ -529,7 +589,7 @@ export function SyncDialog({
                 disabled={isBusy}
               />
               <Label htmlFor="sync-delete" className="text-xs text-destructive">
-                Delete orphaned remote files
+                {t('syncDialog.deleteOrphaned')}
               </Label>
             </div>
           </div>
@@ -537,7 +597,7 @@ export function SyncDialog({
           {/* Exclude patterns */}
           <div className="flex items-center gap-2">
             <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <Label className="text-xs whitespace-nowrap">Exclude</Label>
+            <Label className="text-xs whitespace-nowrap">{t('syncDialog.exclude')}</Label>
             <input
               className="flex-1 h-7 text-xs bg-muted/50 rounded px-2 outline-none placeholder:text-muted-foreground/50"
               placeholder={t('syncDialog.excludePlaceholder')}
@@ -563,7 +623,7 @@ export function SyncDialog({
                   className="text-[10px] gap-1 h-5"
                 >
                   <Upload className="h-3 w-3 text-blue-500" />
-                  {summary.toUpload} upload
+                  {t('syncDialog.badgeUpload', { count: summary.toUpload })}
                 </Badge>
               )}
               {summary.toCreateDir > 0 && (
@@ -572,7 +632,7 @@ export function SyncDialog({
                   className="text-[10px] gap-1 h-5"
                 >
                   <FolderPlus className="h-3 w-3 text-yellow-500" />
-                  {summary.toCreateDir} mkdir
+                  {t('syncDialog.badgeMkdir', { count: summary.toCreateDir })}
                 </Badge>
               )}
               {summary.toDelete > 0 && (
@@ -581,7 +641,7 @@ export function SyncDialog({
                   className="text-[10px] gap-1 h-5"
                 >
                   <Trash2 className="h-3 w-3 text-destructive" />
-                  {summary.toDelete} delete
+                  {t('syncDialog.badgeDelete', { count: summary.toDelete })}
                 </Badge>
               )}
               {summary.toDownload > 0 && (
@@ -590,7 +650,7 @@ export function SyncDialog({
                   className="text-[10px] gap-1 h-5"
                 >
                   <Download className="h-3 w-3 text-green-500" />
-                  {summary.toDownload} download
+                  {t('syncDialog.badgeDownload', { count: summary.toDownload })}
                 </Badge>
               )}
               {summary.skipped > 0 && (
@@ -599,7 +659,7 @@ export function SyncDialog({
                   className="text-[10px] gap-1 h-5"
                 >
                   <Equal className="h-3 w-3" />
-                  {summary.skipped} identical
+                  {t('syncDialog.badgeIdentical', { count: summary.skipped })}
                 </Badge>
               )}
               {summary.conflicts > 0 && (
@@ -608,11 +668,11 @@ export function SyncDialog({
                   className="text-[10px] gap-1 h-5 border-orange-400"
                 >
                   <AlertTriangle className="h-3 w-3 text-orange-500" />
-                  {summary.conflicts} conflict
+                  {t('syncDialog.badgeConflict', { count: summary.conflicts })}
                 </Badge>
               )}
               <span className="text-muted-foreground text-[10px] ml-auto">
-                {formatSize(summary.totalBytes)} total
+                {t('syncDialog.badgeTotal', { size: formatSize(summary.totalBytes) })}
               </span>
             </div>
 
@@ -626,7 +686,7 @@ export function SyncDialog({
                 disabled={isBusy}
               >
                 <CheckCheck className="h-3 w-3 mr-1" />
-                Select all
+                {t('syncDialog.selectAll')}
               </Button>
               <Button
                 variant="ghost"
@@ -635,7 +695,7 @@ export function SyncDialog({
                 onClick={selectNone}
                 disabled={isBusy}
               >
-                Deselect all
+                {t('syncDialog.deselectAll')}
               </Button>
               <div className="flex items-center gap-1 ml-auto">
                 <Checkbox
@@ -648,13 +708,13 @@ export function SyncDialog({
                   htmlFor="show-skipped"
                   className="text-[10px] text-muted-foreground"
                 >
-                  Show identical
+                  {t('syncDialog.showIdentical')}
                 </Label>
               </div>
             </div>
 
             {/* Result table */}
-            <ScrollArea className="flex-1 min-h-0 border rounded">
+            <ScrollArea className="flex-1 min-h-0 border border-border rounded">
               <table className="w-full text-[11px]" style={{ tableLayout: "fixed" }}>
                 <colgroup>
                   <col style={{ width: 28 }} />
@@ -664,19 +724,19 @@ export function SyncDialog({
                   <col style={{ width: 70 }} />
                 </colgroup>
                 <thead className="sticky top-0 bg-muted/60 z-10">
-                  <tr className="border-b text-muted-foreground">
+                  <tr className="border-b border-border text-muted-foreground">
                     <th className="px-1 py-0.5" />
                     <th className="text-left px-2 py-0.5 font-medium">
-                      Path
+                      {t('syncDialog.columnPath')}
                     </th>
                     <th className="text-center px-1 py-0.5 font-medium">
-                      Action
+                      {t('syncDialog.columnAction')}
                     </th>
                     <th className="text-right px-2 py-0.5 font-medium">
-                      Local
+                      {t('syncDialog.columnLocal')}
                     </th>
                     <th className="text-right px-2 py-0.5 font-medium">
-                      Remote
+                      {t('syncDialog.columnRemote')}
                     </th>
                   </tr>
                 </thead>
@@ -748,8 +808,8 @@ export function SyncDialog({
                         className="text-center py-6 text-muted-foreground"
                       >
                         {entries.length === 0
-                          ? "Run comparison to see differences"
-                          : "All files are identical ✓"}
+                          ? t('syncDialog.runComparisonHint')
+                          : `${t('syncDialog.allIdentical')} ✓`}
                       </td>
                     </tr>
                   )}
@@ -765,8 +825,8 @@ export function SyncDialog({
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>
                 {progress.phase === "comparing"
-                  ? "Comparing directories…"
-                  : `Syncing: ${progress.currentItem ?? ""}`}
+                  ? t('syncDialog.comparing')
+                  : t('syncDialog.syncingItem', { item: progress.currentItem ?? "" })}
               </span>
               <span>
                 {progress.processedItems}/{progress.totalItems}
@@ -784,10 +844,13 @@ export function SyncDialog({
               size="sm"
               onClick={() => {
                 cancelRef.current = true;
+                // Stop the in-flight transfer for real; the loop stops at
+                // the next iteration via cancelRef.
+                activeTransferRef.current?.cancel();
               }}
             >
               <X className="h-4 w-4 mr-1" />
-              Cancel
+              {t('common.cancel')}
             </Button>
           )}
           <Button
@@ -799,7 +862,7 @@ export function SyncDialog({
             <RefreshCw
               className={`h-4 w-4 mr-1 ${progress.phase === "comparing" ? "animate-spin" : ""}`}
             />
-            {compared ? "Re-compare" : "Compare"}
+            {compared ? t('syncDialog.recompareButton') : t('syncDialog.compareButton')}
           </Button>
           {compared && (
             <Button
@@ -811,7 +874,7 @@ export function SyncDialog({
               }
             >
               <Play className="h-4 w-4 mr-1" />
-              Sync ({entries.filter((e) => e.checked).length} items)
+              {t('syncDialog.syncItems', { count: entries.filter((e) => e.checked).length })}
             </Button>
           )}
         </DialogFooter>

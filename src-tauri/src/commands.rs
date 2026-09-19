@@ -1,12 +1,17 @@
 use crate::connection_manager::ConnectionManager;
 use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
+use crate::os_keypath::resolve_private_key_path;
 use crate::proxy::{ProxyConfig, ProxyType};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
-use crate::ssh::{AuthMethod, SshConfig};
+use crate::sftp_transfer;
+use crate::ssh::{AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use std::time::Instant;
+use tauri::{Emitter, Manager, State};
+use tauri_plugin_updater::UpdaterExt;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectRequest {
@@ -18,6 +23,9 @@ pub struct ConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// "strict" (default), "accept-new" (after the user confirmed a changed
+    /// key) or "off" (Host Key Verification switched off in Settings).
+    pub host_key_policy: Option<String>,
     /// Advanced SSH options — `Option` so legacy callers that omit them keep
     /// the previous defaults (compression on, keepalive 60 s / 3).
     pub compression: Option<bool>,
@@ -30,6 +38,16 @@ pub struct ConnectRequest {
     pub proxy_port: Option<u16>,
     pub proxy_username: Option<String>,
     pub proxy_password: Option<String>,
+    /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
+    /// false/missing. Legacy callers that omit them connect directly.
+    pub tunnel_enabled: Option<bool>,
+    pub tunnel_host: Option<String>,
+    pub tunnel_port: Option<u16>,
+    pub tunnel_username: Option<String>,
+    pub tunnel_auth_method: Option<String>,
+    pub tunnel_password: Option<String>,
+    pub tunnel_key_path: Option<String>,
+    pub tunnel_passphrase: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -65,12 +83,32 @@ pub struct CommandResponse {
     pub error: Option<String>,
 }
 
+/// `ssh_connect` result. Same shape as `CommandResponse` plus the details
+/// of a refused host key, so the UI can offer to trust the new key.
+#[derive(Debug, Serialize)]
+pub struct SshConnectResponse {
+    pub success: bool,
+    pub output: Option<String>,
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_key_changed: Option<HostKeyChanged>,
+}
+
+fn parse_host_key_policy(value: Option<&str>) -> HostKeyPolicy {
+    match value {
+        Some("off") => HostKeyPolicy::Off,
+        Some("accept-new") => HostKeyPolicy::AcceptNew,
+        _ => HostKeyPolicy::Strict,
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_connect(
     request: ConnectRequest,
     state: State<'_, Arc<ConnectionManager>>,
-) -> Result<CommandResponse, String> {
+) -> Result<SshConnectResponse, String> {
     let proxy = build_proxy(&request)?;
+    let tunnel = build_tunnel(&request)?;
 
     // Keepalive defaults match the connection dialog UI: enabled at 60 s / 3.
     let keepalive_enabled = request.keepalive_enabled.unwrap_or(true);
@@ -90,7 +128,7 @@ pub async fn ssh_connect(
             password: request.password.ok_or("Password required")?,
         },
         "publickey" => AuthMethod::PublicKey {
-            key_path: request.key_path.ok_or("Key path required")?,
+            key_path: resolve_private_key_path(request.key_path.as_deref())?,
             passphrase: request.passphrase,
         },
         _ => return Err("Invalid auth method".to_string()),
@@ -105,21 +143,25 @@ pub async fn ssh_connect(
         keepalive_interval,
         keepalive_max,
         proxy,
+        tunnel,
+        host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
     };
 
     match state
         .create_connection(request.connection_id.clone(), config)
         .await
     {
-        Ok(_) => Ok(CommandResponse {
+        Ok(_) => Ok(SshConnectResponse {
             success: true,
             output: Some(format!("Connected: {}", request.connection_id)),
             error: None,
+            host_key_changed: None,
         }),
-        Err(e) => Ok(CommandResponse {
+        Err(e) => Ok(SshConnectResponse {
             success: false,
             output: None,
             error: Some(e.to_string()),
+            host_key_changed: e.downcast_ref::<HostKeyChanged>().cloned(),
         }),
     }
 }
@@ -152,6 +194,67 @@ fn build_proxy(request: &ConnectRequest) -> Result<Option<ProxyConfig>, String> 
     }
 }
 
+/// Map the tunnel request fields into a `TunnelConfig` (SSH jump host), or
+/// `None` when the tunnel is disabled.
+fn build_tunnel(request: &ConnectRequest) -> Result<Option<TunnelConfig>, String> {
+    build_tunnel_config(
+        request.tunnel_enabled,
+        request.tunnel_host.clone(),
+        request.tunnel_port,
+        request.tunnel_username.clone(),
+        request.tunnel_auth_method.clone(),
+        request.tunnel_password.clone(),
+        request.tunnel_key_path.clone(),
+        request.tunnel_passphrase.clone(),
+    )
+}
+
+/// Shared tunnel-config builder, used by both the SSH and SFTP commands.
+///
+/// Takes the eight raw request fields rather than a request struct so the two
+/// (otherwise unrelated) connect request types can share it.
+#[allow(clippy::too_many_arguments)]
+fn build_tunnel_config(
+    enabled: Option<bool>,
+    host: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    auth_method: Option<String>,
+    password: Option<String>,
+    key_path: Option<String>,
+    passphrase: Option<String>,
+) -> Result<Option<TunnelConfig>, String> {
+    match enabled {
+        Some(true) => {
+            let host = host
+                .filter(|h| !h.trim().is_empty())
+                .ok_or("SSH tunnel host is required")?;
+            let username = username
+                .filter(|u| !u.trim().is_empty())
+                .ok_or("SSH tunnel username is required")?;
+            let auth_method = match auth_method.as_deref() {
+                None | Some("password") => AuthMethod::Password {
+                    password: password.unwrap_or_default(),
+                },
+                Some("publickey") => AuthMethod::PublicKey {
+                    key_path: key_path.ok_or("SSH tunnel key path required")?,
+                    passphrase,
+                },
+                other => {
+                    return Err(format!("Invalid SSH tunnel auth method: {other:?}"));
+                }
+            };
+            Ok(Some(TunnelConfig {
+                host,
+                port: port.unwrap_or(22),
+                username,
+                auth_method,
+            }))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_cancel_connect(
     connection_id: String,
@@ -181,6 +284,54 @@ pub async fn ssh_disconnect(
         Ok(_) => Ok(CommandResponse {
             success: true,
             output: Some("Disconnected".to_string()),
+            error: None,
+        }),
+        Err(e) => Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+/// Per-subsystem health snapshot for a connection's terminal pipeline
+/// (SSH alive / PTY attached / generation / detached). Used by the frontend
+/// to reconcile tab status so "Connected" can't outlive a dead PTY.
+#[tauri::command]
+pub async fn get_session_health(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<crate::connection_manager::SessionHealth, String> {
+    Ok(state.session_health(&connection_id).await)
+}
+
+/// List connection IDs that currently have a detached (background) session.
+#[tauri::command]
+pub async fn list_detached_sessions(
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<Vec<String>, String> {
+    Ok(state.list_detached_sessions().await)
+}
+
+/// Check whether a connection currently has a detached session.
+#[tauri::command]
+pub async fn has_detached_session(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<bool, String> {
+    Ok(state.has_detached_session(&connection_id).await)
+}
+
+/// Terminate a detached background session (PTY + SSH connection).
+#[tauri::command]
+pub async fn close_detached_session(
+    connection_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    match state.close_detached_session(&connection_id).await {
+        Ok(_) => Ok(CommandResponse {
+            success: true,
+            output: Some("Detached session closed".to_string()),
             error: None,
         }),
         Err(e) => Ok(CommandResponse {
@@ -2157,6 +2308,24 @@ pub async fn get_websocket_port() -> Result<u16, String> {
     }
 }
 
+/// What the webview needs to open the PTY bridge: the bound port and the
+/// per-launch token the server demands in the handshake (issue #138).
+#[derive(Debug, Serialize)]
+pub struct WebSocketEndpoint {
+    pub port: u16,
+    pub token: String,
+}
+
+#[tauri::command]
+pub async fn get_websocket_endpoint() -> Result<WebSocketEndpoint, String> {
+    let port = get_websocket_port().await?;
+    let token = crate::WEBSOCKET_TOKEN
+        .get()
+        .cloned()
+        .ok_or_else(|| "WebSocket server not yet started".to_string())?;
+    Ok(WebSocketEndpoint { port, token })
+}
+
 // ========== PTY Connection ==========
 // PTY terminal I/O now uses WebSocket instead of IPC for better performance
 // WebSocket server runs on a dynamically assigned port (9001-9010)
@@ -2175,6 +2344,18 @@ pub struct SftpConnectRequest {
     pub password: Option<String>,
     pub key_path: Option<String>,
     pub passphrase: Option<String>,
+    /// "strict" (default), "accept-new" or "off" — see `HostKeyPolicy`.
+    pub host_key_policy: Option<String>,
+    /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
+    /// false/missing. Legacy callers that omit them connect directly.
+    pub tunnel_enabled: Option<bool>,
+    pub tunnel_host: Option<String>,
+    pub tunnel_port: Option<u16>,
+    pub tunnel_username: Option<String>,
+    pub tunnel_auth_method: Option<String>,
+    pub tunnel_password: Option<String>,
+    pub tunnel_key_path: Option<String>,
+    pub tunnel_passphrase: Option<String>,
 }
 
 #[tauri::command]
@@ -2187,17 +2368,30 @@ pub async fn sftp_connect(
             password: request.password.unwrap_or_default(),
         },
         "publickey" => SftpAuthMethod::PublicKey {
-            key_path: request.key_path.ok_or("Key path required for SFTP")?,
+            key_path: resolve_private_key_path(request.key_path.as_deref())?,
             passphrase: request.passphrase,
         },
         _ => return Err("Invalid SFTP auth method".to_string()),
     };
+
+    let tunnel = build_tunnel_config(
+        request.tunnel_enabled,
+        request.tunnel_host.clone(),
+        request.tunnel_port,
+        request.tunnel_username.clone(),
+        request.tunnel_auth_method.clone(),
+        request.tunnel_password.clone(),
+        request.tunnel_key_path.clone(),
+        request.tunnel_passphrase.clone(),
+    )?;
 
     let config = SftpConfig {
         host: request.host,
         port: request.port,
         username: request.username,
         auth_method: auth,
+        tunnel,
+        host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
     };
 
     match state
@@ -2209,7 +2403,16 @@ pub async fn sftp_connect(
             output: Some(format!("SFTP connected: {}", request.connection_id)),
             error: None,
         }),
-        Err(e) => Err(format!("SFTP connection failed: {}", e)),
+        Err(e) => {
+            // The SFTP path has no "trust new key" dialog; point the user at
+            // the SSH terminal, which does, and shares the same known_hosts.
+            let hint = if e.downcast_ref::<HostKeyChanged>().is_some() {
+                " Open an SSH terminal to this host to review and trust the new key, or fix the entry in known_hosts."
+            } else {
+                ""
+            };
+            Err(format!("SFTP connection failed: {}{}", e, hint))
+        }
     }
 }
 
@@ -2333,67 +2536,221 @@ pub async fn list_remote_files(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found")?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found")?
+            };
+            let mut client = client.lock().await;
             client.list_dir(&path).await.map_err(|e| e.to_string())
         }
         _ => Err(format!("Unsupported protocol: {}", conn_type)),
     }
 }
 
-async fn download_remote_file_to_path(
+/// Build a boxed progress callback that forwards transfer progress to the
+/// frontend over the invoke's IPC channel.
+fn transfer_progress_callback(
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
+) -> Box<dyn Fn(u64, u64) + Send + Sync> {
+    Box::new(move |transferred: u64, total: u64| {
+        let _ = on_progress.send(sftp_transfer::TransferProgress { transferred, total });
+    })
+}
+
+/// Log the outcome of one transfer command. `ok_bytes` is `Some(bytes)` on
+/// success so finish lines always carry the moved byte count.
+fn trace_transfer_finish(
+    transfer_id: &str,
     connection_id: &str,
+    direction: &str,
     remote_path: &str,
-    local_path: &str,
+    started: Instant,
+    outcome: &Result<u64, anyhow::Error>,
+) {
+    match outcome {
+        Ok(bytes) => tracing::info!(
+            transfer_id,
+            connection_id,
+            direction,
+            remote_path,
+            bytes,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "transfer finished"
+        ),
+        Err(e) => tracing::info!(
+            transfer_id,
+            connection_id,
+            direction,
+            remote_path,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            error = %e,
+            "transfer failed"
+        ),
+    }
+}
+
+/// Register the transfer's cancellation token, run `body`, then always
+/// unregister — on every outcome — so tokens can never leak. Returns the
+/// transfer result mapped into the command response.
+async fn run_registered_transfer<F, Fut>(
     state: &Arc<ConnectionManager>,
-) -> Result<FileTransferResponse, String> {
-    let conn_type = state.get_connection_type(connection_id).await;
+    connection_id: &str,
+    transfer_id: &str,
+    direction: &str,
+    remote_path: &str,
+    body: F,
+) -> Result<FileTransferResponse, String>
+where
+    F: FnOnce(CancellationToken) -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<u64>>,
+{
+    let cancel = state.register_transfer(connection_id, transfer_id).await;
+    let started = Instant::now();
+    tracing::info!(
+        transfer_id,
+        connection_id,
+        direction,
+        remote_path,
+        "transfer start"
+    );
+    let result = body(cancel.clone()).await;
+    trace_transfer_finish(
+        transfer_id,
+        connection_id,
+        direction,
+        remote_path,
+        started,
+        &result,
+    );
+    state.finish_transfer(connection_id, transfer_id).await;
 
-    let result = match conn_type.as_deref() {
-        Some("SFTP") => {
-            let sftp_map = state.get_sftp_connection().await;
-            let connections = sftp_map.read().await;
-            let client = connections
-                .get(connection_id)
-                .ok_or("SFTP connection not found".to_string())?;
-            client.download_file(remote_path, local_path).await
-        }
-        Some("FTP") => {
-            let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(connection_id)
-                .ok_or("FTP connection not found".to_string())?;
-            client.download_file(remote_path, local_path).await
-        }
-        Some(other) => return Err(format!("Unsupported protocol: {}", other)),
-        None => {
-            // Fallback: try SSH connection (integrated file browser uses SSH connections
-            // which are not registered in connection_types)
-            let connection = state
-                .get_connection(connection_id)
-                .await
-                .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
-            let client = connection.read().await;
-            client.download_file(remote_path, local_path).await
-        }
-    };
-
-    match result {
-        Ok(bytes) => Ok(FileTransferResponse {
+    Ok(match result {
+        Ok(bytes) => FileTransferResponse {
             success: true,
             bytes_transferred: Some(bytes),
             data: None,
             error: None,
-        }),
-        Err(e) => Ok(FileTransferResponse {
+        },
+        Err(e) => FileTransferResponse {
             success: false,
             bytes_transferred: None,
             data: None,
             error: Some(e.to_string()),
-        }),
+        },
+    })
+}
+
+async fn download_remote_file_to_path(
+    connection_id: &str,
+    transfer_id: &str,
+    remote_path: &str,
+    local_path: &str,
+    state: &Arc<ConnectionManager>,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
+) -> Result<FileTransferResponse, String> {
+    let conn_type = state.get_connection_type(connection_id).await;
+
+    run_registered_transfer(
+        state,
+        connection_id,
+        transfer_id,
+        "download",
+        remote_path,
+        |cancel| async move {
+            let progress = transfer_progress_callback(on_progress);
+            let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
+
+            match conn_type.as_deref() {
+                Some("SFTP") => {
+                    let sftp_map = state.get_sftp_connection().await;
+                    let session = {
+                        let connections = sftp_map.read().await;
+                        let client = connections
+                            .get(connection_id)
+                            .ok_or_else(|| anyhow::anyhow!("SFTP connection not found"))?;
+                        client.transfer_session()?
+                    };
+                    // The session handle is cloned out so the map read guard
+                    // is NOT held across the (potentially long) transfer.
+                    sftp_transfer::download_file(
+                        &session,
+                        remote_path,
+                        local_path,
+                        progress_ref,
+                        &cancel,
+                    )
+                    .await
+                }
+                Some("FTP") => {
+                    let ftp_map = state.get_ftp_connection().await;
+                    let client = {
+                        let connections = ftp_map.read().await;
+                        connections
+                            .get(connection_id)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("FTP connection not found"))?
+                    };
+                    // Per-connection mutex: serializes this connection's FTP
+                    // operations without blocking the whole map.
+                    let mut client = client.lock().await;
+                    client
+                        .download_file_with_progress(remote_path, local_path, progress_ref, &cancel)
+                        .await
+                }
+                Some(other) => Err(anyhow::anyhow!("Unsupported protocol: {}", other)),
+                None => {
+                    // Fallback: try SSH connection (integrated file browser
+                    // uses SSH connections which are not registered in
+                    // connection_types). The session handle is cloned out so
+                    // the client read guard is dropped before the transfer —
+                    // otherwise a long download would block disconnect().
+                    let connection =
+                        state.get_connection(connection_id).await.ok_or_else(|| {
+                            anyhow::anyhow!("No connection found for '{}'", connection_id)
+                        })?;
+                    let session = {
+                        let client = connection.read().await;
+                        client.transfer_session()?
+                    };
+                    sftp_transfer::download_file(
+                        &session,
+                        remote_path,
+                        local_path,
+                        progress_ref,
+                        &cancel,
+                    )
+                    .await
+                }
+            }
+        },
+    )
+    .await
+}
+
+/// Cancel an in-flight transfer. Idempotent: cancelling an unknown/finished
+/// transfer id reports `success: false` without erroring, so the frontend
+/// can fire it best-effort (e.g. against an already-dead connection).
+#[tauri::command]
+pub async fn cancel_transfer(
+    transfer_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<CommandResponse, String> {
+    if state.cancel_transfer_by_id(&transfer_id).await {
+        tracing::info!(transfer_id, "transfer cancelled by user");
+        Ok(CommandResponse {
+            success: true,
+            output: Some("Transfer cancelled".to_string()),
+            error: None,
+        })
+    } else {
+        Ok(CommandResponse {
+            success: false,
+            output: None,
+            error: Some("No active transfer for this id".to_string()),
+        })
     }
 }
 
@@ -2402,9 +2759,19 @@ pub async fn download_remote_file(
     connection_id: String,
     remote_path: String,
     local_path: String,
+    transfer_id: String,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
-    download_remote_file_to_path(&connection_id, &remote_path, &local_path, state.inner()).await
+    download_remote_file_to_path(
+        &connection_id,
+        &transfer_id,
+        &remote_path,
+        &local_path,
+        state.inner(),
+        on_progress,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2414,6 +2781,8 @@ pub async fn download_remote_file_confined(
     destination_root: String,
     remote_relative_path: String,
     destination_relative_path: String,
+    transfer_id: String,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
     validate_remote_relative_path(&remote_relative_path)?;
@@ -2434,7 +2803,15 @@ pub async fn download_remote_file_confined(
         )
     };
 
-    download_remote_file_to_path(&connection_id, &remote_path, local_path, state.inner()).await
+    download_remote_file_to_path(
+        &connection_id,
+        &transfer_id,
+        &remote_path,
+        local_path,
+        state.inner(),
+        on_progress,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2442,54 +2819,75 @@ pub async fn upload_remote_file(
     connection_id: String,
     local_path: String,
     remote_path: String,
+    transfer_id: String,
+    on_progress: tauri::ipc::Channel<sftp_transfer::TransferProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<FileTransferResponse, String> {
     let conn_type = state.get_connection_type(&connection_id).await;
 
-    let result = match conn_type.as_deref() {
-        Some("SFTP") => {
-            let sftp_map = state.get_sftp_connection().await;
-            let connections = sftp_map.read().await;
-            let client = connections
-                .get(&connection_id)
-                .ok_or("SFTP connection not found".to_string())?;
-            client.upload_file(&local_path, &remote_path).await
-        }
-        Some("FTP") => {
-            let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
-            client.upload_file(&local_path, &remote_path).await
-        }
-        Some(other) => return Err(format!("Unsupported protocol: {}", other)),
-        None => {
-            // Fallback: try SSH connection (integrated file browser uses SSH connections
-            // which are not registered in connection_types)
-            let connection = state
-                .get_connection(&connection_id)
-                .await
-                .ok_or_else(|| format!("No connection found for '{}'", connection_id))?;
-            let client = connection.read().await;
-            client.upload_file(&local_path, &remote_path).await
-        }
-    };
+    // Owned copies for the async block (the registry call borrows the originals).
+    let conn_id = connection_id.clone();
+    let local = local_path.clone();
+    let remote = remote_path.clone();
 
-    match result {
-        Ok(bytes) => Ok(FileTransferResponse {
-            success: true,
-            bytes_transferred: Some(bytes),
-            data: None,
-            error: None,
-        }),
-        Err(e) => Ok(FileTransferResponse {
-            success: false,
-            bytes_transferred: None,
-            data: None,
-            error: Some(e.to_string()),
-        }),
-    }
+    run_registered_transfer(
+        state.inner(),
+        &connection_id,
+        &transfer_id,
+        "upload",
+        &remote_path,
+        |cancel| async move {
+            let progress = transfer_progress_callback(on_progress);
+            let progress_ref: Option<&(dyn Fn(u64, u64) + Send + Sync)> = Some(progress.as_ref());
+
+            match conn_type.as_deref() {
+                Some("SFTP") => {
+                    let sftp_map = state.get_sftp_connection().await;
+                    let session = {
+                        let connections = sftp_map.read().await;
+                        let client = connections
+                            .get(&conn_id)
+                            .ok_or_else(|| anyhow::anyhow!("SFTP connection not found"))?;
+                        client.transfer_session()?
+                    };
+                    sftp_transfer::upload_file(&session, &local, &remote, progress_ref, &cancel)
+                        .await
+                }
+                Some("FTP") => {
+                    let ftp_map = state.get_ftp_connection().await;
+                    let client = {
+                        let connections = ftp_map.read().await;
+                        connections
+                            .get(&conn_id)
+                            .cloned()
+                            .ok_or_else(|| anyhow::anyhow!("FTP connection not found"))?
+                    };
+                    let mut client = client.lock().await;
+                    client
+                        .upload_file_with_progress(&local, &remote, progress_ref, &cancel)
+                        .await
+                }
+                Some(other) => Err(anyhow::anyhow!("Unsupported protocol: {}", other)),
+                None => {
+                    // Fallback: try SSH connection (integrated file browser uses
+                    // SSH connections which are not registered in
+                    // connection_types). Session handle cloned out — see the
+                    // download path for why the guard must not be held.
+                    let connection = state
+                        .get_connection(&conn_id)
+                        .await
+                        .ok_or_else(|| anyhow::anyhow!("No connection found for '{}'", conn_id))?;
+                    let session = {
+                        let client = connection.read().await;
+                        client.transfer_session()?
+                    };
+                    sftp_transfer::upload_file(&session, &local, &remote, progress_ref, &cancel)
+                        .await
+                }
+            }
+        },
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2510,7 +2908,7 @@ pub async fn delete_remote_item(
             let connections = sftp_map.read().await;
             let client = connections
                 .get(&connection_id)
-                .ok_or("SFTP connection not found".to_string())?;
+                .ok_or("SFTP connection not found")?;
             if is_directory {
                 client.delete_dir(&path).await
             } else {
@@ -2519,10 +2917,14 @@ pub async fn delete_remote_item(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found")?
+            };
+            let mut client = client.lock().await;
             if is_directory {
                 client.delete_dir(&path).await
             } else {
@@ -2568,10 +2970,14 @@ pub async fn create_remote_directory(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found".to_string())?
+            };
+            let mut client = client.lock().await;
             client.create_dir(&path).await
         }
         _ => return Err(format!("Unsupported protocol: {}", conn_type)),
@@ -2614,10 +3020,14 @@ pub async fn rename_remote_item(
         }
         "FTP" => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found".to_string())?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found".to_string())?
+            };
+            let mut client = client.lock().await;
             client.rename(&old_path, &new_path).await
         }
         _ => return Err(format!("Unsupported protocol: {}", conn_type)),
@@ -2700,7 +3110,10 @@ pub async fn list_local_files(path: String) -> Result<Vec<FileEntry>, String> {
         #[cfg(unix)]
         let (owner, group): (Option<String>, Option<String>) = {
             use std::os::unix::fs::MetadataExt;
-            (Some(metadata.uid().to_string()), Some(metadata.gid().to_string()))
+            (
+                Some(metadata.uid().to_string()),
+                Some(metadata.gid().to_string()),
+            )
         };
         #[cfg(not(unix))]
         let (owner, group): (Option<String>, Option<String>) = (None, None);
@@ -3151,10 +3564,14 @@ pub async fn list_remote_files_recursive(
         }
         Some("FTP") => {
             let ftp_map = state.get_ftp_connection().await;
-            let mut connections = ftp_map.write().await;
-            let client = connections
-                .get_mut(&connection_id)
-                .ok_or("FTP connection not found")?;
+            let client = {
+                let connections = ftp_map.read().await;
+                connections
+                    .get(&connection_id)
+                    .cloned()
+                    .ok_or("FTP connection not found")?
+            };
+            let mut client = client.lock().await;
 
             // FTP recursive walk — iterative with a queue since we need &mut
             let mut dirs_to_visit: Vec<String> = vec![path.clone()];
@@ -3390,6 +3807,655 @@ pub fn get_system_locale() -> Result<String, String> {
     sys_locale::get_locale().ok_or_else(|| "Failed to detect system locale".to_string())
 }
 
+// ========== App Quit Guard (dirty file-editor windows) ==========
+
+/// Request an app quit through the quit guard (quit_guard module). With SSH
+/// sessions still connected, the main window first receives a
+/// `confirm-quit-sessions` event and must re-request via `confirm_app_quit`;
+/// then quits immediately when no editor has unsaved changes — otherwise each
+/// dirty editor window receives a `confirm-quit` event and shows its
+/// unsaved-changes prompt before the quit may proceed.
+#[tauri::command]
+pub fn request_app_quit(app: tauri::AppHandle) {
+    crate::quit_guard::request_quit(&app);
+}
+
+/// Proceed with an app quit after the user accepted the
+/// sessions-still-connected prompt (App.tsx). The session gate is satisfied;
+/// dirty editors are still consulted before the process exits.
+#[tauri::command]
+pub fn confirm_app_quit(app: tauri::AppHandle) {
+    crate::quit_guard::request_quit_confirmed(&app);
+}
+
+/// Cancel an in-flight guarded quit (user chose Cancel in an editor's
+/// unsaved-changes prompt).
+#[tauri::command]
+pub fn cancel_app_quit(app: tauri::AppHandle) {
+    crate::quit_guard::cancel_quit(&app);
+}
+
+/// Report whether a file-editor window has unsaved changes. Called by
+/// FileEditorView whenever its dirty flag flips.
+#[tauri::command]
+pub fn editor_dirty_changed(app: tauri::AppHandle, label: String, dirty: bool) {
+    crate::quit_guard::set_dirty(&app, &label, dirty);
+}
+
+// ========== Credential Encryption (master key + AES-256-GCM) ==========
+
+/// Keychain entry holding the app's data-protection master key. One entry for
+/// the whole app — the OS keychain is touched once (on first use), never per
+/// credential, keeping authorization prompts to a minimum.
+const MASTER_KEY_SERVICE: &str = "com.aiden.r-shell.dataprotection";
+const MASTER_KEY_USER: &str = "connection-secrets";
+
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
+use std::sync::Mutex;
+
+/// Cached master key so we hit the keychain (or the dev key file) once per
+/// app run, not per call.
+static MASTER_KEY_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
+/// True when the OS keychain must never be touched. Dev builds always bypass
+/// it — every rebuild changes the ad-hoc code signature, so macOS re-prompts
+/// for keychain access and blocks unattended AI-agent/e2e runs — and packaged
+/// builds can opt in with `RSHELL_DISABLE_KEYCHAIN=1`.
+fn keychain_disabled() -> bool {
+    tauri::is_dev()
+        || std::env::var("RSHELL_DISABLE_KEYCHAIN")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+}
+
+/// Local stand-in for the keychain while it is bypassed. Lives in the
+/// Tauri-resolved app-data dir (`app_data_dir()` — the same dir the app
+/// already uses for localStorage), so the key persists across dev relaunches
+/// and follows tauri.conf.json's identifier instead of a hardcoded copy.
+fn file_master_key_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("dev-master-key.dat"))
+        .map_err(|e| format!("Cannot resolve the app data directory: {e}"))
+}
+
+/// Decode a previously persisted 32-byte file master key.
+fn read_file_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    let stored = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read dev master key file: {e}"))?;
+    let key = BASE64
+        .decode(stored.trim())
+        .map_err(|e| format!("Stored dev master key is corrupt: {e}"))?;
+    if key.len() != 32 {
+        return Err("Stored dev master key has wrong length".to_string());
+    }
+    Ok(key)
+}
+
+/// Load (or first-use create) the 32-byte master key at `path`, base64 in a
+/// 0600 file. A concurrent creator that loses the `create_new` race falls
+/// back to reading the winner's key.
+fn load_or_create_file_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    if path.exists() {
+        return read_file_key(path);
+    }
+
+    use rand::RngCore;
+    let mut fresh = vec![0u8; 32];
+    rand::thread_rng().fill_bytes(&mut fresh);
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create app data directory: {e}"))?;
+    }
+
+    use std::io::Write;
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+            return read_file_key(path);
+        }
+        Err(err) => return Err(format!("Failed to create dev master key file: {err}")),
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("Failed to restrict dev master key file: {e}"))?;
+    }
+
+    writeln!(file, "{}", BASE64.encode(&fresh))
+        .map_err(|e| format!("Failed to store dev master key: {e}"))?;
+    Ok(fresh)
+}
+
+/// Load (or first-use create) the 32-byte master key. Stored in the OS
+/// keychain normally; in a local file in dev/e2e runs so automation never
+/// trips a keychain authorization prompt.
+fn master_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
+    if let Some(key) = MASTER_KEY_CACHE
+        .lock()
+        .map_err(|e| format!("Key cache lock poisoned: {e}"))?
+        .as_ref()
+    {
+        return Ok(key.clone());
+    }
+
+    let key = if keychain_disabled() {
+        let path = file_master_key_path(app)?;
+        tracing::info!(
+            "Dev/e2e run: OS keychain bypassed, master key file at {}",
+            path.display()
+        );
+        load_or_create_file_key(&path)?
+    } else {
+        let entry = keyring::Entry::new(MASTER_KEY_SERVICE, MASTER_KEY_USER)
+            .map_err(|e| format!("Failed to open keychain entry: {e}"))?;
+
+        let key = match entry.get_password() {
+            Ok(stored) => BASE64
+                .decode(stored)
+                .map_err(|e| format!("Stored master key is corrupt: {e}"))?,
+            Err(keyring::Error::NoEntry) => {
+                // First use: generate a random 32-byte key and persist it.
+                use rand::RngCore;
+                let mut fresh = vec![0u8; 32];
+                rand::thread_rng().fill_bytes(&mut fresh);
+                entry
+                    .set_password(&BASE64.encode(&fresh))
+                    .map_err(|e| format!("Failed to store master key: {e}"))?;
+                fresh
+            }
+            Err(e) => return Err(format!("Failed to read master key: {e}")),
+        };
+
+        if key.len() != 32 {
+            return Err("Stored master key has wrong length".to_string());
+        }
+        key
+    };
+
+    if let Ok(mut cache) = MASTER_KEY_CACHE.lock() {
+        *cache = Some(key.clone());
+    }
+    Ok(key)
+}
+
+/// Encrypt a secret with the given master key (AES-256-GCM).
+/// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
+fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
+
+    use rand::RngCore;
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), secret.as_bytes())
+        .map_err(|e| format!("Failed to encrypt secret: {e}"))?;
+
+    Ok(format!(
+        "v1:{}:{}",
+        BASE64.encode(nonce_bytes),
+        BASE64.encode(ciphertext)
+    ))
+}
+
+/// Decrypt a value produced by `seal_with_key`.
+fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
+    let parts: Vec<&str> = sealed.splitn(3, ':').collect();
+    if parts.len() != 3 || parts[0] != "v1" {
+        return Err("Unrecognized sealed secret format".to_string());
+    }
+    let nonce_bytes = BASE64
+        .decode(parts[1])
+        .map_err(|e| format!("Corrupt nonce: {e}"))?;
+    if nonce_bytes.len() != 12 {
+        return Err("Corrupt nonce: invalid length".to_string());
+    }
+    let ciphertext = BASE64
+        .decode(parts[2])
+        .map_err(|e| format!("Corrupt ciphertext: {e}"))?;
+
+    let cipher =
+        Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
+        .map_err(|e| format!("Failed to decrypt secret: {e}"))?;
+
+    String::from_utf8(plaintext).map_err(|e| format!("Decrypted secret is not UTF-8: {e}"))
+}
+
+/// Encrypt a secret with the app master key (AES-256-GCM).
+/// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
+/// Async per Tauri guidance — the first call in a run does keychain/file
+/// I/O, which must not block the main thread. The `AppHandle` is injected.
+#[tauri::command]
+pub async fn credential_seal(app: tauri::AppHandle, secret: String) -> Result<String, String> {
+    seal_with_key(&master_key(&app)?, &secret)
+}
+
+/// Decrypt a value produced by `credential_seal`.
+#[tauri::command]
+pub async fn credential_open(app: tauri::AppHandle, sealed: String) -> Result<String, String> {
+    open_with_key(&master_key(&app)?, &sealed)
+}
+
+#[cfg(test)]
+mod credential_key_tests {
+    use super::*;
+
+    #[test]
+    fn dev_builds_bypass_the_keychain() {
+        // `tauri dev` and `cargo test` both build without the
+        // `custom-protocol` feature, so is_dev() is true exactly when the
+        // app runs in dev mode. If this ever fails, dev/e2e runs would hit
+        // macOS keychain prompts again — the file-key contract broke.
+        std::env::remove_var("RSHELL_DISABLE_KEYCHAIN");
+        assert!(tauri::is_dev());
+        assert!(keychain_disabled());
+    }
+
+    #[test]
+    fn file_key_roundtrips_and_is_stable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        let first = load_or_create_file_key(&path).expect("create key");
+        assert_eq!(first.len(), 32);
+        let second = load_or_create_file_key(&path).expect("reload key");
+        assert_eq!(first, second, "file key must be stable across runs");
+    }
+
+    #[test]
+    fn file_key_creation_race_converges_on_one_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        let a = load_or_create_file_key(&path).expect("first creator");
+        let b = load_or_create_file_key(&path).expect("loser of the race reads winner");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn file_key_rejects_corrupt_or_short_keys() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        std::fs::write(&path, "not base64!!").expect("write corrupt key");
+        assert!(read_file_key(&path).is_err());
+        std::fs::write(&path, BASE64.encode([0u8; 16])).expect("write short key");
+        assert!(read_file_key(&path).is_err());
+    }
+
+    #[test]
+    fn sealed_secrets_roundtrip_through_the_file_key() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dev-master-key.dat");
+        let key = load_or_create_file_key(&path).expect("key");
+        let sealed = seal_with_key(&key, "s3cret-パスワード").expect("seal");
+        assert!(sealed.starts_with("v1:"));
+        assert_eq!(
+            open_with_key(&key, &sealed).expect("open"),
+            "s3cret-パスワード"
+        );
+    }
+}
+
+// ========== In-App Updater (channel selection + Homebrew detection) ==========
+
+/// Error marker returned by `updater_check` when this install is managed by
+/// Homebrew. The frontend recognizes it and shows `brew upgrade` guidance
+/// instead of an error — the in-app updater must never replace a
+/// brew-managed .app (it would break the receipt/sha256 tracking).
+pub const HOMEBREW_MANAGED_MARKER: &str = "HOMEBREW_MANAGED_INSTALL";
+
+/// Cask tokens that install this app: the stable-line `r-shell` cask and the
+/// evolution-line `r-shell@current` cask. A receipt for either marks the
+/// install as brew-managed.
+const HOMEBREW_CASK_TOKENS: [&str; 2] = ["r-shell", "r-shell@current"];
+
+/// Stable channel manifest. `releases/latest` never points at a prerelease,
+/// so evolution-line tags (`v*-current.N`) cannot hijack this URL.
+const STABLE_MANIFEST_URL: &str =
+    "https://github.com/GOODBOY008/r-shell/releases/latest/download/latest.json";
+/// Evolution channel manifest, attached to the rolling lightweight `current`
+/// tag (moved to the latest `v*-current.N` release by CI).
+const CURRENT_MANIFEST_URL: &str =
+    "https://github.com/GOODBOY008/r-shell/releases/download/current/current.json";
+
+/// Environment facts the update settings UI gates on. `current` channel is
+/// only offered for macOS ≥ 26 on Apple Silicon outside Homebrew.
+/// `auto_check_disabled` suppresses the frontend's startup auto-check: dev
+/// builds (same gate as the keychain bypass) and `RSHELL_DISABLE_AUTO_UPDATE=1`
+/// must not fetch release manifests or pop an update dialog mid-run during
+/// unattended automation. Manual checks are never suppressed.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateContext {
+    pub homebrew_managed: bool,
+    pub platform: String,
+    pub arch: String,
+    pub macos_major: Option<u32>,
+    pub auto_check_disabled: bool,
+}
+
+/// Parse the macOS major version via `sw_vers -productVersion` (e.g. "26.1"
+/// → 26). Cheap enough to call per settings-modal open; None off-macOS.
+#[cfg(target_os = "macos")]
+fn macos_major_version() -> Option<u32> {
+    let output = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout.trim().split('.').next()?.parse().ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_major_version() -> Option<u32> {
+    None
+}
+
+/// True when this install is managed by Homebrew. `brew install --cask`
+/// moves the .app out to /Applications and leaves only a symlink plus a
+/// receipt in the Caskroom, so the executable path normally contains no
+/// "Caskroom" — the receipt (`<prefix>/Caskroom/<token>/.metadata/
+/// INSTALL_RECEIPT.json`, present for every cask install) is the reliable
+/// marker. Requiring the receipt file (not just the Caskroom dir) keeps a
+/// stale uninstalled-cask directory from counting.
+fn cask_receipt_exists(prefixes: &[std::path::PathBuf]) -> bool {
+    prefixes.iter().any(|prefix| {
+        HOMEBREW_CASK_TOKENS.iter().any(|token| {
+            prefix
+                .join("Caskroom")
+                .join(token)
+                .join(".metadata")
+                .join("INSTALL_RECEIPT.json")
+                .exists()
+        })
+    })
+}
+
+fn homebrew_prefixes() -> Vec<std::path::PathBuf> {
+    // Both default prefixes (Apple Silicon / Intel) plus custom installs via
+    // HOMEBREW_PREFIX (unset for GUI apps launched from Finder/Dock).
+    let mut prefixes: Vec<std::path::PathBuf> = vec!["/opt/homebrew".into(), "/usr/local".into()];
+    if let Ok(custom) = std::env::var("HOMEBREW_PREFIX") {
+        if !custom.is_empty() {
+            prefixes.push(custom.into());
+        }
+    }
+    prefixes
+}
+
+/// The innermost `.app` bundle containing `exe`, if any (a dev build's
+/// `target/debug/r-shell` binary has none).
+fn app_bundle_dir(exe: &std::path::Path) -> Option<&std::path::Path> {
+    exe.ancestors().skip(1).find(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".app"))
+    })
+}
+
+fn bundle_in_applications(bundle: &std::path::Path, home: Option<&std::path::Path>) -> bool {
+    bundle.starts_with("/Applications")
+        || home.is_some_and(|h| bundle.starts_with(h.join("Applications")))
+}
+
+fn homebrew_managed() -> bool {
+    // Fast path: running straight out of a Caskroom (e.g. Homebrew staging
+    // or a hand-copied bundle kept in place).
+    if std::env::current_exe()
+        .map(|exe| exe.to_string_lossy().contains("/Caskroom/"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    // Standard layout: app moved to /Applications, receipt in the Caskroom.
+    // The /Applications qualifier keeps an unrelated copy on the same machine
+    // (e.g. a `tauri dev` build) from being classified as managed.
+    if !cask_receipt_exists(&homebrew_prefixes()) {
+        return false;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let home = std::env::var("HOME").ok().map(std::path::PathBuf::from);
+    app_bundle_dir(&exe).is_some_and(|bundle| bundle_in_applications(bundle, home.as_deref()))
+}
+
+/// True when the startup auto-check for updates must be skipped. Dev/e2e
+/// builds never auto-check; `RSHELL_DISABLE_AUTO_UPDATE=1` extends the
+/// suppression to packaged builds. Manual checks are never affected.
+fn update_auto_check_disabled() -> bool {
+    tauri::is_dev()
+        || std::env::var("RSHELL_DISABLE_AUTO_UPDATE")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+}
+
+/// Async per Tauri guidance — resolving the context spawns `sw_vers` on
+/// macOS and stats Caskroom dirs, which must not block the main thread.
+#[tauri::command]
+pub async fn get_update_context() -> UpdateContext {
+    UpdateContext {
+        homebrew_managed: homebrew_managed(),
+        platform: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        macos_major: macos_major_version(),
+        auto_check_disabled: update_auto_check_disabled(),
+    }
+}
+
+/// Projection of `tauri_plugin_updater::Update` for the frontend. The real
+/// `Update` (not serializable) is cached in [`PendingUpdate`] for the
+/// download-and-install step.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMeta {
+    pub version: String,
+    pub current_version: String,
+    pub body: Option<String>,
+}
+
+/// Process-wide cache of the update found by the last `updater_check`. The
+/// entry survives a failed `updater_download_and_install` so the frontend's
+/// retry re-downloads; it is only cleared after a successful install.
+#[derive(Default)]
+pub struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+
+#[tauri::command]
+pub async fn updater_check(
+    app: tauri::AppHandle,
+    channel: String,
+    proxy: Option<String>,
+    pending: State<'_, PendingUpdate>,
+) -> Result<Option<UpdateMeta>, String> {
+    if homebrew_managed() {
+        return Err(HOMEBREW_MANAGED_MARKER.to_string());
+    }
+
+    // Endpoint override only exists on the Rust UpdaterBuilder (the JS
+    // CheckOptions have no such field), which is why the check lives here.
+    let endpoint = match channel.as_str() {
+        "stable" => STABLE_MANIFEST_URL,
+        "current" => CURRENT_MANIFEST_URL,
+        _ => return Err(format!("Unknown update channel: {channel}")),
+    };
+
+    let mut builder = app
+        .updater_builder()
+        .endpoints(vec![endpoint
+            .parse()
+            .map_err(|e| format!("Invalid endpoint: {e}"))?])
+        .map_err(|e| e.to_string())?;
+
+    if let Some(proxy) = proxy {
+        let url: tauri::Url = proxy
+            .parse()
+            .map_err(|_| "Invalid update proxy URL".to_string())?;
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return Err("Invalid update proxy URL".to_string());
+        }
+        builder = builder.proxy(url);
+    }
+
+    let update = builder
+        .build()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    *pending.0.lock().map_err(|e| e.to_string())? = update.clone();
+
+    Ok(update.map(|u| UpdateMeta {
+        version: u.version.clone(),
+        current_version: u.current_version.clone(),
+        body: u.body.clone(),
+    }))
+}
+
+#[tauri::command]
+pub async fn updater_download_and_install(
+    app: tauri::AppHandle,
+    pending: State<'_, PendingUpdate>,
+) -> Result<(), String> {
+    // Clone rather than take: `Update` is cheap to clone and the cached one
+    // must survive a failed transfer, otherwise the dialog's retry would
+    // always die with "No update available" instead of re-downloading.
+    let update = pending.0.lock().map_err(|e| e.to_string())?.clone();
+    let Some(update) = update else {
+        return Err("No update available — run updater_check first".to_string());
+    };
+
+    let mut downloaded: u64 = 0;
+    let progress_app = app.clone();
+    let result = update
+        .download_and_install(
+            move |chunk_len, total| {
+                downloaded += chunk_len as u64;
+                let _ = progress_app.emit(
+                    "updater://progress",
+                    serde_json::json!({ "downloaded": downloaded, "total": total }),
+                );
+            },
+            || {},
+        )
+        .await;
+
+    match result {
+        Ok(()) => {
+            // Installed: drop the cache so a stale `Update` can never be
+            // re-downloaded against the now-current version.
+            *pending.0.lock().map_err(|e| e.to_string())? = None;
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+// ========== Updater Tests ==========
+
+#[cfg(test)]
+mod updater_tests {
+    use super::*;
+
+    #[test]
+    fn dev_builds_disable_the_update_auto_check() {
+        // `tauri dev` and `cargo test` both build without the
+        // `custom-protocol` feature, so is_dev() is true here. If this ever
+        // fails, dev/e2e runs would auto-fetch release manifests and could
+        // pop an update dialog mid-automation again.
+        std::env::remove_var("RSHELL_DISABLE_AUTO_UPDATE");
+        assert!(update_auto_check_disabled());
+    }
+
+    #[test]
+    fn cask_receipt_marks_homebrew_managed() {
+        let prefix = tempfile::tempdir().unwrap();
+        for token in HOMEBREW_CASK_TOKENS {
+            let receipt = prefix
+                .path()
+                .join("Caskroom")
+                .join(token)
+                .join(".metadata")
+                .join("INSTALL_RECEIPT.json");
+            std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+            std::fs::write(&receipt, "{}").unwrap();
+            assert!(
+                cask_receipt_exists(&[prefix.path().to_path_buf()]),
+                "receipt for {token} should mark the install as managed"
+            );
+        }
+    }
+
+    #[test]
+    fn no_receipt_means_unmanaged() {
+        let prefix = tempfile::tempdir().unwrap();
+        assert!(!cask_receipt_exists(&[prefix.path().to_path_buf()]));
+
+        // A Caskroom dir without the receipt (e.g. stale leftovers after a
+        // manual delete) must not count as a managed install.
+        let stale = prefix.path().join("Caskroom").join("r-shell").join("2.9.2");
+        std::fs::create_dir_all(&stale).unwrap();
+        assert!(!cask_receipt_exists(&[prefix.path().to_path_buf()]));
+    }
+
+    #[test]
+    fn other_casks_receipts_do_not_count() {
+        let prefix = tempfile::tempdir().unwrap();
+        let receipt = prefix
+            .path()
+            .join("Caskroom")
+            .join("some-other-app")
+            .join(".metadata")
+            .join("INSTALL_RECEIPT.json");
+        std::fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        std::fs::write(&receipt, "{}").unwrap();
+        assert!(!cask_receipt_exists(&[prefix.path().to_path_buf()]));
+    }
+
+    #[test]
+    fn app_bundle_detection_distinguishes_installed_from_dev_builds() {
+        let installed = std::path::Path::new("/Applications/r-shell.app/Contents/MacOS/r-shell");
+        let bundle = app_bundle_dir(installed).unwrap();
+        assert_eq!(bundle, std::path::Path::new("/Applications/r-shell.app"));
+        assert!(bundle_in_applications(
+            bundle,
+            Some(std::path::Path::new("/Users/dev"))
+        ));
+
+        let user_apps =
+            std::path::Path::new("/Users/dev/Applications/r-shell.app/Contents/MacOS/r-shell");
+        assert!(bundle_in_applications(
+            app_bundle_dir(user_apps).unwrap(),
+            Some(std::path::Path::new("/Users/dev"))
+        ));
+
+        // A tauri-dev binary is not inside any .app bundle at all, so a
+        // receipt on the machine must not classify it as managed.
+        let dev_build = std::path::Path::new("/repo/src-tauri/target/debug/r-shell");
+        assert!(app_bundle_dir(dev_build).is_none());
+
+        // An .app bundle outside /Applications (e.g. run from a mounted dmg)
+        // is not the brew-managed copy either.
+        let from_dmg = std::path::Path::new("/Volumes/R-Shell/r-shell.app/Contents/MacOS/r-shell");
+        assert!(!bundle_in_applications(
+            app_bundle_dir(from_dmg).unwrap(),
+            Some(std::path::Path::new("/Users/dev"))
+        ));
+    }
+}
+
 // ========== Local Filesystem Tests ==========
 
 #[cfg(test)]
@@ -3605,7 +4671,7 @@ mod local_fs_tests {
 mod proxy_config_tests {
     use super::*;
 
-    fn request(proxy_type: Option<&str>) -> ConnectRequest {
+    pub(super) fn request(proxy_type: Option<&str>) -> ConnectRequest {
         ConnectRequest {
             connection_id: "c1".to_string(),
             host: "example.com".to_string(),
@@ -3615,6 +4681,7 @@ mod proxy_config_tests {
             password: Some("pw".to_string()),
             key_path: None,
             passphrase: None,
+            host_key_policy: None,
             compression: None,
             keepalive_enabled: None,
             keepalive_interval: None,
@@ -3624,6 +4691,14 @@ mod proxy_config_tests {
             proxy_port: None,
             proxy_username: None,
             proxy_password: None,
+            tunnel_enabled: None,
+            tunnel_host: None,
+            tunnel_port: None,
+            tunnel_username: None,
+            tunnel_auth_method: None,
+            tunnel_password: None,
+            tunnel_key_path: None,
+            tunnel_passphrase: None,
         }
     }
 
@@ -3683,5 +4758,80 @@ mod proxy_config_tests {
         req.proxy_host = Some("proxy.local".to_string());
         let cfg = build_proxy(&req).unwrap().unwrap();
         assert_eq!(cfg.port, 8080);
+    }
+}
+
+#[cfg(test)]
+mod tunnel_config_tests {
+    use super::*;
+    use crate::ssh::AuthMethod;
+
+    fn request() -> ConnectRequest {
+        let mut req = proxy_config_tests::request(None);
+        req.tunnel_enabled = Some(true);
+        req.tunnel_host = Some("bastion.example.com".to_string());
+        req.tunnel_port = Some(2222);
+        req.tunnel_username = Some("jumpuser".to_string());
+        req
+    }
+
+    #[test]
+    fn no_tunnel_when_disabled_or_missing() {
+        let req = proxy_config_tests::request(None);
+        assert!(build_tunnel(&req).unwrap().is_none());
+
+        let mut req = proxy_config_tests::request(None);
+        req.tunnel_enabled = Some(false);
+        assert!(build_tunnel(&req).unwrap().is_none());
+    }
+
+    #[test]
+    fn maps_password_tunnel() {
+        let mut req = request();
+        req.tunnel_password = Some("jumppass".to_string());
+        let tunnel = build_tunnel(&req).unwrap().unwrap();
+        assert_eq!(tunnel.host, "bastion.example.com");
+        assert_eq!(tunnel.port, 2222);
+        assert_eq!(tunnel.username, "jumpuser");
+        match tunnel.auth_method {
+            AuthMethod::Password { password } => assert_eq!(password, "jumppass"),
+            _ => panic!("expected password auth"),
+        }
+    }
+
+    #[test]
+    fn maps_publickey_tunnel() {
+        let mut req = request();
+        req.tunnel_auth_method = Some("publickey".to_string());
+        req.tunnel_key_path = Some("~/.ssh/id_ed25519".to_string());
+        req.tunnel_passphrase = Some("secret".to_string());
+        let tunnel = build_tunnel(&req).unwrap().unwrap();
+        match tunnel.auth_method {
+            AuthMethod::PublicKey {
+                key_path,
+                passphrase,
+            } => {
+                assert_eq!(key_path, "~/.ssh/id_ed25519");
+                assert_eq!(passphrase.as_deref(), Some("secret"));
+            }
+            _ => panic!("expected publickey auth"),
+        }
+    }
+
+    #[test]
+    fn requires_tunnel_host_when_enabled() {
+        let mut req = proxy_config_tests::request(None);
+        req.tunnel_enabled = Some(true);
+        let err = build_tunnel(&req).unwrap_err();
+        assert!(err.contains("tunnel host is required"));
+    }
+
+    #[test]
+    fn defaults_tunnel_port_to_22() {
+        let mut req = request();
+        req.tunnel_port = None;
+        req.tunnel_password = Some("jumppass".to_string());
+        let tunnel = build_tunnel(&req).unwrap().unwrap();
+        assert_eq!(tunnel.port, 22);
     }
 }

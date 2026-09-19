@@ -13,12 +13,16 @@
  *   node scripts/bump-version.mjs <bump-type> [identifier] [options]
  *
  * bump-type:
- *   major | minor | patch   -> stable release bump      (e.g. 2.7.0 -> 2.8.0)
- *   prerelease [identifier] -> tagged prerelease bump   (e.g. 2.7.0 -> 2.8.0-beta.1,
- *                                                        or 2.8.0-beta.1 -> 2.8.0-beta.2)
- *   stable                  -> finalize a prerelease    (e.g. 2.8.0-beta.3 -> 2.8.0)
+ *   major | minor | patch   stable release bump      (e.g. 2.7.0 -> 2.8.0)
+ *   prerelease [identifier] tagged prerelease bump   (e.g. 2.7.0 -> 2.8.0-beta.1,
+ *                                                         or 2.8.0-beta.1 -> 2.8.0-beta.2)
+ *   stable                  finalize a prerelease    (e.g. 2.8.0-beta.3 -> 2.8.0)
  *
  * options:
+ *   --channel <stable|current>
+ *                           release channel: stable (default) or the evolution
+ *                           line (versions like 3.0.0-current.<N>; only
+ *                           major/minor/patch bumps allowed there)
  *   --dry-run     show what would change without writing anything
  *   --yes, -y     skip the interactive confirmation prompt (CI/automation)
  *   --force       bypass the preflight guardrails (dirty tree, version drift)
@@ -46,10 +50,13 @@ import { fileURLToPath } from 'url';
 import {
   STABLE_BUMP_TYPES,
   BUMP_TYPES,
+  CHANNELS,
+  DEFAULT_CHANNEL,
   PRERELEASE_IDENTIFIER_RE,
   parseVersion,
   baseVersion,
   computeNextVersion,
+  isCurrentLineVersion,
   sectionExists,
   collectFileVersions,
   findVersionDrift,
@@ -99,6 +106,22 @@ export function getWorkingTreeState() {
   return { clean: modifiedPaths.length === 0, hasGit: true, modifiedPaths, untrackedPaths };
 }
 
+/**
+ * Count existing evolution-line git tags for a base version
+ * (v3.0.0-current.*). Best effort: without git or tags the count is 0.
+ */
+function countCurrentTags(base) {
+  try {
+    const tags = execSync('git tag --list', { encoding: 'utf8' })
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    return tags.filter((tag) => tag.startsWith(`v${base}-current.`)).length;
+  } catch {
+    return 0;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -121,6 +144,10 @@ bump-type:
   stable                        finalize a prerelease (2.8.0-beta.3 -> 2.8.0)
 
 options:
+  --channel <stable|current>
+                    release channel: stable (default) or the evolution line
+                    (3.0.0-current.<N>); only major/minor/patch bumps are
+                    allowed on the current line
   --dry-run         show what would change without writing anything
   --yes, -y         skip the interactive confirmation prompt
   --force           bypass preflight guardrails (dirty tree, version drift)
@@ -133,6 +160,7 @@ examples:
   node scripts/bump-version.mjs minor --dry-run
   node scripts/bump-version.mjs prerelease rc --yes
   node scripts/bump-version.mjs stable --no-commit
+  node scripts/bump-version.mjs patch --channel current --yes
 `;
 
 function parseArgs(argv) {
@@ -140,12 +168,23 @@ function parseArgs(argv) {
     console.log(USAGE);
     process.exit(0);
   }
-  const positional = argv.filter((arg) => !arg.startsWith('--') && arg !== '-y');
+  // "--channel <value>" consumes the next token, so it must not be picked
+  // up as a positional bump type / identifier.
+  const positional = argv.filter(
+    (arg, index) =>
+      !arg.startsWith('--') && arg !== '-y' && argv[index - 1] !== '--channel'
+  );
   const bumpType = positional[0] || 'patch';
   const identifier = bumpType === 'prerelease' ? positional[1] : undefined;
+  const channelFlagIndex = argv.indexOf('--channel');
+  const channelValue =
+    channelFlagIndex !== -1 && argv[channelFlagIndex + 1]
+      ? argv[channelFlagIndex + 1]
+      : argv.find((a) => a.startsWith('--channel='))?.split('=')[1];
   return {
     bumpType,
     identifier: identifier && !identifier.startsWith('-') ? identifier : undefined,
+    channel: channelValue || DEFAULT_CHANNEL,
     noCommit: argv.includes('--no-commit'),
     skipChangelog: argv.includes('--skip-changelog'),
     dryRun: argv.includes('--dry-run'),
@@ -155,13 +194,25 @@ function parseArgs(argv) {
 }
 
 function main() {
-  const { bumpType, identifier, noCommit, skipChangelog, dryRun, yes, force } = parseArgs(
+  const { bumpType, identifier, channel, noCommit, skipChangelog, dryRun, yes, force } = parseArgs(
     process.argv.slice(2)
   );
 
   if (!BUMP_TYPES.includes(bumpType)) {
     log.error(
       `Error: Invalid bump type '${bumpType}'. Use: major, minor, patch, prerelease [identifier], or stable`
+    );
+    process.exit(1);
+  }
+
+  if (!CHANNELS.includes(channel)) {
+    log.error(`Error: Invalid channel '${channel}'. Use: stable or current`);
+    process.exit(1);
+  }
+
+  if (channel === 'current' && !STABLE_BUMP_TYPES.includes(bumpType)) {
+    log.error(
+      `Error: --channel current only supports major, minor, or patch bumps (got '${bumpType}')`
     );
     process.exit(1);
   }
@@ -212,12 +263,24 @@ function main() {
   }
 
   const currentVersion = versions['package.json'];
-  log.info(`Current version: ${currentVersion}`);
+  log.info(`Current version: ${currentVersion} (channel: ${channel})`);
 
   // --- Compute the next version ---
   let newVersion;
   try {
-    newVersion = computeNextVersion(currentVersion, bumpType, identifier);
+    // On the current channel the counter continues from the existing
+    // v<base>-current.* git tags (0 when none or git is unavailable).
+    const currentTags =
+      channel === 'current' ? countCurrentTags(baseVersion(parseVersion(currentVersion))) : 0;
+    if (channel === 'current' && isCurrentLineVersion(currentVersion)) {
+      log.warn(
+        `Already on the current line - keeping base ${baseVersion(parseVersion(currentVersion))} (${bumpType} ignored)`
+      );
+    }
+    newVersion = computeNextVersion(currentVersion, bumpType, identifier, {
+      channel,
+      currentTagCount: currentTags
+    });
   } catch (error) {
     log.error(`Error: ${error.message}`);
     process.exit(1);
@@ -227,9 +290,10 @@ function main() {
   // --- Plan the CHANGELOG action so --dry-run shows the full picture ---
   const changelog = fs.readFileSync(paths.changelog, 'utf8');
   const today = new Date().toISOString().split('T')[0];
+  const reuseLine = channel === 'current' || !STABLE_BUMP_TYPES.includes(bumpType);
   let changelogAction = 'skip (--skip-changelog)';
   if (!skipChangelog) {
-    if (!STABLE_BUMP_TYPES.includes(bumpType)) {
+    if (reuseLine) {
       const base = baseVersion(parseVersion(newVersion));
       const curBase = baseVersion(parseVersion(currentVersion));
       if (sectionExists(changelog, newVersion)) {
@@ -268,15 +332,15 @@ function main() {
         log.warn('Version bump cancelled');
         return;
       }
-      performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVersion, paths });
+      performBump({ bumpType, channel, noCommit, skipChangelog, currentVersion, newVersion, paths });
     });
     return;
   }
 
-  performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVersion, paths });
+  performBump({ bumpType, channel, noCommit, skipChangelog, currentVersion, newVersion, paths });
 }
 
-function performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVersion, paths }) {
+function performBump({ bumpType, channel, noCommit, skipChangelog, currentVersion, newVersion, paths }) {
   const rootDir = process.cwd();
 
   try {
@@ -334,7 +398,8 @@ function performBump({ bumpType, noCommit, skipChangelog, currentVersion, newVer
         newVersion,
         today,
         bumpType,
-        skipChangelog
+        skipChangelog,
+        { channel }
       );
       fs.writeFileSync(paths.changelog, updated);
       log.warn('! Please update CHANGELOG.md with actual changes before committing');

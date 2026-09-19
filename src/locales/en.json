@@ -51,6 +51,16 @@
     "connectionError": "Connection Error",
     "connectionErrorDesc": "An unexpected error occurred while connecting.",
     "waitingForConnection": "Waiting for connection...",
+    "connectFailedHint": "The last connection attempt failed",
+    "connectNow": "Connect",
+    "restoreLazyTitle": "Workspace Restored",
+    "restoreLazyDesc": "{{restoredCount}} connection(s) reconnected; {{lazyCount}} more will reconnect when you open them",
+    "restoreLazyOnlyDesc": "Your previous tabs are back — {{lazyCount}} will reconnect when you open them",
+    "restoreLazyFailedDesc": "No connection could be restored automatically; {{lazyCount}} tab(s) will retry when you open them",
+    "quitSessionsTitle_one": "{{count}} SSH session still connected",
+    "quitSessionsTitle_other": "{{count}} SSH sessions still connected",
+    "quitSessionsDescription": "Quitting will disconnect all active sessions.",
+    "quitSessionsConfirm": "Quit",
     "cannotDuplicate": "Cannot Duplicate Tab",
     "cannotDuplicateDesc": "Connection data not found. Please create a new connection.",
     "cannotReconnect": "Cannot Reconnect",
@@ -66,6 +76,14 @@
     "reconnectionFailedDesc": "Unable to reconnect. Please try again.",
     "reconnectionError": "Reconnection Error",
     "reconnectionErrorDesc": "An unexpected error occurred.",
+    "sessionDetached": "Session Detached",
+    "sessionDetachedDesc": "{{name}} keeps running in the background. Reattach it from the sidebar.",
+    "sessionReattached": "Session Reattached",
+    "sessionReattachedDesc": "Attached to the running session of {{name}}",
+    "detachedSessionExpired": "Session Ended",
+    "detachedSessionExpiredDesc": "The background session of {{name}} is no longer running.",
+    "detachedSessionClosed": "Background session closed",
+    "detachedSessionCloseFailed": "Failed to close background session",
     "openingInLogMonitor": "Opening {{filename}} in Log Monitor",
     "failedToOpenWindow": "Failed to open file window",
     "couldNotOpenWindow": "Could not open file window",
@@ -73,10 +91,18 @@
     "noEditorHandler": "Cannot open {{name}}: no editor handler available",
     "monitor": "Monitor",
     "logs": "Logs",
+    "quickCommands": "Commands",
     "systemMonitor": "System Monitor",
     "logMonitor": "Log Monitor",
     "quickConnected": "Quick Connected",
-    "quickConnectedDesc": "Connected to {{name}}"
+    "quickConnectedDesc": "Connected to {{name}}",
+    "connectionNotFound": "Connection Not Found",
+    "connectionNotFoundDesc1": "The connection data could not be loaded.",
+    "connectionNotFoundDesc2": "The connection could not be found. It may have been deleted.",
+    "alreadyConnected": "Already Connected",
+    "alreadyConnectedDesc": "Switched to existing {{name}} connection",
+    "terminal": "Terminal",
+    "fileBrowser": "File Browser"
   },
   "connectionDialog": {
     "title": {
@@ -88,7 +114,8 @@
       "connection": "Connection",
       "auth": "Auth",
       "proxy": "Proxy",
-      "advanced": "Advanced"
+      "advanced": "Advanced",
+      "tunnel": "Tunnel"
     },
     "section": {
       "basicSettings": "Basic Connection Settings",
@@ -100,7 +127,10 @@
       "advancedSsh": "Advanced SSH Options",
       "advancedSshDesc": "Fine-tune SSH connection behavior and performance.",
       "advancedOptions": "Advanced Options",
-      "noAdvancedOptions": "No advanced options are available for {{protocol}} connections."
+      "noAdvancedOptions": "No advanced options are available for {{protocol}} connections.",
+      "tunnelSettings": "SSH Tunnel (Jump Host)",
+      "tunnelSettingsDesc": "Route the connection through an intermediate SSH server (jump host / bastion).",
+      "noTunnelForProtocol": "SSH tunnel is not available for {{protocol}} connections."
     },
     "label": {
       "connectionName": "Connection Name",
@@ -120,7 +150,14 @@
       "maxCount": "Max Count",
       "domain": "Domain (optional)",
       "displayResolution": "Display Resolution",
-      "colorDepth": "Color Depth"
+      "colorDepth": "Color Depth",
+      "tunnelHost": "Tunnel Host",
+      "tunnelPort": "Tunnel Port",
+      "tunnelUsername": "Tunnel Username",
+      "tunnelAuthMethod": "Tunnel Auth Method",
+      "tunnelPassword": "Tunnel Password",
+      "tunnelKeyPath": "Tunnel Private Key",
+      "tunnelPassphrase": "Tunnel Passphrase (optional)"
     },
     "placeholder": {
       "connectionName": "My Server",
@@ -134,7 +171,14 @@
       "proxyPort": "Proxy Port",
       "proxyUsername": "Optional",
       "proxyPassword": "Optional",
-      "domain": "WORKGROUP"
+      "domain": "WORKGROUP",
+      "tunnelHost": "bastion.example.com",
+      "tunnelPort": "Tunnel Port",
+      "tunnelUsername": "jumpuser",
+      "tunnelPassword": "Enter tunnel password",
+      "tunnelKeyPath": "~/.ssh/id_ed25519",
+      "tunnelPassphrase": "Enter passphrase if key is encrypted",
+      "savedPassword": "Leave blank to keep saved password"
     },
     "authMethod": {
       "password": "Password",
@@ -209,7 +253,15 @@
       "connectionFailed": "Connection Failed",
       "connectionFailedDesc": "Unable to connect to the server. Please check your credentials and try again.",
       "connectionError": "Connection Error",
-      "connectionErrorDesc": "An unexpected error occurred while connecting."
+      "connectionErrorDesc": "An unexpected error occurred while connecting.",
+      "credentialSyncFailed": "Failed to encrypt and save the credentials"
+    },
+    "tunnel": {
+      "enable": "Enable SSH Tunnel",
+      "enableDesc": "Forward the connection through a jump host (bastion) to reach the target."
+    },
+    "hint": {
+      "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it."
     }
   },
   "settings": {
@@ -247,7 +299,9 @@
       "imageOpacity": "Image Opacity: {{opacity}}%",
       "imageBlur": "Image Blur: {{blur}}px",
       "imagePosition": "Image Position",
-      "imageSizeWarning": "Image must be less than 5MB"
+      "imageSizeWarning": "Image must be less than 5MB",
+      "images": "Images",
+      "imageLoadError": "Failed to load image"
     },
     "editor": {
       "title": "Code Editor",
@@ -265,7 +319,10 @@
       "foldGutter": "Code Folding",
       "foldGutterDesc": "Show fold/unfold arrows in the gutter",
       "bracketMatching": "Bracket Matching",
-      "bracketMatchingDesc": "Highlight matching brackets when the cursor is next to one"
+      "bracketMatchingDesc": "Highlight matching brackets when the cursor is next to one",
+      "tabSize2": "2 spaces",
+      "tabSize4": "4 spaces",
+      "tabSize8": "8 spaces"
     },
     "connection": {
       "title": "Connection Settings",
@@ -274,7 +331,9 @@
       "connectionTimeout": "Connection Timeout: {{timeout}}s",
       "keepAliveInterval": "Keep Alive Interval: {{interval}}s",
       "autoReconnect": "Auto Reconnect",
-      "autoReconnectDesc": "Automatically reconnect when connection is lost"
+      "autoReconnectDesc": "Automatically reconnect when connection is lost",
+      "restoreSessionsOnStartup": "Reconnect Sessions on Startup",
+      "restoreSessionsOnStartupDesc": "Automatically reopen and reconnect the tabs left open in the previous session when the app starts. When off, the app starts with an empty workspace and previous tabs are not reopened."
     },
     "security": {
       "title": "Security Settings",
@@ -295,7 +354,10 @@
       "systemMonitor": "System Monitor",
       "statusBar": "Status Bar",
       "enableNotifications": "Enable Notifications",
-      "enableNotificationsDesc": "Show system notifications for important events"
+      "enableNotificationsDesc": "Show system notifications for important events",
+      "autostart": "Launch at Login",
+      "autostartDesc": "Start r-shell automatically when you log in",
+      "autostartFailed": "Failed to update launch-at-login setting"
     },
     "keyboard": {
       "title": "Keyboard Shortcuts",
@@ -304,11 +366,13 @@
       "closeSession": "Close Session",
       "nextTab": "Next Tab",
       "previousTab": "Previous Tab",
-      "note": "Changes to keyboard shortcuts take effect after saving."
+      "note": "Changes to keyboard shortcuts take effect after saving.",
+      "registerFailed": "Failed to register shortcut {{shortcut}}"
     },
     "advanced": {
       "title": "Advanced Settings",
       "desc": "Configure advanced options and diagnostic settings.",
+      "version": "Version",
       "logLevel": "Log Level",
       "maxLogSize": "Max Log Size: {{size}}MB",
       "checkUpdates": "Check for Updates",
@@ -340,7 +404,8 @@
       "label": "Language",
       "auto": "Auto (System)",
       "en": "English",
-      "zhCN": "Chinese (Simplified)"
+      "zhCN": "Chinese (Simplified)",
+      "pl": "Polish"
     },
     "button": {
       "resetToDefaults": "Reset to Defaults",
@@ -368,12 +433,32 @@
       "warn": "Warning",
       "info": "Info",
       "debug": "Debug"
+    },
+    "tabScrollLeft": "Scroll left",
+    "tabScrollRight": "Scroll right",
+    "updates": {
+      "channel": {
+        "label": "Update Channel",
+        "stable": "Stable (recommended)",
+        "current": "Current (macOS 26+)",
+        "currentHint": "The current channel only moves forward: switching back to stable requires manually installing the stable version.",
+        "currentUnavailable": "The current channel requires macOS 26 or later on Apple Silicon."
+      },
+      "homebrewManaged": {
+        "title": "Managed by Homebrew",
+        "desc": "This copy was installed with Homebrew, so updates are handled by brew. In-app updates are disabled to avoid conflicting with it.",
+        "command": "brew upgrade --cask r-shell",
+        "copyCommand": "Copy update command",
+        "commandCopied": "Update command copied to clipboard"
+      }
     }
   },
   "welcome": {
     "quickTips": "Quick Tips",
     "getStarted": "Get Started",
     "getStartedDesc": "Create a new session or manage your saved connections",
+    "features": "Features",
+    "featuresDesc": "Everything R-Shell can do once you connect",
     "tip1": "Add a server in the <1>Connection Manager</1> (left sidebar), then double-click to connect",
     "tip2": "Split the terminal with <1>⌘\\</1> (right) or <3>⌘⇧\\</3> (down) for side-by-side sessions",
     "tip3": "The <1>System Monitor</1> and <3>Logs</3> panels appear automatically in the right sidebar once you connect",
@@ -382,6 +467,7 @@
     "newConnection": "New Connection",
     "newConnectionDesc": "Connect via SSH, SFTP, FTP, or FTPS",
     "connectionManager": "Connection Manager",
+    "connectionManagerHighlight": "Left sidebar",
     "connectionManagerDesc": "Browse & organize saved connections",
     "preferences": "Preferences",
     "preferencesDesc": "Terminal themes, fonts & layout",
@@ -412,6 +498,18 @@
       "transferQueueDesc": "Queued file transfers with progress, speed, ETA, cancel, and retry controls",
       "autoUpdate": "Auto-Update",
       "autoUpdateDesc": "Check for updates with download progress and one-click install-and-relaunch"
+    },
+    "recentConnections": "Recent Connections",
+    "connect": "Connect",
+    "connectTo": "Connect to {{name}}",
+    "timeAgo": {
+      "justNow": "just now",
+      "minutes_one": "{{count}} min ago",
+      "minutes_other": "{{count}} min ago",
+      "hours_one": "{{count}} hour ago",
+      "hours_other": "{{count}} hours ago",
+      "days_one": "{{count}} day ago",
+      "days_other": "{{count}} days ago"
     }
   },
   "menuBar": {
@@ -437,6 +535,8 @@
     "clearScreen": "Clear Screen",
     "options": "Options...",
     "checkForUpdates": "Check for Updates",
+    "updateAvailablePill": "Update to {{version}}",
+    "restartToUpdatePill": "Restart to Update",
     "newTab": "New Tab",
     "duplicateTab": "Duplicate Tab",
     "nextTab": "Next Tab",
@@ -445,6 +545,13 @@
     "disconnect": "Disconnect",
     "undo": "Undo",
     "redo": "Redo",
+    "about": "About R-Shell",
+    "help": "Help",
+    "services": "Services",
+    "hide": "Hide R-Shell",
+    "hideOthers": "Hide Others",
+    "showAll": "Show All",
+    "quit": "Quit R-Shell",
     "minimize": "Minimize",
     "zoom": "Zoom",
     "fullscreen": "Enter Full Screen",
@@ -460,6 +567,9 @@
     "toggleZenMode": "Toggle Zen Mode",
     "closeTab": "Close Tab",
     "window": "Window"
+  },
+  "aboutDialog": {
+    "version": "Version"
   },
   "toolbar": {
     "newConnection": "New Connection",
@@ -517,7 +627,12 @@
       "openInLogMonitor": "Open in Log Monitor",
       "openInOS": "Open in OS",
       "uploadFolder": "Upload Folder",
-      "syncDirectories": "Sync Directories"
+      "syncDirectories": "Sync Directories",
+      "open": "Open",
+      "edit": "Edit",
+      "openFolder": "Open Folder",
+      "pasteWithCount_one": "Paste {{count}} item",
+      "pasteWithCount_other": "Paste {{count}} items"
     },
     "toast": {
       "queuedUpload_one": "Queued {{count}} file for upload",
@@ -565,7 +680,12 @@
       "droppedPathsSkipped_other": "{{count}} dropped paths could not be uploaded",
       "queuedUploadToPath": "Queued {{count}} file(s) for upload to {{path}}",
       "enterFolderName": "Enter folder name:",
-      "enterFileName": "Enter file name:"
+      "enterFileName": "Enter file name:",
+      "fileInfo": "File: {{name}}\nSize: {{size}}\nModified: {{modified}}\nPermissions: {{permissions}}",
+      "deletedMultiple": "{{count}} items deleted successfully",
+      "deleteSomeFailed": "{{failed}} of {{total}} items failed to delete",
+      "downloadFoldersNotSupported": "Folders cannot be batch-downloaded; use Download directory instead",
+      "downloadedFilesSkippedFolders": "Downloaded {{count}} files, skipped {{folders}} folder(s)"
     },
     "toolbar": {
       "back": "Back",
@@ -584,8 +704,7 @@
       "syncDirectories": "Sync directories (Ctrl+Shift+S)"
     },
     "selected": "{{count}} selected",
-    "loading": "Loading\u2026",
-    "downloadSelected": "Download {{count}} Selected",
+    "loading": "Loading…",
     "deleteFolderTitle": "Delete Folder?",
     "deleteFileTitle": "Delete File?",
     "contextMenuRefresh": "Refresh",
@@ -617,7 +736,12 @@
       "cancelled": "Cancelled",
       "upload": "Upload",
       "download": "Download"
-    }
+    },
+    "dropOverlay": "Drop files or folders to upload",
+    "dropUploadTo": "Upload to {{path}}",
+    "multiSelectHint": "Tip: Cmd/Ctrl+Click to select multiple, Shift+Click for range",
+    "deleteMultipleTitle": "Delete {{count}} Items?",
+    "deleteMultipleConfirm": "Are you sure you want to delete these {{count}} items?"
   },
   "contextMenu": {
     "copy": "Copy",
@@ -636,13 +760,17 @@
     "splitDown": "Split Down",
     "moveTabToNewGroup": "Move Tab to New Group",
     "moveTabToGroup": "Move Tab to Group",
+    "moveTabLeft": "Move Tab Left",
+    "moveTabRight": "Move Tab Right",
     "search": "Search",
     "findNext": "Find Next",
     "findPrevious": "Find Previous",
     "clearTerminal": "Clear Terminal",
     "clearScrollback": "Clear Scrollback",
     "saveOutputToFile": "Save Output to File",
-    "closeTabsToLeft": "Close Tabs to Left"
+    "closeTabsToLeft": "Close Tabs to Left",
+    "closeAllTabs": "Close All Tabs",
+    "detach": "Detach Session"
   },
   "updateChecker": {
     "checkForUpdates": "Check for Updates",
@@ -658,7 +786,30 @@
     "downloadFailed": "Download Failed",
     "downloadFailedDesc": "Unable to download the update. Please try again later.",
     "checkFailed": "Check Failed",
-    "checkFailedDesc": "Unable to check for updates. Please try again later."
+    "checkFailedDesc": "Unable to check for updates. Please try again later.",
+    "errorNotConfigured": "Update server is not configured for this version.",
+    "errorNetwork": "Could not reach the update server. Check your internet connection.",
+    "errorVerification": "Update verification failed. Please try again later.",
+    "installFailed": "Install Failed",
+    "installFailedDesc": "Unable to install the update. Please try again later.",
+    "readyToInstall": "Update ready to install",
+    "readyToDownload": "Version {{version}} is ready to download.",
+    "newVersionAvailable": "A new version is available.",
+    "newVersionBody": "A new version is available with improvements and fixes.",
+    "restartToFinish": "The update has been downloaded. Restart now to finish installing.",
+    "later": "Later",
+    "restartNow": "Restart now",
+    "restarting": "Restarting…",
+    "downloadUpdate": "Download update",
+    "downloadingButton": "Downloading…",
+    "checkFailedFallback": "Failed to check for updates.",
+    "downloadFailedFallback": "Failed to download update.",
+    "installFailedFallback": "Failed to install update.",
+    "homebrewManaged": "Updates are managed by Homebrew",
+    "homebrewManagedDesc": "This copy was installed with Homebrew, so in-app updates are disabled.",
+    "homebrewCommandCopied": "Upgrade command copied — run it in your terminal.",
+    "autoToastTitle": "New version {{version}} available",
+    "autoToastDesc": "Click \"Download update\" to download and install it."
   },
   "syncDialog": {
     "title": "Directory Sync",
@@ -697,7 +848,48 @@
     "actionCreateDir": "Create Dir",
     "actionDelete": "Delete",
     "actionIdentical": "Identical",
-    "actionConflict": "Conflict"
+    "actionConflict": "Conflict",
+    "localDirectory": "Local Directory",
+    "remoteDirectory": "Remote Directory",
+    "directionLocalToRemote": "Local → Remote",
+    "directionRemoteToLocal": "Remote → Local",
+    "compareBy": "Compare by",
+    "criteriaSize": "Size only",
+    "criteriaDate": "Date only",
+    "criteriaSizeDate": "Size + Date",
+    "recursive": "Recursive (include subdirectories)",
+    "deleteOrphaned": "Delete orphaned remote files",
+    "exclude": "Exclude",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "showIdentical": "Show identical",
+    "columnPath": "Path",
+    "columnAction": "Action",
+    "columnLocal": "Local",
+    "columnRemote": "Remote",
+    "runComparisonHint": "Run comparison to see differences",
+    "allIdentical": "All files are identical",
+    "comparing": "Comparing directories…",
+    "syncItems": "Sync ({{count}} items)",
+    "toastFailed": "Failed: {{path}}",
+    "toastComplete": "Sync complete: {{count}} item(s) synchronized",
+    "toastFinishedWithErrors": "Sync finished with {{errorCount}} error(s) out of {{processedItems}} items",
+    "badgeUpload_one": "{{count}} upload",
+    "badgeUpload_other": "{{count}} uploads",
+    "badgeMkdir_one": "{{count}} mkdir",
+    "badgeMkdir_other": "{{count}} mkdirs",
+    "badgeDelete_one": "{{count}} delete",
+    "badgeDelete_other": "{{count}} deletes",
+    "badgeDownload_one": "{{count}} download",
+    "badgeDownload_other": "{{count}} downloads",
+    "badgeIdentical_one": "{{count}} identical",
+    "badgeIdentical_other": "{{count}} identical",
+    "badgeConflict_one": "{{count}} conflict",
+    "badgeConflict_other": "{{count}} conflicts",
+    "badgeTotal": "{{size}} total",
+    "compareButton": "Compare",
+    "syncingItem": "Syncing: {{item}}",
+    "recompareButton": "Re-compare"
   },
   "directoryTransfer": {
     "title": "Directory Transfer",
@@ -723,6 +915,7 @@
     "edit": "Edit Connection",
     "delete": "Delete Connection",
     "duplicate": "Duplicate Connection",
+    "copySuffix": " (Copy)",
     "confirmDelete": "Are you sure you want to delete \"{{name}}\"?",
     "folder": {
       "allConnections": "All Connections",
@@ -772,12 +965,15 @@
     "connectionDetails": "Connection Details",
     "noConnectionSelected": "No connection selected",
     "movedToRoot": "Moved \"{{name}}\" to All Connections",
-    "failedToReorder": "Failed to reorder items"
+    "failedToReorder": "Failed to reorder items",
+    "detachedSessions": "Detached Sessions",
+    "reattachSession": "Reattach Session",
+    "closeDetachedSession": "Close Session"
   },
   "filePanel": {
     "selectDirectory": "Select a directory to view its contents",
     "noFiles": "No files found",
-    "loading": "Loading...",
+    "loading": "Loading…",
     "dropFilesHint": "Drop files here to upload",
     "items": "{{count}} item(s)",
     "itemsSelected_one": "{{count}} item selected",
@@ -797,7 +993,6 @@
       "noMatches": "No matches",
       "emptyDirectory": "Empty directory"
     },
-    "loading": "Loading…",
     "column": {
       "name": "Name",
       "size": "Size",
@@ -963,7 +1158,14 @@
     "navigateTo": "Navigate to {{path}}"
   },
   "terminal": {
-    "search": "Search..."
+    "search": "Search...",
+    "unreadOutput": "Unread terminal output",
+    "groupAriaLabel": "Terminal group {{id}}",
+    "a11y": {
+      "tabMovedToPosition": "Moved to position {{position}} of {{total}}",
+      "tabMovedToGroup": "Moved to another group",
+      "dragCancelled": "Tab drag cancelled"
+    }
   },
   "terminalSearchBar": {
     "findInTerminal": "Find in terminal...",
@@ -979,8 +1181,24 @@
     "copiedToClipboard": "Copied to clipboard",
     "failedToCopyClipboard": "Failed to copy to clipboard",
     "reconnectingTerminal": "Reconnecting terminal…",
+    "connectionClosedManualReconnect": "Connection closed. Press R to reconnect, or use right-click → Reconnect.",
     "outputSaved": "Terminal output saved",
-    "failedToSaveOutput": "Failed to save output"
+    "failedToSaveOutput": "Failed to save output",
+    "renderer": "Renderer: {{renderer}}",
+    "startingShell": "🚀 Starting interactive shell (WebSocket + PTY mode)...",
+    "webSocketConnected": "✓ WebSocket connected",
+    "previousSessionLost": "⚠ Previous session lost. New shell session started.",
+    "ptyStarted": "✓ PTY connection started",
+    "interactiveHint": "You can now use interactive commands: vim, less, more, top, etc.",
+    "error": "[Error: {{message}}]",
+    "webSocketError": "[WebSocket error]",
+    "autoReconnectFailed": "[Connection lost. Auto-reconnect failed after {{attempts}} attempts. Press R to reconnect, or use right-click → Reconnect.]",
+    "reconnectingAfterDrop": "[Connection lost. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]",
+    "reconnectFailedPermanently": "[Connection failed permanently. Press R to reconnect, or use right-click → Reconnect to retry.]",
+    "reconnectingAfterClose": "[Connection closed. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]",
+    "sshSessionLost": "[SSH session lost. Reconnecting with full authentication...]",
+    "sessionRestored": "[Session restored — reconnected to the same shell]",
+    "sshSessionDeadPermanent": "[SSH session lost and automatic recovery limit reached. Use right-click → Reconnect to retry.]"
   },
   "systemMonitor": {
     "systemOverview": "System Overview",
@@ -1107,7 +1325,10 @@
     "downloadAndOpen": "Download & Open with Local App",
     "downloading": "Downloading…",
     "openedWithOs": "{{fileName}} opened with local application",
-    "failedToOpenWithOs": "Failed to open file with local application"
+    "failedToOpenWithOs": "Failed to open file with local application",
+    "unsavedTitle": "Unsaved changes",
+    "unsavedDescription": "Save your changes to \"{{fileName}}\" before closing?",
+    "discardAndClose": "Don't Save"
   },
   "desktopViewer": {
     "clipboardAccessDenied": "Clipboard access denied",
@@ -1117,5 +1338,89 @@
     "desktopDisconnected": "Desktop Disconnected",
     "reconnect": "Reconnect",
     "connectingTo": "Connecting to {{name}}..."
+  },
+  "errorBoundary": {
+    "somethingWentWrong": "Something went wrong",
+    "unexpectedError": "An unexpected error occurred",
+    "retry": "Retry",
+    "labelError": "{{label}} encountered an error"
+  },
+  "connectionTabs": {
+    "reconnect": "Reconnect",
+    "duplicateTab": "Duplicate Tab",
+    "closeTab": "Close Tab",
+    "closeOtherTabs": "Close Other Tabs",
+    "closeTabsToLeft": "Close Tabs to the Left",
+    "closeTabsToRight": "Close Tabs to the Right",
+    "closeAllTabs": "Close All Tabs"
+  },
+  "networkMonitor": {
+    "title": "Network Statistics",
+    "noConnection": "No active connection. Connect to view network statistics.",
+    "comingSoon": "Advanced network monitoring features coming soon",
+    "disabledNotice": "Network Interfaces and Active Connections monitoring is currently disabled. Check the Network Usage and Network Latency charts in the Monitor tab for current network metrics."
+  },
+  "quickCommands": {
+    "title": "Quick Commands",
+    "searchPlaceholder": "Search snippets…",
+    "newSnippet": "New snippet",
+    "noActiveTerminal": "No active terminal — connect to a host to run snippets",
+    "emptyTitle": "No snippets yet",
+    "emptyDescription": "Save frequently used commands and run them in the active terminal with one click.",
+    "emptyCreate": "Create snippet",
+    "emptySearch": "No snippets match your search",
+    "snippetCount_one": "{{count}} snippet",
+    "snippetCount_other": "{{count}} snippets",
+    "sort": {
+      "ariaLabel": "Sort snippets",
+      "mostUsed": "Most used",
+      "recentlyUsed": "Recently used",
+      "name": "Name"
+    },
+    "actions": {
+      "run": "Run in active terminal",
+      "insert": "Insert without running",
+      "copy": "Copy to clipboard",
+      "edit": "Edit",
+      "delete": "Delete"
+    },
+    "deleteConfirm": {
+      "title": "Delete snippet",
+      "description": "Delete \"{{name}}\"? This cannot be undone."
+    },
+    "dialog": {
+      "newTitle": "New snippet",
+      "editTitle": "Edit snippet",
+      "name": "Name",
+      "namePlaceholder": "e.g. Restart nginx",
+      "nameRequired": "Name is required",
+      "command": "Command",
+      "commandPlaceholder": "e.g. sudo systemctl restart nginx",
+      "commandRequired": "Command is required",
+      "commandHint": "Sent to the terminal as a paste; line breaks are preserved.",
+      "description": "Description",
+      "descriptionPlaceholder": "Optional note",
+      "tags": "Tags",
+      "tagsPlaceholder": "Comma-separated, e.g. docker, logs",
+      "saveFailed": "Could not save the snippet"
+    },
+    "toast": {
+      "noActiveTerminal": "No active terminal",
+      "copied": "Copied to clipboard",
+      "copyFailed": "Failed to copy to clipboard",
+      "created": "Snippet created",
+      "updated": "Snippet updated",
+      "deleted": "Snippet deleted"
+    }
+  },
+  "hostKey": {
+    "changedTitle": "Host key changed",
+    "changedDesc": "The SSH server {{host}}:{{port}} presented a host key that differs from the one saved in known_hosts.",
+    "fingerprint": "New fingerprint",
+    "recordedAt": "Saved key",
+    "recordedAtValue": "line {{line}} of {{file}}",
+    "warning": "This can mean a man-in-the-middle attack. Continue only if you know the server was reinstalled or its key was rotated.",
+    "trustHint": "Trusting replaces the saved key for this host and connects again.",
+    "trust": "Trust new key and connect"
   }
 }

@@ -12,6 +12,7 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { useTranslation } from 'react-i18next';
 import { invoke } from "@tauri-apps/api/core";
+import { submit, getTransferById, type SubmittedTransfer } from "@/lib/transfer-queue-service";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -96,6 +97,9 @@ export function DirectoryTransferDialog({
   });
   const cancelRef = useRef(false);
   const startedRef = useRef(false);
+  // The in-flight transfer submitted to the global queue service, so the
+  // Cancel button can stop it for real (backend cancel_transfer).
+  const activeTransferRef = useRef<SubmittedTransfer | null>(null);
 
   // Auto-start transfer when dialog opens
   useEffect(() => {
@@ -265,36 +269,64 @@ export function DirectoryTransferDialog({
         }));
 
         try {
-          if (direction === "upload") {
-            const fileDestPath =
-              destPath === "/"
-                ? `/${file.relative_path}`
-                : `${destPath}/${file.relative_path}`;
-            const result = await invoke<{
-              success: boolean;
-              error?: string;
-            }>("upload_remote_file", {
-              connectionId,
-              localPath: fileSrcPath,
-              remotePath: fileDestPath,
-            });
-            if (!result.success) {
-              throw new Error(result.error ?? "Upload failed");
-            }
-          } else {
-            const result = await invoke<{
-              success: boolean;
-              error?: string;
-            }>("download_remote_file_confined", {
-              connectionId,
-              remoteRoot: sourcePath,
-              destinationRoot: destPath,
-              remoteRelativePath: file.relative_path,
-              destinationRelativePath: destinationRelativePath(file.relative_path),
-            });
-            if (!result.success) {
-              throw new Error(result.error ?? "Download failed");
-            }
+          // Per-file transfers run through the global queue service (real
+          // cancellation, serialized with every other transfer in the app);
+          // this loop only sequences and aggregates.
+          const transfer = submit(
+            direction === "upload"
+              ? {
+                  connectionId,
+                  fileName: file.name,
+                  direction: "upload",
+                  sourcePath: fileSrcPath,
+                  destinationPath:
+                    destPath === "/"
+                      ? `/${file.relative_path}`
+                      : `${destPath}/${file.relative_path}`,
+                  totalBytes: file.size,
+                }
+              : {
+                  connectionId,
+                  fileName: file.name,
+                  direction: "download",
+                  sourcePath: fileSrcPath,
+                  destinationPath: `${destPath}/${file.relative_path}`,
+                  totalBytes: file.size,
+                  confined: {
+                    remoteRoot: sourcePath,
+                    destinationRoot: destPath,
+                    remoteRelativePath: file.relative_path,
+                    destinationRelativePath: destinationRelativePath(file.relative_path),
+                  },
+                },
+            {
+              // Live byte progress for the file in flight, on top of the
+              // already-completed files' bytes.
+              onRawProgress: (event) => {
+                const baseBytes = bytesTransferred;
+                setProgress((p) => ({
+                  ...p,
+                  bytesTransferred: baseBytes + event.transferred,
+                }));
+              },
+            },
+          );
+          activeTransferRef.current = transfer;
+          let outcome: "completed" | "failed" | "cancelled";
+          try {
+            outcome = await transfer.done;
+          } finally {
+            activeTransferRef.current = null;
+          }
+
+          if (outcome === "cancelled") {
+            // Cancelled from this dialog or the queue strip — stop the batch.
+            setProgress((p) => ({ ...p, phase: "cancelled" }));
+            return;
+          }
+          if (outcome === "failed") {
+            const detail = getTransferById(transfer.id)?.error;
+            throw new Error(detail ?? "Transfer failed");
           }
           bytesTransferred += file.size;
         } catch (err) {
@@ -489,7 +521,7 @@ export function DirectoryTransferDialog({
 
         {/* Error log */}
         {progress.errors.length > 0 && (
-          <ScrollArea className="max-h-24 border rounded text-[10px] font-mono p-2">
+          <ScrollArea className="max-h-24 border border-border rounded text-[10px] font-mono p-2">
             {progress.errors.map((err, i) => (
               <div key={i} className="text-destructive">
                 {err}
@@ -506,6 +538,9 @@ export function DirectoryTransferDialog({
               size="sm"
               onClick={() => {
                 cancelRef.current = true;
+                // Stop the in-flight transfer for real; the loop stops at
+                // the next iteration via cancelRef.
+                activeTransferRef.current?.cancel();
               }}
             >
               <X className="h-4 w-4 mr-1" />

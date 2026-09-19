@@ -51,6 +51,16 @@
     "connectionError": "连接错误",
     "connectionErrorDesc": "连接时发生意外错误。",
     "waitingForConnection": "等待连接...",
+    "connectFailedHint": "上次连接尝试失败",
+    "connectNow": "连接",
+    "restoreLazyTitle": "工作区已恢复",
+    "restoreLazyDesc": "已重连 {{restoredCount}} 个连接；其余 {{lazyCount}} 个将在打开时自动重连",
+    "restoreLazyOnlyDesc": "已恢复上次打开的标签页 —— {{lazyCount}} 个将在打开时自动重连",
+    "restoreLazyFailedDesc": "没有连接能自动恢复；{{lazyCount}} 个标签页将在打开时重试",
+    "quitSessionsTitle_one": "仍有 {{count}} 个 SSH 会话已连接",
+    "quitSessionsTitle_other": "仍有 {{count}} 个 SSH 会话已连接",
+    "quitSessionsDescription": "退出将断开所有已连接的会话。",
+    "quitSessionsConfirm": "退出",
     "cannotDuplicate": "无法复制标签页",
     "cannotDuplicateDesc": "未找到连接数据，请创建新连接。",
     "cannotReconnect": "无法重新连接",
@@ -66,6 +76,14 @@
     "reconnectionFailedDesc": "无法重新连接，请重试。",
     "reconnectionError": "重新连接错误",
     "reconnectionErrorDesc": "发生意外错误。",
+    "sessionDetached": "会话已分离",
+    "sessionDetachedDesc": "{{name}} 正在后台继续运行。可从侧边栏重新挂载。",
+    "sessionReattached": "会话已挂载",
+    "sessionReattachedDesc": "已附加到 {{name}} 正在运行的会话",
+    "detachedSessionExpired": "会话已结束",
+    "detachedSessionExpiredDesc": "{{name}} 的后台会话已不再运行。",
+    "detachedSessionClosed": "后台会话已关闭",
+    "detachedSessionCloseFailed": "关闭后台会话失败",
     "openingInLogMonitor": "正在日志监视器中打开 {{filename}}",
     "failedToOpenWindow": "无法打开文件窗口",
     "couldNotOpenWindow": "无法打开文件窗口",
@@ -73,10 +91,18 @@
     "noEditorHandler": "无法打开 {{name}}：没有可用的编辑器",
     "monitor": "监视器",
     "logs": "日志",
+    "quickCommands": "命令",
     "systemMonitor": "系统监视器",
     "logMonitor": "日志监视器",
     "quickConnected": "快速连接成功",
-    "quickConnectedDesc": "已连接到 {{name}}"
+    "quickConnectedDesc": "已连接到 {{name}}",
+    "connectionNotFound": "未找到连接",
+    "connectionNotFoundDesc1": "无法加载连接数据。",
+    "connectionNotFoundDesc2": "找不到该连接，它可能已被删除。",
+    "alreadyConnected": "已连接",
+    "alreadyConnectedDesc": "已切换到现有的 {{name}} 连接",
+    "terminal": "终端",
+    "fileBrowser": "文件浏览器"
   },
   "connectionDialog": {
     "title": {
@@ -88,7 +114,8 @@
       "connection": "连接",
       "auth": "认证",
       "proxy": "代理",
-      "advanced": "高级"
+      "advanced": "高级",
+      "tunnel": "SSH 隧道"
     },
     "section": {
       "basicSettings": "基本连接设置",
@@ -100,7 +127,10 @@
       "advancedSsh": "高级 SSH 选项",
       "advancedSshDesc": "微调 SSH 连接行为和性能。",
       "advancedOptions": "高级选项",
-      "noAdvancedOptions": "{{protocol}} 连接无可用高级选项。"
+      "noAdvancedOptions": "{{protocol}} 连接无可用高级选项。",
+      "tunnelSettings": "SSH 隧道（跳板机）",
+      "tunnelSettingsDesc": "通过中间 SSH 服务器（跳板机 / Bastion）转发连接。",
+      "noTunnelForProtocol": "{{protocol}} 连接不支持 SSH 隧道。"
     },
     "label": {
       "connectionName": "连接名称",
@@ -120,7 +150,14 @@
       "maxCount": "最大次数",
       "domain": "域（可选）",
       "displayResolution": "显示分辨率",
-      "colorDepth": "色彩深度"
+      "colorDepth": "色彩深度",
+      "tunnelHost": "隧道主机",
+      "tunnelPort": "隧道端口",
+      "tunnelUsername": "隧道用户名",
+      "tunnelAuthMethod": "隧道认证方式",
+      "tunnelPassword": "隧道密码",
+      "tunnelKeyPath": "隧道私钥路径",
+      "tunnelPassphrase": "隧道密钥密码（可选）"
     },
     "placeholder": {
       "connectionName": "我的服务器",
@@ -134,7 +171,14 @@
       "proxyPort": "代理端口",
       "proxyUsername": "可选",
       "proxyPassword": "可选",
-      "domain": "WORKGROUP"
+      "domain": "WORKGROUP",
+      "tunnelHost": "bastion.example.com",
+      "tunnelPort": "隧道端口",
+      "tunnelUsername": "jumpuser",
+      "tunnelPassword": "输入隧道密码",
+      "tunnelKeyPath": "~/.ssh/id_ed25519",
+      "tunnelPassphrase": "密钥加密时输入密码",
+      "savedPassword": "留空保持已保存的密码"
     },
     "authMethod": {
       "password": "密码",
@@ -209,7 +253,15 @@
       "connectionFailed": "连接失败",
       "connectionFailedDesc": "无法连接到服务器，请检查您的凭据并重试。",
       "connectionError": "连接错误",
-      "connectionErrorDesc": "连接时发生意外错误。"
+      "connectionErrorDesc": "连接时发生意外错误。",
+      "credentialSyncFailed": "加密并保存凭据失败"
+    },
+    "tunnel": {
+      "enable": "启用 SSH 隧道",
+      "enableDesc": "通过跳板机（Bastion / Jump Host）转发到目标主机。"
+    },
+    "hint": {
+      "savedPasswordKept": "此连接已保存密码。留空保持不变，输入新密码即可替换。"
     }
   },
   "settings": {
@@ -247,7 +299,9 @@
       "imageOpacity": "图片不透明度：{{opacity}}%",
       "imageBlur": "图片模糊度：{{blur}}px",
       "imagePosition": "图片位置",
-      "imageSizeWarning": "图片必须小于 5MB"
+      "imageSizeWarning": "图片必须小于 5MB",
+      "images": "图片",
+      "imageLoadError": "图片加载失败"
     },
     "editor": {
       "title": "代码编辑器",
@@ -265,7 +319,10 @@
       "foldGutter": "代码折叠",
       "foldGutterDesc": "在侧边栏显示折叠/展开箭头",
       "bracketMatching": "括号匹配",
-      "bracketMatchingDesc": "当光标位于括号旁边时高亮匹配的括号"
+      "bracketMatchingDesc": "当光标位于括号旁边时高亮匹配的括号",
+      "tabSize2": "2 个空格",
+      "tabSize4": "4 个空格",
+      "tabSize8": "8 个空格"
     },
     "connection": {
       "title": "连接设置",
@@ -274,7 +331,9 @@
       "connectionTimeout": "连接超时：{{timeout}}秒",
       "keepAliveInterval": "保持连接间隔：{{interval}}秒",
       "autoReconnect": "自动重新连接",
-      "autoReconnectDesc": "连接断开时自动重新连接"
+      "autoReconnectDesc": "连接断开时自动重新连接",
+      "restoreSessionsOnStartup": "启动时重新连接会话",
+      "restoreSessionsOnStartupDesc": "应用启动时自动重新打开并连接上次会话中的标签页。关闭后，应用将以空工作区启动，不会重新打开上次的标签页。"
     },
     "security": {
       "title": "安全设置",
@@ -295,7 +354,10 @@
       "systemMonitor": "系统监视器",
       "statusBar": "状态栏",
       "enableNotifications": "启用通知",
-      "enableNotificationsDesc": "显示重要事件的系统通知"
+      "enableNotificationsDesc": "显示重要事件的系统通知",
+      "autostart": "登录时自动启动",
+      "autostartDesc": "登录系统时自动启动 r-shell",
+      "autostartFailed": "无法更新自动启动设置"
     },
     "keyboard": {
       "title": "键盘快捷键",
@@ -304,11 +366,13 @@
       "closeSession": "关闭会话",
       "nextTab": "下一个标签页",
       "previousTab": "上一个标签页",
-      "note": "键盘快捷键更改将在保存后生效。"
+      "note": "键盘快捷键更改将在保存后生效。",
+      "registerFailed": "快捷键 {{shortcut}} 注册失败"
     },
     "advanced": {
       "title": "高级设置",
       "desc": "配置高级选项和诊断设置。",
+      "version": "版本",
       "logLevel": "日志级别",
       "maxLogSize": "最大日志大小：{{size}}MB",
       "checkUpdates": "检查更新",
@@ -340,7 +404,8 @@
       "label": "语言",
       "auto": "自动（跟随系统）",
       "en": "英语",
-      "zhCN": "简体中文"
+      "zhCN": "简体中文",
+      "pl": "波兰语"
     },
     "button": {
       "resetToDefaults": "重置为默认值",
@@ -368,12 +433,32 @@
       "warn": "警告",
       "info": "信息",
       "debug": "调试"
+    },
+    "tabScrollLeft": "向左滚动",
+    "tabScrollRight": "向右滚动",
+    "updates": {
+      "channel": {
+        "label": "更新通道",
+        "stable": "稳定版（推荐）",
+        "current": "最新版（macOS 26+）",
+        "currentHint": "最新版通道只升不降：切回稳定版需手动下载稳定版安装包覆盖安装。",
+        "currentUnavailable": "最新版通道仅支持 macOS 26 及以上的 Apple Silicon 设备。"
+      },
+      "homebrewManaged": {
+        "title": "由 Homebrew 管理",
+        "desc": "此副本通过 Homebrew 安装，更新由 brew 负责。为避免冲突，应用内更新已停用。",
+        "command": "brew upgrade --cask r-shell",
+        "copyCommand": "复制更新命令",
+        "commandCopied": "更新命令已复制到剪贴板"
+      }
     }
   },
   "welcome": {
     "quickTips": "快速提示",
     "getStarted": "开始使用",
     "getStartedDesc": "创建新会话或管理已保存的连接",
+    "features": "功能一览",
+    "featuresDesc": "连接后 R-Shell 能为你做的一切",
     "tip1": "在左侧边栏的<1>连接管理器</1>中添加服务器，然后双击连接",
     "tip2": "使用<1>⌘\\</1>（向右）或<3>⌘⇧\\</3>（向下）分割终端以并排显示会话",
     "tip3": "连接后，<1>系统监视器</1>和<3>日志</3>面板将自动显示在右侧边栏中",
@@ -382,6 +467,7 @@
     "newConnection": "新建连接",
     "newConnectionDesc": "通过 SSH、SFTP、FTP 或 FTPS 连接",
     "connectionManager": "连接管理器",
+    "connectionManagerHighlight": "左侧栏",
     "connectionManagerDesc": "浏览和管理已保存的连接",
     "preferences": "偏好设置",
     "preferencesDesc": "终端主题、字体和布局",
@@ -412,6 +498,18 @@
       "transferQueueDesc": "队列文件传输，支持进度、速度、预计完成时间、取消和重试控制",
       "autoUpdate": "自动更新",
       "autoUpdateDesc": "检查更新，支持下载进度和点击安装并重新启动"
+    },
+    "recentConnections": "最近连接",
+    "connect": "连接",
+    "connectTo": "连接到 {{name}}",
+    "timeAgo": {
+      "justNow": "刚刚",
+      "minutes_one": "{{count}} 分钟前",
+      "minutes_other": "{{count}} 分钟前",
+      "hours_one": "{{count}} 小时前",
+      "hours_other": "{{count}} 小时前",
+      "days_one": "{{count}} 天前",
+      "days_other": "{{count}} 天前"
     }
   },
   "menuBar": {
@@ -437,6 +535,8 @@
     "clearScreen": "清屏",
     "options": "选项...",
     "checkForUpdates": "检查更新",
+    "updateAvailablePill": "更新到 {{version}}",
+    "restartToUpdatePill": "重启以更新",
     "newTab": "新建标签页",
     "duplicateTab": "复制标签页",
     "nextTab": "下一个标签页",
@@ -445,6 +545,13 @@
     "disconnect": "断开连接",
     "undo": "撤销",
     "redo": "重做",
+    "about": "关于 R-Shell",
+    "help": "帮助",
+    "services": "服务",
+    "hide": "隐藏 R-Shell",
+    "hideOthers": "隐藏其他",
+    "showAll": "全部显示",
+    "quit": "退出 R-Shell",
     "minimize": "最小化",
     "zoom": "缩放",
     "fullscreen": "进入全屏",
@@ -460,6 +567,9 @@
     "toggleZenMode": "切换禅定模式",
     "closeTab": "关闭标签页",
     "window": "窗口"
+  },
+  "aboutDialog": {
+    "version": "版本"
   },
   "toolbar": {
     "newConnection": "新建连接",
@@ -517,7 +627,12 @@
       "openInLogMonitor": "在日志监视器中打开",
       "openInOS": "在系统中打开",
       "uploadFolder": "上传文件夹",
-      "syncDirectories": "同步目录"
+      "syncDirectories": "同步目录",
+      "open": "打开",
+      "edit": "编辑",
+      "openFolder": "打开文件夹",
+      "pasteWithCount_one": "粘贴 {{count}} 个项目",
+      "pasteWithCount_other": "粘贴 {{count}} 个项目"
     },
     "toast": {
       "queuedUpload_one": "已排队 {{count}} 个文件等待上传",
@@ -565,7 +680,12 @@
       "droppedPathsSkipped_other": "{{count}} 个拖放路径无法上传",
       "queuedUploadToPath": "已排队 {{count}} 个文件等待上传到 {{path}}",
       "enterFolderName": "请输入文件夹名称：",
-      "enterFileName": "请输入文件名称："
+      "enterFileName": "请输入文件名称：",
+      "fileInfo": "文件：{{name}}\n大小：{{size}}\n修改时间：{{modified}}\n权限：{{permissions}}",
+      "deletedMultiple": "已成功删除 {{count}} 个项目",
+      "deleteSomeFailed": "{{total}} 个项目中有 {{failed}} 个删除失败",
+      "downloadFoldersNotSupported": "文件夹不支持批量下载，请使用「下载文件夹」",
+      "downloadedFilesSkippedFolders": "已下载 {{count}} 个文件，跳过 {{folders}} 个文件夹"
     },
     "toolbar": {
       "back": "后退",
@@ -584,8 +704,7 @@
       "syncDirectories": "同步目录（Ctrl+Shift+S）"
     },
     "selected": "已选择 {{count}} 项",
-    "loading": "加载中\u2026",
-    "downloadSelected": "下载选中的 {{count}} 项",
+    "loading": "加载中…",
     "deleteFolderTitle": "删除文件夹？",
     "deleteFileTitle": "删除文件？",
     "contextMenuRefresh": "刷新",
@@ -617,7 +736,12 @@
       "cancelled": "已取消",
       "upload": "上传",
       "download": "下载"
-    }
+    },
+    "dropOverlay": "拖放文件或文件夹以上传",
+    "dropUploadTo": "上传到 {{path}}",
+    "multiSelectHint": "提示：Cmd/Ctrl+点击 多选，Shift+点击 范围选择",
+    "deleteMultipleTitle": "删除 {{count}} 个项目？",
+    "deleteMultipleConfirm": "确定要删除这 {{count}} 个项目吗？"
   },
   "contextMenu": {
     "copy": "复制",
@@ -636,13 +760,17 @@
     "splitDown": "向下分屏",
     "moveTabToNewGroup": "移动到新分组",
     "moveTabToGroup": "移动到分组",
+    "moveTabLeft": "左移标签页",
+    "moveTabRight": "右移标签页",
     "search": "搜索",
     "findNext": "查找下一个",
     "findPrevious": "查找上一个",
     "clearTerminal": "清除终端",
     "clearScrollback": "清除回滚",
     "saveOutputToFile": "保存输出到文件",
-    "closeTabsToLeft": "关闭左侧标签页"
+    "closeTabsToLeft": "关闭左侧标签页",
+    "closeAllTabs": "关闭全部标签页",
+    "detach": "分离会话"
   },
   "updateChecker": {
     "checkForUpdates": "检查更新",
@@ -658,7 +786,30 @@
     "downloadFailed": "下载失败",
     "downloadFailedDesc": "无法下载更新，请稍后重试。",
     "checkFailed": "检查失败",
-    "checkFailedDesc": "无法检查更新，请稍后重试。"
+    "checkFailedDesc": "无法检查更新，请稍后重试。",
+    "errorNotConfigured": "更新服务器未针对此版本进行配置。",
+    "errorNetwork": "无法连接到更新服务器，请检查您的网络连接。",
+    "errorVerification": "更新验证失败，请稍后重试。",
+    "installFailed": "安装失败",
+    "installFailedDesc": "无法安装更新，请稍后重试。",
+    "readyToInstall": "更新已就绪，可安装",
+    "readyToDownload": "版本 {{version}} 已准备好下载。",
+    "newVersionAvailable": "有新版本可用。",
+    "newVersionBody": "有新版本可用，包含改进与修复。",
+    "restartToFinish": "更新已下载，立即重启以完成安装。",
+    "later": "稍后",
+    "restartNow": "立即重启",
+    "restarting": "正在重启…",
+    "downloadUpdate": "下载更新",
+    "downloadingButton": "正在下载…",
+    "checkFailedFallback": "检查更新失败。",
+    "downloadFailedFallback": "更新下载失败。",
+    "installFailedFallback": "更新安装失败。",
+    "homebrewManaged": "更新由 Homebrew 管理",
+    "homebrewManagedDesc": "此副本通过 Homebrew 安装，应用内更新已停用。",
+    "homebrewCommandCopied": "升级命令已复制，请在终端中运行。",
+    "autoToastTitle": "发现新版本 {{version}}",
+    "autoToastDesc": "点击「下载更新」即可下载并安装。"
   },
   "syncDialog": {
     "title": "目录同步",
@@ -697,7 +848,48 @@
     "actionCreateDir": "创建目录",
     "actionDelete": "删除",
     "actionIdentical": "相同",
-    "actionConflict": "冲突"
+    "actionConflict": "冲突",
+    "localDirectory": "本地目录",
+    "remoteDirectory": "远程目录",
+    "directionLocalToRemote": "本地 → 远程",
+    "directionRemoteToLocal": "远程 → 本地",
+    "compareBy": "比较方式",
+    "criteriaSize": "仅比较大小",
+    "criteriaDate": "仅比较日期",
+    "criteriaSizeDate": "大小 + 日期",
+    "recursive": "递归（包含子目录）",
+    "deleteOrphaned": "删除远程孤立文件",
+    "exclude": "排除",
+    "selectAll": "全选",
+    "deselectAll": "取消全选",
+    "showIdentical": "显示相同项",
+    "columnPath": "路径",
+    "columnAction": "操作",
+    "columnLocal": "本地",
+    "columnRemote": "远程",
+    "runComparisonHint": "运行比较以查看差异",
+    "allIdentical": "所有文件均相同",
+    "comparing": "正在比较目录…",
+    "syncItems": "同步（{{count}} 个项目）",
+    "toastFailed": "失败：{{path}}",
+    "toastComplete": "同步完成：已同步 {{count}} 个项目",
+    "toastFinishedWithErrors": "同步完成，共 {{processedItems}} 个项目中有 {{errorCount}} 个错误",
+    "badgeUpload_one": "{{count}} 个上传",
+    "badgeUpload_other": "{{count}} 个上传",
+    "badgeMkdir_one": "{{count}} 个新建目录",
+    "badgeMkdir_other": "{{count}} 个新建目录",
+    "badgeDelete_one": "{{count}} 个删除",
+    "badgeDelete_other": "{{count}} 个删除",
+    "badgeDownload_one": "{{count}} 个下载",
+    "badgeDownload_other": "{{count}} 个下载",
+    "badgeIdentical_one": "{{count}} 个相同",
+    "badgeIdentical_other": "{{count}} 个相同",
+    "badgeConflict_one": "{{count}} 个冲突",
+    "badgeConflict_other": "{{count}} 个冲突",
+    "badgeTotal": "共 {{size}}",
+    "compareButton": "比较",
+    "syncingItem": "正在同步：{{item}}",
+    "recompareButton": "重新比较"
   },
   "directoryTransfer": {
     "title": "目录传输",
@@ -723,6 +915,7 @@
     "edit": "编辑连接",
     "delete": "删除连接",
     "duplicate": "复制连接",
+    "copySuffix": "（副本）",
     "confirmDelete": "确定要删除 \"{{name}}\" 吗？",
     "folder": {
       "allConnections": "所有连接",
@@ -772,12 +965,15 @@
     "connectionDetails": "连接详情",
     "noConnectionSelected": "未选择连接",
     "movedToRoot": "已将\"{{name}}\"移动到所有连接",
-    "failedToReorder": "重新排序失败"
+    "failedToReorder": "重新排序失败",
+    "detachedSessions": "分离的会话",
+    "reattachSession": "重新挂载会话",
+    "closeDetachedSession": "关闭会话"
   },
   "filePanel": {
     "selectDirectory": "选择目录以查看其内容",
     "noFiles": "未找到文件",
-    "loading": "加载中...",
+    "loading": "加载中…",
     "dropFilesHint": "将文件拖放到此处以上传",
     "items": "{{count}} 项",
     "itemsSelected_one": "已选择 {{count}} 项",
@@ -797,7 +993,6 @@
       "noMatches": "无匹配",
       "emptyDirectory": "空目录"
     },
-    "loading": "加载中…",
     "column": {
       "name": "名称",
       "size": "大小",
@@ -963,7 +1158,14 @@
     "navigateTo": "导航到 {{path}}"
   },
   "terminal": {
-    "search": "搜索..."
+    "search": "搜索...",
+    "unreadOutput": "终端有未读输出",
+    "groupAriaLabel": "终端组 {{id}}",
+    "a11y": {
+      "tabMovedToPosition": "已移到第 {{position}} 位（共 {{total}} 个标签页）",
+      "tabMovedToGroup": "已移动到另一个分组",
+      "dragCancelled": "已取消标签页拖拽"
+    }
   },
   "terminalSearchBar": {
     "findInTerminal": "在终端中查找...",
@@ -979,8 +1181,24 @@
     "copiedToClipboard": "已复制到剪贴板",
     "failedToCopyClipboard": "复制到剪贴板失败",
     "reconnectingTerminal": "正在重新连接终端…",
+    "connectionClosedManualReconnect": "连接已关闭。按 R 重连，或右键选择“重新连接”。",
     "outputSaved": "终端输出已保存",
-    "failedToSaveOutput": "保存输出失败"
+    "failedToSaveOutput": "保存输出失败",
+    "renderer": "渲染器：{{renderer}}",
+    "startingShell": "🚀 正在启动交互式 Shell（WebSocket + PTY 模式）...",
+    "webSocketConnected": "✓ WebSocket 已连接",
+    "previousSessionLost": "⚠ 上一个会话已丢失，已启动新的 Shell 会话。",
+    "ptyStarted": "✓ PTY 连接已启动",
+    "interactiveHint": "现在可以使用交互式命令：vim、less、more、top 等。",
+    "error": "[错误：{{message}}]",
+    "webSocketError": "[WebSocket 错误]",
+    "autoReconnectFailed": "[连接丢失。自动重连 {{attempts}} 次后失败。按 R 重连，或右键选择“重新连接”。]",
+    "reconnectingAfterDrop": "[连接丢失。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]",
+    "reconnectFailedPermanently": "[连接永久失败。按 R 重连，或右键选择“重新连接”。]",
+    "reconnectingAfterClose": "[连接已关闭。{{seconds}} 秒后重新连接（第 {{attempt}}/{{max}} 次尝试）...]",
+    "sshSessionLost": "[SSH 会话已丢失。正在重新进行完整认证并重连...]",
+    "sessionRestored": "[会话已恢复 — 已重新连接到原 Shell]",
+    "sshSessionDeadPermanent": "[SSH 会话已丢失且已达自动恢复上限，请使用右键 → 重新连接重试。]"
   },
   "systemMonitor": {
     "systemOverview": "系统概览",
@@ -1107,7 +1325,10 @@
     "downloadAndOpen": "下载并用本地应用打开",
     "downloading": "正在下载…",
     "openedWithOs": "{{fileName}} 已用本地应用打开",
-    "failedToOpenWithOs": "无法用本地应用打开文件"
+    "failedToOpenWithOs": "无法用本地应用打开文件",
+    "unsavedTitle": "未保存的更改",
+    "unsavedDescription": "关闭前要保存对“{{fileName}}”的更改吗？",
+    "discardAndClose": "不保存"
   },
   "desktopViewer": {
     "clipboardAccessDenied": "剪贴板访问被拒绝",
@@ -1117,5 +1338,89 @@
     "desktopDisconnected": "桌面已断开",
     "reconnect": "重新连接",
     "connectingTo": "正在连接到 {{name}}..."
+  },
+  "errorBoundary": {
+    "somethingWentWrong": "出错了",
+    "unexpectedError": "发生了意外错误",
+    "retry": "重试",
+    "labelError": "{{label}} 遇到错误"
+  },
+  "connectionTabs": {
+    "reconnect": "重新连接",
+    "duplicateTab": "复制标签页",
+    "closeTab": "关闭标签页",
+    "closeOtherTabs": "关闭其他标签页",
+    "closeTabsToLeft": "关闭左侧标签页",
+    "closeTabsToRight": "关闭右侧标签页",
+    "closeAllTabs": "关闭所有标签页"
+  },
+  "networkMonitor": {
+    "title": "网络统计",
+    "noConnection": "无活动连接，连接后即可查看网络统计。",
+    "comingSoon": "高级网络监控功能即将推出",
+    "disabledNotice": "网络接口和活动连接监控当前已禁用。请查看「监控」选项卡中的网络使用率和网络延迟图表以获取当前网络指标。"
+  },
+  "quickCommands": {
+    "title": "快捷命令",
+    "searchPlaceholder": "搜索命令片段…",
+    "newSnippet": "新建命令片段",
+    "noActiveTerminal": "没有活动终端——请先连接主机才能执行",
+    "emptyTitle": "还没有命令片段",
+    "emptyDescription": "保存常用命令，一键发送到当前终端执行。",
+    "emptyCreate": "创建命令片段",
+    "emptySearch": "没有匹配的命令片段",
+    "snippetCount_one": "{{count}} 个命令片段",
+    "snippetCount_other": "{{count}} 个命令片段",
+    "sort": {
+      "ariaLabel": "排序方式",
+      "mostUsed": "最常用",
+      "recentlyUsed": "最近使用",
+      "name": "按名称"
+    },
+    "actions": {
+      "run": "在当前终端执行",
+      "insert": "仅输入不执行",
+      "copy": "复制到剪贴板",
+      "edit": "编辑",
+      "delete": "删除"
+    },
+    "deleteConfirm": {
+      "title": "删除命令片段",
+      "description": "确定删除“{{name}}”吗？此操作无法撤销。"
+    },
+    "dialog": {
+      "newTitle": "新建命令片段",
+      "editTitle": "编辑命令片段",
+      "name": "名称",
+      "namePlaceholder": "例如：重启 nginx",
+      "nameRequired": "请输入名称",
+      "command": "命令",
+      "commandPlaceholder": "例如：sudo systemctl restart nginx",
+      "commandRequired": "请输入命令",
+      "commandHint": "以粘贴方式发送到终端，换行会被保留。",
+      "description": "描述",
+      "descriptionPlaceholder": "可选备注",
+      "tags": "标签",
+      "tagsPlaceholder": "逗号分隔，例如 docker, logs",
+      "saveFailed": "保存命令片段失败"
+    },
+    "toast": {
+      "noActiveTerminal": "没有活动终端",
+      "copied": "已复制到剪贴板",
+      "copyFailed": "复制到剪贴板失败",
+      "created": "命令片段已创建",
+      "updated": "命令片段已更新",
+      "deleted": "命令片段已删除"
+    }
+  },
+  "hostKey": {
+    "changedTitle": "主机密钥已更改",
+    "changedDesc": "SSH 服务器 {{host}}:{{port}} 提供的主机密钥与 known_hosts 中保存的不一致。",
+    "fingerprint": "新指纹",
+    "recordedAt": "已保存的密钥",
+    "recordedAtValue": "{{file}} 第 {{line}} 行",
+    "warning": "这可能意味着中间人攻击。仅当您确定服务器已重装或密钥已更换时才继续。",
+    "trustHint": "信任后将替换该主机已保存的密钥并重新连接。",
+    "trust": "信任新密钥并连接"
   }
 }

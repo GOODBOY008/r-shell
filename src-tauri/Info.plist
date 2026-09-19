@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Declare the localizations the app supports so macOS renders
+       system-provided menu items (About / Services / Hide / Quit and the
+       standard Edit items Undo/Redo/Cut/Copy/Paste/Select All) in the
+       user's language instead of English. Merged into the generated
+       Info.plist by the Tauri bundler. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>zh-Hans</string>
+    <string>zh-Hant</string>
+  </array>
+</dict>
+</plist>

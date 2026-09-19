@@ -2,6 +2,7 @@
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
  */
+import { SECRET_FIELDS, isSealed } from './credential-crypto';
 
 export interface ConnectionData {
   id: string;
@@ -31,6 +32,15 @@ export interface ConnectionData {
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
+  // SSH tunnel (jump host)
+  tunnelEnabled?: boolean;
+  tunnelHost?: string;
+  tunnelPort?: number;
+  tunnelUsername?: string;
+  tunnelAuthMethod?: 'password' | 'publickey';
+  tunnelPassword?: string;
+  tunnelKeyPath?: string;
+  tunnelPassphrase?: string;
   // SSH-specific advanced
   compression?: boolean;
   keepAlive?: boolean;
@@ -55,12 +65,87 @@ export interface ConnectionFolder {
   sortOrder?: number;
 }
 
+export function connectionHasCredentials(data: ConnectionData): boolean {
+  const authMethod = data.authMethod || 'password';
+
+  // Desktop protocols connect without stored credentials.
+  if (data.protocol === 'RDP' || data.protocol === 'VNC') {
+    return true;
+  }
+
+  // File browsers (SFTP/FTP) support anonymous auth.
+  const isFileBrowser = data.protocol === 'SFTP' || data.protocol === 'FTP';
+  if (isFileBrowser && authMethod === 'anonymous') {
+    return true;
+  }
+
+  // Password auth: a present password field counts as a credential even when
+  // blank — hosts that allow passwordless login (PermitEmptyPasswords or the
+  // SSH "none" method) store an empty string. An *absent* field (undefined or
+  // null in hand-edited or imported records) is unconfigured: connecting would
+  // serialize it to null and the backend would reject it outright.
+  if (authMethod === 'password') {
+    return data.password != null;
+  }
+
+  // Public-key auth can fall back to the user's default SSH key.
+  return authMethod === 'publickey';
+}
+
 const CONNECTIONS_STORAGE_KEY = 'r-shell-connections';
 const FOLDERS_STORAGE_KEY = 'r-shell-connection-folders';
 
 // Legacy keys for migration
 const LEGACY_SESSIONS_STORAGE_KEY = 'r-shell-sessions';
 const LEGACY_FOLDERS_STORAGE_KEY = 'r-shell-session-folders';
+
+/**
+ * Secret fields that must never be persisted as plaintext. Values in `v1:`
+ * sealed format (encrypted via the Rust credential_seal command) are fine;
+ * anything else non-empty is legacy plaintext and is stripped before writing.
+ */
+
+/**
+ * Connections whose legacy plaintext secrets failed to seal (e.g. the OS
+ * keychain was unavailable). Their plaintext is the only surviving copy, so
+ * persistence must not strip it until sealing succeeds — otherwise any
+ * unrelated write (updateLastConnected, a folder move) would destroy it.
+ * Rewritten by `markSealFailed` / `clearSealFailed`.
+ */
+const sealFailedIds = new Set<string>();
+
+/** Mark a connection's plaintext as "do not strip until sealed". */
+export function markSealFailed(connectionId: string): void {
+  sealFailedIds.add(connectionId);
+}
+
+/** Remove the protection once the connection's secrets are sealed. */
+export function clearSealFailed(connectionId: string): void {
+  sealFailedIds.delete(connectionId);
+}
+
+function stripUnencryptedSecrets(connection: ConnectionData): ConnectionData {
+  const clone = { ...connection };
+  const protectedRecord = connection.id !== undefined && sealFailedIds.has(connection.id);
+  for (const field of SECRET_FIELDS) {
+    const value = clone[field];
+    if (typeof value === 'string' && value.length > 0 && !isSealed(value) && !protectedRecord) {
+      delete clone[field];
+    }
+  }
+  return clone;
+}
+
+/**
+ * Single write path for the connections array: strips any unencrypted secret
+ * before it can reach localStorage. Sealed (encrypted) values pass through.
+ */
+function persistConnections(connections: ConnectionData[]): void {
+  localStorage.setItem(
+    CONNECTIONS_STORAGE_KEY,
+    JSON.stringify(connections.map(stripUnencryptedSecrets)),
+  );
+}
 
 export class ConnectionStorageManager {
   /**
@@ -84,6 +169,10 @@ export class ConnectionStorageManager {
             ...session,
             folder: session.folder?.replace(/All Sessions/g, 'All Connections')
           }));
+          // Write the migrated records verbatim — including plaintext secrets.
+          // `persistConnections` would strip them here, before the startup
+          // credential migration (App.tsx) ever sees them, destroying the only
+          // copy. The plaintext lands in the seal migration's path instead.
           localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
           console.log(`[Migration] Migrated ${connections.length} sessions to connections`);
         }
@@ -186,7 +275,7 @@ export class ConnectionStorageManager {
     };
 
     connections.push(newConnection);
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
 
     return newConnection;
   }
@@ -217,7 +306,7 @@ export class ConnectionStorageManager {
       connections.push(newConnection);
     }
 
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
 
     return newConnection;
   }
@@ -236,7 +325,7 @@ export class ConnectionStorageManager {
       ...updates,
     };
 
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
     return connections[index];
   }
 
@@ -258,7 +347,7 @@ export class ConnectionStorageManager {
 
     if (filtered.length === connections.length) return false;
 
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(filtered));
+    persistConnections(filtered);
     return true;
   }
 
@@ -348,7 +437,7 @@ export class ConnectionStorageManager {
     }
 
     localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
     return true;
   }
 
@@ -401,7 +490,7 @@ export class ConnectionStorageManager {
     }
 
     localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+    persistConnections(connections);
     return true;
   }
 
@@ -472,7 +561,7 @@ export class ConnectionStorageManager {
     if (filteredFolders.length === folders.length) return false;
 
     localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(filteredFolders));
-    localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(filteredConnections));
+    persistConnections(filteredConnections);
 
     return true;
   }
@@ -631,7 +720,7 @@ export class ConnectionStorageManager {
         });
       });
 
-      localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+      persistConnections(connections);
       localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
 
       return imported.connections.length;

@@ -1,6 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
 import { Button } from './ui/button';
 import { Separator } from './ui/separator';
 import { 
@@ -18,6 +28,7 @@ import {
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
 import { DEFAULT_LAYOUT_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import type { UpdateAnnouncement } from './update-checker';
 import { 
   Plus, 
   FolderOpen, 
@@ -39,7 +50,8 @@ import {
   PanelBottomClose,
   PanelBottomOpen,
   Maximize2,
-  LayoutGrid
+  LayoutGrid,
+  Info
 } from 'lucide-react';
 
 interface MenuBarProps {
@@ -60,6 +72,9 @@ interface MenuBarProps {
   onOpenSettings?: () => void;
   onOpenSFTP?: () => void;
   onCheckForUpdates?: () => void;
+  // Update pill (VS Code-style non-intrusive availability cue)
+  updateAnnouncement?: UpdateAnnouncement | null;
+  onOpenUpdateDialog?: () => void;
   onNewTab?: () => void;
   onCloneTab?: () => void;
   onNextTab?: () => void;
@@ -101,6 +116,8 @@ export function MenuBar({
   onOpenSettings,
   onOpenSFTP: _onOpenSFTP,
   onCheckForUpdates,
+  updateAnnouncement,
+  onOpenUpdateDialog,
   onNewTab,
   onCloneTab,
   onNextTab,
@@ -154,6 +171,17 @@ export function MenuBar({
       void getCurrentWindow().toggleMaximize();
     }
   }, [isMac]);
+
+  // About dialog: show the running app version. Falls back to a dash when
+  // getVersion is unavailable (browser dev mode without the Tauri backend).
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!isTauri()) return;
+    getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(null));
+  }, []);
 
   return (
     <div
@@ -222,7 +250,9 @@ export function MenuBar({
             {t('menuBar.closeConnection')}
             <DropdownMenuShortcut>{formatShortcut(closeConnectionShortcutLabel ?? 'Ctrl+W')}</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem>
+          {/* Route Exit through the backend quit guard so dirty file-editor
+              windows are prompted before the app quits (quit_guard.rs). */}
+          <DropdownMenuItem onClick={() => { void invoke('request_app_quit').catch(() => {}); }}>
             <X className="mr-2 h-4 w-4" />
             {t('menuBar.exit')}
             <DropdownMenuShortcut>{formatShortcut('Ctrl+Q')}</DropdownMenuShortcut>
@@ -410,6 +440,19 @@ export function MenuBar({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {/* Help Menu — Windows/Linux only (macOS has the native About item) */}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm">{t('menuBar.help')}</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onClick={() => setAboutOpen(true)}>
+            <Info className="mr-2 h-4 w-4" />
+            {t('menuBar.about')}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
         </> /* end !isMac menu dropdowns */
       )}
 
@@ -423,6 +466,37 @@ export function MenuBar({
       {/* Layout controls — VS Code style, right-aligned */}
       <div className="flex items-center gap-0.5 pr-1">
         <TooltipProvider>
+          {/* Update pill: non-intrusive persistent cue for a discovered
+              update. Hidden when idle; variant switches to the green-dot
+              "restart to update" state once download+install completed. */}
+          {updateAnnouncement && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-7 px-2.5 gap-1.5"
+                  onClick={onOpenUpdateDialog}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-2 w-2 rounded-full ${
+                      updateAnnouncement.ready ? 'bg-emerald-500' : 'bg-blue-500'
+                    }`}
+                  />
+                  {updateAnnouncement.ready
+                    ? t('menuBar.restartToUpdatePill')
+                    : t('menuBar.updateAvailablePill', { version: updateAnnouncement.version })}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {updateAnnouncement.ready
+                  ? t('updateChecker.restartToFinish')
+                  : t('updateChecker.updateAvailable')}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           <Separator orientation="vertical" className="h-4 mx-1" />
 
           <Tooltip>
@@ -525,6 +599,24 @@ export function MenuBar({
           </Tooltip>
         </TooltipProvider>
       </div>
+
+      {/* About dialog (opened from Help → About R-Shell) */}
+      <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
+        <DialogContent className="sm:max-w-[320px]">
+          <DialogHeader>
+            <DialogTitle>{t('menuBar.about')}</DialogTitle>
+            <DialogDescription>{t('app.title')}</DialogDescription>
+          </DialogHeader>
+          <div className="text-sm">
+            {t('aboutDialog.version')}: <span className="font-mono">{appVersion ?? '—'}</span>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAboutOpen(false)}>
+              {t('common.close')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

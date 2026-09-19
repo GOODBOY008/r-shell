@@ -14,6 +14,7 @@ import {
   type ConnectionData,
   type ConnectionFolder,
 } from './connection-storage';
+import { SECRET_FIELDS } from './credential-crypto';
 import { ConnectionProfileManager, type ConnectionProfile } from './connection-profiles';
 import {
   loadAppearanceSettings,
@@ -71,6 +72,11 @@ export interface ImportResult {
  * JSON bundle to disk.  Returns `true` when the file was written, `false`
  * when the user cancelled the dialog.
  */
+// Secret fields that must never end up in an exported config bundle — not
+// even as ciphertext. Exported files are meant to be shareable; a stolen
+// master key would otherwise decrypt every exported credential.
+const EXPORT_STRIPPED_FIELDS = SECRET_FIELDS;
+
 export async function exportAllConfig(): Promise<boolean> {
   try {
     // 1. Build the bundle -------------------------------------------------------
@@ -81,17 +87,33 @@ export async function exportAllConfig(): Promise<boolean> {
       data: {},
     };
 
-    // Connections + folders
+    // Connections + folders. Secret fields (plaintext AND sealed ciphertext)
+    // are stripped — an exported file must not carry credentials.
     const connections = ConnectionStorageManager.getConnections();
     const folders = ConnectionStorageManager.getFolders();
     if (connections.length || folders.length) {
-      bundle.data.connections = { connections, folders };
+      bundle.data.connections = {
+        connections: connections.map((c) => {
+          const clone = { ...c } as Record<string, unknown>;
+          for (const field of EXPORT_STRIPPED_FIELDS) {
+            delete clone[field];
+          }
+          return clone as unknown as typeof c;
+        }),
+        folders,
+      };
     }
 
-    // Connection profiles
+    // Connection profiles — strip secrets the same way.
     const profiles = ConnectionProfileManager.getProfiles();
     if (profiles.length) {
-      bundle.data.profiles = profiles;
+      bundle.data.profiles = profiles.map((p) => {
+        const clone = { ...p } as Record<string, unknown>;
+        for (const field of EXPORT_STRIPPED_FIELDS) {
+          delete clone[field];
+        }
+        return clone as unknown as typeof p;
+      });
     }
 
     // Terminal appearance

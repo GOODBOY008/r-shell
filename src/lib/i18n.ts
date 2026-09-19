@@ -3,10 +3,12 @@ import { initReactI18next } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import en from '@/locales/en.json';
 import zhCN from '@/locales/zh-CN.json';
+import pl from '@/locales/pl.json';
 
 /** Keys used by the native macOS menu bar */
 const NATIVE_MENU_KEYS = [
   'menuBar.file', 'menuBar.edit', 'menuBar.tools', 'menuBar.connection', 'menuBar.window',
+  'menuBar.about', 'menuBar.services', 'menuBar.hide', 'menuBar.hideOthers', 'menuBar.showAll', 'menuBar.quit',
   'menuBar.newConnection', 'menuBar.saveConnection', 'menuBar.closeTab',
   'menuBar.find', 'menuBar.clearScreen',
   'menuBar.options', 'menuBar.checkForUpdates',
@@ -48,11 +50,12 @@ const STORAGE_KEY = 'r-shell-language';
 export const AUTO = 'auto';
 
 /**
- * Resolve a locale string (e.g. "zh-CN", "zh", "zh-Hans") to one of the
- * two supported language codes: "en" or "zh-CN".
+ * Resolve a locale string (e.g. "zh-CN", "zh", "zh-Hans", "pl-PL") to one of
+ * the supported language codes: "en", "zh-CN" or "pl".
  */
 function resolveCode(raw: string): string {
   if (raw.startsWith('zh')) return 'zh-CN';
+  if (raw.startsWith('pl')) return 'pl';
   return 'en';
 }
 
@@ -82,6 +85,7 @@ i18n.use(initReactI18next).init({
   resources: {
     en: { translation: en },
     'zh-CN': { translation: zhCN },
+    pl: { translation: pl },
   },
   lng: INITIAL_LANG,
   fallbackLng: 'en',

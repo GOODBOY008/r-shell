@@ -15,7 +15,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager } from '../lib/connection-storage';
+import { SECRET_FIELDS, sealSecret, openSecret } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
+import { sshConnect } from '@/lib/ssh-connect';
 import { toast } from 'sonner';
 import {
   Server,
@@ -24,6 +26,7 @@ import {
   Network,
   Terminal as TerminalIcon,
   Monitor,
+  Waypoints,
 } from 'lucide-react';
 import { getDefaultPort, getAuthMethods, getHiddenFields, isDesktopProtocol } from '@/lib/protocol-config';
 
@@ -55,6 +58,16 @@ export interface ConnectionConfig {
   proxyUsername?: string;
   proxyPassword?: string;
 
+  // SSH tunnel (jump host)
+  tunnelEnabled?: boolean;
+  tunnelHost?: string;
+  tunnelPort?: number;
+  tunnelUsername?: string;
+  tunnelAuthMethod?: 'password' | 'publickey';
+  tunnelPassword?: string;
+  tunnelKeyPath?: string;
+  tunnelPassphrase?: string;
+
   // FTP specific
   ftpsEnabled?: boolean;
 
@@ -70,6 +83,7 @@ export interface ConnectionConfig {
 
   // VNC specific
   vncColorDepth?: '24' | '16' | '8';
+  vncPassword?: string;
 }
 
 /**
@@ -88,6 +102,30 @@ function mergeWithDefaults(defaults: ConnectionConfig, overrides: ConnectionConf
   }
   return merged;
 }
+
+/**
+ * Sealed secret fields carried over from the connection being edited, so a
+ * blank form field on save means "keep the stored one". Empty for a new
+ * connection — reset on dialog open/close so secrets never leak across
+ * connections.
+ */
+interface StoredSecrets {
+  password: string;
+  passphrase: string;
+  proxyPassword: string;
+  vncPassword: string;
+  tunnelPassword: string;
+  tunnelPassphrase: string;
+}
+
+const EMPTY_STORED_SECRETS: StoredSecrets = {
+  password: '',
+  passphrase: '',
+  proxyPassword: '',
+  vncPassword: '',
+  tunnelPassword: '',
+  tunnelPassphrase: '',
+};
 
 export function ConnectionDialog({
   open,
@@ -112,6 +150,14 @@ export function ConnectionDialog({
     proxyPort: 8080,
     proxyUsername: '',
     proxyPassword: '',
+    tunnelEnabled: false,
+    tunnelHost: '',
+    tunnelPort: 22,
+    tunnelUsername: '',
+    tunnelAuthMethod: 'password',
+    tunnelPassword: '',
+    tunnelKeyPath: '',
+    tunnelPassphrase: '',
     compression: true,
     keepAlive: true,
     keepAliveInterval: 60,
@@ -119,6 +165,10 @@ export function ConnectionDialog({
   };
 
   const [config, setConfig] = useState<ConnectionConfig>(defaultConfig);
+  // Sealed secrets of the connection being edited (empty for a new one). A
+  // blank form field on save resolves back to these — plaintext is never
+  // echoed into the form.
+  const [previousSecrets, setPreviousSecrets] = useState<StoredSecrets>(EMPTY_STORED_SECRETS);
 
   // Track number input display values separately from config to allow
   // the field to be empty while editing — React controlled inputs need
@@ -126,6 +176,7 @@ export function ConnectionDialog({
   const initialDisplayValues = {
     port: 22 as number | '',
     proxyPort: 8080 as number | '',
+    tunnelPort: 22 as number | '',
     keepAliveInterval: 60 as number | '',
     serverAliveCountMax: 3 as number | '',
   };
@@ -187,24 +238,48 @@ export function ConnectionDialog({
       // connection never stored (advanced/proxy options), matching the
       // pre-filled values a new connection gets.
       if (editingConnection) {
-        setConfig(mergeWithDefaults(defaultConfig, editingConnection));
+        // Remember the stored (sealed) secrets so a blank field on save means
+        // "keep the stored one". The form itself never shows them.
+        setPreviousSecrets({
+          password: editingConnection.password ?? '',
+          passphrase: editingConnection.passphrase ?? '',
+          proxyPassword: editingConnection.proxyPassword ?? '',
+          vncPassword: editingConnection.vncPassword ?? '',
+          tunnelPassword: editingConnection.tunnelPassword ?? '',
+          tunnelPassphrase: editingConnection.tunnelPassphrase ?? '',
+        });
+        const merged = mergeWithDefaults(defaultConfig, editingConnection);
+        // Stored secrets are never echoed back into the form: the fields stay
+        // empty with a hint below. Typing a new value replaces the stored one.
+        merged.password = '';
+        merged.passphrase = '';
+        merged.proxyPassword = '';
+        merged.vncPassword = '';
+        merged.tunnelPassword = '';
+        merged.tunnelPassphrase = '';
+        setConfig(merged);
         syncDisplayValues({
           port: editingConnection.port ?? 22,
           proxyPort: editingConnection.proxyPort ?? 8080,
+          tunnelPort: editingConnection.tunnelPort ?? 22,
           keepAliveInterval: editingConnection.keepAliveInterval ?? 60,
           serverAliveCountMax: editingConnection.serverAliveCountMax ?? 3,
         });
         // When editing, don't show "save as connection" since it already exists
         setSaveAsConnection(false);
       } else {
-        // Reset to defaults for new connection
+        // Reset to defaults for a new connection. Clear previousSecrets too:
+        // it survives dialog reopens, so after editing connection A a blank
+        // field on connection B would silently resolve to A's stored secrets.
         setConfig(defaultConfig);
+        setPreviousSecrets(EMPTY_STORED_SECRETS);
         setSaveAsConnection(true);
         syncDisplayValues(initialDisplayValues);
       }
     } else {
       // Reset connection state when dialog closes
       resetConnectionState();
+      setPreviousSecrets(EMPTY_STORED_SECRETS);
     }
   }, [open, editingConnection, initialFolder]);
 
@@ -263,6 +338,45 @@ export function ConnectionDialog({
     cancelRequestedRef.current = false;
   }
 
+  /**
+   * UX contract for stored secrets: a saved password is NEVER shown back to
+   * the user. When editing a connection that has one, the field stays empty
+   * with a hint ("leave blank to keep the saved password"). An empty field on
+   * save therefore means "keep whatever is stored"; a typed value means
+   * "replace". Returns the secret values ready for persistence — already
+   * encrypted (sealed) so plaintext never reaches localStorage.
+   */
+  const resolveSecretsForSave = async (): Promise<Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>> => {
+    const result: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'> = {
+      password: '',
+      passphrase: '',
+      proxyPassword: '',
+      vncPassword: '',
+      tunnelPassword: '',
+      tunnelPassphrase: '',
+    };
+    for (const field of SECRET_FIELDS) {
+      // Use the value as typed — never trim it. Leading/trailing whitespace
+      // can be part of a credential, and the connect request below sends the
+      // unmodified `config` value, so trimming here would store a different
+      // secret than the one that just authenticated.
+      const typed = config[field] ?? '';
+      if (typed.length === 0) {
+        // Field left blank → keep the previously stored (sealed) value.
+        result[field] = previousSecrets[field];
+      } else {
+        // User typed a new value → seal it for storage.
+        try {
+          result[field] = await sealSecret(typed);
+        } catch (error) {
+          console.error(`[Credential] Failed to encrypt ${field}:`, error);
+          throw error; // surface to caller — do not persist plaintext
+        }
+      }
+    }
+    return result;
+  };
+
   const handleConnect = async () => {
     if (isConnecting) {
       return;
@@ -271,7 +385,9 @@ export function ConnectionDialog({
     setIsConnecting(true);
     setIsCancelling(false);
     cancelRequestedRef.current = false;
-    const connectionId = editingConnection?.id || `connection-${Date.now()}`;
+    // A random id, never a timestamp: connection ids address sessions on the
+    // local bridge, so they must not be guessable (issue #138).
+    const connectionId = editingConnection?.id || crypto.randomUUID();
     connectionIdRef.current = connectionId;
 
     // Basic validation — anonymous FTP doesn't require a username
@@ -287,21 +403,38 @@ export function ConnectionDialog({
       return;
     }
 
-    // Validate authentication method specific fields
-    if (config.authMethod === 'password' && !config.password) {
-      toast.error(t('connectionDialog.toast.passwordRequired'), {
-        description: t('connectionDialog.toast.passwordRequiredDesc'),
-      });
+    // Validate authentication method specific fields.
+    // A blank password is allowed — it is a valid credential for hosts that
+    // allow passwordless login (e.g. PermitEmptyPasswords / "none"-auth
+    // devices). If it is wrong, the backend reports a specific auth error.
+    // An empty public key path is allowed too: the backend falls back to the
+    // user's default key (~/.ssh/id_rsa, then id_ed25519).
+
+    // Encrypt secrets for persistence (blank field = keep stored value).
+    let sealedSecrets: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>;
+    try {
+      sealedSecrets = await resolveSecretsForSave();
+    } catch {
+      toast.error(t('connectionDialog.toast.credentialSyncFailed'));
       resetConnectionState();
       return;
     }
 
-    if (config.authMethod === 'publickey' && !config.privateKeyPath) {
-      toast.error(t('connectionDialog.toast.privateKeyRequired'), {
-        description: t('connectionDialog.toast.privateKeyRequiredDesc'),
-      });
-      resetConnectionState();
-      return;
+    // Build the connect-only config. The form never echoes stored secrets, so
+    // a blank field while editing means "use the retained credential" — decrypt
+    // it here (plaintext exists transiently in memory only). The persisted
+    // payload above keeps the sealed form.
+    const connectConfig: ConnectionConfig = { ...config };
+    for (const field of SECRET_FIELDS) {
+      if (connectConfig[field] === '' && previousSecrets[field]) {
+        try {
+          connectConfig[field] = await openSecret(previousSecrets[field]);
+        } catch (error) {
+          // Decrypt failed (keychain hiccup etc.) — leave blank; auth will
+          // fail with a clear error rather than a wrong password.
+          console.error(`[Credential] Failed to decrypt ${field} for connect:`, error);
+        }
+      }
     }
 
     // For SFTP/FTP/RDP/VNC protocols, delegate connection to App.tsx (via onConnect)
@@ -320,15 +453,23 @@ export function ConnectionDialog({
             username: config.username,
             protocol: config.protocol,
             authMethod: config.authMethod,
-            password: config.password,
+            password: sealedSecrets.password,
             privateKeyPath: config.privateKeyPath,
-            passphrase: config.passphrase,
+            passphrase: sealedSecrets.passphrase,
             ftpsEnabled: config.ftpsEnabled,
             proxyType: config.proxyType,
             proxyHost: config.proxyHost,
             proxyPort: config.proxyPort,
             proxyUsername: config.proxyUsername,
-            proxyPassword: config.proxyPassword,
+            tunnelEnabled: config.tunnelEnabled,
+            tunnelHost: config.tunnelHost,
+            tunnelPort: config.tunnelPort,
+            tunnelUsername: config.tunnelUsername,
+            tunnelAuthMethod: config.tunnelAuthMethod,
+            tunnelPassword: sealedSecrets.tunnelPassword,
+            tunnelKeyPath: config.tunnelKeyPath,
+            tunnelPassphrase: sealedSecrets.tunnelPassphrase,
+            proxyPassword: sealedSecrets.proxyPassword,
             compression: config.compression,
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
@@ -347,15 +488,23 @@ export function ConnectionDialog({
             protocol: config.protocol,
             folder: connectionFolder,
             authMethod: config.authMethod,
-            password: config.password,
+            password: sealedSecrets.password,
             privateKeyPath: config.privateKeyPath,
-            passphrase: config.passphrase,
+            passphrase: sealedSecrets.passphrase,
             ftpsEnabled: config.ftpsEnabled,
             proxyType: config.proxyType,
             proxyHost: config.proxyHost,
             proxyPort: config.proxyPort,
             proxyUsername: config.proxyUsername,
-            proxyPassword: config.proxyPassword,
+            tunnelEnabled: config.tunnelEnabled,
+            tunnelHost: config.tunnelHost,
+            tunnelPort: config.tunnelPort,
+            tunnelUsername: config.tunnelUsername,
+            tunnelAuthMethod: config.tunnelAuthMethod,
+            tunnelPassword: sealedSecrets.tunnelPassword,
+            tunnelKeyPath: config.tunnelKeyPath,
+            tunnelPassphrase: sealedSecrets.tunnelPassphrase,
+            proxyPassword: sealedSecrets.proxyPassword,
             compression: config.compression,
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
@@ -367,7 +516,7 @@ export function ConnectionDialog({
         }
 
         // Delegate actual connection to App.tsx handler
-        onConnect({ ...config, id: connectionId });
+        onConnect({ ...connectConfig, id: connectionId });
         onOpenChange(false);
 
         if (!editingConnection) {
@@ -390,14 +539,22 @@ export function ConnectionDialog({
         username: config.username,
         protocol: config.protocol,
         authMethod: config.authMethod,
-        password: config.password,
+        password: sealedSecrets.password,
         privateKeyPath: config.privateKeyPath,
-        passphrase: config.passphrase,
+        passphrase: sealedSecrets.passphrase,
         proxyType: config.proxyType,
         proxyHost: config.proxyHost,
         proxyPort: config.proxyPort,
         proxyUsername: config.proxyUsername,
-        proxyPassword: config.proxyPassword,
+        tunnelEnabled: config.tunnelEnabled,
+        tunnelHost: config.tunnelHost,
+        tunnelPort: config.tunnelPort,
+        tunnelUsername: config.tunnelUsername,
+        tunnelAuthMethod: config.tunnelAuthMethod,
+        tunnelPassword: sealedSecrets.tunnelPassword,
+        tunnelKeyPath: config.tunnelKeyPath,
+        tunnelPassphrase: sealedSecrets.tunnelPassphrase,
+        proxyPassword: sealedSecrets.proxyPassword,
         compression: config.compression,
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
@@ -413,14 +570,22 @@ export function ConnectionDialog({
         protocol: config.protocol,
         folder: connectionFolder,
         authMethod: config.authMethod,
-        password: config.password,
+        password: sealedSecrets.password,
         privateKeyPath: config.privateKeyPath,
-        passphrase: config.passphrase,
+        passphrase: sealedSecrets.passphrase,
         proxyType: config.proxyType,
         proxyHost: config.proxyHost,
         proxyPort: config.proxyPort,
         proxyUsername: config.proxyUsername,
-        proxyPassword: config.proxyPassword,
+        tunnelEnabled: config.tunnelEnabled,
+        tunnelHost: config.tunnelHost,
+        tunnelPort: config.tunnelPort,
+        tunnelUsername: config.tunnelUsername,
+        tunnelAuthMethod: config.tunnelAuthMethod,
+        tunnelPassword: sealedSecrets.tunnelPassword,
+        tunnelKeyPath: config.tunnelKeyPath,
+        tunnelPassphrase: sealedSecrets.tunnelPassphrase,
+        proxyPassword: sealedSecrets.proxyPassword,
         compression: config.compression,
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
@@ -429,16 +594,11 @@ export function ConnectionDialog({
     }
 
     try {
-      const result = await invoke<{ success: boolean; error?: string }>(
-        'ssh_connect',
-        {
-          request: buildSshConnectRequest(connectionId, config),
-        }
-      );
+      const result = await sshConnect(buildSshConnectRequest(connectionId, connectConfig));
 
       if (result.success) {
         onConnect({
-          ...config,
+          ...connectConfig,
           id: connectionId
         });
         if (!editingConnection) {
@@ -462,7 +622,11 @@ export function ConnectionDialog({
         toast.info(t('connectionDialog.toast.connectionCancelled'));
       } else {
         toast.error(t('connectionDialog.toast.connectionError'), {
-          description: error instanceof Error ? error.message : t('connectionDialog.toast.connectionErrorDesc'),
+          description: typeof error === 'string'
+            ? error
+            : error instanceof Error
+              ? error.message
+              : t('connectionDialog.toast.connectionErrorDesc'),
           duration: 5000,
         });
       }
@@ -517,6 +681,15 @@ const handleCancelConnectionAttempt = async () => {
   const handleSave = async () => {
     if (!editingConnection?.id) return;
 
+    // Encrypt secrets for persistence (blank field = keep stored value).
+    let sealed: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>;
+    try {
+      sealed = await resolveSecretsForSave();
+    } catch {
+      toast.error(t('connectionDialog.toast.credentialSyncFailed'));
+      return;
+    }
+
     // Save updated connection to storage
     ConnectionStorageManager.updateConnection(editingConnection.id, {
       name: config.name,
@@ -525,15 +698,23 @@ const handleCancelConnectionAttempt = async () => {
       username: config.username,
       protocol: config.protocol,
       authMethod: config.authMethod,
-      password: config.password,
+      password: sealed.password,
       privateKeyPath: config.privateKeyPath,
-      passphrase: config.passphrase,
+      passphrase: sealed.passphrase,
       ftpsEnabled: config.ftpsEnabled,
       proxyType: config.proxyType,
       proxyHost: config.proxyHost,
       proxyPort: config.proxyPort,
       proxyUsername: config.proxyUsername,
-      proxyPassword: config.proxyPassword,
+      tunnelEnabled: config.tunnelEnabled,
+      tunnelHost: config.tunnelHost,
+      tunnelPort: config.tunnelPort,
+      tunnelUsername: config.tunnelUsername,
+      tunnelAuthMethod: config.tunnelAuthMethod,
+      tunnelPassword: sealed.tunnelPassword,
+      tunnelKeyPath: config.tunnelKeyPath,
+      tunnelPassphrase: sealed.tunnelPassphrase,
+      proxyPassword: sealed.proxyPassword,
       compression: config.compression,
       keepAlive: config.keepAlive,
       keepAliveInterval: config.keepAliveInterval,
@@ -574,7 +755,7 @@ const handleCancelConnectionAttempt = async () => {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
           <DialogTitle className="flex items-center gap-2">
             <div className="p-2 bg-primary/10 rounded-lg">
               <Server className="h-5 w-5 text-primary" />
@@ -589,7 +770,7 @@ const handleCancelConnectionAttempt = async () => {
         </DialogHeader>
 
         <Tabs defaultValue="connection" className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="w-full justify-start rounded-none border-b bg-transparent h-auto p-0 px-4 overflow-x-auto">
+          <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0 px-4 overflow-x-auto">
             <TabsTrigger
               value="connection"
               className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
@@ -610,6 +791,13 @@ const handleCancelConnectionAttempt = async () => {
             >
               <Network className="h-3.5 w-3.5" />
               <span>{t('connectionDialog.tab.proxy')}</span>
+            </TabsTrigger>
+            <TabsTrigger
+              value="tunnel"
+              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+            >
+              <Waypoints className="h-3.5 w-3.5" />
+              <span>{t('connectionDialog.tab.tunnel')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="advanced"
@@ -819,10 +1007,19 @@ const handleCancelConnectionAttempt = async () => {
                     <Label htmlFor="password">{t('connectionDialog.label.password')}</Label>
                     <PasswordInput
                       id="password"
-                      placeholder={t('connectionDialog.placeholder.password')}
+                      placeholder={
+                        previousSecrets.password
+                          ? t('connectionDialog.placeholder.savedPassword')
+                          : t('connectionDialog.placeholder.password')
+                      }
                       value={config.password}
                       onChange={(e) => updateConfig({ password: e.target.value })}
                     />
+                    {previousSecrets.password && (
+                      <p className="text-xs text-muted-foreground">
+                        {t('connectionDialog.hint.savedPasswordKept')}
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -976,6 +1173,153 @@ const handleCancelConnectionAttempt = async () => {
             </Card>
           </TabsContent>
 
+          <TabsContent value="tunnel" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+            {(() => {
+              const canTunnel = config.protocol === 'SSH' || config.protocol === 'SFTP';
+              if (!canTunnel) {
+                return (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <Waypoints className="h-4 w-4" />
+                        {t('connectionDialog.section.tunnelSettings')}
+                      </CardTitle>
+                      <CardDescription>
+                        {t('connectionDialog.section.noTunnelForProtocol', { protocol: config.protocol })}
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                );
+              }
+
+              return (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <Waypoints className="h-4 w-4" />
+                      {t('connectionDialog.section.tunnelSettings')}
+                    </CardTitle>
+                    <CardDescription>
+                      {t('connectionDialog.section.tunnelSettingsDesc')}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label>{t('connectionDialog.tunnel.enable')}</Label>
+                        <p className="text-sm text-muted-foreground">
+                          {t('connectionDialog.tunnel.enableDesc')}
+                        </p>
+                      </div>
+                      <Switch
+                        aria-label={t('connectionDialog.tunnel.enable')}
+                        checked={config.tunnelEnabled ?? false}
+                        onCheckedChange={(checked) => updateConfig({ tunnelEnabled: checked })}
+                      />
+                    </div>
+
+                    {config.tunnelEnabled && (
+                      <>
+                        <Separator />
+                        <div className="grid grid-cols-3 gap-4">
+                          <div className="col-span-2 space-y-2">
+                            <Label htmlFor="tunnel-host">{t('connectionDialog.label.tunnelHost')}</Label>
+                            <Input
+                              id="tunnel-host"
+                              placeholder={t('connectionDialog.placeholder.tunnelHost')}
+                              value={config.tunnelHost}
+                              onChange={(e) => updateConfig({ tunnelHost: e.target.value })}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="tunnel-port">{t('connectionDialog.label.tunnelPort')}</Label>
+                            <Input
+                              id="tunnel-port"
+                              type="number"
+                              value={displayValues.tunnelPort}
+                              onChange={(e) => handleNumberInput('tunnelPort', e.target.value, (n) => updateConfig({ tunnelPort: n }))}
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label htmlFor="tunnel-username">{t('connectionDialog.label.tunnelUsername')}</Label>
+                          <Input
+                            id="tunnel-username"
+                            placeholder={t('connectionDialog.placeholder.tunnelUsername')}
+                            value={config.tunnelUsername}
+                            onChange={(e) => updateConfig({ tunnelUsername: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="space-y-2">
+                          <Label>{t('connectionDialog.label.tunnelAuthMethod')}</Label>
+                          <Select
+                            value={config.tunnelAuthMethod}
+                            onValueChange={(value: string) => updateConfig({ tunnelAuthMethod: value as ConnectionConfig['tunnelAuthMethod'] })}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="password">{t('connectionDialog.authMethod.password')}</SelectItem>
+                              <SelectItem value="publickey">{t('connectionDialog.authMethod.publicKey')}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+
+                        {config.tunnelAuthMethod === 'password' && (
+                          <div className="space-y-2">
+                            <Label htmlFor="tunnel-password">{t('connectionDialog.label.tunnelPassword')}</Label>
+                            <PasswordInput
+                              id="tunnel-password"
+                              placeholder={t('connectionDialog.placeholder.tunnelPassword')}
+                              value={config.tunnelPassword}
+                              onChange={(e) => updateConfig({ tunnelPassword: e.target.value })}
+                            />
+                            {previousSecrets.tunnelPassword && (
+                              <p className="text-xs text-muted-foreground">
+                                {t('connectionDialog.hint.savedPasswordKept')}
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {config.tunnelAuthMethod === 'publickey' && (
+                          <>
+                            <div className="space-y-2">
+                              <Label htmlFor="tunnel-key">{t('connectionDialog.label.tunnelKeyPath')}</Label>
+                              <Input
+                                id="tunnel-key"
+                                placeholder={t('connectionDialog.placeholder.tunnelKeyPath')}
+                                value={config.tunnelKeyPath}
+                                onChange={(e) => updateConfig({ tunnelKeyPath: e.target.value })}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor="tunnel-passphrase">{t('connectionDialog.label.tunnelPassphrase')}</Label>
+                              <PasswordInput
+                                id="tunnel-passphrase"
+                                placeholder={t('connectionDialog.placeholder.tunnelPassphrase')}
+                                value={config.tunnelPassphrase}
+                                onChange={(e) => updateConfig({ tunnelPassphrase: e.target.value })}
+                              />
+                              {previousSecrets.tunnelPassphrase && (
+                                <p className="text-xs text-muted-foreground">
+                                  {t('connectionDialog.hint.savedPasswordKept')}
+                                </p>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })()}
+          </TabsContent>
+
           <TabsContent value="advanced" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
             {(() => {
               const hiddenFields = getHiddenFields(config.protocol);
@@ -1078,7 +1422,7 @@ const handleCancelConnectionAttempt = async () => {
 
         </Tabs>
 
-        <DialogFooter className="px-6 py-4 border-t bg-muted/30 flex-col sm:flex-col">
+        <DialogFooter className="px-6 py-4 border-t border-border bg-muted/30 flex-col sm:flex-col">
           <div className="flex flex-col gap-3 w-full">
             {/* Save as Connection Option - Only show for new connections */}
             {!editingConnection && (

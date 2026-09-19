@@ -4,9 +4,13 @@ use russh::*;
 use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -89,6 +93,12 @@ pub struct SshConfig {
     pub keepalive_max: Option<u32>,
     /// Optional HTTP/SOCKS proxy tunnel. `None` connects directly.
     pub proxy: Option<ProxyConfig>,
+    /// Optional SSH jump host (bastion) to route the connection through.
+    /// `None` connects directly (or via the proxy when one is set).
+    pub tunnel: Option<TunnelConfig>,
+    /// Host-key policy for this connection and its jump host.
+    #[serde(default)]
+    pub host_key_policy: HostKeyPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +111,16 @@ pub enum AuthMethod {
         key_path: String,
         passphrase: Option<String>,
     },
+}
+
+/// An intermediate SSH server (jump host / bastion) used to tunnel the SSH
+/// connection to its final target.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: AuthMethod,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,9 +144,191 @@ pub struct PtySession {
     /// Cancellation token — cancelled when this session is torn down.
     /// The WebSocket reader task should select on this to stop promptly.
     pub cancel: CancellationToken,
+    /// Set once the PTY output channel has closed because the SSH channel is
+    /// gone (transport dropped). A dead session must never be re-attached:
+    /// its reader errors instantly with "PTY connection closed" and the tab
+    /// would otherwise loop reconnect → reattach → error forever.
+    pub dead: Arc<AtomicBool>,
 }
 
-pub struct Client;
+/// How the server's host key is checked. Set per connection from the
+/// "Host Key Verification" switch in Settings, plus a one-shot escalation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostKeyPolicy {
+    /// Verify against known_hosts; record unknown hosts; refuse a changed key.
+    #[default]
+    Strict,
+    /// Like `Strict`, but a changed key replaces the recorded one. Sent only
+    /// after the user confirmed the new key in the "host key changed" dialog.
+    AcceptNew,
+    /// Do not verify at all (the settings switch is off).
+    Off,
+}
+
+/// A refused connection because the recorded key for the host differs.
+/// Carried inside the `anyhow` error so `ssh_connect` can hand the details
+/// to the UI, which offers to trust the new key.
+#[derive(Debug, Clone, Serialize, thiserror::Error)]
+#[error("HOST KEY CHANGED for {host}:{port}. The server presented key {fingerprint} which does not match the one recorded at line {line} of {file}. This can mean a man-in-the-middle attack; the connection was refused.")]
+pub struct HostKeyChanged {
+    pub host: String,
+    pub port: u16,
+    pub fingerprint: String,
+    pub line: usize,
+    pub file: String,
+}
+
+/// Why the handler refused a key.
+#[derive(Debug, Clone)]
+enum HostKeyRejection {
+    Changed(HostKeyChanged),
+    Other(String),
+}
+
+/// Slot the handler fills when it rejects a server key, so the connect path
+/// can report *why* instead of russh's generic "unknown key" error.
+#[derive(Clone, Default)]
+pub struct HostKeyReport(Arc<std::sync::Mutex<Option<HostKeyRejection>>>);
+
+impl HostKeyReport {
+    fn set(&self, rejection: HostKeyRejection) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(rejection);
+    }
+
+    /// The stored rejection if the handler set one (a `HostKeyChanged` stays
+    /// downcastable through the `anyhow` chain), else `fallback`.
+    pub fn explain_or(&self, fallback: anyhow::Error) -> anyhow::Error {
+        match self.0.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            Some(HostKeyRejection::Changed(changed)) => anyhow::Error::new(changed),
+            Some(HostKeyRejection::Other(message)) => anyhow::anyhow!(message),
+            None => fallback,
+        }
+    }
+}
+
+/// Where OpenSSH keeps the user's known hosts on every platform, including
+/// Windows (`%USERPROFILE%\.ssh\known_hosts`). Sharing the file means a host
+/// already trusted from the command line needs no new decision here.
+///
+/// Not `russh_keys::check_known_hosts`: on Windows that looks in `~/ssh/`
+/// (no dot), which OpenSSH for Windows does not use.
+pub fn default_known_hosts_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".ssh").join("known_hosts"))
+}
+
+/// Remove every plain-text entry for `host:port` from the known_hosts file at
+/// `path`, keeping all other lines (comments, other hosts, hashed entries —
+/// those cannot be matched without the hash salt and are left alone).
+pub(crate) fn forget_known_host(host: &str, port: u16, path: &Path) -> std::io::Result<()> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    let wanted = if port == 22 {
+        host.to_string()
+    } else {
+        format!("[{}]:{}", host, port)
+    };
+    let kept: Vec<&str> = content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return true;
+            }
+            // First field is a comma-separated list of host patterns.
+            let hosts = trimmed.split_whitespace().next().unwrap_or("");
+            !hosts.split(',').any(|h| h == wanted)
+        })
+        .collect();
+    let mut rewritten = kept.join("\n");
+    if !rewritten.is_empty() {
+        rewritten.push('\n');
+    }
+    std::fs::write(path, rewritten)
+}
+
+/// Result of checking a server key against a known_hosts file.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HostKeyVerdict {
+    /// The recorded key for this host:port matches.
+    Known,
+    /// No key was recorded for this host:port; it has now been recorded
+    /// (trust on first use).
+    Learned,
+    /// The recorded key differed and, because the user confirmed it, was
+    /// replaced with the presented one.
+    Replaced,
+}
+
+/// Verify `key` for `host:port` against the known_hosts file at `path`.
+///
+/// A mismatch surfaces as `russh_keys::Error::KeyChanged { line }` — the
+/// caller must refuse the connection. An unknown host is recorded and
+/// accepted, which is what most GUI clients do; a confirmation prompt can be
+/// layered on top later.
+pub(crate) fn verify_host_key(
+    host: &str,
+    port: u16,
+    key: &key::PublicKey,
+    path: &Path,
+    accept_new: bool,
+) -> std::result::Result<HostKeyVerdict, russh_keys::Error> {
+    match check_known_hosts_path(host, port, key, path) {
+        Ok(true) => Ok(HostKeyVerdict::Known),
+        Ok(false) => {
+            learn_known_hosts_path(host, port, key, path)?;
+            Ok(HostKeyVerdict::Learned)
+        }
+        Err(russh_keys::Error::KeyChanged { .. }) if accept_new => {
+            forget_known_host(host, port, path)?;
+            learn_known_hosts_path(host, port, key, path)?;
+            Ok(HostKeyVerdict::Replaced)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// russh client handler: verifies the server's host key against the user's
+/// known_hosts before authentication proceeds.
+pub struct Client {
+    host: String,
+    port: u16,
+    /// `None` when the home directory cannot be located; every key is then
+    /// refused rather than silently trusted.
+    known_hosts: Option<PathBuf>,
+    policy: HostKeyPolicy,
+    report: HostKeyReport,
+}
+
+impl Client {
+    /// Handler for `host:port` using the OpenSSH known_hosts file.
+    pub fn new(host: &str, port: u16, policy: HostKeyPolicy) -> (Self, HostKeyReport) {
+        Self::with_known_hosts(host, port, default_known_hosts_path(), policy)
+    }
+
+    /// Handler with an explicit known_hosts location (tests).
+    pub fn with_known_hosts(
+        host: &str,
+        port: u16,
+        known_hosts: Option<PathBuf>,
+        policy: HostKeyPolicy,
+    ) -> (Self, HostKeyReport) {
+        let report = HostKeyReport::default();
+        (
+            Self {
+                host: host.to_string(),
+                port,
+                known_hosts,
+                policy,
+                report: report.clone(),
+            },
+            report,
+        )
+    }
+}
 
 #[async_trait::async_trait]
 impl client::Handler for Client {
@@ -134,10 +336,277 @@ impl client::Handler for Client {
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &key::PublicKey,
+        server_public_key: &key::PublicKey,
     ) -> Result<bool, Self::Error> {
-        Ok(true) // In production, verify the server key
+        if self.policy == HostKeyPolicy::Off {
+            tracing::warn!(
+                "Host key verification is disabled in Settings; accepting {}:{} unverified",
+                self.host,
+                self.port
+            );
+            return Ok(true);
+        }
+        let Some(path) = &self.known_hosts else {
+            self.report.set(HostKeyRejection::Other(format!(
+                "Refusing to connect to {}:{}: cannot locate the home directory to read ~/.ssh/known_hosts.",
+                self.host, self.port
+            )));
+            return Ok(false);
+        };
+        let fingerprint = server_public_key.fingerprint();
+        let accept_new = self.policy == HostKeyPolicy::AcceptNew;
+        match verify_host_key(&self.host, self.port, server_public_key, path, accept_new) {
+            Ok(HostKeyVerdict::Known) => Ok(true),
+            Ok(HostKeyVerdict::Learned) => {
+                tracing::info!(
+                    "Host key for {}:{} was not in {}; recorded it (trust on first use). Fingerprint: {}",
+                    self.host,
+                    self.port,
+                    path.display(),
+                    fingerprint
+                );
+                Ok(true)
+            }
+            Ok(HostKeyVerdict::Replaced) => {
+                tracing::warn!(
+                    "Host key for {}:{} replaced in {} on the user's confirmation. New fingerprint: {}",
+                    self.host,
+                    self.port,
+                    path.display(),
+                    fingerprint
+                );
+                Ok(true)
+            }
+            Err(russh_keys::Error::KeyChanged { line }) => {
+                self.report.set(HostKeyRejection::Changed(HostKeyChanged {
+                    host: self.host.clone(),
+                    port: self.port,
+                    fingerprint,
+                    line,
+                    file: path.display().to_string(),
+                }));
+                Ok(false)
+            }
+            Err(e) => {
+                // Fail closed: an unreadable or malformed known_hosts must not
+                // turn into silent trust.
+                self.report.set(HostKeyRejection::Other(format!(
+                    "Could not verify the host key for {}:{} against {}: {}. The connection was refused.",
+                    self.host,
+                    self.port,
+                    path.display(),
+                    e
+                )));
+                Ok(false)
+            }
+        }
     }
+}
+
+/// Authenticate a connected SSH session with the given credentials, returning
+/// an error when the server rejects them.
+async fn authenticate_session(
+    session: &mut client::Handle<Client>,
+    username: &str,
+    method: &AuthMethod,
+) -> Result<()> {
+    let authenticated = match method {
+        AuthMethod::Password { password } => {
+            // A blank password can mean two things: the host has an
+            // empty-password account (PermitEmptyPasswords) or the host needs
+            // no credentials at all (it grants the SSH "none" method). Send
+            // the password request FIRST — servers with an explicit
+            // AuthenticationMethods list disconnect on a "none" probe, and
+            // PermitEmptyPasswords is the common case — then fall back to
+            // "none" only when the blank password is rejected. Non-blank
+            // passwords never send "none".
+            let mut authenticated = session
+                .authenticate_password(username, password)
+                .await
+                .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?;
+            if !authenticated && password.is_empty() {
+                authenticated = session
+                    .authenticate_none(username)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?;
+            }
+            authenticated
+        }
+        AuthMethod::PublicKey {
+            key_path,
+            passphrase,
+        } => {
+            // Expand tilde in path — use dirs::home_dir() for cross-platform
+            // support (HOME is not set on Windows; USERPROFILE is used instead).
+            let expanded_path = crate::os_keypath::expand_tilde(key_path);
+
+            // Check if file exists
+            if !std::path::Path::new(&expanded_path).exists() {
+                return Err(anyhow::anyhow!(
+                    "SSH key file not found: {}. Please check the file path and try again.",
+                    key_path
+                ));
+            }
+
+            // Read the key file and normalise CRLF line endings so that keys
+            // created or edited on Windows (which use \r\n) are parsed correctly
+            // by russh-keys' PEM / OpenSSH decoder.
+            let key_content = std::fs::read_to_string(&expanded_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e))?;
+            let key_content = key_content.replace("\r\n", "\n");
+
+            // decode_secret_key takes the key *content* as a &str.
+            let key = decode_secret_key(&key_content, passphrase.as_deref()).map_err(|e| {
+                if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
+                    anyhow::anyhow!(
+                        "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
+                    )
+                } else {
+                    anyhow::anyhow!(
+                        "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
+                        key_path, e
+                    )
+                }
+            })?;
+
+            // russh reports a rejected key as Ok(false) — no transport error —
+            // so the "not authorized" branch must name the key itself; the
+            // map_err above only sees real transport errors.
+            let authenticated = session
+                .authenticate_publickey(username, Arc::new(key))
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Public key authentication failed with key {}: {}.",
+                        expanded_path,
+                        e
+                    )
+                })?;
+            if !authenticated {
+                return Err(anyhow::anyhow!(
+                    "Public key authentication failed with key {}. The key may not be authorized on the server.",
+                    expanded_path
+                ));
+            }
+            authenticated
+        }
+    };
+
+    if !authenticated {
+        return Err(anyhow::anyhow!(
+            "Authentication failed. Please check your credentials and try again."
+        ));
+    }
+    Ok(())
+}
+
+/// A byte stream that relays to the final target through an SSH jump host.
+///
+/// Owns both the jump-host SSH session and the direct-tcpip channel opened to
+/// the final target, so the relay stays alive for the lifetime of the tunneled
+/// connection. Implements `AsyncRead`/`AsyncWrite` by delegating to the channel
+/// so russh's `connect_stream` can run the target SSH handshake over it.
+pub struct SshTunnelStream {
+    _session: client::Handle<Client>,
+    stream: ChannelStream<client::Msg>,
+}
+
+impl AsyncRead for SshTunnelStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for SshTunnelStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.stream).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.stream).poll_shutdown(cx)
+    }
+}
+
+/// Establish an SSH session to the jump host, authenticate, and open a
+/// direct-tcpip channel to the final target. Returns a stream the target SSH
+/// handshake runs over.
+pub async fn connect_via_ssh_tunnel(
+    tunnel: &TunnelConfig,
+    host: &str,
+    port: u16,
+    timeout: Duration,
+    policy: HostKeyPolicy,
+) -> Result<SshTunnelStream> {
+    let ssh_config = client::Config {
+        preferred: russh::Preferred {
+            key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
+            ..russh::Preferred::DEFAULT
+        },
+        ..client::Config::default()
+    };
+
+    let (handler, host_key_error) = Client::new(&tunnel.host, tunnel.port, policy);
+    let mut session = tokio::time::timeout(
+        timeout,
+        client::connect(
+            Arc::new(ssh_config),
+            (&tunnel.host[..], tunnel.port),
+            handler,
+        ),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "SSH tunnel connection to {}:{} timed out after {}s. Please check the tunnel host and network connectivity.",
+            tunnel.host,
+            tunnel.port,
+            timeout.as_secs()
+        )
+    })?
+    .map_err(|e| {
+        host_key_error.explain_or(anyhow::anyhow!(
+            "Failed to connect to SSH tunnel host {}:{}: {}",
+            tunnel.host,
+            tunnel.port,
+            e
+        ))
+    })?;
+
+    authenticate_session(&mut session, &tunnel.username, &tunnel.auth_method).await?;
+
+    // Open a direct-tcpip channel through the jump host to the final target.
+    // The originator is our local end and only reported to the server; the
+    // loopback address is the conventional placeholder (as OpenSSH does).
+    let channel = session
+        .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to open tunnel to {}:{} through {}:{}: {}",
+                host,
+                port,
+                tunnel.host,
+                tunnel.port,
+                e
+            )
+        })?;
+
+    Ok(SshTunnelStream {
+        _session: session,
+        stream: channel.into_stream(),
+    })
 }
 
 impl SshClient {
@@ -161,13 +630,45 @@ impl SshClient {
             // preventing the server from silently dropping idle sessions.
             keepalive_interval,
             keepalive_max: config.keepalive_max.unwrap_or(3) as usize,
+            // russh's default time-based rekey (Limits::default rekeys every
+            // 3600s) reliably kills long-idle connections in russh 0.44.x:
+            // in the multi-hour soak test every idle terminal died at the
+            // ~1-hour mark, right at the rekey exchange, while active
+            // sessions rekeyed fine. Keep the spec's 1 GiB data limits but
+            // lift the time limit so idle terminals never enter the broken
+            // path. OpenSSH servers don't time-rekey by default, so no
+            // server-initiated rekey replaces it.
+            limits: Limits::new(1 << 30, 1 << 30, Duration::from_secs(7 * 24 * 60 * 60)),
             ..client::Config::default()
         };
 
         // Connection timeout: 3 seconds
         let connection_timeout = Duration::from_secs(3);
 
-        let mut ssh_session = if let Some(proxy) = &config.proxy {
+        let (handler, host_key_error) =
+            Client::new(&config.host, config.port, config.host_key_policy);
+        let mut ssh_session = if let Some(tunnel) = &config.tunnel {
+            // Route the connection through an SSH jump host: connect to the
+            // tunnel host, open a direct-tcpip channel to the final target,
+            // then hand that channel to russh so the target SSH handshake
+            // runs over the tunnel.
+            let stream = connect_via_ssh_tunnel(
+                tunnel,
+                &config.host,
+                config.port,
+                connection_timeout,
+                config.host_key_policy,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("SSH tunnel failed: {e}"))?;
+            tokio::time::timeout(
+                connection_timeout,
+                client::connect_stream(Arc::new(ssh_config), stream, handler),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
+            .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
+        } else if let Some(proxy) = &config.proxy {
             // Tunnel through the proxy first, then hand the established stream
             // to russh so the SSH handshake runs over the tunnel.
             let stream = crate::proxy::connect_via_proxy(
@@ -180,86 +681,22 @@ impl SshClient {
             .map_err(|e| anyhow::anyhow!("Proxy connection failed: {e}"))?;
             tokio::time::timeout(
                 connection_timeout,
-                client::connect_stream(Arc::new(ssh_config), stream, Client),
+                client::connect_stream(Arc::new(ssh_config), stream, handler),
             )
             .await
             .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
-            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?
+            .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
         } else {
             tokio::time::timeout(
                 connection_timeout,
-                client::connect(Arc::new(ssh_config), (&config.host[..], config.port), Client),
+                client::connect(Arc::new(ssh_config), (&config.host[..], config.port), handler),
             )
             .await
             .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
-            .map_err(|e| anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e))?
+            .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
         };
 
-        let authenticated = match &config.auth_method {
-            AuthMethod::Password { password } => ssh_session
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?,
-            AuthMethod::PublicKey {
-                key_path,
-                passphrase,
-            } => {
-                // Expand tilde in path — use dirs::home_dir() for cross-platform
-                // support (HOME is not set on Windows; USERPROFILE is used instead).
-                let expanded_path = if key_path.starts_with("~/") || key_path.starts_with("~\\") {
-                    if let Some(home) = dirs::home_dir() {
-                        let home_str = home.to_string_lossy();
-                        key_path.replacen('~', &home_str, 1)
-                    } else {
-                        key_path.clone()
-                    }
-                } else {
-                    key_path.clone()
-                };
-
-                // Check if file exists
-                if !std::path::Path::new(&expanded_path).exists() {
-                    return Err(anyhow::anyhow!(
-                        "SSH key file not found: {}. Please check the file path and try again.",
-                        key_path
-                    ));
-                }
-
-                // Read the key file and normalise CRLF line endings so that keys
-                // created or edited on Windows (which use \r\n) are parsed correctly
-                // by russh-keys' PEM / OpenSSH decoder.
-                let key_content = std::fs::read_to_string(&expanded_path).map_err(|e| {
-                    anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e)
-                })?;
-                let key_content = key_content.replace("\r\n", "\n");
-
-                // decode_secret_key takes the key *content* as a &str.
-                let key = decode_secret_key(&key_content, passphrase.as_deref())
-                    .map_err(|e| {
-                        if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
-                            anyhow::anyhow!(
-                                "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
-                            )
-                        } else {
-                            anyhow::anyhow!(
-                                "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
-                                key_path, e
-                            )
-                        }
-                    })?;
-
-                ssh_session
-                    .authenticate_publickey(&config.username, Arc::new(key))
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Public key authentication failed: {}. The key may not be authorized on the server.", e))?
-            }
-        };
-
-        if !authenticated {
-            return Err(anyhow::anyhow!(
-                "Authentication failed. Please check your credentials and try again."
-            ));
-        }
+        authenticate_session(&mut ssh_session, &config.username, &config.auth_method).await?;
 
         self.session = Some(Arc::new(ssh_session));
         Ok(())
@@ -478,6 +915,7 @@ impl SshClient {
                 channel_id,
                 resize_tx,
                 cancel: CancellationToken::new(),
+                dead: Arc::new(AtomicBool::new(false)),
             })
         } else {
             Err(anyhow::anyhow!("Not connected"))
@@ -495,128 +933,380 @@ impl SshClient {
     }
 
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {
-        if let Some(session) = &self.session {
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
+        self.download_file_with_progress(
+            remote_path,
+            local_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
 
-            // Open remote file for reading
-            let mut remote_file = sftp.open(remote_path).await?;
+    /// Clone the russh session handle out so a caller can drop the client
+    /// read guard before starting a long transfer (the guard would otherwise
+    /// block `disconnect()` for the whole transfer).
+    pub fn transfer_session(&self) -> Result<Arc<client::Handle<Client>>> {
+        self.session
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))
+    }
 
-            // Read file content
-            let mut buffer = Vec::new();
-            let mut temp_buf = vec![0u8; 8192];
-            let mut total_bytes = 0u64;
-
-            loop {
-                let n = remote_file.read(&mut temp_buf).await?;
-                if n == 0 {
-                    break;
-                }
-                buffer.extend_from_slice(&temp_buf[..n]);
-                total_bytes += n as u64;
-            }
-
-            // Write to local file
-            tokio::fs::write(local_path, buffer).await?;
-
-            Ok(total_bytes)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
-        }
+    /// Download via the pipelined streaming engine (`sftp_transfer`), with
+    /// optional progress callbacks. Keeps whole files out of memory.
+    /// Cancelling `cancel` aborts the transfer promptly.
+    pub async fn download_file_with_progress(
+        &self,
+        remote_path: &str,
+        local_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<u64> {
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
+            .await
     }
 
     pub async fn download_file_to_memory(&self, remote_path: &str) -> Result<Vec<u8>> {
-        if let Some(session) = &self.session {
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
+        let sftp = self.open_sftp_session_with_transfer_timeout().await?;
 
-            // Open remote file for reading
-            let mut remote_file = sftp.open(remote_path).await?;
+        // Open remote file for reading
+        let mut remote_file = sftp
+            .open(remote_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to open remote file '{}': {}", remote_path, e))?;
 
-            // Read file content
-            let mut buffer = Vec::new();
-            let mut temp_buf = vec![0u8; 8192];
+        let mut buffer = Vec::new();
+        let mut temp_buf = vec![0u8; 32768];
 
-            loop {
-                let n = remote_file.read(&mut temp_buf).await?;
-                if n == 0 {
-                    break;
-                }
-                buffer.extend_from_slice(&temp_buf[..n]);
+        loop {
+            let n = remote_file.read(&mut temp_buf).await?;
+            if n == 0 {
+                break;
             }
-
-            Ok(buffer)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
+            buffer.extend_from_slice(&temp_buf[..n]);
         }
+
+        Ok(buffer)
     }
 
     pub async fn upload_file(&self, local_path: &str, remote_path: &str) -> Result<u64> {
-        if let Some(session) = &self.session {
-            // Read local file
-            let data = tokio::fs::read(local_path).await?;
-            let total_bytes = data.len() as u64;
+        self.upload_file_with_progress(
+            local_path,
+            remote_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
 
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
+    /// Upload via the pipelined streaming engine (`sftp_transfer`), with
+    /// optional progress callbacks. Streams from disk instead of loading
+    /// the whole file into memory. Cancelling `cancel` aborts promptly.
+    pub async fn upload_file_with_progress(
+        &self,
+        local_path: &str,
+        remote_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<u64> {
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
+    }
 
-            // Create remote file for writing
-            let mut remote_file = sftp.create(remote_path).await?;
-
-            // Write data in chunks
-            let mut offset = 0;
-            let chunk_size = 8192;
-
-            while offset < data.len() {
-                let end = std::cmp::min(offset + chunk_size, data.len());
-                remote_file.write_all(&data[offset..end]).await?;
-                offset = end;
-            }
-
-            remote_file.flush().await?;
-
-            Ok(total_bytes)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
-        }
+    /// Open an SFTP subsystem session for small one-shot operations (viewer
+    /// reads, editor saves). Uses the transfer request timeout so a
+    /// momentarily stalled server doesn't abort the read.
+    async fn open_sftp_session_with_transfer_timeout(&self) -> Result<SftpSession> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Not connected"))?;
+        let channel = session.channel_open_session().await?;
+        channel.request_subsystem(true, "sftp").await?;
+        let config = russh_sftp::client::Config {
+            request_timeout_secs: crate::sftp_transfer::REQUEST_TIMEOUT_SECS,
+            ..russh_sftp::client::Config::default()
+        };
+        Ok(SftpSession::new_with_config(channel.into_stream(), config).await?)
     }
 
     pub async fn upload_file_from_bytes(&self, data: &[u8], remote_path: &str) -> Result<u64> {
-        if let Some(session) = &self.session {
-            let total_bytes = data.len() as u64;
-
-            // Open SFTP subsystem
-            let channel = session.channel_open_session().await?;
-            channel.request_subsystem(true, "sftp").await?;
-            let sftp = SftpSession::new(channel.into_stream()).await?;
-
-            // Create remote file for writing
-            let mut remote_file = sftp.create(remote_path).await?;
-
-            // Write data in chunks
-            let mut offset = 0;
-            let chunk_size = 8192;
-
-            while offset < data.len() {
-                let end = std::cmp::min(offset + chunk_size, data.len());
-                remote_file.write_all(&data[offset..end]).await?;
-                offset = end;
-            }
-
-            remote_file.flush().await?;
-
-            Ok(total_bytes)
-        } else {
-            Err(anyhow::anyhow!("Not connected"))
+        if !self.is_connected() {
+            return Err(anyhow::anyhow!("Not connected"));
         }
+        let total_bytes = data.len() as u64;
+
+        let sftp = self.open_sftp_session_with_transfer_timeout().await?;
+
+        // Create remote file for writing
+        let mut remote_file = sftp.create(remote_path).await?;
+
+        // Write data in chunks large enough for the session's internal
+        // write pipeline to keep several requests in flight
+        let mut offset = 0;
+        let chunk_size = 256 * 1024;
+
+        while offset < data.len() {
+            let end = std::cmp::min(offset + chunk_size, data.len());
+            remote_file.write_all(&data[offset..end]).await?;
+            offset = end;
+        }
+
+        remote_file.flush().await?;
+
+        Ok(total_bytes)
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod host_key_tests {
+    use super::*;
+
+    fn fresh_key() -> key::PublicKey {
+        key::KeyPair::generate_ed25519()
+            .expect("ed25519 keygen")
+            .clone_public_key()
+            .expect("public key")
+    }
+
+    #[test]
+    fn unknown_host_is_learned_then_recognised() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let key = fresh_key();
+
+        assert_eq!(
+            verify_host_key("example.test", 22, &key, &path, false).unwrap(),
+            HostKeyVerdict::Learned
+        );
+        let recorded = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            recorded.contains("example.test ssh-ed25519 "),
+            "{recorded:?}"
+        );
+
+        assert_eq!(
+            verify_host_key("example.test", 22, &key, &path, false).unwrap(),
+            HostKeyVerdict::Known
+        );
+        // A second check must not append a duplicate line.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), recorded);
+    }
+
+    #[test]
+    fn non_default_port_is_a_separate_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let key = fresh_key();
+
+        verify_host_key("example.test", 22, &key, &path, false).unwrap();
+        assert_eq!(
+            verify_host_key("example.test", 2222, &key, &path, false).unwrap(),
+            HostKeyVerdict::Learned
+        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("[example.test]:2222 ssh-ed25519 "));
+    }
+
+    #[test]
+    fn changed_key_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+
+        verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
+        let err = verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap_err();
+        assert!(
+            matches!(err, russh_keys::Error::KeyChanged { .. }),
+            "expected KeyChanged, got {err:?}"
+        );
+        // The file is untouched: the impostor's key was not recorded.
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .matches("ssh-ed25519")
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_accepts_known_and_refuses_changed_keys_with_a_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let genuine = fresh_key();
+
+        // First contact: learned and accepted, no rejection reason.
+        let (mut handler, report) = Client::with_known_hosts(
+            "example.test",
+            22,
+            Some(path.clone()),
+            HostKeyPolicy::Strict,
+        );
+        assert!(client::Handler::check_server_key(&mut handler, &genuine)
+            .await
+            .unwrap());
+        assert!(matches!(
+            report
+                .explain_or(anyhow::anyhow!("fallback"))
+                .to_string()
+                .as_str(),
+            "fallback"
+        ));
+
+        // Same key again: accepted.
+        let (mut handler, _) = Client::with_known_hosts(
+            "example.test",
+            22,
+            Some(path.clone()),
+            HostKeyPolicy::Strict,
+        );
+        assert!(client::Handler::check_server_key(&mut handler, &genuine)
+            .await
+            .unwrap());
+
+        // A different key for the same host: refused, and connect() gets the reason.
+        let (mut handler, report) =
+            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::Strict);
+        assert!(
+            !client::Handler::check_server_key(&mut handler, &fresh_key())
+                .await
+                .unwrap()
+        );
+        let reason = report.explain_or(anyhow::anyhow!("fallback")).to_string();
+        assert!(
+            reason.contains("HOST KEY CHANGED for example.test:22"),
+            "{reason}"
+        );
+        assert!(reason.contains("man-in-the-middle"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn handler_refuses_everything_without_a_home_directory() {
+        let (mut handler, report) =
+            Client::with_known_hosts("example.test", 22, None, HostKeyPolicy::Strict);
+        assert!(
+            !client::Handler::check_server_key(&mut handler, &fresh_key())
+                .await
+                .unwrap()
+        );
+        let reason = report.explain_or(anyhow::anyhow!("fallback")).to_string();
+        assert!(
+            reason.contains("cannot locate the home directory"),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn accept_new_replaces_the_recorded_key_and_keeps_other_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let other = fresh_key();
+        verify_host_key("other.test", 22, &other, &path, false).unwrap();
+        verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
+
+        let replacement = fresh_key();
+        assert_eq!(
+            verify_host_key("example.test", 22, &replacement, &path, true).unwrap(),
+            HostKeyVerdict::Replaced
+        );
+        // Now recognised, and the other host's line survived untouched.
+        assert_eq!(
+            verify_host_key("example.test", 22, &replacement, &path, false).unwrap(),
+            HostKeyVerdict::Known
+        );
+        assert_eq!(
+            verify_host_key("other.test", 22, &other, &path, false).unwrap(),
+            HostKeyVerdict::Known
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .matches("ssh-ed25519")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn forget_known_host_only_drops_matching_plain_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        std::fs::write(
+            &path,
+            "# comment\nexample.test ssh-ed25519 AAAA\n[example.test]:2222 ssh-ed25519 BBBB\nother.test,alias ssh-ed25519 CCCC\n|1|hash|salt ssh-ed25519 DDDD\n",
+        )
+        .unwrap();
+        forget_known_host("example.test", 22, &path).unwrap();
+        let left = std::fs::read_to_string(&path).unwrap();
+        assert!(!left.contains("AAAA"));
+        assert!(left.contains("# comment"));
+        assert!(left.contains("[example.test]:2222"));
+        assert!(left.contains("other.test,alias"));
+        assert!(left.contains("|1|hash|salt"));
+        // Missing file is not an error.
+        forget_known_host("nobody", 22, &dir.path().join("absent")).unwrap();
+    }
+
+    #[tokio::test]
+    async fn policy_off_accepts_without_touching_known_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let (mut handler, _) =
+            Client::with_known_hosts("example.test", 22, Some(path.clone()), HostKeyPolicy::Off);
+        assert!(
+            client::Handler::check_server_key(&mut handler, &fresh_key())
+                .await
+                .unwrap()
+        );
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn policy_accept_new_lets_a_changed_key_through_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
+        let (mut handler, report) =
+            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::AcceptNew);
+        assert!(
+            client::Handler::check_server_key(&mut handler, &fresh_key())
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            report.explain_or(anyhow::anyhow!("fallback")).to_string(),
+            "fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn strict_rejection_is_downcastable_to_host_key_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        verify_host_key("example.test", 2222, &fresh_key(), &path, false).unwrap();
+        let (mut handler, report) = Client::with_known_hosts(
+            "example.test",
+            2222,
+            Some(path.clone()),
+            HostKeyPolicy::Strict,
+        );
+        assert!(
+            !client::Handler::check_server_key(&mut handler, &fresh_key())
+                .await
+                .unwrap()
+        );
+        let err = report.explain_or(anyhow::anyhow!("fallback"));
+        let changed = err.downcast_ref::<HostKeyChanged>().expect("typed error");
+        assert_eq!(changed.host, "example.test");
+        assert_eq!(changed.port, 2222);
+        assert_eq!(changed.file, path.display().to_string());
+        assert!(changed.line >= 1);
+        assert!(err
+            .to_string()
+            .contains("HOST KEY CHANGED for example.test:2222"));
+    }
+}

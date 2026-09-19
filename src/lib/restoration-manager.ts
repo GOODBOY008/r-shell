@@ -43,6 +43,10 @@ export function signalReady(connectionId: string): void {
 export function clearAllRestorations(): void {
   for (const entry of pendingRestorations.values()) {
     clearTimeout(entry.timeout);
+    // Resolve any in-flight registerRestoration promises so an await on them
+    // (e.g. the session-restore loop) does not hang forever after a timeout
+    // or abort clears the registry.
+    entry.resolve();
   }
   pendingRestorations.clear();
   earlySignals.clear();

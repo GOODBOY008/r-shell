@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { changeLanguage, getLanguagePreference, AUTO } from '@/lib/i18n';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
@@ -28,7 +29,8 @@ import {
   Code2,
   ChevronLeft,
   ChevronRight,
-  AlertTriangle
+  AlertTriangle,
+  Copy
 } from 'lucide-react';
 import { 
   TerminalAppearanceSettings, 
@@ -59,7 +61,38 @@ import {
   importAllConfig,
 } from '@/lib/config-export-import';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
+import { isTauri, invoke } from '@tauri-apps/api/core';
+import { getVersion } from '@tauri-apps/api/app';
+import {
+  DEFAULT_UPDATE_CONTEXT,
+  isCurrentChannelEligible,
+  type UpdateContext,
+} from '@/lib/update-channel';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { readFile } from '@tauri-apps/plugin-fs';
+import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Checkbox } from './ui/checkbox';
+
+// Background image picker: MIME type for the data URL derived from the file extension.
+const IMAGE_MIME: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  svg: 'image/svg+xml',
+  ico: 'image/x-icon',
+};
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const CHUNK = 0x8000; // avoid call-stack limits on large arrays with spread
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
 
 interface SettingsModalProps {
   open: boolean;
@@ -90,6 +123,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     connectionTimeout: 30,
     keepAliveInterval: 60,
     autoReconnect: true,
+    restoreSessionsOnStartup: true,
     
     // Security settings
     hostKeyVerification: true,
@@ -113,9 +147,30 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     logLevel: 'info',
     maxLogSize: 100,
     checkUpdates: true,
+    updateChannel: 'stable',
     updateProxy: '',
-    telemetry: false
+    telemetry: false,
+
+    // System settings
+    autostart: false
   });
+
+  // True once the user has manually changed the autostart toggle (or reset
+  // settings) while the modal is open — the OS state query must not clobber it.
+  const autostartTouchedRef = useRef(false);
+
+  // Backend facts for the update group: Homebrew detection hides the channel/
+  // auto-check/proxy controls (brew owns updates), platform/arch/macOS major
+  // gate the `current` channel. Null in browser dev mode → gating stays off.
+  const [updateContext, setUpdateContext] = useState<UpdateContext | null>(null);
+
+  const currentChannelEligible = isCurrentChannelEligible(updateContext ?? DEFAULT_UPDATE_CONTEXT);
+  const homebrewManaged = updateContext?.homebrewManaged ?? false;
+  const channelValue =
+    settings.updateChannel === 'current' && currentChannelEligible ? 'current' : 'stable';
+
+  // Running app version for the update group; null in browser dev mode → dash.
+  const [appVersion, setAppVersion] = useState<string | null>(null);
 
   // Load settings when modal opens
   useEffect(() => {
@@ -140,6 +195,33 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         }
       } catch {
         // Ignore parsing errors
+      }
+
+      // Load the real autostart state from the OS so the toggle reflects
+      // the actual launch-at-login configuration, not a cached value.
+      // Skip in browser dev mode where the Tauri backend is absent.
+      if (isTauri()) {
+        invoke<UpdateContext>('get_update_context')
+          .then(setUpdateContext)
+          .catch(() => setUpdateContext(null));
+
+        // Current app version shown in the update group (each open re-reads)
+        getVersion()
+          .then(setAppVersion)
+          .catch(() => setAppVersion(null));
+
+        // Each open re-reads the OS state; discard any prior touch flag
+        autostartTouchedRef.current = false;
+        isAutostartEnabled()
+          .then((enabled) => {
+            // A manual toggle made while the query was in flight wins
+            if (!autostartTouchedRef.current) {
+              setSettings(prev => ({ ...prev, autostart: enabled }));
+            }
+          })
+          .catch(() => {
+            // Plugin unavailable — keep stored/default value
+          });
       }
     }
   }, [open]);
@@ -199,6 +281,33 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     setTerminalAppearance(prev => ({ ...prev, [key]: value }));
   };
 
+  // Pick a background image via the native OS dialog (Tauri builds) or fall
+  // back to the hidden HTML input in browser dev mode. Plain function: only
+  // invoked from the button's onClick, so useCallback buys nothing.
+  const handlePickBackgroundImage = async () => {
+    if (!isTauri()) {
+      document.getElementById('background-image-upload')?.click();
+      return;
+    }
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: t('settings.terminal.images'), extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] }],
+      });
+      if (!selected) return; // dialog dismissed
+      const bytes = await readFile(selected);
+      if (bytes.length > 5 * 1024 * 1024) {
+        toast.error(t('settings.terminal.imageSizeWarning'));
+        return;
+      }
+      const ext = selected.split('.').pop()?.toLowerCase() ?? '';
+      const mime = IMAGE_MIME[ext] ?? 'image/png';
+      updateTerminalAppearance('backgroundImage', `data:${mime};base64,${bytesToBase64(bytes)}`);
+    } catch (err) {
+      toast.error(t('settings.terminal.imageLoadError'), { description: String(err) });
+    }
+  };
+
   const updateSetting = (key: keyof typeof settings, value: any) => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
@@ -211,6 +320,38 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
       toast.error(t('settings.advanced.updateProxyInvalid'));
       return false;
     }
+
+    // Apply the launch-at-login preference to the OS (best effort — revert
+    // the toggle and warn if the plugin call fails so the UI stays truthful).
+    // Skipped in browser dev mode where the Tauri backend is absent.
+    void (async () => {
+      if (!isTauri()) return;
+      try {
+        if (settings.autostart) {
+          await enableAutostart();
+        } else {
+          await disableAutostart();
+        }
+      } catch (error) {
+        const actual = await isAutostartEnabled().catch(() => undefined);
+        const corrected = actual ?? !settings.autostart;
+        setSettings(prev => ({ ...prev, autostart: corrected }));
+        // Keep the persisted config truthful when the OS update failed
+        try {
+          const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+          localStorage.setItem(
+            APP_SETTINGS_STORAGE_KEY,
+            JSON.stringify({ ...saved, autostart: corrected }),
+          );
+          window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+        } catch {
+          // Ignore storage errors — the toggle and toast already reflect reality
+        }
+        toast.error(t('settings.interface.autostartFailed'), {
+          description: error instanceof Error ? error.message : String(error),
+        });
+      }
+    })();
 
     // Save terminal appearance settings
     saveAppearanceSettings(terminalAppearance);
@@ -231,6 +372,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
       ...settings,
       updateProxy: updateProxy ?? '',
+      // A stored `current` preference that no longer qualifies (e.g. the app
+      // moved to a Homebrew install or an older macOS) falls back to stable.
+      updateChannel: channelValue,
     }));
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     onOpenChange(false);
@@ -254,6 +398,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         connectionTimeout: 30,
         keepAliveInterval: 60,
         autoReconnect: true,
+        restoreSessionsOnStartup: true,
         hostKeyVerification: true,
         savePasswords: false,
         autoLockTimeout: 30,
@@ -269,10 +414,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         logLevel: 'info',
         maxLogSize: 100,
         checkUpdates: true,
+        updateChannel: 'stable',
         updateProxy: '',
-        telemetry: false
+        telemetry: false,
+        autostart: false
       });
-      
+
+      // Resetting is a deliberate change — don't let a pending OS query undo it
+      if (settings.autostart) {
+        autostartTouchedRef.current = true;
+      }
+
       // Apply default theme
       applyTheme('dark');
     }
@@ -305,7 +457,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   const scrollToActiveTab = useCallback(() => {
     const el = tabListRef.current;
     if (!el) return;
-    const activeTrigger = el.querySelector('[data-state="active"]') as HTMLElement | null;
+    const activeTrigger = el.querySelector<HTMLElement>('[data-state="active"]');
     if (!activeTrigger) return;
     activeTrigger.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
   }, []);
@@ -337,7 +489,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b">
+        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
           <DialogTitle className="flex items-center gap-2">
             <div className="p-2 bg-primary/10 rounded-lg">
               <Settings className="h-5 w-5 text-primary" />
@@ -353,7 +505,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
           {/* Scrollable tab bar with fade edges and scroll arrows */}
-          <div className="relative border-b">
+          <div className="relative border-b border-border">
             {/* Left scroll button */}
             {canScrollLeft && (
               <div className="absolute left-0 top-0 bottom-0 z-10 flex items-center pl-1 pr-6 bg-gradient-to-r from-background via-background/95 to-transparent pointer-events-none">
@@ -362,7 +514,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   onClick={() => scrollTabs('left')}
                   className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
                   tabIndex={-1}
-                  aria-label="Scroll left"
+                  aria-label={t('settings.tabScrollLeft')}
                 >
                   <ChevronLeft className="h-3.5 w-3.5 text-foreground" />
                 </button>
@@ -377,7 +529,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   onClick={() => scrollTabs('right')}
                   className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
                   tabIndex={-1}
-                  aria-label="Scroll right"
+                  aria-label={t('settings.tabScrollRight')}
                 >
                   <ChevronRight className="h-3.5 w-3.5 text-foreground" />
                 </button>
@@ -599,7 +751,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => document.getElementById('background-image-upload')?.click()}
+                      onClick={() => { void handlePickBackgroundImage(); }}
                       className="gap-2"
                     >
                       <Upload className="h-4 w-4" />
@@ -621,7 +773,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   {terminalAppearance.backgroundImage && (
                     <div className="space-y-4 pl-0">
                       <div className="flex items-center gap-3">
-                        <div className="w-16 h-16 rounded border overflow-hidden flex-shrink-0">
+                        <div className="w-16 h-16 rounded border border-border overflow-hidden flex-shrink-0">
                           <img 
                             src={terminalAppearance.backgroundImage} 
                             alt="Background preview" 
@@ -790,9 +942,9 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="2">2 spaces</SelectItem>
-                        <SelectItem value="4">4 spaces</SelectItem>
-                        <SelectItem value="8">8 spaces</SelectItem>
+                        <SelectItem value="2">{t('settings.editor.tabSize2')}</SelectItem>
+                        <SelectItem value="4">{t('settings.editor.tabSize4')}</SelectItem>
+                        <SelectItem value="8">{t('settings.editor.tabSize8')}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -920,6 +1072,22 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                     onCheckedChange={(checked) => updateSetting('autoReconnect', checked)}
                   />
                 </div>
+
+                <Separator />
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="restore-sessions-on-startup">{t('settings.connection.restoreSessionsOnStartup')}</Label>
+                    <p className="text-sm text-muted-foreground">
+                      {t('settings.connection.restoreSessionsOnStartupDesc')}
+                    </p>
+                  </div>
+                  <Switch
+                    id="restore-sessions-on-startup"
+                    checked={settings.restoreSessionsOnStartup}
+                    onCheckedChange={(checked) => updateSetting('restoreSessionsOnStartup', checked)}
+                  />
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -1031,6 +1199,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       <SelectItem value={AUTO}>{t('settings.language.auto')}</SelectItem>
                       <SelectItem value="en">{t('settings.language.en')}</SelectItem>
                       <SelectItem value="zh-CN">{t('settings.language.zhCN')}</SelectItem>
+                      <SelectItem value="pl">{t('settings.language.pl')}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1076,6 +1245,24 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   <Switch
                     checked={settings.enableNotifications}
                     onCheckedChange={(checked) => updateSetting('enableNotifications', checked)}
+                  />
+                </div>
+
+                <Separator />
+
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>{t('settings.interface.autostart')}</Label>
+                    <p className="text-sm text-muted-foreground">
+                      {t('settings.interface.autostartDesc')}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.autostart}
+                    onCheckedChange={(checked) => {
+                      autostartTouchedRef.current = true;
+                      updateSetting('autostart', checked);
+                    }}
                   />
                 </div>
               </CardContent>
@@ -1182,47 +1369,111 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
 
                 <Separator />
 
+                {/* Current app version — visible on every platform (issue #166) */}
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>{t('settings.advanced.checkUpdates')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.advanced.checkUpdatesDesc')}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        if (handleSave()) {
-                          onCheckForUpdates?.();
-                        }
-                      }}
-                      className="gap-1.5"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      {t('settings.advanced.checkNow')}
-                    </Button>
-                    <Switch
-                      checked={settings.checkUpdates}
-                      onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
-                    />
+                    <Label>{t('settings.advanced.version')}</Label>
+                    <p className="text-sm text-muted-foreground font-mono">{appVersion ?? '—'}</p>
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="update-proxy">{t('settings.advanced.updateProxy')}</Label>
-                  <Input
-                    id="update-proxy"
-                    type="url"
-                    placeholder={t('settings.advanced.updateProxyPlaceholder')}
-                    value={settings.updateProxy}
-                    onChange={(event) => updateSetting('updateProxy', event.target.value)}
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    {t('settings.advanced.updateProxyDesc')}
-                  </p>
-                </div>
+                <Separator />
+
+                {homebrewManaged ? (
+                  <div className="space-y-2 rounded-lg border border-border bg-muted/50 p-3">
+                    <p className="text-sm font-medium">
+                      {t('settings.updates.homebrewManaged.title')}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {t('settings.updates.homebrewManaged.desc')}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <code className="flex-1 rounded border border-border bg-background px-2 py-1.5 font-mono text-xs">
+                        {t('settings.updates.homebrewManaged.command')}
+                      </code>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 w-7 shrink-0 p-0"
+                        aria-label={t('settings.updates.homebrewManaged.copyCommand')}
+                        onClick={() => {
+                          void writeClipboardText(t('settings.updates.homebrewManaged.command'))
+                            .then(() => toast.success(t('settings.updates.homebrewManaged.commandCopied')))
+                            .catch((err: unknown) => console.warn('clipboard write failed:', err));
+                        }}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-2">
+                      <Label>{t('settings.updates.channel.label')}</Label>
+                      <Select
+                        value={channelValue}
+                        onValueChange={(value) => updateSetting('updateChannel', value)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="stable">{t('settings.updates.channel.stable')}</SelectItem>
+                          <SelectItem value="current" disabled={!currentChannelEligible}>
+                            {t('settings.updates.channel.current')}
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <p className="text-sm text-muted-foreground">
+                        {currentChannelEligible
+                          ? t('settings.updates.channel.currentHint')
+                          : t('settings.updates.channel.currentUnavailable')}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <Label>{t('settings.advanced.checkUpdates')}</Label>
+                        <p className="text-sm text-muted-foreground">
+                          {t('settings.advanced.checkUpdatesDesc')}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (handleSave()) {
+                              onCheckForUpdates?.();
+                            }
+                          }}
+                          className="gap-1.5"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          {t('settings.advanced.checkNow')}
+                        </Button>
+                        <Switch
+                          checked={settings.checkUpdates}
+                          onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="update-proxy">{t('settings.advanced.updateProxy')}</Label>
+                      <Input
+                        id="update-proxy"
+                        type="url"
+                        placeholder={t('settings.advanced.updateProxyPlaceholder')}
+                        value={settings.updateProxy}
+                        onChange={(event) => updateSetting('updateProxy', event.target.value)}
+                      />
+                      <p className="text-sm text-muted-foreground">
+                        {t('settings.advanced.updateProxyDesc')}
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
@@ -1258,7 +1509,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   </div>
 
                   <div className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                    <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
                         <p className="text-xs text-muted-foreground">
@@ -1277,7 +1528,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                       </Button>
                     </div>
 
-                    <div className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                    <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
                       <div className="space-y-0.5">
                         <p className="text-sm font-medium">{t('settings.advanced.importConfig')}</p>
                         <p className="text-xs text-muted-foreground">
@@ -1317,7 +1568,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
           </TabsContent>
         </Tabs>
 
-        <div className="flex justify-between px-6 py-4 border-t bg-muted/30">
+        <div className="flex justify-between px-6 py-4 border-t border-border bg-muted/30">
           <Button variant="ghost" onClick={handleReset}>
             {t('settings.button.resetToDefaults')}
           </Button>

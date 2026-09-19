@@ -384,6 +384,37 @@ describe('terminal-group-reducer property tests', () => {
     );
   });
 
+  it('Property 7b: CLOSE_ALL_TABS empties the group and keeps the map consistent', () => {
+    fc.assert(
+      fc.property(
+        arbitraryTerminalGroupState.filter((s) =>
+          Object.values(s.groups).some((g) => g.tabs.length > 0),
+        ),
+        (state) => {
+          const group = Object.values(state.groups).find((g) => g.tabs.length > 0)!;
+          const next = terminalGroupReducer(state, { type: 'CLOSE_ALL_TABS', groupId: group.id });
+
+          // Every tab of the target group is gone from both tabs and map
+          const remainingGroup = next.groups[group.id];
+          if (remainingGroup) {
+            expect(remainingGroup.tabs).toEqual([]);
+            expect(remainingGroup.activeTabId).toBeNull();
+          }
+          for (const tab of group.tabs) {
+            expect(next.tabToGroupMap[tab.id]).toBeUndefined();
+          }
+
+          // Other groups' tabs are untouched
+          for (const [gid, g] of Object.entries(state.groups)) {
+            if (gid === group.id) continue;
+            expect(next.groups[gid]?.tabs.map((t) => t.id)).toEqual(g.tabs.map((t) => t.id));
+          }
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
   // Feature: terminal-split-view, Property 8: 移动标签页到新组
   // **Validates: Requirements 2.6, 4.5**
   it('Property 8: MOVE_TAB_TO_NEW_GROUP creates new group with the tab', () => {

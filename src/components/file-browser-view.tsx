@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useReducer, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from 'react-i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -22,9 +22,9 @@ import { TransferQueue } from "./transfer-queue";
 import type { FileEntry } from "@/lib/file-entry-types";
 import { pathJoin } from "@/lib/file-entry-types";
 import {
-  transferQueueReducer,
-  getNextQueuedTransfer,
-} from "@/lib/transfer-queue-reducer";
+  useTransferQueue,
+  onItemSettled,
+} from "@/lib/transfer-queue-service";
 import {
   buildMixedDropUploadPlan,
   type DroppedPathStat,
@@ -55,7 +55,9 @@ export function FileBrowserView({
 }: FileBrowserViewProps) {
   const { t } = useTranslation();
   const [activePanel, setActivePanel] = useState<"local" | "remote">("local");
-  const [transfers, dispatchTransfer] = useReducer(transferQueueReducer, []);
+  // Global transfer queue — the transfer-queue-service owns the execution
+  // loop; this component only enqueues and reacts to settled items.
+  const { transfers, dispatch: dispatchTransfer } = useTransferQueue();
   const [queueExpanded, setQueueExpanded] = useState(false);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [dirTransfer, setDirTransfer] = useState<{
@@ -152,84 +154,34 @@ export function FileBrowserView({
     [connectionId],
   );
 
-  // ------ Transfer execution ------
-  const processTransferRef = useRef(false);
-
+  // ------ Transfer completion reactions ------
+  // The queue service drives the invokes; this component refreshes panels
+  // and raises the download toast for its own connection's transfers.
   useEffect(() => {
-    const nextItem = getNextQueuedTransfer(transfers);
-    if (!nextItem || processTransferRef.current) return;
-
-    processTransferRef.current = true;
-    dispatchTransfer({ type: "START", id: nextItem.id });
-
-    const doTransfer = async () => {
-      try {
-        if (nextItem.direction === "upload") {
-          const result = await invoke<{ success: boolean; error?: string }>(
-            "upload_remote_file",
-            {
-              connectionId,
-              localPath: nextItem.sourcePath,
-              remotePath: nextItem.destinationPath,
-            },
-          );
-          if (result.success) {
-            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
-            remotePanelRef.current?.refresh();
-          } else {
-            dispatchTransfer({
-              type: "FAIL",
-              id: nextItem.id,
-              error: result.error ?? "Upload failed",
-            });
-          }
-        } else {
-          const result = await invoke<{ success: boolean; error?: string }>(
-            "download_remote_file",
-            {
-              connectionId,
-              remotePath: nextItem.sourcePath,
-              localPath: nextItem.destinationPath,
-            },
-          );
-          if (result.success) {
-            dispatchTransfer({ type: "COMPLETE", id: nextItem.id });
-            localPanelRef.current?.refresh();
-            // Show success toast with quick-open actions
-            const destPath = nextItem.destinationPath;
-            const destDir = destPath.substring(0, destPath.lastIndexOf("/")) || "/";
-            toast.success(t('fileBrowser.toast.downloaded', { name: nextItem.fileName }), {
-              duration: 5000,
-              action: {
-                label: t('fileBrowser.transfer.openFile'),
-                onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
-              },
-              cancel: {
-                label: t('fileBrowser.transfer.showInFolder'),
-                onClick: () => { void invoke("open_in_os", { path: destDir }).catch(() => {}); },
-              },
-            });
-          } else {
-            dispatchTransfer({
-              type: "FAIL",
-              id: nextItem.id,
-              error: result.error ?? "Download failed",
-            });
-          }
-        }
-      } catch (err) {
-        dispatchTransfer({
-          type: "FAIL",
-          id: nextItem.id,
-          error: err instanceof Error ? err.message : String(err),
+    return onItemSettled((item) => {
+      if (item.connectionId !== connectionId) return;
+      if (item.status !== "completed") return;
+      if (item.direction === "upload") {
+        remotePanelRef.current?.refresh();
+      } else {
+        localPanelRef.current?.refresh();
+        // Show success toast with quick-open actions
+        const destPath = item.destinationPath;
+        const destDir = destPath.substring(0, destPath.lastIndexOf("/")) || "/";
+        toast.success(t('fileBrowser.toast.downloaded', { name: item.fileName }), {
+          duration: 5000,
+          action: {
+            label: t('fileBrowser.transfer.openFile'),
+            onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
+          },
+          cancel: {
+            label: t('fileBrowser.transfer.showInFolder'),
+            onClick: () => { void invoke("open_in_os", { path: destDir }).catch(() => {}); },
+          },
         });
-      } finally {
-        processTransferRef.current = false;
       }
-    };
-
-    doTransfer();
-  }, [transfers, connectionId]);
+    });
+  }, [connectionId, t]);
 
   // ------ Transfer initiation helpers ------
   const enqueueUpload = useCallback(
@@ -240,6 +192,7 @@ export function FileBrowserView({
       dispatchTransfer({
         type: "ENQUEUE",
         items: fileItems.map((f) => ({
+          connectionId,
           fileName: f.name,
           direction: "upload" as const,
           sourcePath: pathJoin(localDir, f.name),
@@ -249,7 +202,7 @@ export function FileBrowserView({
       });
       toast.info(t('fileBrowser.toast.queuedUpload', { count: fileItems.length }));
     },
-    [],
+    [connectionId],
   );
 
   // ------ OS-native file drop onto the remote panel ------
@@ -325,7 +278,10 @@ export function FileBrowserView({
         }
 
         if (plan.items.length > 0) {
-          dispatchTransfer({ type: "ENQUEUE", items: plan.items });
+          dispatchTransfer({
+            type: "ENQUEUE",
+            items: plan.items.map((item) => ({ ...item, connectionId })),
+          });
           toast.info(
             t('fileBrowser.toast.queuedUploadToPath', { count: plan.items.length, path: remotePath }) +
               (createdDirectoryCount > 0
@@ -370,6 +326,7 @@ export function FileBrowserView({
       dispatchTransfer({
         type: "ENQUEUE",
         items: fileItems.map((f) => ({
+          connectionId,
           fileName: f.name,
           direction: "download" as const,
           sourcePath: pathJoin(remoteDir, f.name),
@@ -379,7 +336,7 @@ export function FileBrowserView({
       });
       toast.info(t('fileBrowser.toast.queuedDownload', { count: fileItems.length }));
     },
-    [],
+    [connectionId],
   );
 
   const handleUploadButton = useCallback(() => {
@@ -412,6 +369,7 @@ export function FileBrowserView({
           items: files
             .filter((f: { file_type: string }) => f.file_type === "File")
             .map((f: { name: string; size: number }) => ({
+              connectionId,
               fileName: f.name,
               direction: "upload" as const,
               sourcePath: pathJoin(sourcePath, f.name),
@@ -426,6 +384,7 @@ export function FileBrowserView({
           items: files
             .filter((f: { file_type: string }) => f.file_type === "File")
             .map((f: { name: string; size: number }) => ({
+              connectionId,
               fileName: f.name,
               direction: "download" as const,
               sourcePath: pathJoin(sourcePath, f.name),
@@ -438,7 +397,7 @@ export function FileBrowserView({
 
     document.addEventListener("rshell-drop-transfer", handler);
     return () => document.removeEventListener("rshell-drop-transfer", handler);
-  }, []);
+  }, [connectionId]);
 
   // ------ Directory transfer callbacks ------
   const handleUploadDirectory = useCallback(

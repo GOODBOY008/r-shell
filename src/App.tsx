@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
+import { reconcileSessionHealth } from './lib/session-health';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
@@ -9,15 +10,22 @@ import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
+import { HostKeyChangedDialog } from './components/host-key-changed-dialog';
 import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
+import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
-import { UpdateChecker } from './components/update-checker';
+import { UpdateChecker, type UpdateAnnouncement } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
-import { ActiveConnectionsManager, ConnectionStorageManager } from './lib/connection-storage';
+import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, markSealFailed, clearSealFailed } from './lib/connection-storage';
+import { ConnectionProfileManager } from './lib/connection-profiles';
+import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
+import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
-import { buildSshConnectRequest } from './lib/ssh-connect-request';
+import { buildSftpConnectRequest, buildSshConnectRequest } from './lib/ssh-connect-request';
+import { sshConnect } from '@/lib/ssh-connect';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
+import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
   APP_SETTINGS_CHANGED_EVENT,
@@ -27,18 +35,41 @@ import {
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
 import type { SplitViewShortcutBindings } from './lib/keyboard-shortcuts';
+import { announce } from './lib/live-announcer';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
 import { ErrorBoundary } from './components/error-boundary';
 import type { TerminalTab } from './lib/terminal-group-types';
 import { Toaster } from './components/ui/sonner';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './components/ui/alert-dialog';
+import { buttonVariants } from './components/ui/button';
 import { toast } from 'sonner';
 import { dispatchTerminalCommand, type TerminalCommand } from './lib/terminal-commands';
+import { OPEN_SETTINGS_EVENT, QUICK_CONNECT_EVENT } from './lib/app-events';
+import {
+  addOpenEditor,
+  EDITOR_WINDOW_CHANGED_EVENT,
+  editorWindowLabel,
+  loadOpenEditors,
+  removeOpenEditor,
+  type EditorWindowEventPayload,
+} from './lib/editor-windows-store';
+import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
+import { getRestoreTiming } from './lib/restore-timing';
+import { isRestoreSessionsOnStartupEnabled } from './lib/startup-restore';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
-import { History, ShieldCheck, PlugZap, Activity, Loader2 } from 'lucide-react';
 
 interface ConnectionNode {
   id: string;
@@ -54,6 +85,32 @@ interface ConnectionNode {
   isExpanded?: boolean;
 }
 
+/**
+ * Backoff delays (ms) for the automatic full-reconnect retry (`handleReconnect`).
+ * Module-scope so the callback's dependency identity stays stable.
+ */
+const FULL_RECONNECT_BACKOFF_MS = [2000, 4000, 8000, 16000, 30000];
+
+/** Race a promise against a timeout; rejects with a clear message on expiry. */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Timeout: ${label} did not complete within ${ms / 1000}s`)),
+      ms,
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
+}
+
 function AppContent() {
   const { t } = useTranslation();
   const [selectedConnection, setSelectedConnection] = useState<ConnectionNode | null>(null);
@@ -61,6 +118,14 @@ function AppContent() {
   // Terminal group state from context
   const { state, dispatch, activeGroup, activeTab, activeConnection } = useTerminalGroups();
   const workingDirectorySequenceRef = useRef(0);
+  // Fresh mirror of `state` for the mount-only restore effect (empty deps):
+  // the closure's `state` is a mount-time snapshot, but the restore loop may
+  // take minutes, during which the user can switch/split groups. Reading via
+  // this ref keeps the ADD_TAB target group current.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   const [terminalWorkingDirectories, setTerminalWorkingDirectories] = useState<
     Record<string, { path: string; sequence: number }>
   >({});
@@ -79,6 +144,10 @@ function AppContent() {
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const [connectionInitialFolder, setConnectionInitialFolder] = useState<string | undefined>();
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  // Sessions-still-connected quit prompt: the backend quit guard emits
+  // `confirm-quit-sessions` with the active session count when quitting
+  // would tear down live SSH work (quit_guard.rs).
+  const [sessionQuitCount, setSessionQuitCount] = useState<number | null>(null);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   // Track whether the edit dialog was opened due to a failed connection attempt (double-click)
   // vs. direct edit (right-click). When non-null and matches saved config id, auto-connect after save.
@@ -86,19 +155,38 @@ function AppContent() {
   // Incremented after any save/connect dialog close to trigger sidebar refresh
   const [connectionSaveTrigger, setConnectionSaveTrigger] = useState(0);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
+  // MenuBar update pill state, fed by UpdateChecker's announcement callback.
+  const [updateAnnouncement, setUpdateAnnouncement] = useState<UpdateAnnouncement | null>(null);
+  // Incremented when the MenuBar pill is clicked to open the update dialog.
+  const [updateDialogSignal, setUpdateDialogSignal] = useState(0);
   const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
     () => loadKeyboardShortcutSettings(),
   );
+
+  // Xshell-style detached (background) sessions. Tabs that were detached via
+  // Ctrl+A+D keep their SSH connection + PTY alive in the backend; this list
+  // lets the user re-attach or terminate them.
+  const [detachedSessions, setDetachedSessions] = useState<DetachedSession[]>([]);
 
   // Right sidebar tab & log monitor integration
   const [rightSidebarTab, setRightSidebarTab] = useState("monitor");
   const [externalLogPath, setExternalLogPath] = useState<string | undefined>();
   const [externalLogPathKey, setExternalLogPathKey] = useState(0);
 
-  // Restoration state
-  const [isRestoring, setIsRestoring] = useState(false);
-  const [restoringProgress, setRestoringProgress] = useState({ current: 0, total: 0 });
-  const [currentRestoreTarget, setCurrentRestoreTarget] = useState<{ name: string; host?: string; username?: string } | null>(null);
+  // Restoration state: restored tabs that have not been connected yet. Only
+  // the tab that was active in each group reconnects at startup; the rest
+  // stay `pending` in the restored layout and reconnect when first activated
+  // (Chrome-style lazy session restore).
+  const lazyRestoreTabIdsRef = useRef<Set<string>>(new Set());
+  // Pending tabs whose latest connect attempt failed. They stay `pending` and
+  // show a Connect action instead of the "waiting" placeholder, because
+  // nothing is actually in flight for them anymore.
+  const [failedPendingTabIds, setFailedPendingTabIds] = useState<ReadonlySet<string>>(() => new Set());
+  // The exact tab whose Connect/Reconnect opened the credentials dialog, so
+  // handleSaveConnection reconnects that tab. Matching by connection id alone
+  // misses primary tabs (no originalConnectionId) and is ambiguous for
+  // duplicates.
+  const [pendingReconnectTabId, setPendingReconnectTabId] = useState<string | null>(null);
 
   // Layout management
   const {
@@ -155,8 +243,41 @@ function AppContent() {
     };
   }, []);
 
+  // Latest tabs snapshot for the health poll below — kept in a ref so the
+  // interval isn't torn down and recreated on every group-state change.
+  const allTabsRef = useRef(allTabs);
+  useEffect(() => {
+    allTabsRef.current = allTabs;
+  }, [allTabs]);
+
+  // Periodically reconcile terminal tab status against backend session
+  // health (issue #87 backstop: SFTP/monitor can keep the SSH session alive
+  // while the PTY pipeline is gone, leaving a lying "Connected" badge).
+  useEffect(() => {
+    const HEALTH_POLL_INTERVAL_MS = 30_000;
+    const interval = window.setInterval(() => {
+      void reconcileSessionHealth(
+        allTabsRef.current,
+        (connectionId) =>
+          invoke('get_session_health', { connectionId }),
+        (tabId) => dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' }),
+      );
+    }, HEALTH_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [dispatch]);
+
   const handleCloseActiveTab = useCallback(() => {
     if (!activeGroup?.activeTabId) {
+      // No terminal tabs left: close the main window itself (Terminal.app /
+      // VS Code close their window when Cmd+W hits an empty session list).
+      // On macOS the CloseRequested handler in lib.rs turns this into a
+      // hide: the app keeps running and the Dock reopens the same webview;
+      // on Windows/Linux the process exits with the last window per
+      // platform convention. Every Ctrl+W entry point (DOM shortcut, global
+      // shortcut, macOS menu close_connection) converges here.
+      import('@tauri-apps/api/window')
+        .then(({ getCurrentWindow }) => getCurrentWindow().close())
+        .catch(() => {});
       return;
     }
 
@@ -171,6 +292,18 @@ function AppContent() {
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
     const groupIds = Object.keys(state.groups);
+    // Ctrl+Shift+PageUp/PageDown — move the active tab one slot in its group.
+    const moveActiveTab = (delta: -1 | 1) => {
+      if (!activeGroup?.activeTabId) return;
+      const fromIndex = activeGroup.tabs.findIndex((t) => t.id === activeGroup.activeTabId);
+      const toIndex = fromIndex + delta;
+      if (fromIndex === -1 || toIndex < 0 || toIndex >= activeGroup.tabs.length) return;
+      dispatch({ type: 'REORDER_TAB', groupId: activeGroup.id, fromIndex, toIndex });
+      announce(t('terminal.a11y.tabMovedToPosition', {
+        position: toIndex + 1,
+        total: activeGroup.tabs.length,
+      }));
+    };
     return createSplitViewShortcuts(
       {
         splitRight: () => {
@@ -205,10 +338,12 @@ function AppContent() {
             dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
           }
         },
+        moveTabLeft: () => moveActiveTab(-1),
+        moveTabRight: () => moveActiveTab(1),
       },
       keyboardShortcutSettings,
     );
-  }, [state.activeGroupId, state.groups, activeGroup, dispatch, handleCloseActiveTab, keyboardShortcutSettings]);
+  }, [state.activeGroupId, state.groups, activeGroup, dispatch, handleCloseActiveTab, keyboardShortcutSettings, t]);
 
   const layoutShortcuts = useMemo(() => createLayoutShortcuts({
     toggleLeftSidebar,
@@ -238,273 +373,329 @@ function AppContent() {
     }
   }, [allTabs]);
 
-  // Restore connections on mount
+  // One-time migration: encrypt any legacy plaintext secrets still sitting in
+  // localStorage (from app versions before encrypted-at-rest storage). The
+  // restore effect awaits this so restored connections can decrypt them.
+  const legacyMigrationRef = useRef<Promise<void> | null>(null);
+
+  // Kick off the legacy-secret migration on mount.
   useEffect(() => {
-    /** Race a promise against a timeout; rejects with a clear message on expiry. */
-    function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-      return Promise.race([
-        promise,
-        new Promise<never>((_resolve, reject) =>
-          setTimeout(() => reject(new Error(`Timeout: ${label} did not complete within ${ms / 1000}s`)), ms),
-        ),
-      ]);
+    legacyMigrationRef.current = (async () => {
+      const connections = ConnectionStorageManager.getConnections();
+      const withPlaintext = connections.filter((c) =>
+        SECRET_FIELDS.some((f) => isLegacyPlaintext(c[f])),
+      );
+      for (const conn of withPlaintext) {
+        try {
+          const migrated = await sealLegacySecrets(conn as unknown as Record<string, unknown> & { id: string });
+          if (migrated) {
+            clearSealFailed(conn.id);
+            ConnectionStorageManager.updateConnection(conn.id, conn);
+            console.log(`[Credential] Encrypted stored secrets for ${conn.id}`);
+          }
+        } catch (error) {
+          // Keep the legacy plaintext on failure — never destroy the only copy.
+          // Guard it against persistence writes too: any unrelated write
+          // (updateLastConnected, a folder move) would otherwise strip the
+          // plaintext from storage and destroy that only copy.
+          markSealFailed(conn.id);
+          console.error(`[Credential] Migration failed for ${conn.id}; keeping plaintext:`, error);
+        }
+      }
+      if (withPlaintext.length > 0) {
+        console.log(`[Credential] Legacy secret encryption checked ${withPlaintext.length} connection(s)`);
+      }
+
+      // Profiles can carry legacy plaintext passwords too (historical stores
+      // and export bundles from before exports were sanitized). Seal them the
+      // same way. On failure keep the plaintext — profile storage has no
+      // strip-on-write path, so the only copy is never at risk here.
+      const profiles = ConnectionProfileManager.getProfiles();
+      for (const profile of profiles) {
+        if (!isLegacyPlaintext(profile.password)) continue;
+        try {
+          const sealed = await sealSecret(profile.password);
+          ConnectionProfileManager.updateProfile(profile.id, { password: sealed });
+          console.log(`[Credential] Encrypted stored password of profile ${profile.id}`);
+        } catch (error) {
+          console.error(`[Credential] Profile migration failed for ${profile.id}; keeping plaintext:`, error);
+        }
+      }
+    })();
+  }, []);
+
+  // Reconnect one tab restored from the previous session. The tab already
+  // exists in the restored layout, so this never ADD_TABs. On failure the tab
+  // stays `pending` and is marked failed so its placeholder offers a Connect
+  // action — mounting a PTY for a tab whose backend connect never succeeded
+  // only surfaces a misleading "Connection not found" error.
+  const connectRestoredTab = useCallback(async (tab: TerminalTab): Promise<boolean> => {
+    const markFailed = () => {
+      setFailedPendingTabIds(prev => new Set(prev).add(tab.id));
+    };
+
+    const connectionIdToLoad = tab.originalConnectionId || tab.id;
+    const connectionData = ConnectionStorageManager.getConnection(connectionIdToLoad);
+    if (!connectionData) {
+      console.warn(`[Restore] Connection ${connectionIdToLoad} not found in storage`);
+      markFailed();
+      return false;
     }
 
-    const CONNECT_TIMEOUT_MS = 15_000; // 15 s per backend connect call
-    const OVERALL_RESTORE_TIMEOUT_MS = 60_000; // 60 s for the entire restore
+    // Decrypt stored secrets for the connect requests below (tunnel
+    // credentials included) so the credential check sees plaintext.
+    await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
 
-    const restoreConnections = async () => {
+    if (!connectionHasCredentials(connectionData)) {
+      // Without stored credentials the tab cannot reconnect on its own; the
+      // Connect action on its placeholder opens the credentials dialog.
+      console.log(`[Restore] Connection ${connectionData.name} has no saved credentials`);
+      markFailed();
+      return false;
+    }
+
+    const { connectTimeoutMs } = getRestoreTiming();
+    const isDesktop = tab.tabType === 'desktop';
+    const isFileBrowser = tab.tabType === 'file-browser'
+      || (!isDesktop && (tab.protocol === 'SFTP' || tab.protocol === 'FTP'));
+
+    try {
+      if (isDesktop) {
+        const proto = connectionData.protocol;
+        await withTimeout(
+          invoke('desktop_connect', {
+            request: {
+              connection_id: tab.id,
+              host: connectionData.host,
+              port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
+              protocol: proto.toLowerCase(),
+              username: connectionData.username || '',
+              password: connectionData.password || '',
+              domain: connectionData.domain || null,
+              resolution: connectionData.rdpResolution || '1920x1080',
+              color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
+            }
+          }),
+          connectTimeoutMs,
+          `desktop_connect ${connectionData.name}`,
+        );
+      } else if (isFileBrowser) {
+        if (tab.protocol === 'SFTP' || connectionData.protocol === 'SFTP') {
+          await withTimeout(
+            invoke('sftp_connect', {
+              request: buildSftpConnectRequest(tab.id, connectionData)
+            }),
+            connectTimeoutMs,
+            `sftp_connect ${connectionData.name}`,
+          );
+        } else {
+          await withTimeout(
+            invoke('ftp_connect', {
+              request: {
+                connection_id: tab.id,
+                host: connectionData.host,
+                port: connectionData.port || 21,
+                username: connectionData.username || '',
+                password: connectionData.password || '',
+                ftps_enabled: connectionData.ftpsEnabled ?? false,
+                anonymous: connectionData.authMethod === 'anonymous',
+              }
+            }),
+            connectTimeoutMs,
+            `ftp_connect ${connectionData.name}`,
+          );
+        }
+      } else {
+        const result = await withTimeout(
+          sshConnect(buildSshConnectRequest(tab.id, connectionData)),
+          connectTimeoutMs,
+          `ssh_connect ${connectionData.name}`,
+        );
+        if (!result.success) {
+          console.error(`[Restore] Failed to restore connection ${connectionData.name}:`, result.error);
+          markFailed();
+          return false;
+        }
+      }
+
+      if (!tab.originalConnectionId) {
+        ConnectionStorageManager.updateLastConnected(connectionData.id);
+      }
+      dispatch({
+        type: 'UPDATE_TAB_STATUS',
+        tabId: tab.id,
+        status: isDesktop || isFileBrowser ? 'connected' : 'connecting',
+      });
+      return true;
+    } catch (error) {
+      console.error(`[Restore] Error restoring connection ${connectionData.name}:`, error);
+      markFailed();
+      return false;
+    }
+  }, [dispatch]);
+
+  // Chrome-style lazy restore: a background tab from the previous session
+  // reconnects the first time it becomes the active tab, not at startup.
+  useEffect(() => {
+    if (!activeTab || activeTab.connectionStatus !== 'pending') return;
+    // Claim the tab synchronously so rapid re-activation cannot double-connect.
+    if (!lazyRestoreTabIdsRef.current.delete(activeTab.id)) return;
+    void connectRestoredTab(activeTab);
+  }, [activeTab, connectRestoredTab]);
+
+  // Restore connections on mount
+  useEffect(() => {
+    const { overallTimeoutMs: OVERALL_RESTORE_TIMEOUT_MS } = getRestoreTiming();
+
+    // Soft-cancel flag: once the overall timeout fires, the restore loop stops
+    // initiating NEW connections. The connection currently in flight is allowed
+    // to finish naturally so a just-succeeding host is not killed mid-handshake.
+    let restoreCancelled = false;
+
+    const restoreActiveSessions = async () => {
+      // Wait for the one-time legacy-secret encryption so restored
+      // connections can decrypt their stored credentials.
+      try {
+        await legacyMigrationRef.current;
+      } catch (error) {
+        console.error('[Credential] Legacy migration did not complete cleanly; continuing restore:', error);
+      }
+
       const activeConnections = ActiveConnectionsManager.getActiveConnections();
 
       if (activeConnections.length === 0) {
         return;
       }
 
-      // Collect tab IDs already present in the restored layout state to avoid duplicates.
-      // The TerminalGroupProvider may have loaded tabs from localStorage, so we only need
-      // to re-establish SSH connections for those tabs, not add them again.
-      const existingTabIds = new Set(
-        Object.values(state.groups).flatMap(g => g.tabs.map(t => t.id))
+      if (!isRestoreSessionsOnStartupEnabled()) {
+        // The user opted out of automatic reconnect at startup (issue #126).
+        // TerminalGroupProvider started from a fresh, empty workspace and
+        // discarded the previous layout, so there is nothing to reconnect
+        // into. This branch is a guard: it keeps a stale active-connections
+        // list (e.g. after an effect-order change) from ever initiating a
+        // connection when the setting is off.
+        console.log('Session restore skipped by setting');
+        return;
+      }
+
+      // The restored layout is the source of truth: only tabs present in it
+      // are reconnected. Entries without a matching tab (a stale list, or a
+      // store written by an older app version) are dropped; the persist
+      // effect rewrites the list from the real tabs right after mount.
+      const restoredTabs = Object.values(stateRef.current.groups)
+        .flatMap(g => g.tabs)
+        .map(tab => [tab.id, tab] as const);
+      const tabsById = new Map(restoredTabs);
+
+      // Chrome-style lazy restore: only the tab that was active in each
+      // group is visible at startup, so only those reconnect now. The rest
+      // stay `pending` in the restored layout and reconnect when the user
+      // first activates them (see the lazy-restore effect above).
+      const activeTabIds = new Set(
+        Object.values(stateRef.current.groups)
+          .map(g => g.activeTabId)
+          .filter((id): id is string => Boolean(id)),
       );
 
-      console.log('Previous connections found:', activeConnections);
+      const eager: TerminalTab[] = [];
+      const lazy = new Set<string>();
+      for (const activeConn of [...activeConnections].sort((a, b) => a.order - b.order)) {
+        const tab = tabsById.get(activeConn.connectionId);
+        if (!tab) {
+          console.warn(`[Restore] No restored tab for ${activeConn.connectionId}; skipping`);
+          continue;
+        }
+        if (activeTabIds.has(tab.id)) {
+          eager.push(tab);
+        } else {
+          lazy.add(tab.id);
+        }
+      }
+      lazyRestoreTabIdsRef.current = lazy;
 
-      setIsRestoring(true);
-      setRestoringProgress({ current: 0, total: activeConnections.length });
-
-      const sortedConnections = [...activeConnections].sort((a, b) => a.order - b.order);
 
       let restoredCount = 0;
       let failedCount = 0;
 
-      for (let i = 0; i < sortedConnections.length; i++) {
-        const activeConn = sortedConnections[i];
-        const connectionIdToLoad = activeConn.originalConnectionId || activeConn.connectionId;
-        const connectionData = ConnectionStorageManager.getConnection(connectionIdToLoad);
-
-        setRestoringProgress({ current: i + 1, total: sortedConnections.length });
-
-        if (!connectionData) {
-          console.warn(`Connection ${connectionIdToLoad} not found in storage`);
-          failedCount++;
-          continue;
+      for (let i = 0; i < eager.length; i++) {
+        if (restoreCancelled) {
+          // Overall timeout fired: stop initiating new connections. The
+          // remaining eager tabs degrade to lazy — they still reconnect
+          // when activated.
+          for (let j = i; j < eager.length; j++) {
+            lazyRestoreTabIdsRef.current.add(eager[j].id);
+          }
+          console.warn(`[Restore] Cancelled at connection ${i + 1}/${eager.length}; remaining tabs will reconnect when activated`);
+          break;
         }
 
-        const isDesktopProto = connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
-        const hasCredentials = isDesktopProto
-          ? true // Desktop protocols can connect with or without credentials
-          : connectionData.authMethod === 'password'
-            ? !!connectionData.password
-            : (connectionData.authMethod === 'anonymous' ? true : !!connectionData.privateKeyPath);
-
-        if (!hasCredentials) {
-          console.log(`Connection ${connectionData.name} has no saved credentials, skipping restore`);
-          failedCount++;
-          continue;
-        }
-
-        setCurrentRestoreTarget({
-          name: connectionData.name,
-          host: connectionData.host,
-          username: connectionData.username,
-        });
-
-        const tabAlreadyExists = existingTabIds.has(activeConn.connectionId);
-        const isSftp = activeConn.protocol === 'SFTP' || connectionData.protocol === 'SFTP';
-        const isFtp = activeConn.protocol === 'FTP' || connectionData.protocol === 'FTP';
-        const isFileBrowser = isSftp || isFtp;
-        const isDesktopRestore = activeConn.tabType === 'desktop' ||
-          connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
-
-        try {
-          if (isDesktopRestore) {
-            // RDP/VNC restoration
-            const proto = connectionData.protocol;
-            await withTimeout(
-              invoke('desktop_connect', {
-                request: {
-                  connection_id: activeConn.connectionId,
-                  host: connectionData.host,
-                  port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
-                  protocol: proto.toLowerCase(),
-                  username: connectionData.username || '',
-                  password: connectionData.password || '',
-                  domain: connectionData.domain || null,
-                  resolution: connectionData.rdpResolution || '1920x1080',
-                  color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
-                }
-              }),
-              CONNECT_TIMEOUT_MS,
-              `desktop_connect ${connectionData.name}`,
-            );
-
-            if (!activeConn.originalConnectionId) {
-              ConnectionStorageManager.updateLastConnected(connectionData.id);
-            }
-
-            if (tabAlreadyExists) {
-              dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'connected' });
-            } else {
-              const newTab: TerminalTab = {
-                id: activeConn.connectionId,
-                name: connectionData.name,
-                tabType: 'desktop',
-                protocol: connectionData.protocol,
-                host: connectionData.host,
-                username: connectionData.username,
-                originalConnectionId: activeConn.originalConnectionId,
-                connectionStatus: 'connected',
-                reconnectCount: 0,
-              };
-              dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
-            }
-
-            restoredCount++;
-            console.log(`✓ Restored ${proto} desktop connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}`);
-          } else if (isFileBrowser) {
-            // SFTP/FTP restoration
-            if (isSftp) {
-              await withTimeout(
-                invoke('sftp_connect', {
-                  request: {
-                    connection_id: activeConn.connectionId,
-                    host: connectionData.host,
-                    port: connectionData.port || 22,
-                    username: connectionData.username,
-                    auth_method: connectionData.authMethod || 'password',
-                    password: connectionData.password || '',
-                    key_path: connectionData.privateKeyPath || null,
-                    passphrase: connectionData.passphrase || null,
-                  }
-                }),
-                CONNECT_TIMEOUT_MS,
-                `sftp_connect ${connectionData.name}`,
-              );
-            } else {
-              await withTimeout(
-                invoke('ftp_connect', {
-                  request: {
-                    connection_id: activeConn.connectionId,
-                    host: connectionData.host,
-                    port: connectionData.port || 21,
-                    username: connectionData.username || '',
-                    password: connectionData.password || '',
-                    ftps_enabled: connectionData.ftpsEnabled ?? false,
-                    anonymous: connectionData.authMethod === 'anonymous',
-                  }
-                }),
-                CONNECT_TIMEOUT_MS,
-                `ftp_connect ${connectionData.name}`,
-              );
-            }
-
-            if (!activeConn.originalConnectionId) {
-              ConnectionStorageManager.updateLastConnected(connectionData.id);
-            }
-
-            if (tabAlreadyExists) {
-              dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'connected' });
-            } else {
-              const newTab: TerminalTab = {
-                id: activeConn.connectionId,
-                name: connectionData.name,
-                tabType: 'file-browser',
-                protocol: connectionData.protocol,
-                host: connectionData.host,
-                username: connectionData.username,
-                originalConnectionId: activeConn.originalConnectionId,
-                connectionStatus: 'connected',
-                reconnectCount: 0,
-              };
-              dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
-            }
-
-            restoredCount++;
-            console.log(`✓ Restored ${connectionData.protocol} connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}`);
-          } else {
-            // SSH restoration (existing behavior)
-            const result = await withTimeout(
-              invoke<{ success: boolean; error?: string }>(
-                'ssh_connect',
-                {
-                  request: buildSshConnectRequest(activeConn.connectionId, connectionData),
-                }
-              ),
-              CONNECT_TIMEOUT_MS,
-              `ssh_connect ${connectionData.name}`,
-            );
-
-            if (result.success) {
-              if (!activeConn.originalConnectionId) {
-                ConnectionStorageManager.updateLastConnected(connectionData.id);
-              }
-
-              if (tabAlreadyExists) {
-                dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'connecting' });
-              } else {
-                const newTab: TerminalTab = {
-                  id: activeConn.connectionId,
-                  name: connectionData.name,
-                  protocol: connectionData.protocol,
-                  host: connectionData.host,
-                  username: connectionData.username,
-                  originalConnectionId: activeConn.originalConnectionId,
-                  connectionStatus: 'connecting',
-                  reconnectCount: 0,
-                };
-                dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
-              }
-
-              restoredCount++;
-              console.log(`✓ Restored connection: ${connectionData.name}${tabAlreadyExists ? ' (reconnected existing tab)' : ''}${activeConn.originalConnectionId ? ' (duplicate)' : ''}`);
-
-              if (i < sortedConnections.length - 1) {
-                await registerRestoration(activeConn.connectionId, 3000);
-              }
-            } else {
-              console.error(`Failed to restore connection ${connectionData.name}:`, result.error);
-              if (tabAlreadyExists) {
-                dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'disconnected' });
-              }
-              failedCount++;
-            }
+        if (await connectRestoredTab(eager[i])) {
+          restoredCount++;
+          // Pace serial PTY attaches so the next connect's WebSocket does
+          // not race this one's PtyStarted handshake.
+          if (i < eager.length - 1) {
+            await registerRestoration(eager[i].id, 3000);
           }
-        } catch (error) {
-          console.error(`Error restoring connection ${connectionData.name}:`, error);
-          if (tabAlreadyExists) {
-            dispatch({ type: 'UPDATE_TAB_STATUS', tabId: activeConn.connectionId, status: 'disconnected' });
-          }
+        } else {
           failedCount++;
         }
       }
 
-      if (restoredCount > 0) {
+      clearAllRestorations();
+
+      const lazyCount = lazyRestoreTabIdsRef.current.size;
+      if (restoreCancelled) {
+        // The overall timeout fired (possibly while the LAST connection was
+        // still in flight, so the loop never saw the flag at a loop head).
+        // The timeout toast already told the user; keep the
+        // active-connections list intact so a manual reconnect of the skipped
+        // hosts is still possible, and do not emit a contradicting success or
+        // "all failed" toast here.
+      } else if (restoredCount > 0) {
         toast.success(t('app.connectionsRestored'), {
-          description: failedCount > 0
-            ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
-            : t('app.connectionsRestoredAllDesc', { restoredCount }),
+          description: lazyCount > 0
+            ? t('app.restoreLazyDesc', { restoredCount, lazyCount })
+            : failedCount > 0
+              ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
+              : t('app.connectionsRestoredAllDesc', { restoredCount }),
         });
-      } else if (failedCount > 0) {
+      } else if (failedCount > 0 && lazyCount === 0) {
+        // Every restored connection failed and no lazy tabs are left to
+        // activate: nothing left to restore.
         ActiveConnectionsManager.clearActiveConnections();
         toast.error(t('app.restoreFailed'), {
           description: t('app.restoreFailedDesc'),
         });
+      } else if (failedCount > 0) {
+        // The eager set failed but lazy tabs are still open — they retry
+        // when activated, so keep the list and say so.
+        toast.error(t('app.restoreFailed'), {
+          description: t('app.restoreLazyFailedDesc', { lazyCount }),
+        });
+      } else if (lazyCount > 0) {
+        // Only lazy tabs were restored (no tab was active at quit time).
+        toast.info(t('app.restoreLazyTitle'), {
+          description: t('app.restoreLazyOnlyDesc', { lazyCount }),
+        });
       }
-
-      setCurrentRestoreTarget(null);
-      setIsRestoring(false);
-      setRestoringProgress({ current: 0, total: 0 });
-      clearAllRestorations();
     };
 
-    withTimeout(restoreConnections(), OVERALL_RESTORE_TIMEOUT_MS, 'Session restore').catch((err) => {
-      console.error('Session restore timed out:', err);
-      toast.error(t('app.restoreTimedOut'), {
-        description: t('app.restoreTimedOutDesc'),
-      });
-      setCurrentRestoreTarget(null);
-      setIsRestoring(false);
-      setRestoringProgress({ current: 0, total: 0 });
+    withTimeout(restoreActiveSessions(), OVERALL_RESTORE_TIMEOUT_MS, 'Session restore').catch((err) => {
+      // Distinguish the overall-timeout rejection from an unexpected error
+      // thrown by restoreActiveSessions itself (e.g. storage parse). Only the
+      // former should cancel the loop and show the timeout toast.
+      const isOverallTimeout = err instanceof Error && err.message.startsWith('Timeout:');
+      if (isOverallTimeout) {
+        console.error('Session restore timed out:', err);
+        // Soft-cancel: the in-flight connection may still complete, but the loop
+        // must not start any new connections after this point.
+        restoreCancelled = true;
+        toast.error(t('app.restoreTimedOut'), {
+          description: t('app.restoreTimedOutDesc'),
+        });
+      } else {
+        console.error('Session restore failed:', err);
+      }
       clearAllRestorations();
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -524,17 +715,16 @@ function AppContent() {
       const connectionData = ConnectionStorageManager.getConnection(connection.id);
       if (!connectionData) return;
 
+      // Decrypt stored secrets for the connect requests below.
+      await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
+
       const isSftp = connectionData.protocol === 'SFTP';
       const isFtp = connectionData.protocol === 'FTP';
       const isFileBrowser = isSftp || isFtp;
 
-      const hasCredentials = isFileBrowser
-        ? (connectionData.authMethod === 'anonymous' || connectionData.authMethod === 'password'
-          ? (connectionData.authMethod === 'anonymous' || !!connectionData.password)
-          : !!connectionData.privateKeyPath)
-        : (connectionData.authMethod === 'password'
-          ? !!connectionData.password
-          : !!connectionData.privateKeyPath);
+      // A blank password is still a valid credential — hosts that allow
+      // passwordless login must connect directly instead of opening the dialog.
+      const hasCredentials = connectionHasCredentials(connectionData);
 
       if (!hasCredentials) {
         setEditingConnection(toConnectionConfig(connectionData));
@@ -566,16 +756,7 @@ function AppContent() {
         try {
           if (isSftp) {
             await invoke('sftp_connect', {
-              request: {
-                connection_id: sessionId,
-                host: connectionData.host,
-                port: connectionData.port || 22,
-                username: connectionData.username,
-                auth_method: connectionData.authMethod || 'password',
-                password: connectionData.password || '',
-                key_path: connectionData.privateKeyPath || null,
-                passphrase: connectionData.passphrase || null,
-              }
+              request: buildSftpConnectRequest(sessionId, connectionData)
             });
           } else {
             await invoke('ftp_connect', {
@@ -620,12 +801,7 @@ function AppContent() {
         console.debug('[SSH] Connecting:', { id: connectionData.id, host: connectionData.host, port: connectionData.port, authMethod: connectionData.authMethod });
 
         try {
-          const result = await invoke<{ success: boolean; error?: string }>(
-            'ssh_connect',
-            {
-              request: buildSshConnectRequest(sessionId, connectionData),
-            }
-          );
+          const result = await sshConnect(buildSshConnectRequest(sessionId, connectionData));
 
           if (result.success) {
             ConnectionStorageManager.updateLastConnected(connection.id);
@@ -646,7 +822,11 @@ function AppContent() {
           console.error('Error connecting to SSH:', error);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
           toast.error(t('app.connectionError'), {
-            description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
+            description: typeof error === 'string'
+              ? error
+              : error instanceof Error
+                ? error.message
+                : t('app.connectionErrorDesc'),
           });
           setEditingConnection(toConnectionConfig(connectionData));
           setPendingConnectionId(connection.id);
@@ -667,7 +847,7 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
-  const _handleTabClose = useCallback(async (tabId: string) => {
+  const handleCloseTab = useCallback(async (tabId: string) => {
     // Find which group contains this tab and remove it
     for (const group of Object.values(state.groups)) {
       const tab = group.tabs.find(t => t.id === tabId);
@@ -690,11 +870,35 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
+  // Close every tab in a group. Runs backend cleanup for file-browser
+  // sessions first (CLOSE_ALL_TABS is reducer-only and would otherwise
+  // leave SFTP/FTP connections alive), then empties the group.
+  const handleCloseAllTabs = useCallback(async (groupId: string) => {
+    const group = state.groups[groupId];
+    if (!group) return;
+    for (const tab of group.tabs) {
+      // Disconnect SFTP/FTP sessions when closing file-browser tabs
+      if (tab.tabType === 'file-browser') {
+        try {
+          if (tab.protocol === 'SFTP') {
+            await invoke('sftp_standalone_disconnect', { connection_id: tab.id });
+          } else if (tab.protocol === 'FTP') {
+            await invoke('ftp_disconnect', { connection_id: tab.id });
+          }
+        } catch {
+          // Ignore disconnect errors on tab close
+        }
+      }
+    }
+    dispatch({ type: 'CLOSE_ALL_TABS', groupId });
+  }, [state.groups, dispatch]);
+
   const handleNewTab = useCallback((folderPath?: string) => {
     setConnectionInitialFolder(folderPath);
     setConnectionDialogOpen(true);
     setEditingConnection(null);
     setPendingConnectionId(null);
+    setPendingReconnectTabId(null);
   }, []);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
@@ -710,15 +914,15 @@ function AppContent() {
       return;
     }
 
+    // Decrypt stored secrets for the connect requests below.
+    await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
+
     const isSftp = tabToDuplicate.protocol === 'SFTP' || connectionData.protocol === 'SFTP';
     const isFtp = tabToDuplicate.protocol === 'FTP' || connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
 
-    const hasCredentials = isFileBrowser
-      ? (connectionData.authMethod === 'anonymous' || !!connectionData.password || !!connectionData.privateKeyPath)
-      : (connectionData.authMethod === 'password'
-        ? !!connectionData.password
-        : !!connectionData.privateKeyPath);
+    // A blank password is still a valid credential (passwordless SSH hosts).
+    const hasCredentials = connectionHasCredentials(connectionData);
 
     if (!hasCredentials) {
       toast.error(t('app.cannotDuplicate'), {
@@ -748,16 +952,7 @@ function AppContent() {
         try {
           if (isSftp) {
             await invoke('sftp_connect', {
-              request: {
-                connection_id: duplicateId,
-                host: connectionData.host,
-                port: connectionData.port || 22,
-                username: connectionData.username,
-                auth_method: connectionData.authMethod || 'password',
-                password: connectionData.password || '',
-                key_path: connectionData.privateKeyPath || null,
-                passphrase: connectionData.passphrase || null,
-              }
+              request: buildSftpConnectRequest(duplicateId, connectionData)
             });
           } else {
             await invoke('ftp_connect', {
@@ -784,12 +979,7 @@ function AppContent() {
         }
       } else {
         // SSH duplicate flow
-        const result = await invoke<{ success: boolean; error?: string }>(
-          'ssh_connect',
-          {
-            request: buildSshConnectRequest(duplicateId, connectionData),
-          }
-        );
+        const result = await sshConnect(buildSshConnectRequest(duplicateId, connectionData));
 
         if (result.success) {
           const duplicatedTab: TerminalTab = {
@@ -822,44 +1012,139 @@ function AppContent() {
     }
   }, [allTabs, state.activeGroupId, dispatch, t]);
 
+  // Automatic full-reconnect retry
+  //
+  // A single-shot ssh_connect (the backend uses a 3s connect timeout) can fail
+  // right after a network blip — previously the tab then sat in a dead
+  // 'disconnected' state until the user clicked Reconnect. Retry with bounded
+  // exponential backoff so a transient outage heals on its own; permanent
+  // failures (bad credentials) skip retrying. Retry state is keyed by tab id
+  // and survives component remounts of the terminal (RECONNECT_TAB).
+  const reconnectRetryState = useRef<Record<string, { failures: number; timer?: ReturnType<typeof setTimeout> }>>({});
+  // Reconnect retry timers re-invoke the callback via this ref: the callback's
+  // own body can't reference `handleReconnect` directly (TDZ before the const
+  // binding exists).
+  const handleReconnectRef = useRef<((tabId: string) => Promise<void>) | null>(null);
+  const clearReconnectRetry = useCallback((tabId: string) => {
+    const entry = reconnectRetryState.current[tabId];
+    if (entry?.timer) clearTimeout(entry.timer);
+    const next = { ...reconnectRetryState.current };
+    delete next[tabId];
+    reconnectRetryState.current = next;
+  }, []);
+
   const handleReconnect = useCallback(async (tabId: string) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
-    if (!tabToReconnect) return;
+    if (!tabToReconnect) {
+      clearReconnectRetry(tabId);
+      return;
+    }
+
+    // A pending retry timer is superseded by this invocation (manual click or
+    // timer re-entry); keep the failure count so the backoff stays bounded.
+    const pendingRetry = reconnectRetryState.current[tabId];
+    if (pendingRetry?.timer) {
+      clearTimeout(pendingRetry.timer);
+      reconnectRetryState.current = {
+        ...reconnectRetryState.current,
+        [tabId]: { failures: pendingRetry.failures },
+      };
+    }
 
     const originalConnectionId = tabToReconnect.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
+      clearReconnectRetry(tabId);
       toast.error(t('app.cannotReconnect'), {
         description: t('app.cannotReconnectDesc'),
       });
       return;
     }
 
+    // Decrypt stored secrets for the connect requests below.
+    await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
+
     const isSftp = tabToReconnect.protocol === 'SFTP' || connectionData.protocol === 'SFTP';
     const isFtp = tabToReconnect.protocol === 'FTP' || connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
 
-    const hasCredentials = isFileBrowser
-      ? (connectionData.authMethod === 'anonymous' || !!connectionData.password || !!connectionData.privateKeyPath)
-      : (connectionData.authMethod === 'password'
-        ? !!connectionData.password
-        : !!connectionData.privateKeyPath);
+    // A blank password is still a valid credential (passwordless SSH hosts).
+    const hasCredentials = connectionHasCredentials(connectionData);
 
     if (!hasCredentials) {
+      clearReconnectRetry(tabId);
       toast.error(t('app.cannotReconnect'), {
         description: t('app.noCredentialsDesc'),
       });
       setEditingConnection(toConnectionConfig(connectionData));
       setPendingConnectionId(originalConnectionId);
+      setPendingReconnectTabId(tabId);
       setConnectionDialogOpen(true);
       return;
     }
 
-    // Update tab status to connecting
-    dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
+    const isDesktop = tabToReconnect.tabType === 'desktop' ||
+      connectionData.protocol === 'RDP' || connectionData.protocol === 'VNC';
+
+    // A `pending` tab has no terminal mounted (a connect still in flight).
+    // Keep it pending while the backend session is established: dispatching
+    // `connecting` now would mount PtyTerminal, which sends StartPty against
+    // a session that does not exist yet and can race a dead-session reconnect
+    // with this one. RECONNECT_TAB on success is what mounts the terminal.
+    const wasPending = tabToReconnect.connectionStatus === 'pending';
+    // Swap the Connect action for the in-flight placeholder while connecting.
+    setFailedPendingTabIds(prev => {
+      if (!prev.has(tabId)) return prev;
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
+    /**
+     * Failed while still pending: offer Connect again instead of a dead
+     * terminal. Applies to backoff retries too (they re-enter with the marker
+     * already cleared), so the final failure never strands the tab.
+     */
+    const failPending = () => {
+      setFailedPendingTabIds(prev => new Set(prev).add(tabId));
+    };
+
+    if (!wasPending) {
+      dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connecting' });
+    }
 
     try {
-      if (isFileBrowser) {
+      if (isDesktop) {
+        // RDP/VNC reconnect: same request as the startup restore path.
+        try {
+          await invoke('desktop_disconnect', { connectionId: tabId });
+        } catch {
+          // Ignore errors when disconnecting
+        }
+
+        const proto = connectionData.protocol;
+        await invoke('desktop_connect', {
+          request: {
+            connection_id: tabId,
+            host: connectionData.host,
+            port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
+            protocol: proto.toLowerCase(),
+            username: connectionData.username || '',
+            password: connectionData.password || '',
+            domain: connectionData.domain || null,
+            resolution: connectionData.rdpResolution || '1920x1080',
+            color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
+          }
+        });
+
+        clearReconnectRetry(tabId);
+        if (!tabToReconnect.originalConnectionId) {
+          ConnectionStorageManager.updateLastConnected(originalConnectionId);
+        }
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
+        toast.success(t('app.reconnected'), {
+          description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
+        });
+      } else if (isFileBrowser) {
         // SFTP/FTP reconnect
         try {
           if (isSftp) {
@@ -873,16 +1158,7 @@ function AppContent() {
 
         if (isSftp) {
           await invoke('sftp_connect', {
-            request: {
-              connection_id: tabId,
-              host: connectionData.host,
-              port: connectionData.port || 22,
-              username: connectionData.username,
-              auth_method: connectionData.authMethod || 'password',
-              password: connectionData.password || '',
-              key_path: connectionData.privateKeyPath || null,
-              passphrase: connectionData.passphrase || null,
-            }
+            request: buildSftpConnectRequest(tabId, connectionData)
           });
         } else {
           await invoke('ftp_connect', {
@@ -913,14 +1189,10 @@ function AppContent() {
           // Ignore errors when disconnecting
         }
 
-        const result = await invoke<{ success: boolean; error?: string }>(
-          'ssh_connect',
-          {
-            request: buildSshConnectRequest(tabId, connectionData),
-          }
-        );
+        const result = await sshConnect(buildSshConnectRequest(tabId, connectionData));
 
         if (result.success) {
+          clearReconnectRetry(tabId);
           if (!tabToReconnect.originalConnectionId) {
             ConnectionStorageManager.updateLastConnected(originalConnectionId);
           }
@@ -931,20 +1203,138 @@ function AppContent() {
             description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
           });
         } else {
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error(t('app.reconnectionFailed'), {
-            description: result.error || t('app.reconnectionFailedDesc'),
-          });
+          // A transient network outage can outlast one connect attempt: keep
+          // retrying with bounded backoff instead of dropping to a dead
+          // 'disconnected' tab. Permanent auth failures are not retried.
+          const permanent = /authentication|credential|password/i.test(result.error || '');
+          const failures = (reconnectRetryState.current[tabId]?.failures ?? 0) + 1;
+          if (!permanent && failures <= FULL_RECONNECT_BACKOFF_MS.length) {
+            const delay = FULL_RECONNECT_BACKOFF_MS[failures - 1];
+            const timer = setTimeout(() => {
+              void handleReconnectRef.current?.(tabId);
+            }, delay);
+            reconnectRetryState.current = {
+              ...reconnectRetryState.current,
+              [tabId]: { failures, timer },
+            };
+            // Stay 'connecting' — the next attempt is already scheduled.
+          } else {
+            clearReconnectRetry(tabId);
+            if (wasPending) {
+              failPending();
+            } else {
+              dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+            }
+            toast.error(t('app.reconnectionFailed'), {
+              description: result.error || t('app.reconnectionFailedDesc'),
+            });
+          }
         }
       }
     } catch (error) {
       console.error('Error reconnecting:', error);
-      dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+      clearReconnectRetry(tabId);
+      if (wasPending) {
+        failPending();
+      } else {
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+      }
       toast.error(t('app.reconnectionError'), {
         description: error instanceof Error ? error.message : t('app.reconnectionErrorDesc'),
       });
     }
-  }, [allTabs, dispatch, t]);
+  }, [allTabs, dispatch, t, clearReconnectRetry]);
+
+  useEffect(() => {
+    handleReconnectRef.current = handleReconnect;
+  }, [handleReconnect]);
+
+  // Handler: Xshell-style detach (Ctrl+A+D). The PtyTerminal already sent the
+  // Detach WS message to the backend; here we remove the tab and record the
+  // session so the user can re-attach to it later.
+  const handleDetachTab = useCallback((tabId: string) => {
+    const tab = allTabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    // If the tab-bar context menu initiated this, the PtyTerminal itself hasn't
+    // sent the Detach WS message yet — ask the mounted terminal to do so.
+    requestDetach(tabId);
+
+    // Record the detached session for the sidebar.
+    setDetachedSessions(prev => {
+      if (prev.some(s => s.connectionId === tabId)) return prev;
+      return [...prev, {
+        connectionId: tabId,
+        name: tab.name,
+        host: tab.host,
+        username: tab.username,
+        protocol: tab.protocol || 'SSH',
+        originalConnectionId: tab.originalConnectionId,
+        detachedAt: Date.now(),
+      }];
+    });
+
+    // Remove the tab from its group.
+    for (const group of Object.values(state.groups)) {
+      if (group.tabs.some(t => t.id === tabId)) {
+        dispatch({ type: 'REMOVE_TAB', groupId: group.id, tabId });
+        break;
+      }
+    }
+
+    toast.success(t('app.sessionDetached'), {
+      description: t('app.sessionDetachedDesc', { name: tab.name }),
+    });
+  }, [allTabs, state.groups, dispatch, t]);
+
+  // Handler: re-attach a detached background session by opening a new tab that
+  // reuses the same connection ID (the backend re-attaches to the live PTY).
+  const handleReattachSession = useCallback(async (session: DetachedSession) => {
+    // Verify the backend still has the session alive.
+    try {
+      const alive = await invoke<boolean>('has_detached_session', {
+        connection_id: session.connectionId,
+      });
+      if (!alive) {
+        setDetachedSessions(prev => prev.filter(s => s.connectionId !== session.connectionId));
+        toast.error(t('app.detachedSessionExpired'), {
+          description: t('app.detachedSessionExpiredDesc', { name: session.name }),
+        });
+        return;
+      }
+    } catch {
+      // Assume alive if the check fails.
+    }
+
+    const newTab: TerminalTab = {
+      id: session.connectionId,
+      name: session.name,
+      protocol: session.protocol || 'SSH',
+      host: session.host,
+      username: session.username,
+      originalConnectionId: session.originalConnectionId,
+      connectionStatus: 'connecting',
+      reconnectCount: 0,
+    };
+    dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
+    setDetachedSessions(prev => prev.filter(s => s.connectionId !== session.connectionId));
+    toast.success(t('app.sessionReattached'), {
+      description: t('app.sessionReattachedDesc', { name: session.name }),
+    });
+  }, [state.activeGroupId, dispatch, t]);
+
+  // Handler: terminate a detached background session (PTY + SSH connection).
+  const handleCloseDetachedSession = useCallback(async (connectionId: string) => {
+    setDetachedSessions(prev => prev.filter(s => s.connectionId !== connectionId));
+    try {
+      await invoke('close_detached_session', { connection_id: connectionId });
+      toast.success(t('app.detachedSessionClosed'));
+    } catch (error) {
+      toast.error(t('app.detachedSessionCloseFailed'), {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }, [t]);
 
   // Handler: open a remote file in the Log Monitor panel
   const handleOpenInLogMonitor = useCallback((filePath: string) => {
@@ -958,24 +1348,54 @@ function AppContent() {
     toast.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
   }, [layout.rightSidebarVisible, toggleRightSidebar, t]);
 
-  // Handler: open a remote file in a new Tauri window.
-  // The window is centered on whichever monitor the parent window currently
-  // occupies, matching the behaviour of VS Code, Chrome, Figma, etc.
-  const handleOpenInEditor = useCallback((filePath: string, fileName: string) => {
-    if (!activeConnection) return;
-    const label = `file-viewer-${Date.now()}`;
+  // Opens (or focuses) the dedicated Tauri window editing a remote file.
+  // One window per (connection, file) — reopening a file reuses the existing
+  // window with its state instead of duplicating it.
+  // `focus: false` (used by the launch/reopen restore) skips focusing an
+  // already-open editor so restored windows don't steal focus from the main
+  // window the user just opened (Dock reopen / app launch).
+  const openEditorWindow = useCallback(async (connectionId: string, filePath: string, fileName: string, options?: { focus?: boolean }) => {
+    const focus = options?.focus !== false;
+    const label = editorWindowLabel(connectionId, filePath);
+
+    // Reuse an already-open editor for this file: bring it to the front and
+    // restore it if minimized. Its content state is maintained in its own
+    // webview, so nothing needs reloading here.
+    try {
+      const windows = await getAllWebviewWindows();
+      const existing = windows.find((win) => win.label === label);
+      if (existing) {
+        try {
+          await existing.show();
+          await existing.unminimize();
+          if (focus) {
+            await existing.setFocus();
+          }
+        } catch (err: unknown) {
+          // Surface unexpected failures (e.g. an ACL denial); a window that
+          // is already visible/focused resolves these calls fine, so an
+          // error here means the reuse path silently no-opped.
+          console.warn('Failed to focus existing editor window', err);
+        }
+        return;
+      }
+    } catch {
+      // Window plugin unavailable — fall through and try to create below.
+    }
+
     const url = `${window.location.origin}/?mode=file-viewer`
-      + `&connectionId=${encodeURIComponent(activeConnection.connectionId)}`
+      + `&connectionId=${encodeURIComponent(connectionId)}`
       + `&filePath=${encodeURIComponent(filePath)}`
       + `&fileName=${encodeURIComponent(fileName)}`;
 
     const WIN_W = 900;
     const WIN_H = 700;
 
-    Promise.all([
-      import('@tauri-apps/api/webviewWindow'),
-      import('@tauri-apps/api/window'),
-    ]).then(async ([{ WebviewWindow }, { getCurrentWindow, currentMonitor }]) => {
+    try {
+      const [{ WebviewWindow }, { getCurrentWindow, currentMonitor }] = await Promise.all([
+        import('@tauri-apps/api/webviewWindow'),
+        import('@tauri-apps/api/window'),
+      ]);
       const parentWin = getCurrentWindow();
       const [monitor, scaleFactor] = await Promise.all([
         currentMonitor(),          // standalone function, not a method on Window
@@ -1009,10 +1429,50 @@ function AppContent() {
       win.once('tauri://error', (e) => {
         toast.error(t('app.failedToOpenWindow'), { description: String(e.payload) });
       });
-    }).catch((err: unknown) => {
-      toast.error(t('app.couldNotOpenWindow'), { description: String(err) });
+    } catch (err: unknown) {
+      toast.error(t('app.couldNotOpenWindow'), { description: err instanceof Error ? err.message : String(err) });
+    }
+  }, [t]);
+
+  // Handler: open a remote file in a dedicated Tauri window.
+  // The window is centered on whichever monitor the parent window currently
+  // occupies, matching the behaviour of VS Code, Chrome, Figma, etc.
+  const handleOpenInEditor = useCallback((filePath: string, fileName: string) => {
+    if (!activeConnection) return;
+    void openEditorWindow(activeConnection.connectionId, filePath, fileName);
+  }, [activeConnection, openEditorWindow]);
+
+  // Track open editor windows (persisted so they can be restored on next
+  // launch) via events emitted by the viewer windows themselves.
+  useEffect(() => {
+    const unlistenPromise = listen<EditorWindowEventPayload>(EDITOR_WINDOW_CHANGED_EVENT, (event) => {
+      const { event: kind, connectionId, filePath, fileName } = event.payload;
+      const entry = { connectionId, filePath, fileName };
+      if (kind === 'opened') {
+        addOpenEditor(entry);
+      } else {
+        removeOpenEditor(entry);
+      }
     });
-  }, [activeConnection, t]);
+    return () => { unlistenPromise.then(fn => fn()); };
+  }, []);
+
+  // Reopen file-editor windows that were open when the app last quit. The
+  // viewer windows poll session health, so they load their files as soon as
+  // the backend reconnects or show the error/retry view when the connection
+  // is gone.
+  // Run-once by intent (on launch): the effect depends on openEditorWindow,
+  // whose identity changes with `t` (e.g. a language switch) — re-running
+  // would show/focus every editor window and steal focus mid-use.
+  const restoredEditorsRef = useRef(false);
+  useEffect(() => {
+    if (restoredEditorsRef.current) return;
+    restoredEditorsRef.current = true;
+    const persistedEditors = loadOpenEditors();
+    for (const entry of persistedEditors) {
+      void openEditorWindow(entry.connectionId, entry.filePath, entry.fileName, { focus: false });
+    }
+  }, [openEditorWindow]);
 
   const handleConnectionDialogConnect = useCallback(async (config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
@@ -1040,16 +1500,7 @@ function AppContent() {
         try {
           if (isSftp) {
             await invoke('sftp_connect', {
-              request: {
-                connection_id: tabId,
-                host: config.host,
-                port: config.port || 22,
-                username: config.username,
-                auth_method: config.authMethod || 'password',
-                password: config.password || '',
-                key_path: config.privateKeyPath || null,
-                passphrase: config.passphrase || null,
-              }
+              request: buildSftpConnectRequest(tabId, config)
             });
           } else {
             await invoke('ftp_connect', {
@@ -1094,6 +1545,14 @@ function AppContent() {
             description: error instanceof Error ? error.message : String(error),
           });
         }
+      } else {
+        // SSH / Telnet / Raw / Serial reconnect. The backend SSH session was
+        // already (re-)established by the dialog's own ssh_connect invoke, so
+        // remount PtyTerminal to open a fresh WebSocket/PTY session on it.
+        // (RECONNECT_TAB increments reconnectCount, changing PtyTerminal's key
+        // in terminal-tab-portals so it remounts; the tab status self-heals to
+        // 'connected' once the new PTY session reports ready.)
+        dispatch({ type: 'RECONNECT_TAB', tabId });
       }
     } else {
       if (isDesktop) {
@@ -1149,16 +1608,7 @@ function AppContent() {
         try {
           if (isSftp) {
             await invoke('sftp_connect', {
-              request: {
-                connection_id: tabId,
-                host: config.host,
-                port: config.port || 22,
-                username: config.username,
-                auth_method: config.authMethod || 'password',
-                password: config.password || '',
-                key_path: config.privateKeyPath || null,
-                passphrase: config.passphrase || null,
-              }
+              request: buildSftpConnectRequest(tabId, config)
             });
           } else {
             await invoke('ftp_connect', {
@@ -1201,9 +1651,45 @@ function AppContent() {
     setSettingsModalOpen(true);
   }, []);
 
+  // App quit with live SSH sessions: the backend quit guard (quit_guard.rs)
+  // emits `confirm-quit-sessions` with the connection count — Terminal.app
+  // style confirmation before quitting tears down remote work. Confirming
+  // re-runs the quit with the session gate satisfied (dirty editor windows
+  // are still consulted); Cancel aborts the quit entirely.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<number>('confirm-quit-sessions', (event) => {
+      if (!disposed) setSessionQuitCount(event.payload);
+    })
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Open settings requested from below App-level state (empty terminal group welcome screen)
+  useEffect(() => {
+    window.addEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
+  }, [handleOpenSettings]);
+
   // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
   useEffect(() => {
     const unlistenPromise = listen<string>('menu-action', (event) => {
+      // The native macOS menu belongs to the whole app: its key equivalents
+      // (Cmd+W → "Close Tab", Cmd+N, ...) fire even while a secondary window
+      // of this app — such as the file-viewer editor — has focus. Only act on
+      // main-window state when this window actually has focus, otherwise the
+      // shortcut closes a tab here instead of acting on the focused window.
+      if (!document.hasFocus()) {
+        return;
+      }
       switch (event.payload) {
         case 'new_connection':
         case 'new_tab':
@@ -1255,16 +1741,33 @@ function AppContent() {
         setEditingConnection(toConnectionConfig(connectionData));
         setConnectionDialogOpen(true);
         setPendingConnectionId(null);
+        setPendingReconnectTabId(null);
       } else {
-        toast.error('Connection Not Found', {
-          description: 'The connection data could not be loaded.',
+        toast.error(t('app.connectionNotFound'), {
+          description: t('app.connectionNotFoundDesc1'),
         });
       }
     }
-  }, []);
+  }, [t]);
 
   const handleSaveConnection = useCallback(async (config: ConnectionConfig) => {
     if (!config.id) return;
+
+    // A blank secret on a saved connection means "keep the stored secret" —
+    // decrypt the stored values so the connect requests below carry the real
+    // values (covers the password, tunnel credentials, etc.).
+    if (SECRET_FIELDS.some((f) => !config[f])) {
+      const stored = ConnectionStorageManager.getConnection(config.id);
+      if (stored) {
+        const withSecrets: Record<string, unknown> = { ...stored };
+        await openConnectionSecrets(withSecrets);
+        for (const f of SECRET_FIELDS) {
+          if (!config[f] && typeof withSecrets[f] === 'string' && withSecrets[f]) {
+            (config as unknown as Record<string, unknown>)[f] = withSecrets[f];
+          }
+        }
+      }
+    }
 
     // Update any open tab name for this connection
     for (const group of Object.values(state.groups)) {
@@ -1278,14 +1781,20 @@ function AppContent() {
     const wasPendingConnect = pendingConnectionId === config.id;
     if (wasPendingConnect) {
       setPendingConnectionId(null);
+      const targetTabId = pendingReconnectTabId;
+      setPendingReconnectTabId(null);
 
       // Reuse the existing disconnected/pending tab (created by the initial failed
       // connection attempt) instead of creating a new one. This avoids leaving a
-      // dead tab behind after the user saves a fix and auto-connects.
-      const pendingTab = allTabs.find(tab =>
-        tab.originalConnectionId === config.id &&
-        (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
-      );
+      // dead tab behind after the user saves a fix and auto-connects. Prefer the
+      // exact tab that opened the dialog: a primary tab has no
+      // originalConnectionId, and several duplicates would be ambiguous.
+      const pendingTab =
+        (targetTabId ? allTabs.find(tab => tab.id === targetTabId) : undefined) ??
+        allTabs.find(tab =>
+          tab.originalConnectionId === config.id &&
+          (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
+        );
       const sessionId = pendingTab ? pendingTab.id : `${config.id}-dup-${Date.now()}`;
 
       const isSftp = config.protocol === 'SFTP';
@@ -1356,16 +1865,7 @@ function AppContent() {
         try {
           if (isSftp) {
             await invoke('sftp_connect', {
-              request: {
-                connection_id: sessionId,
-                host: config.host,
-                port: config.port || 22,
-                username: config.username,
-                auth_method: config.authMethod || 'password',
-                password: config.password || '',
-                key_path: config.privateKeyPath || null,
-                passphrase: config.passphrase || null,
-              }
+              request: buildSftpConnectRequest(sessionId, config)
             });
           } else {
             await invoke('ftp_connect', {
@@ -1391,9 +1891,7 @@ function AppContent() {
       } else {
         // SSH / Telnet / Raw — connect then create/reuse tab
         try {
-          const result = await invoke<{ success: boolean; error?: string }>('ssh_connect', {
-            request: buildSshConnectRequest(sessionId, config),
-          });
+          const result = await sshConnect(buildSshConnectRequest(sessionId, config));
 
           if (result.success) {
             ConnectionStorageManager.updateLastConnected(config.id);
@@ -1404,6 +1902,13 @@ function AppContent() {
               // the old terminal content showing.)
               dispatch({ type: 'UPDATE_TAB_NAME', tabId: sessionId, name: config.name });
               dispatch({ type: 'RECONNECT_TAB', tabId: sessionId });
+              // A pending tab whose connect failed earlier is connected now.
+              setFailedPendingTabIds(prev => {
+                if (!prev.has(sessionId)) return prev;
+                const next = new Set(prev);
+                next.delete(sessionId);
+                return next;
+              });
             } else {
               // No existing tab — create a new one
               const newTab: TerminalTab = {
@@ -1425,12 +1930,16 @@ function AppContent() {
           }
         } catch (error) {
           toast.error(t('app.connectionError'), {
-            description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
+            description: typeof error === 'string'
+              ? error
+              : error instanceof Error
+                ? error.message
+                : t('app.connectionErrorDesc'),
           });
         }
       }
     }
-  }, [state.groups, state.activeGroupId, allTabs, dispatch, t, pendingConnectionId]);
+  }, [state.groups, state.activeGroupId, allTabs, dispatch, t, pendingConnectionId, pendingReconnectTabId]);
 
   // Get recent connections for quick connect
   const recentConnections = useMemo(() => {
@@ -1449,29 +1958,29 @@ function AppContent() {
     const existingTab = allTabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
     if (existingTab) {
       handleTabSelect(existingTab.id);
-      toast.info('Already Connected', {
-        description: `Switched to existing ${existingTab.name} connection`,
+      toast.info(t('app.alreadyConnected'), {
+        description: t('app.alreadyConnectedDesc', { name: existingTab.name }),
       });
       return;
     }
 
     const connectionData = ConnectionStorageManager.getConnection(connectionId);
     if (!connectionData) {
-      toast.error('Connection Not Found', {
-        description: 'The connection could not be found. It may have been deleted.',
+      toast.error(t('app.connectionNotFound'), {
+        description: t('app.connectionNotFoundDesc2'),
       });
       return;
     }
+
+    // Decrypt stored secrets for the connect requests below.
+    await openConnectionSecrets(connectionData as unknown as Record<string, unknown>);
 
     const isSftp = connectionData.protocol === 'SFTP';
     const isFtp = connectionData.protocol === 'FTP';
     const isFileBrowser = isSftp || isFtp;
 
-    const hasCredentials = isFileBrowser
-      ? (connectionData.authMethod === 'anonymous' || !!connectionData.password || !!connectionData.privateKeyPath)
-      : (connectionData.authMethod === 'password'
-        ? !!connectionData.password
-        : !!connectionData.privateKeyPath);
+    // A blank password is still a valid credential (passwordless SSH hosts).
+    const hasCredentials = connectionHasCredentials(connectionData);
 
     if (!hasCredentials) {
       setEditingConnection(toConnectionConfig(connectionData));
@@ -1490,12 +1999,7 @@ function AppContent() {
     } else {
       // SSH quick connect (existing behavior)
       try {
-        const result = await invoke<{ success: boolean; error?: string }>(
-          'ssh_connect',
-          {
-            request: buildSshConnectRequest(connectionData.id, connectionData),
-          }
-        );
+        const result = await sshConnect(buildSshConnectRequest(connectionData.id, connectionData));
 
         if (result.success) {
           ConnectionStorageManager.updateLastConnected(connectionData.id);
@@ -1519,11 +2023,25 @@ function AppContent() {
       } catch (error) {
         console.error('Quick connect error:', error);
         toast.error(t('app.connectionError'), {
-          description: error instanceof Error ? error.message : t('app.connectionErrorDesc'),
+          description: typeof error === 'string'
+              ? error
+              : error instanceof Error
+                ? error.message
+                : t('app.connectionErrorDesc'),
         });
       }
     }
   }, [allTabs, handleTabSelect, handleConnectionDialogConnect, t]);
+
+  // Quick-connect requested from below App-level callbacks (welcome screen recents)
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const connectionId = (event as CustomEvent<{ connectionId: string }>).detail?.connectionId;
+      if (connectionId) void handleQuickConnect(connectionId);
+    };
+    window.addEventListener(QUICK_CONNECT_EVENT, handler);
+    return () => window.removeEventListener(QUICK_CONNECT_EVENT, handler);
+  }, [handleQuickConnect]);
 
   // Derive active connection info for StatusBar (compatible format)
   const statusBarConnection = activeConnection ? {
@@ -1532,18 +2050,6 @@ function AppContent() {
     host: activeConnection.host,
     status: activeConnection.status,
   } : undefined;
-
-  const restoringPercent = !restoringProgress.total
-    ? 0
-    : Math.min(100, Math.round((restoringProgress.current / restoringProgress.total) * 100));
-
-  const restoreHighlights = useMemo(() => (
-    [
-      { icon: ShieldCheck, label: 'Secrets stay encrypted locally' },
-      { icon: PlugZap, label: 'Auto reconnect with retry' },
-      { icon: Activity, label: 'Live status monitoring' },
-    ]
-  ), []);
 
   // Check if there are any tabs across all groups
   const hasAnyTabs = allTabs.length > 0;
@@ -1559,72 +2065,11 @@ function AppContent() {
 
   return (
     <div className="h-screen flex flex-col bg-background">
-      <UpdateChecker checkSignal={updateCheckSignal} />
-      {/* Connection Restoration Loading Overlay */}
-      {isRestoring && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-          <div className="mx-4 w-full max-w-xl rounded-2xl border bg-card p-8 shadow-2xl">
-            <div className="flex items-center gap-4">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <History className="h-6 w-6" />
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.25em] text-muted-foreground">Workspace Restore</p>
-                <h3 className="mt-1 text-2xl font-semibold text-foreground">Bringing your connections back online</h3>
-              </div>
-            </div>
-
-            <div className="mt-6 space-y-5">
-              <div className="flex items-center justify-between text-sm text-muted-foreground" aria-live="polite">
-                <span>
-                  {currentRestoreTarget
-                    ? `Reconnecting ${currentRestoreTarget.name}`
-                    : 'Preparing saved connections'}
-                </span>
-                <span className="font-semibold text-foreground">
-                  {restoringProgress.current} / {restoringProgress.total}
-                </span>
-              </div>
-
-              <div className="h-2 overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full bg-gradient-to-r from-primary to-primary/70 transition-[width] duration-500 ease-out"
-                  style={{ width: `${restoringPercent}%` }}
-                />
-              </div>
-
-              {currentRestoreTarget && (
-                <div className="flex items-start gap-3 rounded-xl border bg-muted/40 p-4">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-background">
-                    <Loader2 className="h-5 w-5 animate-spin text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{currentRestoreTarget.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {currentRestoreTarget.username ? `${currentRestoreTarget.username}@` : ''}
-                      {currentRestoreTarget.host || 'unknown host'}
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 gap-3 text-sm text-muted-foreground sm:grid-cols-3">
-                {restoreHighlights.map(({ icon: Icon, label }) => (
-                  <div
-                    key={label}
-                    className="flex items-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 p-2.5"
-                  >
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-background text-primary">
-                      <Icon className="h-4 w-4" />
-                    </div>
-                    <span className="text-xs leading-tight">{label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <UpdateChecker
+        checkSignal={updateCheckSignal}
+        openDialogSignal={updateDialogSignal}
+        onAnnouncement={setUpdateAnnouncement}
+      />
 
       {/* Web menu bar – on macOS shows only layout controls (native system menu handles File/Edit); on Windows/Linux shows full menus */}
       <MenuBar
@@ -1661,6 +2106,8 @@ function AppContent() {
         onClearScreen={() => runActiveTerminalCommand('clear-screen')}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
+        updateAnnouncement={updateAnnouncement}
+        onOpenUpdateDialog={() => setUpdateDialogSignal((current) => current + 1)}
         closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
         nextTabShortcutLabel={keyboardShortcutSettings.nextTab}
         previousTabShortcutLabel={keyboardShortcutSettings.prevTab}
@@ -1701,6 +2148,9 @@ function AppContent() {
                   onEditConnection={handleEditConnection}
                   recentConnections={recentConnections}
                   onQuickConnect={handleQuickConnect}
+                  detachedSessions={detachedSessions}
+                  onReattachSession={handleReattachSession}
+                  onCloseDetachedSession={handleCloseDetachedSession}
                 />
               </ResizablePanel>
 
@@ -1731,8 +2181,12 @@ function AppContent() {
                       onReconnectTab: handleReconnect,
                       closeTabShortcut: keyboardShortcutSettings.closeTab,
                       onWorkingDirectoryChange: handleWorkingDirectoryChange,
+                      onCloseTab: handleCloseTab,
+                      onCloseAllTabs: handleCloseAllTabs,
+                      onDetachTab: handleDetachTab,
+                      failedPendingTabIds,
                     }}>
-                      <ErrorBoundary label="Terminal">
+                      <ErrorBoundary label={t('app.terminal')}>
                         <GridRenderer node={state.gridLayout} path={[]} />
                       </ErrorBoundary>
                     </TerminalCallbacksProvider>
@@ -1751,7 +2205,7 @@ function AppContent() {
                         maxSize={50}
                         onResize={(size) => setBottomPanelSize(size)}
                       >
-                        <ErrorBoundary label="File Browser">
+                        <ErrorBoundary label={t('app.fileBrowser')}>
                           <IntegratedFileBrowser
                           connectionId={activeConnection.connectionId}
                           host={activeConnection.host}
@@ -1787,6 +2241,7 @@ function AppContent() {
                   <TabsList className="inline-flex w-auto mx-1 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
+                    <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
@@ -1811,6 +2266,14 @@ function AppContent() {
                         </ErrorBoundary>
                       ) : null}
                     </TabsContent>
+
+                    <TabsContent value="commands" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      <div className="h-full overflow-hidden px-1 py-2">
+                        <ErrorBoundary label={t('app.quickCommands')}>
+                          <QuickCommandsPanel activeTerminalId={activeTerminalId} />
+                        </ErrorBoundary>
+                      </div>
+                    </TabsContent>
                   </div>
                 </Tabs>
               </ResizablePanel>
@@ -1822,6 +2285,7 @@ function AppContent() {
       <StatusBar activeConnection={statusBarConnection} />
 
       {/* Modals */}
+      <HostKeyChangedDialog />
       <ConnectionDialog
         open={connectionDialogOpen}
         onOpenChange={(open) => {
@@ -1847,6 +2311,45 @@ function AppContent() {
         }}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />
+
+      {/* Quit confirmation while SSH sessions are still connected (emitted
+          by the backend quit guard). Only the Cancel button notifies the
+          backend — clicking Quit must not cancel the quit it just confirmed,
+          so onOpenChange merely clears the prompt state. */}
+      <AlertDialog
+        open={sessionQuitCount !== null}
+        onOpenChange={(open) => {
+          if (!open) setSessionQuitCount(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t('app.quitSessionsTitle', { count: sessionQuitCount ?? 0 })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t('app.quitSessionsDescription')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => {
+                invoke('cancel_app_quit').catch(() => {});
+              }}
+            >
+              {t('common.cancel')}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'destructive' })}
+              onClick={() => {
+                void invoke('confirm_app_quit').catch(() => {});
+              }}
+            >
+              {t('app.quitSessionsConfirm')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Toaster richColors position="top-right" />
     </div>

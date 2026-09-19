@@ -2,9 +2,8 @@
  * Unit tests for toConnectionConfig — the mapping from persisted
  * ConnectionData to the dialog form's ConnectionConfig.
  *
- * Covers the proxy round-trip: saved proxy settings must be carried into
- * the edit dialog, and legacy connections without proxy must not show a
- * phantom proxy.
+ * connectionHasCredentials lives in connection-storage.ts (next to the
+ * ConnectionData type it inspects) and is tested in connection-storage.test.ts.
  */
 import { describe, expect, it } from 'vitest';
 import { toConnectionConfig } from '../lib/connection-config';

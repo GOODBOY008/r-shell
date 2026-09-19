@@ -5,6 +5,156 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.3] - 2026-09-14
+
+### 🔧 R-Shell 2.9.3 — Security Hardening & Lazy Session Restore
+
+This patch release hardens security in two places: the local WebSocket PTY bridge now requires authentication, and SSH host keys are verified against your `known_hosts` — an unknown key asks once via a "trust new key" dialog, and a changed key refuses to connect. Startup session restore becomes Chrome-style lazy: only each group's active tab reconnects eagerly while background tabs wait for their first activation. Disconnected terminals can now be reconnected by simply pressing R, and the Homebrew packaging moves to a dual-baseline update channel.
+
+### New Features 🎉
+
+- feat(terminal): add reconnect shortcut (press R) for disconnected sessions by @htazq in #52
+- feat(restore): Chrome-style lazy session restore by @GOODBOY008 in #153
+- feat(release): Homebrew dual-baseline updates by @GOODBOY008 in #151
+
+### Bug Fixes 🐛
+
+- fix(security): verify SSH host keys against known_hosts, with a "trust new key" dialog and a working Settings switch by @twkrol in #141
+- fix(security): authenticate the local WebSocket PTY bridge by @twkrol in #140
+
+### Contributors
+
+Thanks to [@twkrol](https://github.com/twkrol), [@htazq](https://github.com/htazq), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.2...v2.9.3
+
+## [2.9.2] - 2026-09-12
+
+### 🔧 R-Shell 2.9.2 — Terminal & Connection Manager Refinements
+
+This patch release polishes the connection manager — collapsed folders are remembered across restarts and the status row is replaced with a relative/compact last-connected date — and stabilizes the terminal: tab dragging is rock solid, a hidden pane keeps its WebGL renderer through a grace period, and the tab close button no longer loses clicks to the drag handler. Global shortcuts stop hijacking keys in other apps and macOS menu chords, the transfer queue gets scrollable rows without bright dividers, and a Polish translation is now available.
+
+### New Features 🎉
+
+- feat(connection-manager): remember collapsed folders across restarts by @twkrol in #143
+- feat(connection-manager): drop status row and show relative/compact last-connected date by @GOODBOY008
+- feat(i18n): add Polish translation by @twkrol in #132
+
+### Bug Fixes 🐛
+
+- fix(terminal): keep a hidden pane's WebGL renderer through a grace period by @twkrol in #137
+- fix(transfer-queue): fix bright row dividers and enable list scrolling by @sunxiaobin89 in #149
+- fix(shortcuts): stop hijacking cross-app keys and macOS menu chords by @sunxiaobin89 in #146
+- fix(terminal): let the tab close button receive its click under the drag handler by @twkrol in #136
+- fix(terminal): stabilize tab drag and round out reorder affordances by @GOODBOY008 in #133
+- fix(lint): remove unnecessary type assertion in settings modal by @sunxiaobin89 in #145
+
+### Contributors
+
+Thanks to [@twkrol](https://github.com/twkrol), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.1...v2.9.2
+
+## [2.9.1] - 2026-09-08
+
+### 🔧 R-Shell 2.9.1 — Welcome Page, Encrypted Credentials & Connection Fixes
+
+This patch release redesigns the start page with recent connections and quick connect, encrypts stored credentials at rest with a keychain-backed master key, and makes closing the window on macOS hide the app instead of restarting it. SSH connections become more forgiving: default key path fallback, passwordless logins, idle connections that survive the russh 1-hour rekey, and an option to skip automatic session reconnect at startup.
+
+### New Features 🎉
+
+- feat(welcome): redesign start page with recent connections and quick connect by @GOODBOY008 in #131
+- feat(macos): red X hides the window; Dock reopens the same webview by @GOODBOY008 in #129
+- feat(security): encrypt stored credentials at rest with keychain-backed master key by @sunxiaobin89 in #114
+- feat(settings): option to skip automatic session reconnect at startup by @twkrol in #127
+- feat(auth): use default ssh key path if field is not filled by @supercute in #103
+
+### Bug Fixes 🐛
+
+- fix(ui): register switch-background token and redesign Switch for light theme by @GOODBOY008 in #129
+- fix(settings): start with an empty workspace when startup reconnect is disabled by @GOODBOY008 in #128
+- fix(ssh): support connecting to hosts without a password by @sunxiaobin89 in #125
+- fix(ssh): keep idle connections alive past the russh 1h rekey and stop the reconnect loop by @GOODBOY008 in #123
+
+### Documentation 📚
+
+- docs(readme): polish for users and refresh for v2.9 by @GOODBOY008 in #124
+
+### Contributors
+
+Thanks to [@sunxiaobin89](https://github.com/sunxiaobin89), [@supercute](https://github.com/supercute), [@twkrol](https://github.com/twkrol), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.0...v2.9.1
+
+## [2.9.0] - 2026-08-30
+
+### 🚀 R-Shell 2.9 — SSH Jump Hosts, Quick Commands & Terminal Stability
+
+This release adds SSH tunneling through jump hosts and a Quick Commands / Snippets panel in the right sidebar, replaces DOM keydown shortcuts with OS-level global shortcuts, and adds launch-at-login. The terminal gets a series of stability fixes: PTY resize sync with xterm, recovery of SSH-dead sessions, WebGL rendering recovery, bounded output flow control, and deadlock fixes. Window management gains layout persistence and Ctrl+W behavior, and the file browser supports multi-select and batch delete.
+
+### New Features 🎉
+
+- feat(ssh-tunnel): support SSH tunnel (jump host) when creating a connection by @GOODBOY008 in #79
+- feat(quick-commands): Quick Commands / Snippets panel in the right sidebar by @GOODBOY008 in #120
+- feat(window): Ctrl+W with no tabs closes the main window; app stays running on macOS by @GOODBOY008 in #119
+- feat(window): window layout persistence + positioner-centered popups + native image picker by @GOODBOY008 in #111
+- feat(shortcuts): replace DOM keydown shortcuts with tauri-plugin-global-shortcut by @GOODBOY008 in #110
+- feat(settings): launch at login via tauri-plugin-autostart by @GOODBOY008 in #109
+- feat(terminal): per-subsystem session health tracking by @GOODBOY008 in #108
+- feat(terminal): park PTYs through transient WebSocket drops with reattach by @GOODBOY008 in #107
+- feat(terminal): add Xshell-style Ctrl+A+D session detach with background keep-alive by @GOODBOY008 in #76
+- feat(i18n): localize remaining hardcoded user-facing strings by @sunxiaobin89 in #101
+
+### Bug Fixes 🐛
+
+- fix(terminal): keep PTY size in sync with xterm to prevent silent display/input divergence by @GOODBOY008 in #121
+- fix(file-viewer): focus-aware Ctrl+W, single-window reuse and persistent editors by @GOODBOY008 in #119
+- fix(terminal): deadlock on new PTY connections after first session idles by @GOODBOY008 in #118
+- fix(terminal): lazy WebGL per visible pane + deterministic activation repair by @GOODBOY008 in #105
+- fix(terminal): recover SSH-dead sessions via typed errors and auto re-auth by @GOODBOY008 in #104
+- fix(terminal): keep PTY output flow control bounded by @htazq in #66
+- fix(restore): cancel session restore when the 60s overall timeout fires by @sunxiaobin89 in #99
+- fix(file-browser): support intuitive multi-select and batch delete by @sunxiaobin89 in #96
+
+### Performance Improvements 🚀
+
+- perf(terminal): event-driven PTY reads and binary input fast path by @GOODBOY008 in #106
+
+### Contributors
+
+Thanks to [@htazq](https://github.com/htazq), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.8.0...v2.9.0
+
+## [2.8.0] - 2026-08-17
+
+### 🌐 R-Shell 2.8 — Close All Tabs, Internationalization & Connection Fixes
+
+This release adds a Close All Tabs action with unified dark-mode borders and search input icons, completes localization of hardcoded strings across the UI, shows owner and group in SSH file listings, and fixes connection sidebar and tab reconnection issues.
+
+### New Features 🎉
+
+- feat(terminal): add Close All Tabs + unify dark-mode borders and search input icons by @sunxiaobin89 in #84
+- feat(i18n): localize hardcoded strings across components by @sunxiaobin89 in #83
+
+### Bug Fixes 🐛
+
+- fix(connections): remove sidebar connected-status dot by @sunxiaobin89 in #94
+- fix(connections): duplicate keeps advanced and protocol-specific fields by @sunxiaobin89 in #92
+- fix(terminal): reconnect existing SSH tab via RECONNECT_TAB by @sunxiaobin89 in #90
+- fix(test): stabilize flaky file-browser follow test by @GOODBOY008 in #81
+- fix(file-browser): show owner and group in SSH file listings by @GOODBOY008 in #80
+
+### Documentation 📚
+
+- docs(skill): contributor avatars + origin/main sync in release-version by @GOODBOY008 in #82
+
+### Contributors
+
+Thanks to [@sunxiaobin89](https://github.com/sunxiaobin89) and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.7.0...v2.8.0
+
 ## [2.7.0] - 2026-08-08
 
 ### 🖥️ R-Shell 2.7 — Terminal-Integrated File Browser & Connections

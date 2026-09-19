@@ -4,9 +4,12 @@ mod desktop_protocol;
 mod ftp_client;
 mod ls_parser;
 mod os_detect;
+mod os_keypath;
 mod proxy;
+mod quit_guard;
 mod rdp_client;
 mod sftp_client;
+mod sftp_transfer;
 mod ssh;
 mod vnc_client;
 mod websocket_server;
@@ -14,11 +17,57 @@ mod websocket_server;
 use connection_manager::ConnectionManager;
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
-use tauri::Emitter;
+use std::sync::OnceLock;
+use tauri::{Emitter, Manager};
 use websocket_server::WebSocketServer;
 
 // Global atomic to store the WebSocket port (shared between backend and frontend)
 pub static WEBSOCKET_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// Per-launch secret the PTY bridge requires in every WebSocket handshake.
+/// Generated when the server starts; handed to the webview only through the
+/// `get_websocket_endpoint` command, so a foreign local process or a web page
+/// that can reach 127.0.0.1 cannot open or drive sessions (issue #138).
+pub static WEBSOCKET_TOKEN: OnceLock<String> = OnceLock::new();
+
+/// Applies the saved top-left position of the "main" window on startup.
+///
+/// The window-state plugin restores size and maximized state, but its position
+/// restore is gated behind a monitor-intersects check backed by
+/// `CGDisplay::active_displays`, which can come back empty and silently drop
+/// the saved position (window relaunches at the OS default placement). Read
+/// the plugin's own state file (public `DEFAULT_FILENAME` schema) and apply
+/// the position directly. Skipped while the saved state is maximized — the
+/// plugin handles maximizing, and a position is meaningless for a zoomed
+/// window.
+fn restore_main_window_position(window: &tauri::WebviewWindow, app: &tauri::AppHandle) {
+    use serde::Deserialize;
+
+    #[derive(Deserialize)]
+    struct SavedPosition {
+        x: i32,
+        y: i32,
+        maximized: bool,
+    }
+
+    let Ok(config_dir) = app.path().app_config_dir() else {
+        return;
+    };
+    let state_path = config_dir.join(tauri_plugin_window_state::DEFAULT_FILENAME);
+    let Ok(contents) = std::fs::read_to_string(state_path) else {
+        return;
+    };
+    let Ok(states) =
+        serde_json::from_str::<std::collections::HashMap<String, SavedPosition>>(&contents)
+    else {
+        return;
+    };
+    if let Some(state) = states.get("main") {
+        if !state.maximized {
+            let _ = window.set_position(tauri::PhysicalPosition::new(state.x, state.y));
+        }
+    }
+}
 
 /// Build the native macOS menu bar (File / Edit / Tools / Connection / Window).
 /// Only compiled on macOS; other platforms keep the web-based MenuBar component.
@@ -37,15 +86,31 @@ fn build_app_menu<F: Fn(&str) -> String>(
         "r-shell",
         true,
         &[
-            &PredefinedMenuItem::about(app, None, Some(AboutMetadata::default()))?,
+            &PredefinedMenuItem::about(
+                app,
+                Some(&t("menuBar.about")),
+                Some(AboutMetadata::default()),
+            )?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::services(app, Some(&t("menuBar.services")))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::hide(app, Some(&t("menuBar.hide")))?,
+            &PredefinedMenuItem::hide_others(app, Some(&t("menuBar.hideOthers")))?,
+            &PredefinedMenuItem::show_all(app, Some(&t("menuBar.showAll")))?,
             &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
+            // Custom quit item instead of PredefinedMenuItem::quit: a
+            // predefined item calls NSApp.terminate directly, which never
+            // surfaces as RunEvent::ExitRequested (see quit_guard.rs), so a
+            // dirty file-editor window could not be prompted on Cmd+Q. The
+            // custom item routes through quit_guard::request_quit; with no
+            // dirty editors it is a plain app.exit(0).
+            &MenuItem::with_id(
+                app,
+                "quit_app",
+                &t("menuBar.quit"),
+                true,
+                Some("CmdOrCtrl+Q"),
+            )?,
         ],
     )?;
 
@@ -82,6 +147,12 @@ fn build_app_menu<F: Fn(&str) -> String>(
     )?;
 
     // ── Edit menu (mix of predefined + custom) ────────────────────────────────
+    // NOTE: macOS additionally injects system-managed items at the end of the
+    // Edit menu (AutoFill, Start Dictation, Emoji & Symbols). Those follow the
+    // app's *effective* language (system language ∩ declared CFBundleLocalizations),
+    // not the in-app language setting — accepted macOS behavior (see Tutanota
+    // issue #6221, marked wontfix "intended behaviour"). Everything below is
+    // app-controlled and follows the in-app language via update_menu_language.
     let edit_menu = Submenu::with_id_and_items(
         app,
         "m_edit",
@@ -204,6 +275,12 @@ fn default_menu_text(key: &str) -> String {
         "menuBar.tools" => "Tools",
         "menuBar.connection" => "Connection",
         "menuBar.window" => "Window",
+        "menuBar.about" => "About R-Shell",
+        "menuBar.services" => "Services",
+        "menuBar.hide" => "Hide R-Shell",
+        "menuBar.hideOthers" => "Hide Others",
+        "menuBar.showAll" => "Show All",
+        "menuBar.quit" => "Quit R-Shell",
         "menuBar.newConnection" => "New Connection...",
         "menuBar.saveConnection" => "Save Connection",
         "menuBar.closeTab" => "Close Tab",
@@ -246,6 +323,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        // Global shortcuts are registered at runtime from the frontend
+        // (src/lib/keyboard-shortcuts.ts) via the plugin's JS API.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_positioner::init())
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
@@ -262,6 +348,13 @@ pub fn run() {
                     }
                 }
 
+                // Restore the main window's saved position (see
+                // restore_main_window_position: the plugin's position restore
+                // is gated and can silently no-op).
+                if let Some(main_window) = app.get_webview_window("main") {
+                    restore_main_window_position(&main_window, app.handle());
+                }
+
                 // Start WebSocket server for terminal I/O
                 // Try ports 9001-9010 to avoid conflicts with other instances
                 let ws_server = Arc::new(WebSocketServer::new(connection_manager_clone));
@@ -274,14 +367,69 @@ pub fn run() {
             }
         })
         .on_menu_event(|app, event| {
-            // Forward custom menu item IDs to the frontend so React can handle them
+            // Quit goes through the dirty-editor guard; everything else is
+            // forwarded to the frontend as before.
+            if event.id().0 == "quit_app" {
+                quit_guard::request_quit(app);
+                return;
+            }
             let _ = app.emit("menu-action", event.id().0.as_str());
         })
+        .on_window_event(|window, event| {
+            // macOS close semantics: the red X (and any programmatic close of
+            // the main window, e.g. Ctrl+W with no tabs left) hides the
+            // window instead of destroying it. Clicking the Dock icon then
+            // shows the SAME webview via RunEvent::Reopen — terminals,
+            // scrollback and layout are untouched — instead of the
+            // destroy→rebuild cycle that re-ran the whole frontend boot and
+            // session-restore ceremony like an app restart. Quitting still
+            // goes through quit_app / quit_guard; on Windows/Linux the red X
+            // keeps quitting with the last window (platform convention).
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    return;
+                }
+            }
+            // Keep the quit guard's dirty/pending registries free of stale
+            // window labels (also resolves a pending quit when the last
+            // dirty editor is discarded during quit confirmation).
+            if matches!(event, tauri::WindowEvent::Destroyed { .. }) {
+                quit_guard::window_destroyed(window.app_handle(), window.label());
+
+                // Global shortcuts are registered from the main window's JS
+                // runtime; when that webview is torn down with the window,
+                // its unregisterAll cleanup never runs. The OS hotkeys would
+                // stay registered with handlers pointing at the dead webview
+                // (keystrokes swallowed while the app runs window-less), and
+                // the window recreated by RunEvent::Reopen would then fail
+                // to re-register every accelerator ("already registered"
+                // toast). Unregister everything here so the recreated
+                // window starts from a clean slate. Only the main window
+                // registers global shortcuts today.
+                if window.label() == "main" {
+                    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                    if let Err(e) = window.app_handle().global_shortcut().unregister_all() {
+                        tracing::warn!(
+                            "Failed to unregister global shortcuts on window destroy: {e}"
+                        );
+                    }
+                }
+            }
+        })
         .manage(connection_manager)
+        .manage(quit_guard::QuitGuard::default())
+        .manage(commands::PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
             commands::ssh_connect,
             commands::ssh_cancel_connect,
             commands::ssh_disconnect,
+            commands::get_session_health,
+            commands::list_detached_sessions,
+            commands::has_detached_session,
+            commands::close_detached_session,
             commands::ssh_execute_command,
             commands::ssh_tab_complete,
             commands::get_system_stats,
@@ -311,6 +459,7 @@ pub fn run() {
             commands::detect_gpu,
             commands::get_gpu_stats,
             commands::get_websocket_port,
+            commands::get_websocket_endpoint,
             // Standalone SFTP/FTP commands
             commands::sftp_connect,
             commands::sftp_standalone_disconnect,
@@ -321,6 +470,7 @@ pub fn run() {
             commands::download_remote_file,
             commands::download_remote_file_confined,
             commands::upload_remote_file,
+            commands::cancel_transfer,
             commands::delete_remote_item,
             commands::create_remote_directory,
             commands::rename_remote_item,
@@ -346,9 +496,142 @@ pub fn run() {
             commands::desktop_resize,
             commands::update_menu_language,
             commands::get_system_locale,
+            // App quit guard (dirty file-editor windows + active SSH sessions)
+            commands::request_app_quit,
+            commands::confirm_app_quit,
+            commands::cancel_app_quit,
+            commands::editor_dirty_changed,
+            commands::credential_seal,
+            commands::credential_open,
+            // In-app updater (channel endpoints + Homebrew detection)
+            commands::get_update_context,
+            commands::updater_check,
+            commands::updater_download_and_install,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            // The last window was destroyed. On macOS the app keeps running
+            // window-less (Terminal.app / VS Code behaviour: quitting goes
+            // through the quit_app menu item / quit_guard). With close-to-
+            // hide above, the main window is never destroyed by its red X,
+            // so this is a safety net for other close paths; on Windows/
+            // Linux the process exits with the last window per platform
+            // convention. code: None means user-initiated window closure —
+            // explicit exits (quit_guard app.exit(0), updater restart)
+            // arrive as code: Some(_) and fall through unprevented.
+            tauri::RunEvent::ExitRequested {
+                code: None, api, ..
+            } => {
+                #[cfg(target_os = "macos")]
+                api.prevent_exit();
+                #[cfg(not(target_os = "macos"))]
+                let _ = api;
+            }
+            // Dock icon clicked while no window is visible (macOS): the main
+            // window usually still exists but hidden (close-to-hide above) —
+            // show the SAME webview so terminals and scrollback come back
+            // instantly. Rebuild it from tauri.conf.json only if it genuinely
+            // does not exist (e.g. creation failed at startup); the
+            // window-state plugin restores size/position for that path (its
+            // cache keeps entries across destroy/create).
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } => {
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.show();
+                    let _ = main.set_focus();
+                } else if let Some(window_config) = app.config().app.windows.first() {
+                    let builder = tauri::WebviewWindowBuilder::from_config(app, window_config);
+                    if let Err(e) = builder.map_err(tauri::Error::from).and_then(|b| b.build()) {
+                        tracing::warn!("Failed to recreate main window: {e}");
+                    }
+                }
+            }
+            _ => {}
+        });
+}
+
+#[cfg(test)]
+mod shortcut_accelerator_tests {
+    use std::str::FromStr;
+    use tauri_plugin_global_shortcut::Shortcut;
+
+    /// Every accelerator string the frontend can emit (toAccelerator in
+    /// src/lib/keyboard-shortcuts.ts) must parse on all platforms; the plugin
+    /// rejects unparseable registrations at runtime.
+    #[test]
+    fn frontend_accelerators_parse() {
+        let mut accelerators: Vec<String> = vec![
+            // Default app/layout/split shortcuts
+            "CommandOrControl+N".to_string(),
+            "CommandOrControl+W".to_string(),
+            "CommandOrControl+Tab".to_string(),
+            "CommandOrControl+Shift+Tab".to_string(),
+            "CommandOrControl+B".to_string(),
+            "CommandOrControl+J".to_string(),
+            "CommandOrControl+M".to_string(),
+            "CommandOrControl+Z".to_string(),
+            "CommandOrControl+Backslash".to_string(),
+            "CommandOrControl+Shift+Backslash".to_string(),
+        ];
+        for i in 1..=9 {
+            accelerators.push(format!("CommandOrControl+{i}"));
+        }
+
+        // Named keys and symbols that customizable bindings can produce
+        let keys = [
+            "Escape",
+            "Enter",
+            "Space",
+            "Backspace",
+            "Delete",
+            "Insert",
+            "PageUp",
+            "PageDown",
+            "Home",
+            "End",
+            "ArrowUp",
+            "ArrowDown",
+            "ArrowLeft",
+            "ArrowRight",
+            "Pause",
+            "CapsLock",
+            "PrintScreen",
+            "ScrollLock",
+            "NumLock",
+            "F1",
+            "F5",
+            "F13",
+            "F24",
+            "Backquote",
+            "BracketLeft",
+            "BracketRight",
+            "Comma",
+            "Equal",
+            "Minus",
+            "Period",
+            "Quote",
+            "Semicolon",
+            "Slash",
+            "1",
+            "9",
+            "0",
+        ];
+        for key in keys {
+            accelerators.push(format!("CommandOrControl+{key}"));
+            accelerators.push(format!("Option+Shift+{key}"));
+        }
+
+        for accelerator in accelerators {
+            assert!(
+                Shortcut::from_str(&accelerator).is_ok(),
+                "accelerator failed to parse: {accelerator}"
+            );
+        }
+    }
 }

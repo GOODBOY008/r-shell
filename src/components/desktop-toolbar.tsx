@@ -60,7 +60,7 @@ export function DesktopToolbar({
       onMouseLeave={handleMouseLeave}
       onMouseMove={resetHideTimer}
     >
-      <div className="flex items-center gap-1 bg-background/90 border rounded-lg px-2 py-1 shadow-lg backdrop-blur-sm">
+      <div className="flex items-center gap-1 bg-background/90 border border-border rounded-lg px-2 py-1 shadow-lg backdrop-blur-sm">
         <Button
           variant="ghost"
           size="sm"
