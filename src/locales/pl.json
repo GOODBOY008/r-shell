@@ -543,6 +543,8 @@
     "clearScreen": "Wyczyść ekran",
     "options": "Opcje...",
     "checkForUpdates": "Sprawdź aktualizacje",
+    "updateAvailablePill": "Zaktualizuj do {{version}}",
+    "restartToUpdatePill": "Uruchom ponownie, aby zaktualizować",
     "newTab": "Nowa karta",
     "duplicateTab": "Powiel kartę",
     "nextTab": "Następna karta",
@@ -823,7 +825,9 @@
     "installFailedFallback": "Nie udało się zainstalować aktualizacji.",
     "homebrewManaged": "Aktualizacjami zarządza Homebrew",
     "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew, więc aktualizacje w aplikacji są wyłączone.",
-    "homebrewCommandCopied": "Komenda aktualizacji została skopiowana — uruchom ją w terminalu."
+    "homebrewCommandCopied": "Komenda aktualizacji została skopiowana — uruchom ją w terminalu.",
+    "autoToastTitle": "Dostępna nowa wersja {{version}}",
+    "autoToastDesc": "Kliknij „Pobierz aktualizację”, aby pobrać i zainstalować."
   },
   "syncDialog": {
     "title": "Synchronizacja katalogów",

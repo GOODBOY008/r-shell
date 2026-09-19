@@ -28,11 +28,31 @@ import {
   type UpdateContext,
 } from '@/lib/update-channel';
 
+/** Update availability surfaced outside the dialog (MenuBar pill, auto toast). */
+export interface UpdateAnnouncement {
+  version: string;
+  /** true once the update is downloaded+installed and a relaunch is pending. */
+  ready: boolean;
+}
+
 interface UpdateCheckerProps {
   checkSignal?: number;
+  /** Increment to open the update dialog from outside (MenuBar pill click). */
+  openDialogSignal?: number;
+  /** Notified whenever the outside-facing update availability changes. */
+  onAnnouncement?: (announcement: UpdateAnnouncement | null) => void;
 }
 
 type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'ready' | 'error';
+
+// Auto-check scheduling, following the VS Code pattern: a delayed first
+// check after launch plus periodic re-checks for long-lived sessions
+// (SSH clients often stay open for days — a launch-only check would miss
+// every release published after startup).
+export const FIRST_CHECK_DELAY_MS = 30_000;
+export const AUTO_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// Non-blocking auto-discovery toast; disappears on its own, never blocks.
+const AUTO_TOAST_DURATION_MS = 30_000;
 
 /** Mirror of the `UpdateMeta` struct returned by the `updater_check` command. */
 interface UpdateMeta {
@@ -75,19 +95,40 @@ const getUpdateProxy = () => {
   return normalizeUpdateProxy(updateProxy);
 };
 
-export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
+export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }: UpdateCheckerProps) {
   const { t } = useTranslation();
   const [status, setStatus] = useState<UpdateStatus>('idle');
   const [updateInfo, setUpdateInfo] = useState<UpdateMeta | null>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  // The auto toast's "Download update" action also opens the dialog from
+  // outside the component tree (sonner holds the onClick), so it routes
+  // through the same restore-on-reopen effect as the MenuBar pill signal.
+  const [toastOpenSignal, setToastOpenSignal] = useState(0);
+  const [announcement, setAnnouncement] = useState<UpdateAnnouncement | null>(null);
+  // Synchronous mirror of `announcement`, read inside async callbacks where
+  // the state closure may be stale (and after `setStatus('checking')`).
+  const announcementRef = useRef<UpdateAnnouncement | null>(null);
+  // Single write path so the ref never drifts from the state.
+  const applyAnnouncement = useCallback((next: UpdateAnnouncement | null) => {
+    announcementRef.current = next;
+    setAnnouncement(next);
+  }, []);
   const lastSignalRef = useRef<number | undefined>(checkSignal);
+  const lastOpenSignalRef = useRef<number | undefined>(openDialogSignal);
+  const lastToastOpenSignalRef = useRef(0);
   const busyRef = useRef(false);
   // Running app version, used to include it in the "up to date" toast. Kept in
   // a ref so the checkForUpdates closure always reads the latest value and a
   // failed lookup just falls back to the generic message.
   const currentVersionRef = useRef<string | null>(null);
+  // Auto-discovery toast fires once per session; afterwards the MenuBar pill
+  // is the only remaining hint (no repeated interruptions).
+  const autoToastShownRef = useRef(false);
+  // Survives the dialog-close reset so the pill click can reopen with the
+  // version text intact.
+  const latestUpdateRef = useRef<UpdateMeta | null>(null);
   // Environment facts from the backend (Homebrew detection + channel gating).
   // The Rust side re-checks Caskroom on every updater_check, so a stale ref
   // only costs a wasted round-trip, never a wrong install path.
@@ -145,9 +186,43 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
 
       if (update) {
         setUpdateInfo(update);
-        setStatus('available');
-        setDialogOpen(true);
+        latestUpdateRef.current = update;
+        // A ready announcement (update installed, relaunch pending) survives
+        // re-checks that still report the same version: the on-disk binary is
+        // still the old one, so the checker keeps finding it. The ref (not the
+        // state) is the truth here — `setStatus('checking')` above has already
+        // knocked the state out of ready by the time this line runs.
+        const stillReady =
+          announcementRef.current?.ready && announcementRef.current.version === update.version;
+        applyAnnouncement(
+          stillReady ? announcementRef.current : { version: update.version, ready: false }
+        );
+        if (manual) {
+          // Manual checks: the user asked, so open the dialog directly.
+          setDialogOpen(true);
+        } else if (!autoToastShownRef.current) {
+          // Auto-discovered updates never open the dialog (that would
+          // interrupt an active session). One non-blocking toast per
+          // session; the MenuBar pill keeps the entry point visible.
+          autoToastShownRef.current = true;
+          toast.info(t('updateChecker.autoToastTitle', { version: update.version }), {
+            description: t('updateChecker.autoToastDesc'),
+            duration: AUTO_TOAST_DURATION_MS,
+            id: 'update-available',
+            // Explicit close button: the user must be able to dismiss an
+            // auto-discovered update without acting on it.
+            closeButton: true,
+            // Route through the shared open path instead of setDialogOpen: a
+            // "Later" dismissal may have cleared the dialog state since the
+            // toast was shown, and the reopened dialog needs the same
+            // version/ready restore the pill click gets.
+            action: { label: t('updateChecker.downloadUpdate'), onClick: () => setToastOpenSignal((n) => n + 1) },
+          });
+        }
+        setStatus(stillReady ? 'ready' : 'available');
       } else {
+        applyAnnouncement(null);
+        latestUpdateRef.current = null;
         setStatus('idle');
         if (manual) {
           // Prefer the versioned message so the user learns which release
@@ -207,6 +282,15 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
         return;
       }
 
+      if (!manual) {
+        // Silent failure for automatic checks: almost always a transient
+        // network problem the user cannot act on, and the next periodic
+        // check retries. Never interrupt the session for this.
+        console.warn('[update-checker] automatic update check failed:', raw);
+        setStatus('idle');
+        return;
+      }
+
       // Map the common Rust error substrings to friendlier messages.
       const lower = raw.toLowerCase();
       const message =
@@ -232,7 +316,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
         toast.error(t('updateChecker.checkFailed'), { description: message });
       }
     }
-  }, [t]);
+  }, [t, applyAnnouncement]);
 
   const handleDownload = useCallback(async () => {
     setStatus('downloading');
@@ -246,6 +330,12 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       await invoke('updater_download_and_install');
       setProgress(100);
       setStatus('ready');
+      // Keep the MenuBar pill in sync: a downloaded update shows the
+      // "restart to update" variant until relaunch.
+      const next = announcementRef.current
+        ? { ...announcementRef.current, ready: true }
+        : null;
+      applyAnnouncement(next);
     } catch (caught) {
       const message =
         typeof caught === 'string'
@@ -278,7 +368,7 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       setError(message);
       toast.error(t('updateChecker.installFailed'), { description: message });
     }
-  }, [t]);
+  }, [t, applyAnnouncement]);
 
   // Download progress from the Rust updater command.
   useEffect(() => {
@@ -305,29 +395,50 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
 
   useEffect(() => {
     let cancelled = false;
-    // Dev/e2e builds never auto-check (context.autoCheckDisabled): fetching
-    // the release manifest or popping an update dialog mid-run breaks
-    // unattended automation. The context is still fetched so manual checks
-    // see real Homebrew/channel facts; non-Tauri dev falls through with the
-    // default context so a manual check still surfaces the real backend error.
-    const maybeAutoCheck = () => {
-      if (cancelled) return;
+    let firstCheckTimer: ReturnType<typeof setTimeout> | undefined;
+    let interval: ReturnType<typeof setInterval> | undefined;
+
+    const scheduleAutoChecks = () => {
+      // Dev/e2e builds never auto-check (context.autoCheckDisabled): fetching
+      // the release manifest or popping an update dialog mid-run breaks
+      // unattended automation. Homebrew-managed installs never auto-check
+      // either: brew owns updates there. The context is still fetched so
+      // manual checks see real Homebrew/channel facts; non-Tauri dev falls
+      // through with the default context so a manual check still surfaces
+      // the real backend error.
       const context = contextRef.current;
-      if (!context.autoCheckDisabled && !context.homebrewManaged && isAutoCheckEnabled()) {
+      if (context.autoCheckDisabled || context.homebrewManaged || !isAutoCheckEnabled()) return;
+      // VS Code-style delayed first check: avoids racing the startup
+      // connection-restore traffic and a not-yet-ready network at launch.
+      // Both timer callbacks re-read the preference on every fire: turning
+      // "Check for updates" off in Settings mid-session must silence the
+      // pending first check and all periodic re-checks, not just future
+      // schedulings (the timers themselves keep running as no-ops).
+      firstCheckTimer = setTimeout(() => {
+        if (!isAutoCheckEnabled()) return;
         void checkForUpdates(false);
-      }
+      }, FIRST_CHECK_DELAY_MS);
+      // Long-lived sessions re-check periodically; a launch-only check would
+      // miss every release published after startup.
+      interval = setInterval(() => {
+        if (!isAutoCheckEnabled()) return;
+        void checkForUpdates(false);
+      }, AUTO_CHECK_INTERVAL_MS);
     };
+
     invoke<UpdateContext>('get_update_context')
       .then((context) => {
         if (cancelled) return;
         contextRef.current = context;
-        maybeAutoCheck();
+        scheduleAutoChecks();
       })
       .catch(() => {
-        if (!cancelled) maybeAutoCheck();
+        if (!cancelled) scheduleAutoChecks();
       });
     return () => {
       cancelled = true;
+      clearTimeout(firstCheckTimer);
+      clearInterval(interval);
     };
   }, [checkForUpdates]);
 
@@ -339,6 +450,33 @@ export function UpdateChecker({ checkSignal }: UpdateCheckerProps) {
       }
     }
   }, [checkSignal, checkForUpdates]);
+
+  // Outside entry points (MenuBar pill click, auto toast action) → open the
+  // update dialog. The dialog-close reset clears updateInfo, so restore it
+  // from latestUpdateRef to keep the version text accurate after a "Later"
+  // dismissal — whichever entry point was used.
+  useEffect(() => {
+    const pillSignal =
+      typeof openDialogSignal === 'number' && lastOpenSignalRef.current !== openDialogSignal;
+    const toastSignal = lastToastOpenSignalRef.current !== toastOpenSignal;
+    if (!pillSignal && !toastSignal) return;
+    if (pillSignal) lastOpenSignalRef.current = openDialogSignal;
+    if (toastSignal) lastToastOpenSignalRef.current = toastOpenSignal;
+    if (!updateInfo && latestUpdateRef.current) {
+      setUpdateInfo(latestUpdateRef.current);
+      // A ready announcement restores the dialog into the ready state so it
+      // matches the pill ("Restart to Update") instead of offering a
+      // redundant download.
+      setStatus(announcement?.ready ? 'ready' : 'available');
+    }
+    setDialogOpen(true);
+  }, [openDialogSignal, toastOpenSignal, updateInfo, announcement]);
+
+  // Surface availability outside the dialog (MenuBar pill). The announcement
+  // outlives dialog closes so the pill persists until the update is handled.
+  useEffect(() => {
+    onAnnouncement?.(announcement);
+  }, [announcement, onAnnouncement]);
 
   const notes = useMemo(() => {
     if (!updateInfo?.body) {
