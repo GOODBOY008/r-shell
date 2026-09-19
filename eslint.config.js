@@ -17,7 +17,12 @@ export default tseslint.config(
     languageOptions: {
       globals: { ...globals.browser },
       parserOptions: {
-        projectService: true,
+        // version-bump.mjs is plain ESM shared by the CLI and the unit tests;
+        // it is not part of any tsconfig project, so lint it via the default
+        // project instead of failing with "not found by the project service".
+        projectService: {
+          allowDefaultProject: ['src/lib/version-bump.mjs'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },
