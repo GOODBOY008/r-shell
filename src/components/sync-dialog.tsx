@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { makeRawProgressChannel } from "@/lib/transfer-progress";
 import {
   Dialog,
   DialogContent,
@@ -311,6 +312,13 @@ export function SyncDialog({
           case "upload": {
             const srcPath = pathJoin(localPath, entry.relativePath);
             const destPath = pathJoin(remotePath, entry.relativePath);
+            const baseBytes = bytesTransferred;
+            const onProgress = makeRawProgressChannel((event) => {
+              setProgress((p) => ({
+                ...p,
+                bytesTransferred: baseBytes + event.transferred,
+              }));
+            });
             const result = await invoke<{
               success: boolean;
               error?: string;
@@ -318,6 +326,7 @@ export function SyncDialog({
               connectionId,
               localPath: srcPath,
               remotePath: destPath,
+              onProgress,
             });
             if (!result.success) {
               throw new Error(result.error ?? "Upload failed");
@@ -331,6 +340,13 @@ export function SyncDialog({
             break;
           }
           case "download": {
+            const baseBytes = bytesTransferred;
+            const onProgress = makeRawProgressChannel((event) => {
+              setProgress((p) => ({
+                ...p,
+                bytesTransferred: baseBytes + event.transferred,
+              }));
+            });
             const result = await invoke<{
               success: boolean;
               error?: string;
@@ -340,6 +356,7 @@ export function SyncDialog({
               destinationRoot: localPath,
               remoteRelativePath: entry.relativePath,
               destinationRelativePath: entry.relativePath,
+              onProgress,
             });
             if (!result.success) {
               throw new Error(result.error ?? "Download failed");

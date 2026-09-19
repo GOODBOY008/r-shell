@@ -18,6 +18,7 @@ import {
   AlertDialogTitle,
 } from "./ui/alert-dialog";
 import { classifyFileByExtension, type FileViewKind } from "@/lib/editor-config";
+import { makeNoopProgressChannel } from "@/lib/transfer-progress";
 import {
   EDITOR_WINDOW_CHANGED_EVENT,
   type EditorWindowEventPayload,
@@ -162,7 +163,7 @@ export function FileEditorView({
       const localPath = `${homeDir}/.rshell-preview-${fileName}`;
       const result = await invoke<{ success: boolean; error?: string }>(
         "download_remote_file",
-        { connectionId, remotePath: filePath, localPath },
+        { connectionId, remotePath: filePath, localPath, onProgress: makeNoopProgressChannel() },
       );
       if (!result.success) {
         throw new Error(result.error ?? "Download failed");

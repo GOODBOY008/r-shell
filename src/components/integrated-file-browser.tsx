@@ -12,6 +12,7 @@ import {
   transferQueueReducer,
   getNextQueuedTransfer,
 } from '@/lib/transfer-queue-reducer';
+import { makeTransferProgressChannel } from '@/lib/transfer-progress';
 import {
   buildDirectoryUploadPlan,
   buildFileUploadItems,
@@ -413,6 +414,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     dispatchTransfer({ type: "START", id: nextItem.id });
 
     const doTransfer = async () => {
+      const onProgress = makeTransferProgressChannel(
+        dispatchTransfer,
+        nextItem.id,
+        nextItem.totalBytes,
+      );
       try {
         if (nextItem.direction === "upload") {
           const result = await invoke<{ success: boolean; bytes_transferred?: number; error?: string }>(
@@ -421,6 +427,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               connectionId,
               localPath: nextItem.sourcePath,
               remotePath: nextItem.destinationPath,
+              onProgress,
             },
           );
           if (result.success) {
@@ -444,6 +451,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               connectionId,
               remotePath: nextItem.sourcePath,
               localPath: nextItem.destinationPath,
+              onProgress,
             },
           );
           if (result.success) {

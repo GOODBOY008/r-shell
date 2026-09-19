@@ -12,6 +12,7 @@
 import React, { useState, useCallback, useRef, useEffect } from "react";
 import { useTranslation } from 'react-i18next';
 import { invoke } from "@tauri-apps/api/core";
+import { makeRawProgressChannel } from "@/lib/transfer-progress";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -270,6 +271,15 @@ export function DirectoryTransferDialog({
               destPath === "/"
                 ? `/${file.relative_path}`
                 : `${destPath}/${file.relative_path}`;
+            // Live byte progress for the file in flight, on top of the
+            // already-completed files' bytes.
+            const baseBytes = bytesTransferred;
+            const onProgress = makeRawProgressChannel((event) => {
+              setProgress((p) => ({
+                ...p,
+                bytesTransferred: baseBytes + event.transferred,
+              }));
+            });
             const result = await invoke<{
               success: boolean;
               error?: string;
@@ -277,11 +287,19 @@ export function DirectoryTransferDialog({
               connectionId,
               localPath: fileSrcPath,
               remotePath: fileDestPath,
+              onProgress,
             });
             if (!result.success) {
               throw new Error(result.error ?? "Upload failed");
             }
           } else {
+            const baseBytes = bytesTransferred;
+            const onProgress = makeRawProgressChannel((event) => {
+              setProgress((p) => ({
+                ...p,
+                bytesTransferred: baseBytes + event.transferred,
+              }));
+            });
             const result = await invoke<{
               success: boolean;
               error?: string;
@@ -291,6 +309,7 @@ export function DirectoryTransferDialog({
               destinationRoot: destPath,
               remoteRelativePath: file.relative_path,
               destinationRelativePath: destinationRelativePath(file.relative_path),
+              onProgress,
             });
             if (!result.success) {
               throw new Error(result.error ?? "Download failed");
