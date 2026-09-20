@@ -1,7 +1,7 @@
 {
   "name": "r-shell",
   "private": true,
-  "version": "2.9.3",
+  "version": "3.0.0-current.1",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0-current.1] - 2026-09-20
+
+### 🚀 R-Shell 3.0 Current — Evolution Line Debut
+
+First release on the evolution line (current channel): it carries all new features and requires macOS 26 or later on Apple Silicon — Intel and older-macOS builds stay on the 2.9.x stable line, whose releases and in-app updates are unchanged. Settings gains an Update Channel picker (current is offered on eligible machines and only moves forward), and the in-app updater now stands down on Homebrew-managed installs in favor of `brew upgrade --cask r-shell`. File transfers move to a unified queue: one cancellable engine with per-transfer cancel, connection-death cleanup, and streaming SFTP progress. Update checks become periodic with non-intrusive notifications, and dev/e2e builds stop touching the OS keychain and the update server.
+
+### New Features 🎉
+
+- feat(transfer): frontend unified transfer queue service with guards by @GOODBOY008 in #168
+- feat(transfer): backend cancellable transfers via registry and cancel_transfer by @GOODBOY008 in #168
+- feat(update): periodic background re-checks with non-intrusive notifications by @sunxiaobin89 in #156
+- feat(update): one-click copy for the Homebrew upgrade command by @sunxiaobin89 in #157
+- feat(ui): add version visibility on Windows and versioned up-to-date toast by @sunxiaobin89 in #167
+- feat(scripts): channel-aware version bumping over a pure version lib by @GOODBOY008 in #85
+- feat(updater): skip the startup auto-check in dev/e2e builds by @GOODBOY008 in #155
+- feat(security): bypass OS keychain in dev/e2e builds so unattended runs never prompt by @GOODBOY008 in #155
+
+### Bug Fixes 🐛
+
+- fix(terminal): track transient unread output in stable portals by @htazq in #169
+- fix(sftp): streaming pipelined transfers with live progress by @GOODBOY008 in #168
+- fix(monitor): stabilize zero-value frames and tighten right-panel spacing by @sunxiaobin89 in #159
+
+### Documentation 📚
+
+- docs: document stable, prerelease and current release flows by @GOODBOY008 in #85
+- docs(transfer): add transfer subsystem design with decision records by @GOODBOY008 in #168
+
+### Other Changes
+
+- ci(release): validate release tags and gate prerelease artifacts by @GOODBOY008 in #85
+
+### Contributors
+
+Thanks to [@htazq](https://github.com/htazq), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.3...v3.0.0-current.1
+
 ## [2.9.3] - 2026-09-14
 
 ### 🔧 R-Shell 2.9.3 — Security Hardening & Lazy Session Restore
