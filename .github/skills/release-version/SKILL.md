@@ -240,6 +240,22 @@ Check the output includes the release body text (not just "See the assets…"). 
 - **Stable vs tagged (prerelease)?** A stable release uses `--latest` and updates the in-app updater + Homebrew. A tagged prerelease (`-alpha`/`-beta`/`-rc`) uses `--prerelease` instead of `--latest`; the Release workflow skips `latest.json` and Homebrew for prerelease tags, so stable users and Homebrew are never switched to a prerelease. Finalize a prerelease with `pnpm run version:stable` before tagging it as `vX.Y.Z`.
 - **Stable vs evolution line (current channel)?** A current-channel release (`vX.Y.Z-current.<N>`, bumped with `--channel current`) is also published with `--prerelease`, but it ships the reduced evolution-line build matrix and gets its own `current.json` manifest under the rolling `current` tag — `latest.json` and Homebrew stay on the stable line. Open the line from a stable version (`major --channel current`), continue it with any stable bump type (the base and bump type are ignored, only `<N>` advances), and promote back to stable with a normal bump on the stable channel.
 
+## Promotion (current → stable)
+
+Every 4–6 weeks the current line is frozen and promoted to a stable release:
+
+1. `pnpm run version:minor` on `main` — a plain stable bump automatically strips the `-current.N` suffix (`3.0.0-current.3` → `3.1.0`).
+2. Fill the new CHANGELOG section — the current line's unreleased features roll up into this stable entry.
+3. Tag `vX.Y.0` and release as usual (`--latest`): full compat matrix (mac arm64 + Intel, Linux, Windows msi+nsis), `latest.json` refreshes and the Homebrew tap follows.
+
+## Stable-release QA checklist
+
+- [ ] **macOS 27 (latest major) manual QA** — no GitHub runner exists yet, and "works on the latest major macOS" is a hard requirement for any future Homebrew-official cask: launch the app, connect over SSH, type in a terminal, transfer a file over SFTP.
+- [ ] `releases/latest` points at the new stable tag and `latest.json` reports the new version on all four platforms (stable channel intact).
+- [ ] The Homebrew tap dispatch succeeded (`update-homebrew` job) and `brew info` shows the new version.
+
+> Homebrew-official cask bump automation is **shelved** until notarization is in place — see the [dual-baseline design](../../../docs/superpowers/specs/2026-09-12-homebrew-official-dual-baseline-design.md) §3.5.
+
 ## Prerequisites
 
 - `gh` CLI authenticated (`gh auth status`)

@@ -200,7 +200,19 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 
 ## 📦 Installation
 
+R-Shell ships on two release lines:
+
+| | **Stable** (recommended) | **Current** (evolution line) |
+|---|---|---|
+| Audience | Most users | Early adopters |
+| Versions | `2.9.x`, `3.1.x`… | `3.0.0-current.1`, `-current.2`… |
+| macOS | 10.13+, Apple Silicon & Intel | macOS 26+, Apple Silicon only |
+| Content | Bug fixes & security patches | All new features, promoted to stable every 4–6 weeks |
+| Where | [`releases/latest`](https://github.com/GOODBOY008/r-shell/releases/latest) (marked "Latest") | [Current-channel prereleases](https://github.com/GOODBOY008/r-shell/releases/tag/current) |
+
 ### 🍺 Homebrew (macOS — Recommended)
+
+Installs the **stable** line:
 
 ```bash
 brew tap GOODBOY008/tap
@@ -213,7 +225,9 @@ brew install --cask r-shell
 brew upgrade --cask r-shell
 ```
 
-### 📥 Download Releases
+Homebrew-managed installs update exclusively through brew — the in-app updater detects them and stands down automatically.
+
+### 📥 Download Releases (stable)
 
 Download from the [Releases](https://github.com/GOODBOY008/r-shell/releases) page:
 
@@ -223,6 +237,17 @@ Download from the [Releases](https://github.com/GOODBOY008/r-shell/releases) pag
 | macOS (Intel) | `r-shell_x.x.x_x64.dmg` |
 | Windows | `r-shell_x.x.x_x64-setup.exe` |
 | Linux | `r-shell_x.x.x_amd64.AppImage` / `.deb` |
+
+Direct downloads update themselves in-app on the stable channel.
+
+### 🧪 Current channel (pre-release)
+
+The evolution line carries all new features and requires **macOS 26 or later on Apple Silicon**; Windows and Linux builds follow the same version numbers.
+
+- Get it from the [current-channel release page](https://github.com/GOODBOY008/r-shell/releases/tag/current), or
+- from `3.0.0-current.1` onward, switch in-app: **Settings → Advanced → Update Channel → Current** (offered only on eligible machines).
+
+⚠️ The current channel only moves forward — the updater never downgrades. To return to stable, download the latest stable `.dmg` and install it over the app.
 
 ---
 
