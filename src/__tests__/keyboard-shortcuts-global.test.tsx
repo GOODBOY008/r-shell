@@ -314,6 +314,100 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     expect(onShiftZ).toHaveBeenCalledTimes(2);
   });
 
+  it('registers Ctrl+, as a global shortcut on non-macOS (no native menu there)', async () => {
+    // Pin a non-mac host (the beforeEach default): the native menu and its
+    // ⌘, Settings chord only exist on macOS, so Windows/Linux need the
+    // frontend registration (#161).
+    const onComma = vi.fn();
+    await act(async () => {
+      render(
+        <GlobalShortcutHarness
+          shortcuts={[{ key: ',', ctrlKey: true, handler: onComma, description: 'Open Settings' }]}
+        />,
+      );
+    });
+
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+Comma', expect.any(Function));
+
+    // And the OS registration fires the handler.
+    const handler = mockedRegister.mock.calls.find(
+      ([accel]) => accel === 'CommandOrControl+Comma',
+    )?.[1] as (event: { state: 'Pressed'; shortcut: string; id: number }) => void;
+    handler({ state: 'Pressed', shortcut: 'CommandOrControl+Comma', id: 1 });
+    expect(onComma).toHaveBeenCalledOnce();
+  });
+
+  it('keeps Ctrl+, out of OS registration on macOS (menu-owned ⌘, chord)', async () => {
+    platformSpy.mockReturnValue('MacIntel');
+    const onComma = vi.fn();
+    await act(async () => {
+      render(
+        <GlobalShortcutHarness
+          shortcuts={[{ key: ',', ctrlKey: true, handler: onComma, description: 'Open Settings' }]}
+        />,
+      );
+    });
+
+    // ⌘, belongs to the native menu's Settings item; registering it would
+    // double-fire. It is also NOT in the in-window chords, so nothing fires
+    // in-window — the menu is the only path on macOS.
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Comma', expect.any(Function));
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true, bubbles: true }));
+    expect(onComma).not.toHaveBeenCalled();
+  });
+
+  it('drives tab-switch bindings from an in-window keydown on macOS (⌃Tab/⌃⇧Tab)', async () => {
+    platformSpy.mockReturnValue('MacIntel');
+    const onNext = vi.fn();
+    const onPrev = vi.fn();
+    const nextTab: KeyboardShortcut = {
+      key: 'Tab',
+      ctrlKey: true,
+      shiftKey: false,
+      handler: onNext,
+      description: 'Next tab in group',
+    };
+    const prevTab: KeyboardShortcut = {
+      key: 'Tab',
+      ctrlKey: true,
+      shiftKey: true,
+      handler: onPrev,
+      description: 'Previous tab in group',
+    };
+
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[nextTab, prevTab]} />);
+    });
+
+    // ⌘Tab / ⌘⇧Tab are the system app switcher — macOS rejects the OS
+    // registration, so these chords are never registered globally (#161).
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Tab', expect.any(Function));
+    expect(mockedRegister).not.toHaveBeenCalledWith('CommandOrControl+Shift+Tab', expect.any(Function));
+
+    // The physical ⌃Tab / ⌃⇧Tab chords fire the in-window handler.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, bubbles: true }));
+    expect(onNext).toHaveBeenCalledOnce();
+
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, shiftKey: true, bubbles: true }),
+    );
+    expect(onPrev).toHaveBeenCalledOnce();
+
+    // The Cmd chord belongs to the system app switcher, not the handler.
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: false, metaKey: true, bubbles: true }),
+    );
+    expect(onNext).toHaveBeenCalledOnce();
+
+    // Tab-switch bindings carry no ignoreInTerminal: they keep firing inside
+    // the terminal (matching the OS-registration semantics other platforms use).
+    const terminalTextarea = document.querySelector<HTMLElement>('[data-testid="terminal-textarea"]')!;
+    focusElement(terminalTextarea);
+    terminalTextarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, bubbles: true }));
+    expect(onNext).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps explicit-Cmd spellings out of OS registration on macOS', async () => {
     platformSpy.mockReturnValue('MacIntel');
     // The shortcut editor accepts explicit Cmd/Command/Meta spellings, which

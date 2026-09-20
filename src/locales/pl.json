@@ -368,6 +368,8 @@
       "closeSession": "Zamknij sesję",
       "nextTab": "Następna karta",
       "previousTab": "Poprzednia karta",
+      "effectiveKeys": "Faktyczne klawisze",
+      "newSessionNote": "Domyślne ⌘N jest obsługiwane przez menu aplikacji na macOS; pozostałe niestandardowe skróty działają zgodnie z konfiguracją, chyba że kombinacja jest już zajęta przez inną funkcję lub skrót aplikacji.",
       "note": "Zmiany skrótów klawiszowych zaczną działać po zapisaniu.",
       "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}"
     },
@@ -389,7 +391,7 @@
       "configBackup": "Kopia zapasowa konfiguracji",
       "configBackupDesc": "Wyeksportuj lub zaimportuj pełną konfigurację, aby przenieść połączenia i ustawienia na inny komputer.",
       "exportConfig": "Eksportuj konfigurację",
-      "exportConfigDesc": "Zapisz wszystkie połączenia, ustawienia i preferencje do pliku JSON.",
+      "exportConfigDesc": "Zapisz wszystkie połączenia, ustawienia i preferencje do pliku JSON. Hasła nie są dołączane.",
       "importConfig": "Importuj konfigurację",
       "importConfigDesc": "Przywróć konfigurację z wcześniej wyeksportowanego pliku JSON.",
       "exportSuccess": "Konfiguracja wyeksportowana pomyślnie",
@@ -399,7 +401,7 @@
       "importCancelled": "Anulowano import",
       "importFailed": "Import nie powiódł się",
       "exportFailed": "Eksport nie powiódł się",
-      "passwordWarning": "Uwaga: wyeksportowany plik zawiera hasła w postaci jawnej. Przechowuj go bezpiecznie.",
+      "passwordWarning": "Wyeksportowany plik nie zawiera żadnych haseł ani poświadczeń (ani jawnych, ani zaszyfrowanych). Po zaimportowaniu na innym urządzeniu należy ponownie wprowadzić poświadczenia.",
       "mergeOption": "Scal z istniejącymi"
     },
     "language": {
