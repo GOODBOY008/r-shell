@@ -6,7 +6,34 @@ on:
       - 'v*'
   workflow_dispatch:
 
+# Serialize releases per tag/branch: two overlapping runs could race on the
+# latest.json manifest upload or the release asset list. Never cancel a run
+# that already started building.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Cheap, fails-fast gate: the tag must be a valid semver tag AND match the
+  # version declared in every version file, so a mis-tagged release never
+  # ships artifacts whose version differs from the tag. Accepts stable
+  # (vX.Y.Z), tagged prerelease (vX.Y.Z-beta.1) and evolution-line
+  # (vX.Y.Z-current.1) tags.
+  validate-tag:
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Validate tag matches project version
+        run: node scripts/verify-release-tag.mjs "$GITHUB_REF_NAME"
+
   # A job-level `if` cannot reference the `matrix` context (GitHub only
   # allows github/needs/vars/inputs there), so the baseline selection for
   # the tag happens here: this job picks the matrix entries matching the
@@ -45,7 +72,7 @@ jobs:
           echo "entries=$ENTRIES" >> "$GITHUB_OUTPUT"
 
   release:
-    needs: resolve-matrix
+    needs: [validate-tag, resolve-matrix]
     permissions:
       contents: write
     strategy:
@@ -109,20 +136,28 @@ jobs:
           releaseName: 'r-shell ${{ github.ref_name }}'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: false
-          prerelease: ${{ matrix.baseline == 'current' }}
+          # Tagged prereleases (vX.Y.Z-<id>.<n>) must be GitHub *prereleases*:
+          # a release created with prerelease: false would be auto-marked
+          # "Latest" and hijack releases/latest for stable users. This covers
+          # both the evolution line (baseline == 'current', tags always look
+          # like v3.0.0-current.1) and compat-line beta/rc tags. Stable tags
+          # are always vX.Y.Z (no dash).
+          prerelease: ${{ matrix.baseline == 'current' || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-')) }}
           # The complete manifest is assembled by upload-updater-json /
           # upload-current-json; a per-job latest.json would be partial, so
-          # only the stable line lets tauri-action emit one at all.
-          includeUpdaterJson: ${{ matrix.baseline == 'compat' }}
+          # only stable compat tags (vX.Y.Z) let tauri-action emit one at all.
+          includeUpdaterJson: ${{ matrix.baseline == 'compat' && !contains(github.ref_name, '-') }}
           args: ${{ matrix.args }}
 
   # Generate and upload latest.json for the in-app updater.
-  # Skips pre-release tags so a beta/alpha/current tag never becomes the
-  # `latest` release and hijacks the updater manifest for stable users.
+  # Skips prerelease tags (vX.Y.Z-<id>.<n>) so a beta/rc/current tag never
+  # becomes the `latest` release and hijacks the updater manifest for stable
+  # users. Stable tags are always vX.Y.Z (no dash), so `!contains('-')` is
+  # the robust test.
   upload-updater-json:
     needs: release
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, '-current.')
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
     permissions:
       contents: write
     steps:
@@ -421,12 +456,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Update Homebrew tap (requires HOMEBREW_TAP_TOKEN secret).
-  # The tap's `r-shell` cask tracks the stable line only — current-line tags
-  # must not bump it to a prerelease version.
+  # Skips prerelease tags just like upload-updater-json - a beta/rc must not
+  # replace the stable cask, and the tap's `r-shell` cask tracks the stable
+  # line only (current-line tags must not bump it to a prerelease version).
   update-homebrew:
     needs: generate-checksums
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, 'alpha') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, '-current.')
+    if: startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
     steps:
       - name: Update Homebrew Cask
         uses: peter-evans/repository-dispatch@v4
