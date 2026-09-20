@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
 import { Plus, X, Circle, CircleDot } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -17,7 +18,7 @@ interface SocksProxyInfo {
 }
 
 /** Persist current proxy list to localStorage so session restore can recreate them. */
-async function persistProxyState(): Promise<void> {
+export async function persistProxyState(): Promise<void> {
   try {
     const list = await invoke<SocksProxyInfo[]>("list_socks_proxies");
     localStorage.setItem(SOCKS_PROXY_STATE_KEY, JSON.stringify(list));
@@ -31,6 +32,7 @@ interface PortForwardingPanelProps {
 }
 
 export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) {
+  const { t } = useTranslation();
   const [proxies, setProxies] = useState<SocksProxyInfo[]>([]);
   const [bindAddress, setBindAddress] = useState("127.0.0.1");
   const [bindPort, setBindPort] = useState("1080");
@@ -53,13 +55,13 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
 
   const handleStart = async () => {
     if (!connectionId) {
-      toast.error("No active connection");
+      toast.error(t("portForwarding.noConnection"));
       return;
     }
     const proxyId = `socks-${connectionId}-${Date.now()}`;
     const port = parseInt(bindPort, 10);
     if (isNaN(port) || port < 1 || port > 65535) {
-      toast.error("Invalid port number");
+      toast.error(t("portForwarding.invalidPort"));
       return;
     }
     setLoading(true);
@@ -73,14 +75,17 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
         },
       });
       if (res.success) {
-        toast.success(`SOCKS proxy started on ${bindAddress}:${res.actual_port ?? port}`);
+        toast.success(t("portForwarding.started", {
+          address: bindAddress,
+          port: res.actual_port ?? port,
+        }));
         await persistProxyState();
         refresh();
       } else {
-        toast.error("Failed to start proxy", { description: res.error });
+        toast.error(t("portForwarding.startFailed"), { description: res.error });
       }
     } catch (e: any) {
-      toast.error("Failed to start proxy", { description: String(e) });
+      toast.error(t("portForwarding.startFailed"), { description: String(e) });
     } finally {
       setLoading(false);
     }
@@ -92,14 +97,14 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
         proxyId,
       });
       if (res.success) {
-        toast.success(res.output ?? "Proxy stopped");
+        toast.success(res.output ?? t("portForwarding.stopped"));
         await persistProxyState();
         refresh();
       } else {
-        toast.error("Failed to stop proxy", { description: res.error });
+        toast.error(t("portForwarding.stopFailed"), { description: res.error });
       }
     } catch (e: any) {
-      toast.error("Failed to stop proxy", { description: String(e) });
+      toast.error(t("portForwarding.stopFailed"), { description: String(e) });
     }
   };
 
@@ -108,7 +113,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
       <div className="flex-1 overflow-auto p-2 space-y-2">
         {proxies.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center pt-4">
-            No SOCKS proxies running
+            {t("portForwarding.noProxies")}
           </p>
         ) : (
           proxies.map((p) => (
@@ -130,6 +135,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6 shrink-0"
+                aria-label={t("portForwarding.stop")}
                 onClick={() => handleStop(p.proxy_id)}
               >
                 <X className="h-3 w-3" />
@@ -140,10 +146,10 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
       </div>
 
       <div className="border-t p-2 space-y-2">
-        <p className="text-xs font-medium text-muted-foreground">New SOCKS Proxy</p>
+        <p className="text-xs font-medium text-muted-foreground">{t("portForwarding.newProxy")}</p>
         <div className="flex items-center gap-1">
           <div className="flex-1">
-            <Label className="sr-only" htmlFor="bind-address">Bind Address</Label>
+            <Label className="sr-only" htmlFor="bind-address">{t("portForwarding.bindAddress")}</Label>
             <Input
               id="bind-address"
               placeholder="127.0.0.1"
@@ -154,7 +160,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
           </div>
           <span className="text-muted-foreground">:</span>
           <div className="w-20">
-            <Label className="sr-only" htmlFor="bind-port">Port</Label>
+            <Label className="sr-only" htmlFor="bind-port">{t("portForwarding.bindPort")}</Label>
             <Input
               id="bind-port"
               placeholder="1080"
@@ -170,7 +176,7 @@ export function PortForwardingPanel({ connectionId }: PortForwardingPanelProps) 
             disabled={loading || !connectionId}
           >
             <Plus className="h-3 w-3 mr-1" />
-            Start
+            {t("portForwarding.start")}
           </Button>
         </div>
       </div>

@@ -92,6 +92,7 @@
     "monitor": "监视器",
     "logs": "日志",
     "quickCommands": "命令",
+    "portForwarding": "端口转发",
     "systemMonitor": "系统监视器",
     "logMonitor": "日志监视器",
     "quickConnected": "快速连接成功",
@@ -1396,6 +1397,21 @@
       "updated": "命令片段已更新",
       "deleted": "命令片段已删除"
     }
+  },
+  "portForwarding": {
+    "title": "端口转发",
+    "noProxies": "没有正在运行的 SOCKS 代理",
+    "newProxy": "新建 SOCKS 代理",
+    "bindAddress": "绑定地址",
+    "bindPort": "端口",
+    "start": "启动",
+    "stop": "停止代理",
+    "started": "SOCKS 代理已监听 {{address}}:{{port}}",
+    "startFailed": "启动代理失败",
+    "stopped": "代理已停止",
+    "stopFailed": "停止代理失败",
+    "noConnection": "没有活动连接",
+    "invalidPort": "端口号无效"
   },
   "hostKey": {
     "changedTitle": "主机密钥已更改",

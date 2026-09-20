@@ -978,6 +978,16 @@ impl ConnectionManager {
         };
         drop(connections);
 
+        // Cancel any existing proxy with the same ID BEFORE binding the new
+        // listener, so restarting a proxy on the same port cannot race the
+        // old listener's still-open socket (EADDRINUSE until it is released).
+        {
+            let mut proxies = self.socks_proxies.write().await;
+            if let Some((_, old_cancel)) = proxies.remove(&proxy_id) {
+                old_cancel.cancel();
+            }
+        }
+
         let cancel = CancellationToken::new();
         let proxy_cancel = cancel.clone();
 
@@ -998,10 +1008,6 @@ impl ConnectionManager {
             active: true,
         };
         let mut proxies = self.socks_proxies.write().await;
-        // Cancel any existing proxy with the same ID
-        if let Some((_, old_cancel)) = proxies.remove(&proxy_id) {
-            old_cancel.cancel();
-        }
         proxies.insert(proxy_id, (info, cancel));
 
         Ok(actual_port)

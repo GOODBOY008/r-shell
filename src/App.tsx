@@ -8,7 +8,7 @@ import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
-import { PortForwardingPanel } from './components/port-forwarding-panel';
+import { PortForwardingPanel, SOCKS_PROXY_STATE_KEY } from './components/port-forwarding-panel';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { HostKeyChangedDialog } from './components/host-key-changed-dialog';
@@ -381,8 +381,8 @@ function AppContent() {
 
   // Persist running SOCKS proxies to localStorage so they survive app restart.
   // Only saves non-empty lists so the saved state is never overwritten by the
-  // initial "no proxies yet" read on a fresh backend.
-  const PROXY_STATE_KEY = "r-shell-socks-proxy-state";
+  // initial "no proxies yet" read on a fresh backend (start/stop in the
+  // PortForwardingPanel persist immediately, including the empty list).
   useEffect(() => {
     let cancelled = false;
     const persist = async () => {
@@ -390,7 +390,7 @@ function AppContent() {
       try {
         const list = await invoke<{ connection_id: string; bind_address: string; bind_port: number }[]>("list_socks_proxies");
         if (list.length > 0) {
-          localStorage.setItem(PROXY_STATE_KEY, JSON.stringify(list));
+          localStorage.setItem(SOCKS_PROXY_STATE_KEY, JSON.stringify(list));
         }
       } catch {
         // ignore
@@ -398,9 +398,38 @@ function AppContent() {
     };
     // Delay the first persist so the session-restore effect can read the
     // stale saved state before we potentially overwrite it.
-    const timer = setTimeout(() => persist(), 1000);
-    const interval = setInterval(persist, 10_000);
+    const timer = setTimeout(() => { void persist(); }, 1000);
+    const interval = setInterval(() => { void persist(); }, 10_000);
     return () => { cancelled = true; clearTimeout(timer); clearInterval(interval); };
+  }, []);
+
+  // Restart the SOCKS proxies a connection had running when the previous
+  // session ended. Called right after its SSH session is re-established;
+  // individual failures warn but never block the restore.
+  const restoreSocksProxies = useCallback(async (connectionId: string, name: string) => {
+    try {
+      const raw = localStorage.getItem(SOCKS_PROXY_STATE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { connection_id: string; bind_address: string; bind_port: number }[];
+      const mine = saved.filter(p => p.connection_id === connectionId);
+      for (const proxy of mine) {
+        const res = await invoke<{ success: boolean; error?: string }>("start_socks_proxy", {
+          request: {
+            proxy_id: `socks-${connectionId}-restore-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            connection_id: connectionId,
+            bind_address: proxy.bind_address,
+            bind_port: proxy.bind_port,
+          },
+        });
+        if (res.success) {
+          console.log(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} restored for ${name}`);
+        } else {
+          console.warn(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} failed for ${name}:`, res.error);
+        }
+      }
+    } catch (e) {
+      console.warn('[Restore] Failed to restore SOCKS proxies:', e);
+    }
   }, []);
 
   // One-time migration: encrypt any legacy plaintext secrets still sitting in
@@ -548,6 +577,9 @@ function AppContent() {
           markFailed();
           return false;
         }
+        // SOCKS proxies ride on the SSH session: restart the ones this
+        // connection had running when the previous session ended.
+        await restoreSocksProxies(tab.id, connectionData.name);
       }
 
       if (!tab.originalConnectionId) {
@@ -564,7 +596,7 @@ function AppContent() {
       markFailed();
       return false;
     }
-  }, [dispatch]);
+  }, [dispatch, restoreSocksProxies]);
 
   // Chrome-style lazy restore: a background tab from the previous session
   // reconnects the first time it becomes the active tab, not at startup.
