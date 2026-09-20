@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.0-current.1] - 2026-09-20
+## [3.0.0] - 2026-09-20
 
-### 🚀 R-Shell 3.0 Current — Evolution Line Debut
+### 🚀 R-Shell 3.0 — Unified Transfer Queue, Periodic Update Checks & the Dual-Baseline Release System
 
-First release on the evolution line (current channel): it carries all new features and requires macOS 26 or later on Apple Silicon — Intel and older-macOS builds stay on the 2.9.x stable line, whose releases and in-app updates are unchanged. Settings gains an Update Channel picker (current is offered on eligible machines and only moves forward), and the in-app updater now stands down on Homebrew-managed installs in favor of `brew upgrade --cask r-shell`. File transfers move to a unified queue: one cancellable engine with per-transfer cancel, connection-death cleanup, and streaming SFTP progress. Update checks become periodic with non-intrusive notifications, and dev/e2e builds stop touching the OS keychain and the update server.
+The first major release in two years promotes everything that was hardened on the current channel to the stable line, for every platform. File transfers move to a unified queue — one cancellable engine with per-transfer cancel, connection-death cleanup and streaming SFTP progress. Update checks become periodic with non-intrusive notifications, and the app now ships on two release lines: this stable line (all platforms, macOS 10.13+) and the `current` evolution line (macOS 26+ Apple Silicon) that you can switch to in Settings → Advanced → Update Channel; Homebrew-managed installs keep updating through brew while the in-app updater steps aside. Dev/e2e builds stop touching the OS keychain and the update server, and release engineering gains tag validation, prerelease-aware CI manifests and a channel-aware version tooling.
 
 ### New Features 🎉
 
@@ -27,9 +27,11 @@ First release on the evolution line (current channel): it carries all new featur
 - fix(terminal): track transient unread output in stable portals by @htazq in #169
 - fix(sftp): streaming pipelined transfers with live progress by @GOODBOY008 in #168
 - fix(monitor): stabilize zero-value frames and tighten right-panel spacing by @sunxiaobin89 in #159
+- fix(ci): build NSIS-only on Windows for prerelease tags by @GOODBOY008 in #85
 
 ### Documentation 📚
 
+- docs: document the two release lines, promotion flow and stable QA checklist by @GOODBOY008
 - docs: document stable, prerelease and current release flows by @GOODBOY008 in #85
 - docs(transfer): add transfer subsystem design with decision records by @GOODBOY008 in #168
 
@@ -41,7 +43,7 @@ First release on the evolution line (current channel): it carries all new featur
 
 Thanks to [@htazq](https://github.com/htazq), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
 
-**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.3...v3.0.0-current.1
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v2.9.3...v3.0.0
 
 ## [2.9.3] - 2026-09-14
 

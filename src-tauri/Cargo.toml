@@ -1,6 +1,6 @@
 [package]
 name = "r-shell"
-version = "3.0.0-current.1"
+version = "3.0.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
