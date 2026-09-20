@@ -51,22 +51,33 @@ jobs:
           # build only the evolution line (macOS 26+ arm64, no Intel) which
           # is published as a prerelease so it can never hijack
           # `releases/latest` from the stable channel.
+          #
+          # WiX/MSI ProductVersion is numeric-only (x.y.z, parts ≤ 65535),
+          # so any prerelease tag (-current.N, -beta.N, …) cannot build the
+          # msi target — restrict Windows to nsis there. The updater
+          # consumes the NSIS -setup.exe (+ .sig) only.
           if [[ "$GITHUB_REF_NAME" == *-current.* ]]; then
             ENTRIES=$(jq -cn \
               --arg macArgs '--target aarch64-apple-darwin --config '\''{"bundle":{"macOS":{"minimumSystemVersion":"26.0"}}}'\''' \
+              --arg winArgs '--config '\''{"bundle":{"targets":["nsis"]}}'\''' \
               '{include: [
                  {platform: "macos-latest",  args: $macArgs, baseline: "current"},
                  {platform: "ubuntu-latest",  args: "",       baseline: "current"},
-                 {platform: "windows-latest", args: "",       baseline: "current"}
+                 {platform: "windows-latest", args: $winArgs, baseline: "current"}
                ]}')
           else
+            WIN_ARGS=""
+            if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+              WIN_ARGS='--config ''{"bundle":{"targets":["nsis"]}}'''
+            fi
             ENTRIES=$(jq -cn \
+              --arg winArgs "$WIN_ARGS" \
               '{include: [
                  # Stable / compat line (minimumSystemVersion stays at the Tauri default)
                  {platform: "macos-latest",  args: "--target aarch64-apple-darwin", baseline: "compat"},
                  {platform: "macos-latest",  args: "--target x86_64-apple-darwin",  baseline: "compat"},
                  {platform: "ubuntu-latest",  args: "",                              baseline: "compat"},
-                 {platform: "windows-latest", args: "",                              baseline: "compat"}
+                 {platform: "windows-latest", args: $winArgs,                        baseline: "compat"}
                ]}')
           fi
           echo "entries=$ENTRIES" >> "$GITHUB_OUTPUT"
