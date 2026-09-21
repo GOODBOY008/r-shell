@@ -29,8 +29,11 @@ import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
   APP_SETTINGS_CHANGED_EVENT,
+  createConfiguredShortcut,
   createLayoutShortcuts,
   createSplitViewShortcuts,
+  DEFAULT_APP_KEYBOARD_SHORTCUTS,
+  isShortcutRecording,
   loadKeyboardShortcutSettings,
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
@@ -352,7 +355,6 @@ function AppContent() {
     toggleZenMode,
   }), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode]);
 
-  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts], true);
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
@@ -900,6 +902,26 @@ function AppContent() {
     setPendingConnectionId(null);
     setPendingReconnectTabId(null);
   }, []);
+
+  // Customizable new-session binding (Settings → Keyboard). Kept in its own
+  // memo below handleNewTab so the factory can reference it; the shortcut is
+  // ignored while a terminal owns the keystroke (Ctrl+N is readline
+  // next-history) and the macOS registration layer separately skips chords
+  // owned by the native menu (⌘N).
+  const newSessionShortcut = useMemo(
+    () => ({
+      ...createConfiguredShortcut(
+        keyboardShortcutSettings.newSession,
+        DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+        () => handleNewTab(),
+        'New session',
+      ),
+      ignoreInTerminal: true,
+    }),
+    [keyboardShortcutSettings.newSession, handleNewTab],
+  );
+
+  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts, newSessionShortcut], true);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
@@ -1690,6 +1712,12 @@ function AppContent() {
       if (!document.hasFocus()) {
         return;
       }
+      // While the user records a shortcut in Settings, the native menu's key
+      // equivalents must not fire their actions — the recorder owns the
+      // keystroke (otherwise ⌘N in the recorder opens a new session).
+      if (isShortcutRecording()) {
+        return;
+      }
       switch (event.payload) {
         case 'new_connection':
         case 'new_tab':
@@ -2305,10 +2333,6 @@ function AppContent() {
       <SettingsModal
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
-        onAppearanceChange={() => {
-          // Appearance changes are handled by individual PtyTerminal instances
-          // via their own settings listeners in TerminalGroupView
-        }}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />
 

@@ -264,7 +264,8 @@
     },
     "hint": {
       "savedPasswordKept": "Dla tego połączenia zapisano hasło. Pozostaw pole puste, aby je zachować, albo wpisz nowe, aby je zastąpić."
-    }
+    },
+    "passwordSavingDisabledHint": "Zapisywanie haseł jest wyłączone w ustawieniach — połączenie zadziała, ale dane logowania nie zostaną zapisane."
   },
   "settings": {
     "title": "Ustawienia i preferencje",
@@ -342,21 +343,13 @@
       "desc": "Skonfiguruj opcje bezpieczeństwa i uwierzytelniania.",
       "hostKeyVerification": "Weryfikacja klucza hosta",
       "hostKeyVerificationDesc": "Weryfikuj klucze hostów SSH dla większego bezpieczeństwa",
-      "savePasswords": "Zapisuj hasła",
-      "savePasswordsDesc": "Przechowuj hasła lokalnie (zaszyfrowane)",
-      "autoLockTimeout": "Czas do automatycznej blokady: {{timeout}} min",
-      "autoLockTimeoutDesc": "Automatycznie blokuj aplikację po tym okresie bezczynności"
+      "allowPasswordSaving": "Zezwalaj na zapisywanie haseł lokalnie",
+      "allowPasswordSavingDesc": "Określa, czy okno połączenia oferuje zapisywanie danych logowania. Zapisane dane pozostają nietknięte i są zawsze szyfrowane AES-256-GCM."
     },
     "interface": {
       "title": "Ustawienia interfejsu",
       "desc": "Dostosuj interfejs aplikacji i panele.",
       "appTheme": "Motyw aplikacji",
-      "panelVisibility": "Widoczność paneli",
-      "connectionManager": "Menedżer połączeń",
-      "systemMonitor": "Monitor systemu",
-      "statusBar": "Pasek stanu",
-      "enableNotifications": "Włącz powiadomienia",
-      "enableNotificationsDesc": "Pokazuj powiadomienia systemowe o ważnych zdarzeniach",
       "autostart": "Uruchamiaj przy logowaniu",
       "autostartDesc": "Uruchamiaj r-shell automatycznie po zalogowaniu",
       "autostartFailed": "Nie udało się zmienić ustawienia uruchamiania przy logowaniu"
@@ -369,14 +362,13 @@
       "nextTab": "Następna karta",
       "previousTab": "Poprzednia karta",
       "note": "Zmiany skrótów klawiszowych zaczną działać po zapisaniu.",
-      "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}"
+      "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}",
+      "recorderHint": "Naciśnij kombinację klawiszy (Esc, aby anulować)"
     },
     "advanced": {
       "title": "Ustawienia zaawansowane",
       "desc": "Skonfiguruj opcje zaawansowane i diagnostyczne.",
       "version": "Wersja",
-      "logLevel": "Poziom logowania",
-      "maxLogSize": "Maksymalny rozmiar logu: {{size}} MB",
       "checkUpdates": "Sprawdzaj aktualizacje",
       "checkUpdatesDesc": "Automatycznie sprawdzaj dostępność aktualizacji aplikacji",
       "checkNow": "Sprawdź teraz",
@@ -384,8 +376,6 @@
       "updateProxyDesc": "Opcjonalne proxy HTTP lub HTTPS używane do sprawdzania i pobierania aktualizacji.",
       "updateProxyPlaceholder": "http://127.0.0.1:7890",
       "updateProxyInvalid": "Podaj prawidłowy adres proxy HTTP lub HTTPS.",
-      "enableTelemetry": "Włącz telemetrię",
-      "enableTelemetryDesc": "Pomóż ulepszać aplikację, wysyłając anonimowe dane o użyciu",
       "configBackup": "Kopia zapasowa konfiguracji",
       "configBackupDesc": "Wyeksportuj lub zaimportuj pełną konfigurację, aby przenieść połączenia i ustawienia na inny komputer.",
       "exportConfig": "Eksportuj konfigurację",
@@ -429,12 +419,6 @@
       "contain": "Zmieść w całości",
       "center": "Wyśrodkuj (oryginalny rozmiar)",
       "tile": "Kafelki (powtarzaj)"
-    },
-    "logLevel": {
-      "error": "Błąd",
-      "warn": "Ostrzeżenie",
-      "info": "Informacja",
-      "debug": "Diagnostyka"
     },
     "tabScrollLeft": "Przewiń w lewo",
     "tabScrollRight": "Przewiń w prawo",

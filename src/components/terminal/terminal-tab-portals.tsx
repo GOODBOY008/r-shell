@@ -14,6 +14,7 @@ import { RefreshCw } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
+import { APP_SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcuts';
 import type { TerminalTab } from '../../lib/terminal-group-types';
 import { isTerminalTabVisible } from '../../lib/terminal-group-reducer';
 import { PtyTerminal } from '../pty-terminal';
@@ -51,7 +52,25 @@ function useThemeKey(): number {
   return themeKey;
 }
 
-function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: number }) {
+/**
+ * Bumped every time Settings are saved (APP_SETTINGS_CHANGED_EVENT) so
+ * terminals re-read the terminal-appearance settings without a remount —
+ * previously the value was wired in the prop but never updated by any
+ * parent, so appearance changes only applied after reconnect.
+ */
+function useAppearanceKey(): number {
+  const [appearanceKey, setAppearanceKey] = useState(0);
+
+  useEffect(() => {
+    const onSettingsChanged = () => setAppearanceKey((key) => key + 1);
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+    return () => window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, onSettingsChanged);
+  }, []);
+
+  return appearanceKey;
+}
+
+function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab; themeKey: number; appearanceKey: number }) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
   const { onReconnectTab, onDetachTab, failedPendingTabIds } = useTerminalCallbacks();
@@ -193,6 +212,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         host={tab.host}
         username={tab.username}
         themeKey={themeKey}
+        appearanceKey={appearanceKey}
         isActive={isActive}
         onOutput={!isVisible && !tab.hasUnreadOutput ? handleOutput : undefined}
         onConnectionStatusChange={handleConnectionStatusChange}
@@ -227,6 +247,7 @@ export function TerminalTabPortalProvider({ children }: { children: React.ReactN
   const { state } = useTerminalGroups();
   const [portalNodes] = useState(() => new Map<string, HTMLDivElement>());
   const themeKey = useThemeKey();
+  const appearanceKey = useAppearanceKey();
 
   const allTabs = useMemo(
     () => Object.values(state.groups).flatMap((group) => group.tabs),
@@ -261,7 +282,7 @@ export function TerminalTabPortalProvider({ children }: { children: React.ReactN
       {children}
       {allTabs.map((tab) =>
         createPortal(
-          <TerminalTabContent tab={tab} themeKey={themeKey} />,
+          <TerminalTabContent tab={tab} themeKey={themeKey} appearanceKey={appearanceKey} />,
           getPortalNode(tab.id),
           tab.id,
         ),

@@ -262,7 +262,8 @@
     },
     "hint": {
       "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it."
-    }
+    },
+    "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored."
   },
   "settings": {
     "title": "Settings & Preferences",
@@ -340,21 +341,13 @@
       "desc": "Configure security options and authentication settings.",
       "hostKeyVerification": "Host Key Verification",
       "hostKeyVerificationDesc": "Verify SSH host keys for enhanced security",
-      "savePasswords": "Save Passwords",
-      "savePasswordsDesc": "Store passwords locally (encrypted)",
-      "autoLockTimeout": "Auto Lock Timeout: {{timeout}} minutes",
-      "autoLockTimeoutDesc": "Automatically lock the application after this period of inactivity"
+      "allowPasswordSaving": "Allow saving passwords locally",
+      "allowPasswordSavingDesc": "Controls whether the connection dialog offers to save credentials. Already-saved credentials are unaffected and always stored AES-256-GCM encrypted."
     },
     "interface": {
       "title": "Interface Settings",
       "desc": "Customize the application interface and panels.",
       "appTheme": "Application Theme",
-      "panelVisibility": "Panel Visibility",
-      "connectionManager": "Connection Manager",
-      "systemMonitor": "System Monitor",
-      "statusBar": "Status Bar",
-      "enableNotifications": "Enable Notifications",
-      "enableNotificationsDesc": "Show system notifications for important events",
       "autostart": "Launch at Login",
       "autostartDesc": "Start r-shell automatically when you log in",
       "autostartFailed": "Failed to update launch-at-login setting"
@@ -367,14 +360,13 @@
       "nextTab": "Next Tab",
       "previousTab": "Previous Tab",
       "note": "Changes to keyboard shortcuts take effect after saving.",
-      "registerFailed": "Failed to register shortcut {{shortcut}}"
+      "registerFailed": "Failed to register shortcut {{shortcut}}",
+      "recorderHint": "Press a key combination (Esc to cancel)"
     },
     "advanced": {
       "title": "Advanced Settings",
       "desc": "Configure advanced options and diagnostic settings.",
       "version": "Version",
-      "logLevel": "Log Level",
-      "maxLogSize": "Max Log Size: {{size}}MB",
       "checkUpdates": "Check for Updates",
       "checkUpdatesDesc": "Automatically check for application updates",
       "checkNow": "Check Now",
@@ -382,8 +374,6 @@
       "updateProxyDesc": "Optional HTTP or HTTPS proxy used to check and download updates.",
       "updateProxyPlaceholder": "http://127.0.0.1:7890",
       "updateProxyInvalid": "Enter a valid HTTP or HTTPS proxy URL.",
-      "enableTelemetry": "Enable Telemetry",
-      "enableTelemetryDesc": "Help improve the application by sending anonymous usage data",
       "configBackup": "Config Backup",
       "configBackupDesc": "Export or import your full configuration to transfer connections and settings to another machine.",
       "exportConfig": "Export Config",
@@ -427,12 +417,6 @@
       "contain": "Contain (fit inside)",
       "center": "Center (original size)",
       "tile": "Tile (repeat)"
-    },
-    "logLevel": {
-      "error": "Error",
-      "warn": "Warning",
-      "info": "Info",
-      "debug": "Debug"
     },
     "tabScrollLeft": "Scroll left",
     "tabScrollRight": "Scroll right",

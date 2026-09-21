@@ -1343,6 +1343,8 @@ export function PtyTerminal({
     term.options.theme = opts.theme;
     term.options.fontSize = opts.fontSize;
     term.options.fontFamily = opts.fontFamily;
+    term.options.lineHeight = opts.lineHeight;
+    term.options.letterSpacing = opts.letterSpacing;
     term.options.cursorStyle = opts.cursorStyle;
     term.options.cursorBlink = opts.cursorBlink;
     term.options.scrollback = opts.scrollback;

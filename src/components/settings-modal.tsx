@@ -72,6 +72,7 @@ import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { readFile } from '@tauri-apps/plugin-fs';
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import { Checkbox } from './ui/checkbox';
+import { ShortcutRecorderInput } from './shortcut-recorder-input';
 
 // Background image picker: MIME type for the data URL derived from the file extension.
 const IMAGE_MIME: Record<string, string> = {
@@ -97,11 +98,10 @@ function bytesToBase64(bytes: Uint8Array): string {
 interface SettingsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAppearanceChange?: (settings: TerminalAppearanceSettings) => void;
   onCheckForUpdates?: () => void;
 }
 
-export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckForUpdates }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: SettingsModalProps) {
   const { t } = useTranslation();
   const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
@@ -127,29 +127,24 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     
     // Security settings
     hostKeyVerification: true,
-    savePasswords: false,
-    autoLockTimeout: 30,
-    
+    // Password-saving master switch (affects the connection dialog's secret
+    // persistence). Default ON = today's behavior; only an explicit `false`
+    // disables saving.
+    allowPasswordSaving: true,
+
     // Interface settings
     theme: 'dark',
-    showConnectionManager: true,
-    showSystemMonitor: true,
-    showStatusBar: true,
-    enableNotifications: true,
-    
+
     // Keyboard shortcuts
     newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
     closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
     nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
     previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
-    
+
     // Advanced settings
-    logLevel: 'info',
-    maxLogSize: 100,
     checkUpdates: true,
     updateChannel: 'stable',
     updateProxy: '',
-    telemetry: false,
 
     // System settings
     autostart: false
@@ -188,6 +183,7 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
           setSettings(prev => ({
             ...prev,
             ...parsed,
+            newSession: keyboardShortcuts.newSession,
             closeSession: keyboardShortcuts.closeTab,
             nextTab: keyboardShortcuts.nextTab,
             previousTab: keyboardShortcuts.prevTab,
@@ -260,7 +256,6 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         const appearance = loadAppearanceSettings();
         setTerminalAppearance(appearance);
         setEditorConfig(loadEditorConfig());
-        if (onAppearanceChange) onAppearanceChange(appearance);
       } else {
         toast.info(t('settings.advanced.importCancelled'));
       }
@@ -356,11 +351,6 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
     // Save terminal appearance settings
     saveAppearanceSettings(terminalAppearance);
     
-    // Notify parent component of appearance changes
-    if (onAppearanceChange) {
-      onAppearanceChange(terminalAppearance);
-    }
-    
     // Save editor config and notify live editors
     saveEditorConfig(editorConfig);
     dispatchEditorConfigChanged();
@@ -400,23 +390,15 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
         autoReconnect: true,
         restoreSessionsOnStartup: true,
         hostKeyVerification: true,
-        savePasswords: false,
-        autoLockTimeout: 30,
+        allowPasswordSaving: true,
         theme: 'dark',
-        showConnectionManager: true,
-        showSystemMonitor: true,
-        showStatusBar: true,
-        enableNotifications: true,
         newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
         closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
         nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
         previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
-        logLevel: 'info',
-        maxLogSize: 100,
         checkUpdates: true,
         updateChannel: 'stable',
         updateProxy: '',
-        telemetry: false,
         autostart: false
       });
 
@@ -1121,29 +1103,15 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
-                    <Label>{t('settings.security.savePasswords')}</Label>
+                    <Label>{t('settings.security.allowPasswordSaving')}</Label>
                     <p className="text-sm text-muted-foreground">
-                      {t('settings.security.savePasswordsDesc')}
+                      {t('settings.security.allowPasswordSavingDesc')}
                     </p>
                   </div>
                   <Switch
-                    checked={settings.savePasswords}
-                    onCheckedChange={(checked) => updateSetting('savePasswords', checked)}
+                    checked={settings.allowPasswordSaving}
+                    onCheckedChange={(checked) => updateSetting('allowPasswordSaving', checked)}
                   />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>{t('settings.security.autoLockTimeout', { timeout: settings.autoLockTimeout })}</Label>
-                  <Slider
-                    value={[settings.autoLockTimeout]}
-                    onValueChange={([value]) => updateSetting('autoLockTimeout', value)}
-                    min={5}
-                    max={120}
-                    step={5}
-                  />
-                  <p className="text-sm text-muted-foreground">
-                    {t('settings.security.autoLockTimeoutDesc')}
-                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -1205,51 +1173,6 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                 </div>
                 <Separator />
 
-                <div className="space-y-4">
-                  <Label>{t('settings.interface.panelVisibility')}</Label>
-                  
-                  <div className="flex items-center justify-between">
-                    <span>{t('settings.interface.connectionManager')}</span>
-                    <Switch
-                      checked={settings.showConnectionManager}
-                      onCheckedChange={(checked) => updateSetting('showConnectionManager', checked)}
-                    />
-                  </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <span>{t('settings.interface.systemMonitor')}</span>
-                    <Switch
-                      checked={settings.showSystemMonitor}
-                      onCheckedChange={(checked) => updateSetting('showSystemMonitor', checked)}
-                    />
-                  </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <span>{t('settings.interface.statusBar')}</span>
-                    <Switch
-                      checked={settings.showStatusBar}
-                      onCheckedChange={(checked) => updateSetting('showStatusBar', checked)}
-                    />
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.interface.enableNotifications')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.interface.enableNotificationsDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.enableNotifications}
-                    onCheckedChange={(checked) => updateSetting('enableNotifications', checked)}
-                  />
-                </div>
-
-                <Separator />
-
                 <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <Label>{t('settings.interface.autostart')}</Label>
@@ -1284,17 +1207,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('settings.keyboard.newSession')}</Label>
-                    <Input
+                    <ShortcutRecorderInput
                       value={settings.newSession}
-                      onChange={(e) => updateSetting('newSession', e.target.value)}
-                      placeholder="Ctrl+N"
+                      onValueChange={(value) => updateSetting('newSession', value)}
+                      placeholder={DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession}
                     />
                   </div>
                   <div className="space-y-2">
                     <Label>{t('settings.keyboard.closeSession')}</Label>
-                    <Input
+                    <ShortcutRecorderInput
                       value={settings.closeSession}
-                      onChange={(e) => updateSetting('closeSession', e.target.value)}
+                      onValueChange={(value) => updateSetting('closeSession', value)}
                       placeholder={DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession}
                     />
                   </div>
@@ -1303,17 +1226,17 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>{t('settings.keyboard.nextTab')}</Label>
-                    <Input
+                    <ShortcutRecorderInput
                       value={settings.nextTab}
-                      onChange={(e) => updateSetting('nextTab', e.target.value)}
+                      onValueChange={(value) => updateSetting('nextTab', value)}
                       placeholder="Ctrl+Tab"
                     />
                   </div>
                   <div className="space-y-2">
                     <Label>{t('settings.keyboard.previousTab')}</Label>
-                    <Input
+                    <ShortcutRecorderInput
                       value={settings.previousTab}
-                      onChange={(e) => updateSetting('previousTab', e.target.value)}
+                      onValueChange={(value) => updateSetting('previousTab', value)}
                       placeholder="Ctrl+Shift+Tab"
                     />
                   </div>
@@ -1340,33 +1263,6 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                   </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.advanced.logLevel')}</Label>
-                    <Select value={settings.logLevel} onValueChange={(value) => updateSetting('logLevel', value)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="error">{t('settings.logLevel.error')}</SelectItem>
-                        <SelectItem value="warn">{t('settings.logLevel.warn')}</SelectItem>
-                        <SelectItem value="info">{t('settings.logLevel.info')}</SelectItem>
-                        <SelectItem value="debug">{t('settings.logLevel.debug')}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.advanced.maxLogSize', { size: settings.maxLogSize })}</Label>
-                    <Slider
-                      value={[settings.maxLogSize]}
-                      onValueChange={([value]) => updateSetting('maxLogSize', value)}
-                      min={10}
-                      max={500}
-                      step={10}
-                    />
-                  </div>
-                </div>
-
                 <Separator />
 
                 {/* Current app version — visible on every platform (issue #166) */}
@@ -1474,19 +1370,6 @@ export function SettingsModal({ open, onOpenChange, onAppearanceChange, onCheckF
                     </div>
                   </>
                 )}
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.advanced.enableTelemetry')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.advanced.enableTelemetryDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.telemetry}
-                    onCheckedChange={(checked) => updateSetting('telemetry', checked)}
-                  />
-                </div>
 
                 <Separator />
 

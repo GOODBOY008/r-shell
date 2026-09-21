@@ -262,7 +262,8 @@
     },
     "hint": {
       "savedPasswordKept": "此连接已保存密码。留空保持不变，输入新密码即可替换。"
-    }
+    },
+    "passwordSavingDisabledHint": "已在设置中关闭密码保存——连接可正常建立，但不会存储凭据。"
   },
   "settings": {
     "title": "设置与首选项",
@@ -340,21 +341,13 @@
       "desc": "配置安全选项和认证设置。",
       "hostKeyVerification": "主机密钥验证",
       "hostKeyVerificationDesc": "验证 SSH 主机密钥以增强安全性",
-      "savePasswords": "保存密码",
-      "savePasswordsDesc": "在本地存储密码（加密）",
-      "autoLockTimeout": "自动锁定超时：{{timeout}}分钟",
-      "autoLockTimeoutDesc": "在此无活动时间后自动锁定应用程序"
+      "allowPasswordSaving": "允许在本地保存密码",
+      "allowPasswordSavingDesc": "控制连接对话框是否提供保存密码选项。已保存的凭据不受影响，始终以 AES-256-GCM 加密存储。"
     },
     "interface": {
       "title": "界面设置",
       "desc": "自定义应用程序界面和面板。",
       "appTheme": "应用主题",
-      "panelVisibility": "面板可见性",
-      "connectionManager": "连接管理器",
-      "systemMonitor": "系统监视器",
-      "statusBar": "状态栏",
-      "enableNotifications": "启用通知",
-      "enableNotificationsDesc": "显示重要事件的系统通知",
       "autostart": "登录时自动启动",
       "autostartDesc": "登录系统时自动启动 r-shell",
       "autostartFailed": "无法更新自动启动设置"
@@ -367,14 +360,13 @@
       "nextTab": "下一个标签页",
       "previousTab": "上一个标签页",
       "note": "键盘快捷键更改将在保存后生效。",
-      "registerFailed": "快捷键 {{shortcut}} 注册失败"
+      "registerFailed": "快捷键 {{shortcut}} 注册失败",
+      "recorderHint": "按下组合键（Esc 取消）"
     },
     "advanced": {
       "title": "高级设置",
       "desc": "配置高级选项和诊断设置。",
       "version": "版本",
-      "logLevel": "日志级别",
-      "maxLogSize": "最大日志大小：{{size}}MB",
       "checkUpdates": "检查更新",
       "checkUpdatesDesc": "自动检查应用程序更新",
       "checkNow": "立即检查",
@@ -382,8 +374,6 @@
       "updateProxyDesc": "用于检查和下载更新的可选 HTTP 或 HTTPS 代理。",
       "updateProxyPlaceholder": "http://127.0.0.1:7890",
       "updateProxyInvalid": "请输入有效的 HTTP 或 HTTPS 代理地址。",
-      "enableTelemetry": "启用遥测",
-      "enableTelemetryDesc": "通过发送匿名使用数据帮助改进应用程序",
       "configBackup": "配置备份",
       "configBackupDesc": "导出或导入完整配置，以便将连接和设置迁移到另一台设备。",
       "exportConfig": "导出配置",
@@ -427,12 +417,6 @@
       "contain": "包含（适应内部）",
       "center": "居中（原始大小）",
       "tile": "平铺（重复）"
-    },
-    "logLevel": {
-      "error": "错误",
-      "warn": "警告",
-      "info": "信息",
-      "debug": "调试"
     },
     "tabScrollLeft": "向左滚动",
     "tabScrollRight": "向右滚动",

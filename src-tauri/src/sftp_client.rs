@@ -20,6 +20,14 @@ pub struct SftpConfig {
     /// Host-key policy for this connection and its jump host.
     #[serde(default)]
     pub host_key_policy: HostKeyPolicy,
+    /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
+    /// Timeout" slider. `None` keeps the backend default (10 s).
+    #[serde(default = "default_sftp_connect_timeout")]
+    pub connect_timeout: u64,
+}
+
+fn default_sftp_connect_timeout() -> u64 {
+    10
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -130,7 +138,9 @@ impl StandaloneSftpClient {
             },
             ..client::Config::default()
         };
-        let connection_timeout = Duration::from_secs(10);
+        // Floor at 1 s so a zero/garbage value from the settings can't time
+        // out instantly.
+        let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
         let (handler, host_key_error) =
             Client::new(&config.host, config.port, config.host_key_policy);
@@ -153,7 +163,8 @@ impl StandaloneSftpClient {
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "SFTP connection timed out after 10 seconds. Please check the host and network."
+                    "SFTP connection timed out after {} seconds. Please check the host and network.",
+                    connection_timeout.as_secs()
                 )
             })?
             .map_err(|e| {
@@ -176,7 +187,8 @@ impl StandaloneSftpClient {
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "SFTP connection timed out after 10 seconds. Please check the host and network."
+                    "SFTP connection timed out after {} seconds. Please check the host and network.",
+                    connection_timeout.as_secs()
                 )
             })?
             .map_err(|e| {

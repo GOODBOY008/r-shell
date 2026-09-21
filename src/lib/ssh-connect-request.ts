@@ -1,4 +1,5 @@
 import { getHostKeyPolicy, type HostKeyPolicy } from './host-key';
+import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcuts';
 /**
  * Builds the `ssh_connect` and `sftp_connect` invoke request payloads.
  *
@@ -9,6 +10,25 @@ import { getHostKeyPolicy, type HostKeyPolicy } from './host-key';
  * (dialog, quick connect, restore, duplicate, reconnect) carries the same
  * fields.
  */
+
+/**
+ * Connection timeout (seconds) from the Settings "Connection Timeout" slider.
+ * `null` when unset or unparsable — the backend then keeps its own default
+ * (3 s for SSH, 10 s for standalone SFTP), so only an explicit setting
+ * changes today's behaviour.
+ */
+function getConnectionTimeoutSetting(): number | null {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const value = (parsed as Record<string, unknown>).connectionTimeout;
+    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
 
 /** Subset of ConnectionConfig / ConnectionData that the SSH connect request needs. */
 export interface SshConnectRequestSource {
@@ -50,6 +70,8 @@ export interface SshConnectRequest {
   passphrase: string | null;
   /** See `HostKeyPolicy`; derived from Settings unless overridden for a retry. */
   host_key_policy: HostKeyPolicy;
+  /** Seconds; `null` keeps the backend default (see `getConnectionTimeoutSetting`). */
+  connect_timeout: number | null;
   compression: boolean;
   keepalive_enabled: boolean;
   keepalive_interval: number | null;
@@ -98,6 +120,7 @@ export function buildSshConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
+    connect_timeout: getConnectionTimeoutSetting(),
     compression: source.compression !== false,
     keepalive_enabled: keepAlive,
     keepalive_interval: keepAlive ? (source.keepAliveInterval ?? 60) : null,
@@ -149,6 +172,8 @@ export interface SftpConnectRequest {
   passphrase: string | null;
   /** Same policy as SSH sessions; derived from the Settings switch. */
   host_key_policy: HostKeyPolicy;
+  /** Seconds; `null` keeps the backend default (see `getConnectionTimeoutSetting`). */
+  connect_timeout: number | null;
   tunnel_enabled: boolean;
   tunnel_host: string | null;
   tunnel_port: number | null;
@@ -181,6 +206,7 @@ export function buildSftpConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
+    connect_timeout: getConnectionTimeoutSetting(),
     tunnel_enabled: tunnelEnabled,
     tunnel_host: tunnelEnabled ? (source.tunnelHost || null) : null,
     tunnel_port: tunnelEnabled ? (source.tunnelPort ?? null) : null,

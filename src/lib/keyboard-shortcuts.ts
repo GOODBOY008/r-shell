@@ -38,6 +38,8 @@ export interface SplitViewShortcutBindings {
   closeTab: string;
   nextTab: string;
   prevTab: string;
+  /** New-session binding; on macOS the native menu also owns ⌘N regardless. */
+  newSession: string;
 }
 
 export const APP_SETTINGS_STORAGE_KEY = 'sshClientSettings';
@@ -64,6 +66,7 @@ export const DEFAULT_SPLIT_VIEW_SHORTCUTS: SplitViewShortcutBindings = {
   closeTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
   nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
   prevTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
+  newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
 };
 
 const KEY_ALIASES: Record<string, string> = {
@@ -214,19 +217,21 @@ export function loadKeyboardShortcutSettings(): SplitViewShortcutBindings {
       closeSession: unknown;
       nextTab: unknown;
       previousTab: unknown;
+      newSession: unknown;
     }>;
 
     return {
       closeTab: resolveSavedShortcut(parsed.closeSession, defaults.closeTab, LEGACY_CLOSE_TAB_SHORTCUTS),
       nextTab: resolveSavedShortcut(parsed.nextTab, defaults.nextTab),
       prevTab: resolveSavedShortcut(parsed.previousTab, defaults.prevTab),
+      newSession: resolveSavedShortcut(parsed.newSession, defaults.newSession),
     };
   } catch {
     return defaults;
   }
 }
 
-function createConfiguredShortcut(
+export function createConfiguredShortcut(
   shortcut: string,
   fallback: string,
   handler: () => void,
@@ -498,6 +503,18 @@ const MACOS_MENU_CONFLICT_DEGRADE = new Set([
 const SIBLING_FOCUS_POLL_INTERVAL_MS = 2000;
 
 type FocusContext = 'app' | 'terminal' | 'editable';
+
+/**
+ * True while a shortcut-recorder input in Settings owns the keyboard. The
+ * native macOS menu's key equivalents fire regardless of webview focus, so
+ * the `menu-action` handler checks this and stays passive while a recording
+ * is in progress — otherwise pressing ⌘N inside the recorder would open a
+ * new session instead of recording the chord.
+ */
+export function isShortcutRecording(): boolean {
+  const el = document.activeElement;
+  return !!el && el.closest('[data-shortcut-recorder]') !== null;
+}
 
 function currentFocusContext(): FocusContext {
   const target = document.activeElement;
