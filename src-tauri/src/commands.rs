@@ -26,6 +26,9 @@ pub struct ConnectRequest {
     /// "strict" (default), "accept-new" (after the user confirmed a changed
     /// key) or "off" (Host Key Verification switched off in Settings).
     pub host_key_policy: Option<String>,
+    /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
+    /// Timeout" slider. `None` keeps the backend default (3 s).
+    pub connect_timeout: Option<u64>,
     /// Advanced SSH options — `Option` so legacy callers that omit them keep
     /// the previous defaults (compression on, keepalive 60 s / 3).
     pub compression: Option<bool>,
@@ -145,6 +148,7 @@ pub async fn ssh_connect(
         proxy,
         tunnel,
         host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
+        connect_timeout: request.connect_timeout.unwrap_or(3),
     };
 
     match state
@@ -2346,6 +2350,9 @@ pub struct SftpConnectRequest {
     pub passphrase: Option<String>,
     /// "strict" (default), "accept-new" or "off" — see `HostKeyPolicy`.
     pub host_key_policy: Option<String>,
+    /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
+    /// Timeout" slider. `None` keeps the backend default (10 s).
+    pub connect_timeout: Option<u64>,
     /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
     /// false/missing. Legacy callers that omit them connect directly.
     pub tunnel_enabled: Option<bool>,
@@ -2392,6 +2399,7 @@ pub async fn sftp_connect(
         auth_method: auth,
         tunnel,
         host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
+        connect_timeout: request.connect_timeout.unwrap_or(10),
     };
 
     match state
@@ -4686,6 +4694,7 @@ mod proxy_config_tests {
             keepalive_enabled: None,
             keepalive_interval: None,
             keepalive_max: None,
+            connect_timeout: None,
             proxy_type: proxy_type.map(|s| s.to_string()),
             proxy_host: None,
             proxy_port: None,

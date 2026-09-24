@@ -30,6 +30,7 @@ import {
 import {
   APP_SETTINGS_STORAGE_KEY,
   APP_SETTINGS_CHANGED_EVENT,
+  stripRemovedSettingsKeys,
 } from './keyboard-shortcuts';
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -226,6 +227,9 @@ export async function importAllConfig(
 
     // 3e. App settings ----------------------------------------------------------
     if (data.appSettings) {
+      // Drop keys whose controls were removed (issue #163) so importing an
+      // older config cannot resurrect dead settings that nothing consumes.
+      stripRemovedSettingsKeys(data.appSettings);
       localStorage.setItem(
         APP_SETTINGS_STORAGE_KEY,
         JSON.stringify(data.appSettings),

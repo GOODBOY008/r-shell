@@ -22,15 +22,18 @@ import { ConnectionProfileManager } from './lib/connection-profiles';
 import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
-import { buildSftpConnectRequest, buildSshConnectRequest } from './lib/ssh-connect-request';
+import { buildSftpConnectRequest, buildSshConnectRequest, getConnectionTimeoutSetting } from './lib/ssh-connect-request';
 import { sshConnect } from '@/lib/ssh-connect';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
   APP_SETTINGS_CHANGED_EVENT,
+  createConfiguredShortcut,
   createLayoutShortcuts,
   createSplitViewShortcuts,
+  DEFAULT_APP_KEYBOARD_SHORTCUTS,
+  isShortcutRecording,
   loadKeyboardShortcutSettings,
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
@@ -65,7 +68,10 @@ import {
   type EditorWindowEventPayload,
 } from './lib/editor-windows-store';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
-import { getRestoreTiming } from './lib/restore-timing';
+import {
+  effectiveConnectTimeoutMs,
+  effectiveOverallTimeoutMs,
+} from './lib/restore-timing';
 import { isRestoreSessionsOnStartupEnabled } from './lib/startup-restore';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
@@ -352,7 +358,6 @@ function AppContent() {
     toggleZenMode,
   }), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode]);
 
-  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts], true);
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
@@ -454,7 +459,9 @@ function AppContent() {
       return false;
     }
 
-    const { connectTimeoutMs } = getRestoreTiming();
+    // A configured Connection Timeout above the restore default must not be
+    // raced to death by this wrapper — take the larger of the two.
+    const connectTimeout = effectiveConnectTimeoutMs(getConnectionTimeoutSetting());
     const isDesktop = tab.tabType === 'desktop';
     const isFileBrowser = tab.tabType === 'file-browser'
       || (!isDesktop && (tab.protocol === 'SFTP' || tab.protocol === 'FTP'));
@@ -476,7 +483,7 @@ function AppContent() {
               color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
             }
           }),
-          connectTimeoutMs,
+          connectTimeout,
           `desktop_connect ${connectionData.name}`,
         );
       } else if (isFileBrowser) {
@@ -485,7 +492,7 @@ function AppContent() {
             invoke('sftp_connect', {
               request: buildSftpConnectRequest(tab.id, connectionData)
             }),
-            connectTimeoutMs,
+            connectTimeout,
             `sftp_connect ${connectionData.name}`,
           );
         } else {
@@ -501,14 +508,14 @@ function AppContent() {
                 anonymous: connectionData.authMethod === 'anonymous',
               }
             }),
-            connectTimeoutMs,
+            connectTimeout,
             `ftp_connect ${connectionData.name}`,
           );
         }
       } else {
         const result = await withTimeout(
           sshConnect(buildSshConnectRequest(tab.id, connectionData)),
-          connectTimeoutMs,
+          connectTimeout,
           `ssh_connect ${connectionData.name}`,
         );
         if (!result.success) {
@@ -545,8 +552,6 @@ function AppContent() {
 
   // Restore connections on mount
   useEffect(() => {
-    const { overallTimeoutMs: OVERALL_RESTORE_TIMEOUT_MS } = getRestoreTiming();
-
     // Soft-cancel flag: once the overall timeout fires, the restore loop stops
     // initiating NEW connections. The connection currently in flight is allowed
     // to finish naturally so a just-succeeding host is not killed mid-handshake.
@@ -680,7 +685,11 @@ function AppContent() {
       }
     };
 
-    withTimeout(restoreActiveSessions(), OVERALL_RESTORE_TIMEOUT_MS, 'Session restore').catch((err) => {
+    // Scale the overall budget with the configured Connection Timeout so a
+    // slow host restored in sequence cannot trip the escape hatch early.
+    const sessionCount = ActiveConnectionsManager.getActiveConnections().length;
+    const overallRestoreTimeoutMs = effectiveOverallTimeoutMs(getConnectionTimeoutSetting(), sessionCount);
+    withTimeout(restoreActiveSessions(), overallRestoreTimeoutMs, 'Session restore').catch((err) => {
       // Distinguish the overall-timeout rejection from an unexpected error
       // thrown by restoreActiveSessions itself (e.g. storage parse). Only the
       // former should cancel the loop and show the timeout toast.
@@ -900,6 +909,26 @@ function AppContent() {
     setPendingConnectionId(null);
     setPendingReconnectTabId(null);
   }, []);
+
+  // Customizable new-session binding (Settings → Keyboard). Kept in its own
+  // memo below handleNewTab so the factory can reference it; the shortcut is
+  // ignored while a terminal owns the keystroke (Ctrl+N is readline
+  // next-history) and the macOS registration layer separately skips chords
+  // owned by the native menu (⌘N).
+  const newSessionShortcut = useMemo(
+    () => ({
+      ...createConfiguredShortcut(
+        keyboardShortcutSettings.newSession,
+        DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+        () => handleNewTab(),
+        'New session',
+      ),
+      ignoreInTerminal: true,
+    }),
+    [keyboardShortcutSettings.newSession, handleNewTab],
+  );
+
+  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts, newSessionShortcut], true);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
@@ -1690,6 +1719,12 @@ function AppContent() {
       if (!document.hasFocus()) {
         return;
       }
+      // While the user records a shortcut in Settings, the native menu's key
+      // equivalents must not fire their actions — the recorder owns the
+      // keystroke (otherwise ⌘N in the recorder opens a new session).
+      if (isShortcutRecording()) {
+        return;
+      }
       switch (event.payload) {
         case 'new_connection':
         case 'new_tab':
@@ -2305,10 +2340,6 @@ function AppContent() {
       <SettingsModal
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
-        onAppearanceChange={() => {
-          // Appearance changes are handled by individual PtyTerminal instances
-          // via their own settings listeners in TerminalGroupView
-        }}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />
 

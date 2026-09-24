@@ -232,3 +232,50 @@ describe('buildSftpConnectRequest', () => {
     expect(req.tunnel_password).toBe('jumppass');
   });
 });
+
+describe('connect_timeout setting wiring', () => {
+  const SETTINGS_KEY = 'sshClientSettings';
+
+  it('sends null when the Connection Timeout setting was never saved', () => {
+    localStorage.removeItem(SETTINGS_KEY);
+
+    expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBeNull();
+    expect(buildSftpConnectRequest('c1', baseSource).connect_timeout).toBeNull();
+  });
+
+  it('carries the saved timeout into both SSH and SFTP requests', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: 45 }));
+
+    expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBe(45);
+    expect(buildSftpConnectRequest('c1', baseSource).connect_timeout).toBe(45);
+    localStorage.removeItem(SETTINGS_KEY);
+  });
+
+  it('ignores garbage timeout values instead of forwarding them', () => {
+    for (const bad of [0, -5, '60', null]) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: bad }));
+      expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBeNull();
+    }
+    localStorage.removeItem(SETTINGS_KEY);
+  });
+
+  it('rejects values outside the Settings slider range of 5-120 seconds', () => {
+    // Slider bounds: only 5..=120 reaches the connector, everything else
+    // falls back to the backend default.
+    for (const bad of [4, 121, 3600]) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: bad }));
+      expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBeNull();
+    }
+    for (const good of [5, 120]) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: good }));
+      expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBe(good);
+    }
+    localStorage.removeItem(SETTINGS_KEY);
+  });
+
+  it('rejects non-integer values the Rust u64 field cannot parse', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: 30.5 }));
+    expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBeNull();
+    localStorage.removeItem(SETTINGS_KEY);
+  });
+});

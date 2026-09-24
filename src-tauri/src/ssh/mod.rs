@@ -99,6 +99,15 @@ pub struct SshConfig {
     /// Host-key policy for this connection and its jump host.
     #[serde(default)]
     pub host_key_policy: HostKeyPolicy,
+    /// TCP/SSH handshake timeout in seconds. `None` in the request keeps the
+    /// historical hard-coded default; the Settings "Connection Timeout"
+    /// slider overrides it per launch.
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout: u64,
+}
+
+fn default_connect_timeout() -> u64 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -642,8 +651,10 @@ impl SshClient {
             ..client::Config::default()
         };
 
-        // Connection timeout: 3 seconds
-        let connection_timeout = Duration::from_secs(3);
+        // Connection timeout: configurable via the Settings "Connection
+        // Timeout" slider (SshConfig::connect_timeout); floor at 1 s so a
+        // zero/garbage value can't time out instantly.
+        let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
         let (handler, host_key_error) =
             Client::new(&config.host, config.port, config.host_key_policy);
@@ -666,7 +677,7 @@ impl SshClient {
                 client::connect_stream(Arc::new(ssh_config), stream, handler),
             )
             .await
-            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
+            .map_err(|_| anyhow::anyhow!("Connection timed out after {} seconds. Please check the host address and network connectivity.", connection_timeout.as_secs()))?
             .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
         } else if let Some(proxy) = &config.proxy {
             // Tunnel through the proxy first, then hand the established stream
@@ -684,7 +695,7 @@ impl SshClient {
                 client::connect_stream(Arc::new(ssh_config), stream, handler),
             )
             .await
-            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
+            .map_err(|_| anyhow::anyhow!("Connection timed out after {} seconds. Please check the host address and network connectivity.", connection_timeout.as_secs()))?
             .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
         } else {
             tokio::time::timeout(
@@ -692,7 +703,7 @@ impl SshClient {
                 client::connect(Arc::new(ssh_config), (&config.host[..], config.port), handler),
             )
             .await
-            .map_err(|_| anyhow::anyhow!("Connection timed out after 3 seconds. Please check the host address and network connectivity."))?
+            .map_err(|_| anyhow::anyhow!("Connection timed out after {} seconds. Please check the host address and network connectivity.", connection_timeout.as_secs()))?
             .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
         };
 

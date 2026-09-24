@@ -1,7 +1,8 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
+import { APP_SETTINGS_CHANGED_EVENT } from '../lib/keyboard-shortcuts';
 import {
   TerminalTabPortalHost,
   TerminalTabPortalProvider,
@@ -12,6 +13,7 @@ const lifecycle = vi.hoisted(() => ({
   unmounted: vi.fn(),
   dispatch: vi.fn(),
   reconnect: vi.fn(),
+  ptyProps: vi.fn(),
 }));
 
 let mockState: TerminalGroupState;
@@ -31,11 +33,12 @@ vi.mock('../components/pty-terminal', async () => {
   const ReactModule = await import('react');
 
   return {
-    PtyTerminal: ({ connectionId }: { connectionId: string }) => {
+    PtyTerminal: ({ connectionId, appearanceKey }: { connectionId: string; appearanceKey?: number }) => {
       ReactModule.useEffect(() => {
         lifecycle.mounted(connectionId);
         return () => lifecycle.unmounted(connectionId);
       }, [connectionId]);
+      lifecycle.ptyProps(connectionId, appearanceKey);
 
       return <div data-testid={`pty-${connectionId}`} />;
     },
@@ -131,6 +134,7 @@ describe('TerminalTabPortalProvider', () => {
     lifecycle.unmounted.mockClear();
     lifecycle.dispatch.mockClear();
     lifecycle.reconnect.mockClear();
+    lifecycle.ptyProps.mockClear();
     mockState = singleGroupState();
   });
 
@@ -189,5 +193,19 @@ describe('TerminalTabPortalProvider', () => {
     ).toBe(false);
     expect(lifecycle.reconnect).toHaveBeenCalledOnce();
     expect(lifecycle.reconnect).toHaveBeenCalledWith(tabA.id);
+  });
+
+  it('bumps the terminals\' appearanceKey when settings change, without remounting', () => {
+    render(<PortalHosts split={false} />);
+    expect(lifecycle.ptyProps).toHaveBeenCalledWith(tabA.id, 0);
+    const mountsBefore = lifecycle.mounted.mock.calls.length;
+
+    act(() => {
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+    });
+
+    expect(lifecycle.ptyProps).toHaveBeenCalledWith(tabA.id, 1);
+    // Hot update only — no terminal remount (the WS/PTY session must live on).
+    expect(lifecycle.mounted.mock.calls.length).toBe(mountsBefore);
   });
 });
