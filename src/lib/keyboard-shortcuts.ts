@@ -511,6 +511,31 @@ type FocusContext = 'app' | 'terminal' | 'editable';
  * is in progress — otherwise pressing ⌘N inside the recorder would open a
  * new session instead of recording the chord.
  */
+/**
+ * Fields removed by the settings cleanup (issue #163): their controls are
+ * gone and nothing consumes them. Stripped wherever a legacy blob is loaded
+ * so removed keys are not re-persisted by whole-blob writes (settings save,
+ * config import, autostart failure correction).
+ */
+export const REMOVED_SETTINGS_KEYS = new Set([
+  'savePasswords',
+  'autoLockTimeout',
+  'showConnectionManager',
+  'showSystemMonitor',
+  'showStatusBar',
+  'enableNotifications',
+  'logLevel',
+  'maxLogSize',
+  'telemetry',
+]);
+
+/** Delete every removed settings key from `blob` in place. */
+export function stripRemovedSettingsKeys(blob: Record<string, unknown>): void {
+  for (const key of REMOVED_SETTINGS_KEYS) {
+    delete blob[key];
+  }
+}
+
 export function isShortcutRecording(): boolean {
   const el = document.activeElement;
   return !!el && el.closest('[data-shortcut-recorder]') !== null;

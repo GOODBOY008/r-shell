@@ -46,6 +46,7 @@ import {
   APP_SETTINGS_STORAGE_KEY,
   DEFAULT_APP_KEYBOARD_SHORTCUTS,
   loadKeyboardShortcutSettings,
+  stripRemovedSettingsKeys,
 } from '../lib/keyboard-shortcuts';
 import { applyTheme, ThemeMode } from '../lib/utils';
 import {
@@ -179,6 +180,9 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
         const savedSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
         if (savedSettings) {
           const parsed = JSON.parse(savedSettings);
+          // Drop fields whose controls no longer exist so saving this session
+          // writes a clean blob instead of resurrecting the removed keys.
+          stripRemovedSettingsKeys(parsed);
           const keyboardShortcuts = loadKeyboardShortcutSettings();
           setSettings(prev => ({
             ...prev,
@@ -334,6 +338,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
         // Keep the persisted config truthful when the OS update failed
         try {
           const saved = JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+          stripRemovedSettingsKeys(saved);
           localStorage.setItem(
             APP_SETTINGS_STORAGE_KEY,
             JSON.stringify({ ...saved, autostart: corrected }),

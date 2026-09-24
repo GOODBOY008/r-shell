@@ -258,4 +258,24 @@ describe('connect_timeout setting wiring', () => {
     }
     localStorage.removeItem(SETTINGS_KEY);
   });
+
+  it('rejects values outside the Settings slider range of 5-120 seconds', () => {
+    // Slider bounds: only 5..=120 reaches the connector, everything else
+    // falls back to the backend default.
+    for (const bad of [4, 121, 3600]) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: bad }));
+      expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBeNull();
+    }
+    for (const good of [5, 120]) {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: good }));
+      expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBe(good);
+    }
+    localStorage.removeItem(SETTINGS_KEY);
+  });
+
+  it('rejects non-integer values the Rust u64 field cannot parse', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ connectionTimeout: 30.5 }));
+    expect(buildSshConnectRequest('c1', baseSource).connect_timeout).toBeNull();
+    localStorage.removeItem(SETTINGS_KEY);
+  });
 });

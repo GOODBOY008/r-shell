@@ -17,14 +17,19 @@ import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcuts';
  * (3 s for SSH, 10 s for standalone SFTP), so only an explicit setting
  * changes today's behaviour.
  */
-function getConnectionTimeoutSetting(): number | null {
+export function getConnectionTimeoutSetting(): number | null {
   try {
     const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
     const value = (parsed as Record<string, unknown>).connectionTimeout;
-    return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+    // Accept only values within the Settings slider range (5–120); anything
+    // else — stale, hand-edited or imported — falls back to the backend
+    // default instead of quietly reconfiguring the connector.
+    return typeof value === 'number' && Number.isInteger(value) && value >= 5 && value <= 120
+      ? value
+      : null;
   } catch {
     return null;
   }
