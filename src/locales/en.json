@@ -1411,7 +1411,8 @@
     "stopped": "Proxy stopped",
     "stopFailed": "Failed to stop proxy",
     "noConnection": "No active connection",
-    "invalidPort": "Invalid port number"
+    "invalidPort": "Invalid port number",
+    "alreadyRunning": "A proxy on this port is already running for this connection"
   },
   "hostKey": {
     "changedTitle": "Host key changed",

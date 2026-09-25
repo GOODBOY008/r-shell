@@ -1461,7 +1461,8 @@
     "stopped": "Proxy zatrzymane",
     "stopFailed": "Nie udało się zatrzymać proxy",
     "noConnection": "Brak aktywnego połączenia",
-    "invalidPort": "Nieprawidłowy numer portu"
+    "invalidPort": "Nieprawidłowy numer portu",
+    "alreadyRunning": "Serwer proxy na tym porcie już działa dla tego połączenia"
   },
   "hostKey": {
     "changedTitle": "Klucz hosta uległ zmianie",

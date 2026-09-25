@@ -8,7 +8,8 @@ import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
-import { PortForwardingPanel, SOCKS_PROXY_STATE_KEY } from './components/port-forwarding-panel';
+import { PortForwardingPanel } from './components/port-forwarding-panel';
+import { initSocksProxyStore, savedProxiesFor, startSocksProxy } from './lib/socks-proxy-store';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { HostKeyChangedDialog } from './components/host-key-changed-dialog';
@@ -213,6 +214,13 @@ function AppContent() {
     return Object.values(state.groups).flatMap(g => g.tabs);
   }, [state.groups]);
 
+  // tab.id → tab name: the port-forwarding panel labels each proxy's owning
+  // session (a proxy's connection_id is a tab id).
+  const connectionNames = useMemo(
+    () => Object.fromEntries(allTabs.map(tab => [tab.id, tab.name])),
+    [allTabs],
+  );
+
   // Memoized set of active connection IDs — stable reference prevents
   // ConnectionManager from rebuilding its tree on every parent render.
   const activeConnectionIds = useMemo(
@@ -379,56 +387,26 @@ function AppContent() {
     }
   }, [allTabs]);
 
-  // Persist running SOCKS proxies to localStorage so they survive app restart.
-  // Only saves non-empty lists so the saved state is never overwritten by the
-  // initial "no proxies yet" read on a fresh backend (start/stop in the
-  // PortForwardingPanel persist immediately, including the empty list).
+  // SOCKS proxy state is event-driven: the backend emits
+  // `socks-proxies-changed` on every start/stop/cleanup, the store persists
+  // exactly on each change, and this init wires the module-level listener
+  // once (it outlives any panel mount, so persistence never gaps while the
+  // right sidebar is hidden).
   useEffect(() => {
-    let cancelled = false;
-    const persist = async () => {
-      if (cancelled) return;
-      try {
-        const list = await invoke<{ connection_id: string; bind_address: string; bind_port: number }[]>("list_socks_proxies");
-        if (list.length > 0) {
-          localStorage.setItem(SOCKS_PROXY_STATE_KEY, JSON.stringify(list));
-        }
-      } catch {
-        // ignore
-      }
-    };
-    // Delay the first persist so the session-restore effect can read the
-    // stale saved state before we potentially overwrite it.
-    const timer = setTimeout(() => { void persist(); }, 1000);
-    const interval = setInterval(() => { void persist(); }, 10_000);
-    return () => { cancelled = true; clearTimeout(timer); clearInterval(interval); };
+    void initSocksProxyStore();
   }, []);
 
   // Restart the SOCKS proxies a connection had running when the previous
   // session ended. Called right after its SSH session is re-established;
   // individual failures warn but never block the restore.
   const restoreSocksProxies = useCallback(async (connectionId: string, name: string) => {
-    try {
-      const raw = localStorage.getItem(SOCKS_PROXY_STATE_KEY);
-      if (!raw) return;
-      const saved = JSON.parse(raw) as { connection_id: string; bind_address: string; bind_port: number }[];
-      const mine = saved.filter(p => p.connection_id === connectionId);
-      for (const proxy of mine) {
-        const res = await invoke<{ success: boolean; error?: string }>("start_socks_proxy", {
-          request: {
-            proxy_id: `socks-${connectionId}-restore-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            connection_id: connectionId,
-            bind_address: proxy.bind_address,
-            bind_port: proxy.bind_port,
-          },
-        });
-        if (res.success) {
-          console.log(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} restored for ${name}`);
-        } else {
-          console.warn(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} failed for ${name}:`, res.error);
-        }
+    for (const proxy of savedProxiesFor(connectionId)) {
+      const res = await startSocksProxy(connectionId, proxy.bind_address, proxy.bind_port);
+      if (res.ok) {
+        console.log(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} restored for ${name}`);
+      } else {
+        console.warn(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} failed for ${name}:`, res.error);
       }
-    } catch (e) {
-      console.warn('[Restore] Failed to restore SOCKS proxies:', e);
     }
   }, []);
 
@@ -2370,7 +2348,10 @@ function AppContent() {
 
                     <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       <ErrorBoundary label={t('app.portForwarding')}>
-                        <PortForwardingPanel connectionId={activeConnection?.connectionId ?? null} />
+                        <PortForwardingPanel
+                          connectionId={activeConnection?.connectionId ?? null}
+                          connectionNames={connectionNames}
+                        />
                       </ErrorBoundary>
                     </TabsContent>
                   </div>

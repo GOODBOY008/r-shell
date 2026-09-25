@@ -3805,7 +3805,9 @@ pub async fn start_socks_proxy(
     request: StartSocksProxyRequest,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<StartSocksProxyResponse, String> {
-    let bind_address = request.bind_address.unwrap_or_else(|| "127.0.0.1".to_string());
+    let bind_address = request
+        .bind_address
+        .unwrap_or_else(|| "127.0.0.1".to_string());
 
     match state
         .start_socks_proxy(
@@ -3838,7 +3840,8 @@ pub async fn stop_socks_proxy(
     match state.stop_socks_proxy(&proxy_id).await {
         Ok(_) => Ok(CommandResponse {
             success: true,
-            output: Some(format!("SOCKS proxy '{}' stopped", proxy_id)),
+            // No output text: the frontend shows a translated toast.
+            output: None,
             error: None,
         }),
         Err(e) => Ok(CommandResponse {

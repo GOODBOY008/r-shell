@@ -37,17 +37,16 @@ fn bind_with_reuseaddr(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
     Ok(listener)
 }
 
-/// Start a SOCKS4/5 proxy on `bind_addr:bind_port` that forwards through the
-/// given SSH `handle`.  Returns the actual port the listener is bound to.
+/// Bind the SOCKS proxy listener on `bind_addr:bind_port` (port 0 picks an
+/// ephemeral port). Returns the listener plus the actual bound port.
 ///
-/// The proxy runs until `cancel` is fired, at which point the listener is
-/// torn down and all in-flight connections are dropped.
-pub async fn start_socks_proxy(
-    ssh_handle: Arc<russh::client::Handle<Client>>,
-    bind_addr: String,
+/// Binding is split from [`run_socks_proxy`] so the caller can surface bind
+/// errors (port in use, bad address) synchronously and only then hand the
+/// listener to the accept-loop task.
+pub fn bind_socks_listener(
+    bind_addr: &str,
     bind_port: u16,
-    cancel: CancellationToken,
-) -> Result<u16> {
+) -> Result<(tokio::net::TcpListener, u16)> {
     let addr: SocketAddr = format!("{bind_addr}:{bind_port}")
         .parse()
         .map_err(|e| anyhow::anyhow!("Invalid bind address {bind_addr}:{bind_port}: {e}"))?;
@@ -56,40 +55,71 @@ pub async fn start_socks_proxy(
     let actual_port = listener.local_addr()?.port();
 
     tracing::info!("SOCKS proxy listening on {bind_addr}:{actual_port} (requested {bind_port})");
+    Ok((listener, actual_port))
+}
 
-    let accept_cancel = cancel.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                biased;
-                _ = accept_cancel.cancelled() => {
-                    tracing::info!("SOCKS proxy on {bind_addr}:{actual_port} shutting down");
+/// How often the accept loop polls the SSH session for death. russh exposes
+/// session loss only as a sync flag (`Handle::is_closed`), so there is no
+/// future to await — the loop wakes on this cadence and checks.
+const SESSION_DEATH_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Run the SOCKS accept loop until the proxy is stopped, the SSH session
+/// dies, or the listener errors out.
+///
+/// The caller owns this future (the connection manager spawns it as a
+/// supervisor task). When it returns, the proxy is down and the manager must
+/// drop the entry — unless a newer generation of the same proxy id has
+/// already replaced it.
+pub async fn run_socks_proxy(
+    listener: tokio::net::TcpListener,
+    ssh_handle: Arc<russh::client::Handle<Client>>,
+    cancel: CancellationToken,
+) {
+    let bind_desc = listener
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "unknown".into());
+    // interval's first tick completes immediately; consume it so the poll
+    // arm below fires on the 3s cadence, not instantly.
+    let mut session_check = tokio::time::interval(SESSION_DEATH_POLL);
+    session_check.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                tracing::info!("SOCKS proxy on {bind_desc} shutting down");
+                break;
+            }
+            _ = session_check.tick() => {
+                if ssh_handle.is_closed() {
+                    tracing::info!(
+                        "SOCKS proxy on {bind_desc}: SSH session closed, stopping"
+                    );
                     break;
                 }
-                accept = listener.accept() => {
-                    match accept {
-                        Ok((stream, peer)) => {
-                            tracing::debug!("SOCKS connection from {peer}");
-                            let handle = ssh_handle.clone();
-                            let peer_cancel = cancel.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = handle_socks_connection(stream, handle, peer_cancel).await {
-                                    tracing::warn!("SOCKS connection from {peer} failed: {e}");
-                                }
-                            });
-                        }
-                        Err(e) => {
-                            tracing::error!("SOCKS accept error: {e}");
-                        }
+            }
+            accept = listener.accept() => {
+                match accept {
+                    Ok((stream, peer)) => {
+                        tracing::debug!("SOCKS connection from {peer}");
+                        let handle = ssh_handle.clone();
+                        let peer_cancel = cancel.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = handle_socks_connection(stream, handle, peer_cancel).await {
+                                tracing::warn!("SOCKS connection from {peer} failed: {e}");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("SOCKS accept error: {e}");
                     }
                 }
             }
         }
+    }
 
-        tracing::debug!("SOCKS proxy accept loop exited");
-    });
-
-    Ok(actual_port)
+    tracing::debug!("SOCKS proxy accept loop exited");
 }
 
 // ── SOCKS4 / SOCKS5 connection handler ──────────────────────────────────
@@ -430,6 +460,7 @@ mod tests {
                 compression: true,
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
+                connect_timeout: 10,
                 proxy: None,
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
@@ -534,10 +565,9 @@ mod tests {
         handle: Arc<russh::client::Handle<Client>>,
     ) -> (u16, CancellationToken) {
         let cancel = CancellationToken::new();
-        let port = start_socks_proxy(handle, "127.0.0.1".to_string(), 0, cancel.clone())
-            .await
-            .expect("start proxy");
+        let (listener, port) = bind_socks_listener("127.0.0.1", 0).expect("bind proxy listener");
         assert_ne!(0, port, "ephemeral bind must report a real port");
+        tokio::spawn(run_socks_proxy(listener, handle, cancel.clone()));
         (port, cancel)
     }
 
@@ -684,6 +714,62 @@ mod tests {
         cancel.cancel();
         client.disconnect().await.ok();
         python.kill().ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn session_death_stops_listener() {
+        // The accept loop polls Handle::is_closed every SESSION_DEATH_POLL,
+        // so the listener must be gone within that window (plus slack for
+        // session teardown) after the SSH session dies server-side — no
+        // explicit stop, no lingering accept queue.
+        //
+        // SshClient::disconnect() only closes the transport when this test
+        // holds the last Arc reference, and the proxy's handle is another
+        // one — so killing the server-side sshd session process is the way
+        // to make the session genuinely die (TCP reset → russh event loop
+        // exits → is_closed). multi_thread flavor: docker exec is a
+        // blocking std Command that would starve a current-thread runtime.
+        let fixture_container = std::env::var("RSHELL_TEST_FIXTURE_CONTAINER")
+            .unwrap_or_else(|_| "rshell-sshd-default-key".to_string());
+        let (mut client, handle) = connected_handle().await;
+        let (port, _cancel) = start_proxy_on_ephemeral_port(handle).await;
+
+        // Sanity: the proxy is relaying before the session dies.
+        let (mut s, rep) = socks5_connect(port, 3, "localhost", 22).await;
+        assert_eq!(0, rep);
+        read_ssh_banner(&mut s).await;
+        drop(s);
+
+        let killed = std::process::Command::new("docker")
+            .args([
+                "exec",
+                &fixture_container,
+                "pkill",
+                "-9",
+                "-f",
+                "sshd: testuser",
+            ])
+            .status()
+            .expect("docker exec pkill must run")
+            .success();
+        assert!(killed, "must kill the server-side sshd session process");
+
+        let gone = tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                match TcpStream::connect(("127.0.0.1", port)).await {
+                    Ok(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+                    Err(_) => return,
+                }
+            }
+        })
+        .await;
+        assert!(
+            gone.is_ok(),
+            "listener must stop within ~SESSION_DEATH_POLL after the SSH session dies"
+        );
+
+        client.disconnect().await.ok();
     }
 
     #[tokio::test]

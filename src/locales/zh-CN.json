@@ -1411,7 +1411,8 @@
     "stopped": "代理已停止",
     "stopFailed": "停止代理失败",
     "noConnection": "没有活动连接",
-    "invalidPort": "端口号无效"
+    "invalidPort": "端口号无效",
+    "alreadyRunning": "该连接在此端口上已有正在运行的代理"
   },
   "hostKey": {
     "changedTitle": "主机密钥已更改",
