@@ -623,6 +623,83 @@ mod e2e_tests {
         );
     }
 
+    /// Full real-Windows acceptance e2e, verified against the local UTM
+    /// Windows 11 ARM VM: NLA credentials are accepted by the server
+    /// (CredSSP logon completes), the user desktop streams back, and
+    /// r-shell's injected keyboard opens the Windows command line
+    /// (Start → search "cmd" → Enter). This is the end-to-end user-logon
+    /// proof the xrdp rig cannot provide (no NLA, no real Windows shell).
+    #[tokio::test]
+    #[ignore = "requires a live NLA host with valid credentials (RDP_E2E_* vars)"]
+    async fn rdp_nla_full_logon_opens_cmd() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config)
+            .await
+            .expect("NLA logon with valid credentials should succeed");
+
+        let (w, h) = client.desktop_size();
+        println!("Logged on via NLA: desktop {}x{}", w, h);
+        assert!(w > 0 && h > 0);
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop should succeed");
+
+        // Give the user desktop time to come up after logon (explorer
+        // startup), then take the baseline picture.
+        let mut before = vec![0u8; w as usize * h as usize * 4];
+        let baseline = collect_frames(&mut event_rx, &mut before, w, h, 10).await;
+        println!("post-logon baseline: {} frames", baseline);
+        assert!(baseline > 0, "frames must flow after a successful logon");
+
+        // Open the command line through injected keyboard only:
+        // Ctrl+Esc opens Start (search focused) → type "cmd" → Enter.
+        for (key_code, down) in [(17u32, true), (27, true), (27, false), (17, false)] {
+            client.send_key(key_code, down).await.expect("Ctrl+Esc");
+        }
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+        for key_code in [67u32, 77, 68] {
+            // c, m, d
+            client.send_key(key_code, true).await.expect("letter down");
+            client.send_key(key_code, false).await.expect("letter up");
+            tokio::time::sleep(Duration::from_millis(120)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        client.send_key(13, true).await.expect("Enter down");
+        client.send_key(13, false).await.expect("Enter up");
+
+        // Capture the result: a console window must have appeared.
+        let mut after = vec![0u8; w as usize * h as usize * 4];
+        let after_n = collect_frames(&mut event_rx, &mut after, w, h, 8).await;
+        println!("after cmd: {} frames", after_n);
+        assert!(after_n > 0, "session must keep streaming after input");
+
+        let diff = fb_region_diff(&before, &after, w, h, 0.15, 0.10, 0.85, 0.85);
+        println!(
+            "center region changed by {:.2}% after launching cmd",
+            diff * 100.0
+        );
+        assert!(
+            diff > 0.05,
+            "a command-line window should have opened (center region diff {:.2}%)",
+            diff * 100.0
+        );
+
+        save_png("target/rdp_nla_logon_desktop.png", &before, w, h);
+        save_png("target/rdp_nla_logon_cmd.png", &after, w, h);
+        println!("evidence PNGs: target/rdp_nla_logon_desktop.png, target/rdp_nla_logon_cmd.png");
+
+        cancel.cancel();
+    }
+
     /// Runtime render-mode swap against the live server: FrameLoop →
     /// DropNative → FrameLoop. This is the machinery behind popping the RDP
     /// session out into a native window and returning it to the tab canvas
