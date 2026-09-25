@@ -4,6 +4,7 @@ pub mod input;
 pub mod native_input;
 pub mod native_render;
 
+pub mod cert_store;
 mod connect;
 mod session;
 mod tls;
@@ -36,7 +37,12 @@ enum SessionSignal {
     NativeRender(SendableHandles, CancellationToken),
     /// Drop the native renderer after its window closed. A no-op in any
     /// other mode — never disturbs a running channel (canvas) stream.
-    DropNative,
+    /// The oneshot completes once the session loop has swapped out of
+    /// native mode; window teardown awaits it so the window is never
+    /// destroyed while a blit may still be using its raw handles.
+    DropNative {
+        ack: tokio::sync::oneshot::Sender<()>,
+    },
     /// Resize the native renderer's surface (physical pixels) after the
     /// user resized its window. Ignored outside native mode.
     ResizeNative { width: u32, height: u32 },
@@ -59,6 +65,11 @@ pub struct RdpClient {
     cancel: CancellationToken,
     /// Tracks the previous pointer button mask so we can detect press/release transitions.
     prev_pointer_mask: AtomicU8,
+    /// True while the session is being displayed in a native window. The
+    /// WebSocket layer checks this before cancelling a desktop stream on
+    /// transport loss: a popped-out session must keep running even when the
+    /// tab's frame socket goes away.
+    native_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl RdpClient {
@@ -143,8 +154,10 @@ impl RdpClient {
                                 );
                             }
                         },
-                        SessionSignal::DropNative => {
-                            // No renderer to drop before the session starts.
+                        SessionSignal::DropNative { ack } => {
+                            // No renderer to drop before the session starts,
+                            // but release any teardown waiting on the ack.
+                            let _ = ack.send(());
                         }
                         SessionSignal::ResizeNative { .. } => {
                             // No renderer before the session starts.
@@ -171,6 +184,7 @@ impl RdpClient {
             frame_loop_tx: Mutex::new(Some(frame_loop_tx)),
             cancel: CancellationToken::new(),
             prev_pointer_mask: AtomicU8::new(0),
+            native_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 }
@@ -221,6 +235,11 @@ impl DesktopProtocol for RdpClient {
 
         let cancel = self.cancel.clone();
 
+        // Set before the signal so a transport-loss check racing the pop-out
+        // errs on the side of keeping the session alive.
+        self.native_active
+            .store(true, std::sync::atomic::Ordering::Release);
+
         let sender = self.frame_loop_tx.lock().await.clone()
             .ok_or_else(|| anyhow::anyhow!("RDP thread already exited"))?;
         sender.send(SessionSignal::NativeRender(handles, cancel))
@@ -232,11 +251,27 @@ impl DesktopProtocol for RdpClient {
     /// Drop the native renderer (if any) after its window closed. Safe in
     /// every mode; the session keeps running and a later `start_frame_loop`
     /// re-attaches the WebSocket canvas.
+    ///
+    /// Waits (bounded) for the session loop to acknowledge the mode swap so
+    /// the caller can destroy the window without racing a pending blit that
+    /// still uses the window's raw handles.
     async fn stop_native_render(&self) -> Result<()> {
+        self.native_active
+            .store(false, std::sync::atomic::Ordering::Release);
         let sender = self.frame_loop_tx.lock().await.clone()
             .ok_or_else(|| anyhow::anyhow!("RDP thread already exited"))?;
-        sender.send(SessionSignal::DropNative)
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel::<()>();
+        sender
+            .send(SessionSignal::DropNative { ack: ack_tx })
             .map_err(|_| anyhow::anyhow!("RDP thread already exited"))?;
+        if tokio::time::timeout(std::time::Duration::from_secs(2), ack_rx)
+            .await
+            .is_err()
+        {
+            // A wedged session thread must not hang window teardown; the
+            // window is destroyed anyway after this returns.
+            tracing::warn!("RDP DropNative ack timed out — proceeding with window teardown");
+        }
         Ok(())
     }
 
@@ -299,8 +334,12 @@ impl DesktopProtocol for RdpClient {
     }
 
     async fn set_clipboard(&self, _text: String) -> Result<()> {
-        tracing::debug!("RDP set_clipboard: deferred (CLIPRDR not implemented)");
-        Ok(())
+        // Honest failure instead of a silent no-op: CLIPRDR (RDP clipboard
+        // virtual channel) is not implemented yet, so a Ctrl+V in the viewer
+        // must surface as unsupported rather than pretend to succeed.
+        Err(anyhow::anyhow!(
+            "clipboard sync is not implemented for RDP yet (CLIPRDR virtual channel)"
+        ))
     }
 
     fn desktop_size(&self) -> (u16, u16) {
@@ -326,6 +365,11 @@ impl DesktopProtocol for RdpClient {
 
     fn input_sender(&self) -> Option<mpsc::UnboundedSender<InputCommand>> {
         Some(self.input_tx.clone())
+    }
+
+    fn is_native_rendering(&self) -> bool {
+        self.native_active
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 }
 
@@ -373,12 +417,21 @@ mod e2e_tests {
     use crate::desktop_protocol::{DesktopEvent, RdpConfig};
     use std::time::Duration;
 
+    /// Target is overridable so the suite can run against any live server:
+    /// `RDP_E2E_HOST` / `RDP_E2E_PORT` / `RDP_E2E_USER` / `RDP_E2E_PASS`.
+    /// Defaults target the xrdp-style rig; e.g. a real Windows host for the
+    /// NLA/CredSSP path:
+    ///   RDP_E2E_HOST=192.168.64.2 RDP_E2E_USER=<user> RDP_E2E_PASS=<pass> \
+    ///     cargo test e2e -- --ignored
     fn test_config() -> RdpConfig {
         RdpConfig {
-            host: "192.168.20.180".to_string(),
-            port: 3389,
-            username: "administrator".to_string(),
-            password: "Oristand@2021".to_string(),
+            host: std::env::var("RDP_E2E_HOST").unwrap_or_else(|_| "192.168.20.180".to_string()),
+            port: std::env::var("RDP_E2E_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(3389),
+            username: std::env::var("RDP_E2E_USER").unwrap_or_else(|_| "administrator".to_string()),
+            password: std::env::var("RDP_E2E_PASS").unwrap_or_else(|_| "Oristand@2021".to_string()),
             domain: None,
             width: 1920,
             height: 1080,
@@ -527,6 +580,47 @@ mod e2e_tests {
         }
 
         cancel.cancel();
+    }
+
+    /// Real-Windows NLA rejection path (verified against the local UTM
+    /// Windows 11 ARM VM at 192.168.64.2). Proves, against a host that
+    /// enforces NLA — which the xrdp rig can never do:
+    ///   1. TLS to real Windows succeeds (AEAD cipher suite).
+    ///   2. The full CredSSP/NTLMv2 exchange runs and the server's
+    ///      STATUS_LOGON_FAILURE is surfaced as a clear, actionable error.
+    ///   3. The TLS-only downgrade is NOT attempted after an explicit
+    ///      credential rejection (Windows would refuse it anyway).
+    #[tokio::test]
+    #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
+    async fn rdp_nla_bad_credentials_rejected() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let mut config = test_config();
+        config.password = "definitely-not-the-password".to_string();
+
+        // (match, not expect_err — RdpClient deliberately has no Debug impl)
+        let err = match RdpClient::connect(&config).await {
+            Ok(_) => panic!("connect with a wrong password must fail"),
+            Err(e) => e,
+        };
+
+        let msg = format!("{}", err);
+        println!("connect error: {}", msg);
+        assert!(
+            msg.contains("rejected") || msg.contains("incorrect"),
+            "a credential rejection must be reported as such, got: {}",
+            msg
+        );
+        // A rejected credential is final: no doomed TLS-only second attempt
+        // may dilute the message.
+        assert!(
+            !msg.contains("TLS-only"),
+            "TLS-only fallback must not run after an explicit logon rejection: {}",
+            msg
+        );
     }
 
     /// Runtime render-mode swap against the live server: FrameLoop →

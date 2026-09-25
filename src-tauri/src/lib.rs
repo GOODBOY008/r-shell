@@ -360,6 +360,18 @@ pub fn run() {
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
+                // RDP server certificates are pinned TOFU-style (like the SSH
+                // client's known_hosts); the fingerprint store lives in the
+                // app data directory.
+                let rdp_cert_store_path = app
+                    .path()
+                    .app_data_dir()
+                    .ok()
+                    .map(|dir| dir.join("rdp-host-fingerprints.json"));
+                if let Some(path) = rdp_cert_store_path {
+                    crate::rdp::cert_store::set_store_path(path);
+                }
+
                 // Register native macOS menu and forward item events to the frontend
                 #[cfg(target_os = "macos")]
                 {
@@ -415,6 +427,33 @@ pub fn run() {
                 if window.label() == "main" {
                     api.prevent_close();
                     let _ = window.hide();
+                    return;
+                }
+                // Native RDP windows: the user's red X must not destroy the
+                // window while the session loop may still be blitting into
+                // it. Prevent the close, wait for the DropNative ack, then
+                // destroy — the Destroyed handler below finishes the shared
+                // cleanup (input monitor, frontend notification).
+                if let Some(connection_id) = window.label().strip_prefix("rdp-") {
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    let connection_id = connection_id.to_string();
+                    tauri::async_runtime::spawn(async move {
+                        let state = app.state::<std::sync::Arc<crate::connection_manager::ConnectionManager>>();
+                        if let Err(e) = state.stop_desktop_native_render(&connection_id).await {
+                            tracing::debug!(
+                                "stop_desktop_native_render for {}: {}",
+                                connection_id,
+                                e
+                            );
+                        }
+                        let label = format!("rdp-{}", connection_id);
+                        if let Some(w) = app.get_window(&label) {
+                            if let Err(e) = w.destroy() {
+                                tracing::warn!("Failed to destroy RDP window {}: {}", label, e);
+                            }
+                        }
+                    });
                     return;
                 }
             }

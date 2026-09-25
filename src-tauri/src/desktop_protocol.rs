@@ -126,6 +126,13 @@ pub trait DesktopProtocol: Send + Sync {
     fn input_sender(&self) -> Option<mpsc::UnboundedSender<InputCommand>> {
         None
     }
+
+    /// True while the session is displayed in a native window. The WebSocket
+    /// layer consults this before cancelling a desktop stream on transport
+    /// loss: a popped-out session must survive the tab's socket going away.
+    fn is_native_rendering(&self) -> bool {
+        false
+    }
 }
 
 // ---------------------------------------------------------------------------

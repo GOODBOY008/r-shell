@@ -866,6 +866,16 @@ impl ConnectionManager {
         client.start_native_render(handles, cancel).await
     }
 
+    /// True when the desktop connection is currently displayed in a native
+    /// window (RDP pop-out). Missing connections report `false`.
+    pub async fn is_desktop_native_rendering(&self, connection_id: &str) -> bool {
+        let desktop = self.desktop_connections.read().await;
+        match desktop.get(connection_id) {
+            Some(client) => client.read().await.is_native_rendering(),
+            None => false,
+        }
+    }
+
     /// Drop the native renderer for a desktop connection (its window closed).
     /// No-op unless the connection is currently rendering natively.
     pub async fn stop_desktop_native_render(&self, connection_id: &str) -> Result<()> {

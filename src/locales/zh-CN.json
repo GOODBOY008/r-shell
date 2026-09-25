@@ -1321,6 +1321,7 @@
   "desktopViewer": {
     "clipboardAccessDenied": "剪贴板访问被拒绝",
     "clipboardAccessDeniedDesc": "允许剪贴板权限以粘贴到远程桌面。",
+    "clipboardPasteUnavailable": "剪贴板粘贴暂不可用",
     "failedToEnterFullScreen": "进入全屏失败",
     "failedToDisconnect": "断开连接失败",
     "desktopDisconnected": "桌面已断开",

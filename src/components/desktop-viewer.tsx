@@ -17,6 +17,9 @@ interface DesktopViewerProps {
   protocol?: string;
   isConnected: boolean;
   onReconnect?: () => void;
+  /** Fired after a successful explicit disconnect so the parent can flip
+   * the tab out of its connected state (close the frame stream's tab). */
+  onDisconnected?: () => void;
 }
 
 export function DesktopViewer({
@@ -26,6 +29,7 @@ export function DesktopViewer({
   protocol = 'RDP',
   isConnected,
   onReconnect,
+  onDisconnected,
 }: DesktopViewerProps) {
   const { t } = useTranslation();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -50,17 +54,6 @@ export function DesktopViewer({
   // Frame-stream watchdog bookkeeping
   const activeCloseRef = useRef(false);
   const lastFrameRef = useRef(0);
-  // TEMP diag: expose internal state via local http log
-  const diagRef = useRef({ frames: 0, started: false, ws: 'null' });
-  useEffect(() => {
-    const iv = setInterval(() => {
-      const c = canvasRef.current;
-      const r = c ? c.getBoundingClientRect() : null;
-      const st = diagRef.current;
-      fetch(`http://127.0.0.1:8924/d?frames=${st.frames}&started=${st.started}&ws=${st.ws}&cwh=${c ? c.width + 'x' + c.height : 'none'}&rect=${r ? Math.round(r.left) + ',' + Math.round(r.top) + ',' + Math.round(r.width) + 'x' + Math.round(r.height) : 'none'}&dwh=${desktopWidth}x${desktopHeight}&conn=${isConnected}&miss=${sessionMissing}`, { mode: 'no-cors' }).catch(() => {});
-    }, 2000);
-    return () => clearInterval(iv);
-  });
   // Set when the backend reports the desktop session is gone (e.g. after an
   // app restart restored the tab before its connection was re-established);
   // shows the reconnect panel instead of a dead canvas that eats clicks.
@@ -150,7 +143,6 @@ export function DesktopViewer({
             const msg = JSON.parse(event.data);
             if (msg.type === 'DesktopStarted' && msg.connection_id === connectionId) {
               startedRef.current = true;
-              diagRef.current.started = true;
               setSessionMissing(false);
               reconnectAttemptRef.current = 0;
               // Update canvas dimensions from negotiated desktop size
@@ -185,7 +177,6 @@ export function DesktopViewer({
             const cmd = view.getUint8(0);
             if (cmd !== 0x02) return; // not a desktop frame
             lastFrameRef.current = Date.now();
-            diagRef.current.frames++;
             const idLen = view.getUint16(1, false); // big-endian
             const headerSize = 1 + 2 + idLen + 8;
             if (event.data.byteLength < headerSize) return;
@@ -211,7 +202,6 @@ export function DesktopViewer({
       };
 
       ws.onclose = () => {
-        diagRef.current.ws = 'closed';
         if (wsRef.current === ws) {
           wsRef.current = null;
         }
@@ -351,15 +341,29 @@ export function DesktopViewer({
   }, []);
 
   // Handle keyboard events — forward via WebSocket
+  // Let toolbar controls keep their own keystrokes: Space/Enter on a focused
+  // button must activate the button, not travel into the remote desktop.
+  const isFromInteractiveControl = (e: React.KeyboardEvent) => {
+    if (e.target === e.currentTarget) return false;
+    const el = e.target as HTMLElement | null;
+    return !!el?.closest('button, input, select, textarea, a[href], [role="button"]');
+  };
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (!isConnected) return;
+    if (!isConnected || isFromInteractiveControl(e)) return;
 
     // Intercept Ctrl+V for clipboard paste: read local clipboard and send to remote
     if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
       e.preventDefault();
       readClipboardText().then((text) => {
         if (text) {
-          invoke('desktop_set_clipboard', { connectionId, text }).catch(() => {});
+          invoke('desktop_set_clipboard', { connectionId, text }).catch((err) => {
+            // Backend reports unsupported clipboard sync (e.g. RDP has no
+            // CLIPRDR yet) — say so instead of silently dropping the paste.
+            toast.info(t('desktopViewer.clipboardPasteUnavailable'), {
+              description: String(err),
+            });
+          });
         }
       }).catch(() => {
         toast.info(t('desktopViewer.clipboardAccessDenied'), {
@@ -375,7 +379,7 @@ export function DesktopViewer({
   }, [connectionId, isConnected, sendWsEvent, t]);
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent) => {
-    if (!isConnected) return;
+    if (!isConnected || isFromInteractiveControl(e)) return;
     e.preventDefault();
     pressedKeysRef.current.delete(e.keyCode);
     sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: e.keyCode, down: false });
@@ -475,12 +479,22 @@ export function DesktopViewer({
   }, []);
 
   const handleDisconnect = useCallback(() => {
-    invoke('desktop_disconnect', { connectionId }).catch((err) => {
-      toast.error(t('desktopViewer.failedToDisconnect'), {
-        description: String(err),
+    invoke('desktop_disconnect', { connectionId })
+      .then(() => {
+        // Mark the socket close as intentional (suppresses the auto-reconnect
+        // path) and flip the tab out of its connected state — otherwise the
+        // parent keeps showing a connected canvas with no way back.
+        activeCloseRef.current = true;
+        wsRef.current?.close();
+        wsRef.current = null;
+        onDisconnected?.();
+      })
+      .catch((err) => {
+        toast.error(t('desktopViewer.failedToDisconnect'), {
+          description: String(err),
+        });
       });
-    });
-  }, [connectionId, t]);
+  }, [connectionId, onDisconnected, t]);
 
   // Pop the RDP session out into a standalone native window (softbuffer
   // rendering + native input). The tab canvas goes idle; the session itself

@@ -126,6 +126,7 @@ function TerminalTabContent({ tab, themeKey }: { tab: TerminalTab; themeKey: num
         protocol={tab.protocol}
         isConnected={tab.connectionStatus === 'connected'}
         onReconnect={handleReconnect}
+        onDisconnected={() => handleConnectionStatusChange(tab.id, 'disconnected')}
       />
     );
   } else if (tab.tabType === 'file-browser') {

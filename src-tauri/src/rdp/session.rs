@@ -312,13 +312,17 @@ pub(super) async fn rdp_session_loop(
                             );
                         }
                     },
-                    Some(SessionSignal::DropNative) => {
+                    Some(SessionSignal::DropNative { ack }) => {
                         if matches!(mode, RenderMode::Native(_)) {
                             tracing::info!("RDP native renderer dropped (window closed)");
                             // Dropping the renderer here is what releases the
                             // softbuffer surface tied to the destroyed window.
                             mode = RenderMode::Noop;
                         }
+                        // Acknowledge only after the mode swap: the window
+                        // teardown waits for this before destroying the
+                        // window, so a pending blit can never outlive it.
+                        let _ = ack.send(());
                     }
                     Some(SessionSignal::ResizeNative { width, height }) => {
                         if let RenderMode::Native(ref mut renderer) = mode {
@@ -327,8 +331,16 @@ pub(super) async fn rdp_session_loop(
                         }
                     }
                     None => {
-                        // Signal sender gone — the RdpClient was dropped;
-                        // session cancellation handles shutdown.
+                        // Signal sender gone — the RdpClient was dropped. No
+                        // further signal can ever arrive, and `recv()` now
+                        // returns None immediately, so continuing would
+                        // busy-spin this loop at 100% CPU. The session is a
+                        // zombie anyway (nobody can feed it input): end it.
+                        // The closed frame channel makes the forwarder emit
+                        // `desktop_session_ended`, which the viewer folds
+                        // into its reconnect flow.
+                        tracing::warn!("RDP signal channel closed (client dropped) — ending session loop");
+                        break;
                     }
                 }
                 Vec::new()

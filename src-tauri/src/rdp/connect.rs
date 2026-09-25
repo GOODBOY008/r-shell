@@ -29,6 +29,18 @@ pub(super) async fn rdp_connect_inner(
 )> {
     match rdp_connect_attempt(config, input_rx, true, true).await {
         Ok(v) => Ok(v),
+        // The server answered the NTLM exchange with "bad credentials" —
+        // a final verdict on the supplied username/password, not a
+        // transport problem. Retrying TLS-only cannot help (every real
+        // Windows host enforces NLA and refuses the downgrade), and the
+        // fallback's combined error buries the actual cause. Fail fast
+        // with the message the user can act on.
+        Err((e, _rx)) if is_logon_rejection(&e) => Err(anyhow::anyhow!(
+            "RDP logon rejected by {}: the username or password is incorrect — \
+             check the credentials and domain before reconnecting (server said: {})",
+            config.host,
+            e
+        )),
         Err((e, rx)) if is_credssp_error(&e) => {
             tracing::warn!("RDP CredSSP/NLA failed ({}), retrying TLS-only", e);
             rdp_connect_attempt(config, rx, false, true)
@@ -39,6 +51,19 @@ pub(super) async fn rdp_connect_inner(
         }
         Err((e, _rx)) => Err(e),
     }
+}
+
+/// Did the server explicitly reject the credentials during CredSSP? These
+/// NT status codes come back from a working NLA stack (proven against real
+/// Windows) and are the user's cue to re-check username/password/domain.
+fn is_logon_rejection(e: &anyhow::Error) -> bool {
+    let s = format!("{:?}", e);
+    // STATUS_LOGON_FAILURE / STATUS_WRONG_PASSWORD / STATUS_NO_SUCH_USER —
+    // matched on the debug repr because the sspi error is nested inside the
+    // ironrdp error's `kind` field, out of reach of anyhow's downcast.
+    s.contains("NStatusCode(0xc000006d)")
+        || s.contains("NStatusCode(0xc000006a)")
+        || s.contains("NStatusCode(0xc0000064)")
 }
 
 /// Heuristic: did the connection fail due to CredSSP/NLA specifically?
@@ -175,6 +200,19 @@ async fn rdp_connect_attempt_body(
             }
         }
     };
+
+    // ── 4b. TOFU certificate pinning ────────────────────────────────────
+    // The TLS layer accepts self-signed certificates (the RDP norm), but
+    // the leaf certificate is pinned on first sight and any later change
+    // fails closed — a MITM presenting its own certificate cannot intercept
+    // CredSSP credentials. Runs before any credential is sent.
+    {
+        use x509_cert::der::Encode as _;
+        let cert_der = tls_cert
+            .to_der()
+            .map_err(|e| anyhow::anyhow!("RDP cert encode failed: {}", e))?;
+        super::cert_store::verify_or_pin(&config.host, config.port, &cert_der)?;
+    }
 
     let upgraded = ironrdp_tokio::mark_as_upgraded(final_should_upgrade, &mut final_connector);
 

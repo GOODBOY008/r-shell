@@ -195,6 +195,12 @@ type OutputControls = Arc<Mutex<HashMap<String, OutputCredits>>>;
 /// what makes Xshell-style Detach possible.
 type ReaderTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 
+/// Desktop (RDP/VNC) frame streams this WebSocket connection started:
+/// connection id → the token that cancels the session-side frame loop.
+/// Cancelled when the transport dies, so a dropped socket cannot leave an
+/// unwatched session running forever (native pop-out sessions are spared).
+type DesktopStreams = Arc<Mutex<HashMap<String, CancellationToken>>>;
+
 #[derive(Debug, PartialEq, Eq)]
 enum SendOutcome {
     Sent,
@@ -469,6 +475,7 @@ impl WebSocketServer {
         let (tx, mut rx) = mpsc::channel::<Message>(WS_OUTPUT_QUEUE_CAPACITY);
         let output_controls: OutputControls = Arc::new(Mutex::new(HashMap::new()));
         let reader_tokens: ReaderTokens = Arc::new(Mutex::new(HashMap::new()));
+        let desktop_streams: DesktopStreams = Arc::new(Mutex::new(HashMap::new()));
         let mut active_pty_generations: HashMap<String, u64> = HashMap::new();
 
         // Forward messages from the bounded channel to the WebSocket.
@@ -528,6 +535,7 @@ impl WebSocketServer {
                             tx.clone(),
                             output_controls.clone(),
                             reader_tokens.clone(),
+                            desktop_streams.clone(),
                         )
                         .await
                     {
@@ -602,6 +610,34 @@ impl WebSocketServer {
         }
         output_controls.lock().await.clear();
         reader_tokens.lock().await.clear();
+
+        // The transport is gone. Any desktop frame stream this connection
+        // started would keep its RDP session (and ConnectionManager entry)
+        // alive forever with nobody watching — cancel it, unless the session
+        // is currently popped out into a native window, which keeps running
+        // (and taking input) without this socket.
+        let orphaned: Vec<(String, CancellationToken)> = {
+            let mut streams = desktop_streams.lock().await;
+            streams.drain().collect()
+        };
+        for (connection_id, cancel) in orphaned {
+            if self
+                .connection_manager
+                .is_desktop_native_rendering(&connection_id)
+                .await
+            {
+                tracing::info!(
+                    "Transport closed but {} renders in a native window — stream kept alive",
+                    connection_id
+                );
+                continue;
+            }
+            tracing::info!(
+                "Transport closed — cancelling desktop stream for {}",
+                connection_id
+            );
+            cancel.cancel();
+        }
         ws_sender_task.abort();
 
         Ok(())
@@ -614,6 +650,7 @@ impl WebSocketServer {
         tx: WsTx,
         output_controls: OutputControls,
         reader_tokens: ReaderTokens,
+        desktop_streams: DesktopStreams,
     ) -> Result<PtyLifecycleEvent, WsError> {
         match msg {
             WsMessage::StartPty {
@@ -928,6 +965,11 @@ impl WebSocketServer {
                     let (event_tx, mut event_rx) =
                         mpsc::unbounded_channel::<crate::desktop_protocol::DesktopEvent>();
                     let desktop_cancel = CancellationToken::new();
+                    // Track it so transport loss below can cancel the stream.
+                    desktop_streams
+                        .lock()
+                        .await
+                        .insert(connection_id.clone(), desktop_cancel.clone());
 
                     // Spawn the frame loop on the connection manager
                     let cm = self.connection_manager.clone();
@@ -1104,6 +1146,7 @@ impl WebSocketServer {
 
             WsMessage::CloseDesktop { connection_id } => {
                 tracing::info!("Closing desktop session: {}", connection_id);
+                desktop_streams.lock().await.remove(&connection_id);
                 if let Err(e) = self
                     .connection_manager
                     .close_desktop_connection(&connection_id)
