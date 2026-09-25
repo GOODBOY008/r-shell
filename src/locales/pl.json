@@ -94,6 +94,7 @@
     "monitor": "Monitor",
     "logs": "Logi",
     "quickCommands": "Polecenia",
+    "portForwarding": "Przek. portów",
     "systemMonitor": "Monitor systemu",
     "logMonitor": "Monitor logów",
     "quickConnected": "Szybkie połączenie",
@@ -1446,6 +1447,22 @@
       "updated": "Zaktualizowano fragment",
       "deleted": "Usunięto fragment"
     }
+  },
+  "portForwarding": {
+    "title": "Przekazywanie portów",
+    "noProxies": "Brak uruchomionych proxy SOCKS",
+    "newProxy": "Nowe proxy SOCKS",
+    "bindAddress": "Adres powiązania",
+    "bindPort": "Port",
+    "start": "Uruchom",
+    "stop": "Zatrzymaj proxy",
+    "started": "Proxy SOCKS nasłuchuje na {{address}}:{{port}}",
+    "startFailed": "Nie udało się uruchomić proxy",
+    "stopped": "Proxy zatrzymane",
+    "stopFailed": "Nie udało się zatrzymać proxy",
+    "noConnection": "Brak aktywnego połączenia",
+    "invalidPort": "Nieprawidłowy numer portu",
+    "alreadyRunning": "Serwer proxy na tym porcie już działa dla tego połączenia"
   },
   "hostKey": {
     "changedTitle": "Klucz hosta uległ zmianie",

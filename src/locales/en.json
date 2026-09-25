@@ -92,6 +92,7 @@
     "monitor": "Monitor",
     "logs": "Logs",
     "quickCommands": "Commands",
+    "portForwarding": "Port Fwd",
     "systemMonitor": "System Monitor",
     "logMonitor": "Log Monitor",
     "quickConnected": "Quick Connected",
@@ -1396,6 +1397,22 @@
       "updated": "Snippet updated",
       "deleted": "Snippet deleted"
     }
+  },
+  "portForwarding": {
+    "title": "Port Forwarding",
+    "noProxies": "No SOCKS proxies running",
+    "newProxy": "New SOCKS Proxy",
+    "bindAddress": "Bind address",
+    "bindPort": "Port",
+    "start": "Start",
+    "stop": "Stop proxy",
+    "started": "SOCKS proxy listening on {{address}}:{{port}}",
+    "startFailed": "Failed to start proxy",
+    "stopped": "Proxy stopped",
+    "stopFailed": "Failed to stop proxy",
+    "noConnection": "No active connection",
+    "invalidPort": "Invalid port number",
+    "alreadyRunning": "A proxy on this port is already running for this connection"
   },
   "hostKey": {
     "changedTitle": "Host key changed",
