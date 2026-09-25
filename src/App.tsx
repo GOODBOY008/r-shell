@@ -1157,8 +1157,8 @@ function AppContent() {
 
         const proto = connectionData.protocol;
         await invoke('desktop_connect', {
+          connectionId: tabId,
           request: {
-            connection_id: tabId,
             host: connectionData.host,
             port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
             protocol: proto.toLowerCase(),

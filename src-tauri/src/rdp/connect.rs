@@ -288,6 +288,20 @@ fn build_ironrdp_config(cfg: &RdpConfig, enable_credssp: bool, enable_tls: bool)
     use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
     use ironrdp::pdu::rdp::client_info::PerformanceFlags;
 
+    // An empty domain string must behave like no domain at all: the UI
+    // always sends the field, and `Some("")` qualifies the username for
+    // NTLM, so Windows answers LOGON_FAILURE for a user that would
+    // otherwise resolve against the local SAM.
+    let domain = cfg.domain.clone().filter(|d| !d.is_empty());
+    tracing::info!(
+        "RDP auth identity: user={:?} pass_len={} domain={:?} size={}x{}",
+        cfg.username,
+        cfg.password.len(),
+        cfg.domain,
+        cfg.width,
+        cfg.height
+    );
+
     IronRdpConfig {
         desktop_size: DesktopSize {
             width: cfg.width,
@@ -300,7 +314,7 @@ fn build_ironrdp_config(cfg: &RdpConfig, enable_credssp: bool, enable_tls: bool)
             username: cfg.username.clone(),
             password: cfg.password.clone(),
         },
-        domain: cfg.domain.clone(),
+        domain,
         client_build: 0,
         client_name: "r-shell".to_string(),
         keyboard_type: KeyboardType::IbmEnhanced,

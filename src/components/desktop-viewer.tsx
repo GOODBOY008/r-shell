@@ -393,6 +393,15 @@ export function DesktopViewer({
     pressedKeysRef.current.clear();
   }, [connectionId, sendWsEvent]);
 
+  // Take keyboard focus as soon as the session is live (or restored after a
+  // reconnect), like the PTY terminal does — otherwise every keystroke is
+  // silently dropped until the user clicks into the canvas.
+  useEffect(() => {
+    if (isConnected && !sessionMissing && !isPoppedOut) {
+      containerRef.current?.focus();
+    }
+  }, [isConnected, sessionMissing, isPoppedOut]);
+
   // Helper to get remote coords from any mouse event (works on container or canvas)
   const getRemoteCoordsFromEvent = useCallback((clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
