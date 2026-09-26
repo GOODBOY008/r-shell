@@ -1,0 +1,26 @@
+[package]
+name = "kdc"
+version = "0.1.0"
+edition = "2024"
+readme = "README.md"
+license = "MIT/Apache-2.0"
+homepage = "https://github.com/devolutions/sspi-rs"
+repository = "https://github.com/devolutions/sspi-rs"
+authors = ["Devolutions Inc. <infos@devolutions.net>"]
+description = "A minimal Rust implementation of the KDC (Key Distribution Center)"
+
+[dependencies]
+picky-asn1 = { workspace = true, features = ["time_conversion"] }
+picky-asn1-der.workspace = true
+picky-asn1-x509.workspace = true
+picky-krb.workspace = true
+tracing.workspace = true
+time.workspace = true
+
+thiserror = "2.0"
+argon2 = { version = "0.5", features = ["std"] }
+
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+[lints]
+workspace = true

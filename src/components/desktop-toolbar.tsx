@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from './ui/button';
-import { Maximize2, Minimize2, Monitor, Power, RectangleHorizontal } from 'lucide-react';
+import { ExternalLink, Maximize2, Minimize2, Monitor, Power, RectangleHorizontal } from 'lucide-react';
 
 interface DesktopToolbarProps {
   protocol: string;
@@ -11,6 +11,8 @@ interface DesktopToolbarProps {
   onSendCtrlAltDel: () => void;
   onToggleFullScreen: () => void;
   onDisconnect: () => void;
+  /** Pop the session out into a standalone native window (RDP only). */
+  onPopOut?: () => void;
 }
 
 export function DesktopToolbar({
@@ -21,6 +23,7 @@ export function DesktopToolbar({
   onSendCtrlAltDel,
   onToggleFullScreen,
   onDisconnect,
+  onPopOut,
 }: DesktopToolbarProps) {
   const { t } = useTranslation();
   const [visible, setVisible] = useState(true);
@@ -101,6 +104,18 @@ export function DesktopToolbar({
             <Maximize2 className="h-3.5 w-3.5" />
           )}
         </Button>
+
+        {protocol === 'RDP' && onPopOut && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            onClick={onPopOut}
+            title={t('desktopToolbar.popOutWindow')}
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Button>
+        )}
 
         <div className="w-px h-5 bg-border mx-1" />
 

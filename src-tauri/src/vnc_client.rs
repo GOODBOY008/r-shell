@@ -1,4 +1,4 @@
-use crate::desktop_protocol::{DesktopProtocol, FrameUpdate, VncConfig};
+use crate::desktop_protocol::{DesktopEvent, DesktopProtocol, VncConfig};
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
@@ -65,7 +65,7 @@ impl VncClient {
 impl DesktopProtocol for VncClient {
     async fn start_frame_loop(
         &self,
-        _frame_tx: mpsc::UnboundedSender<FrameUpdate>,
+        _event_tx: mpsc::UnboundedSender<DesktopEvent>,
         _cancel: CancellationToken,
     ) -> Result<()> {
         if !self.connected {

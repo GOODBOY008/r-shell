@@ -1,0 +1,16 @@
+[package]
+name = "dpapi-core"
+version = "0.1.0"
+edition = "2024"
+publish = false # not ready yet
+
+[features]
+std = []
+alloc = []
+
+[dependencies]
+uuid.workspace = true
+ironrdp-core = { version = "0.1", features = ["alloc"] }
+
+[lints]
+workspace = true

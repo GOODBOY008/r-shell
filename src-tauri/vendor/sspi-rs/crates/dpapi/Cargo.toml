@@ -1,0 +1,76 @@
+[package]
+name = "dpapi"
+version = "0.0.0"
+edition = "2024"
+readme = "README.md"
+license = "MIT/Apache-2.0"
+homepage = "https://github.com/devolutions/sspi-rs"
+repository = "https://github.com/devolutions/sspi-rs"
+authors = ["Devolutions Inc. <infos@devolutions.net>"]
+description = "A Rust implementation of Windows DPAPI"
+publish = false # not ready yet
+
+[lib]
+name = "dpapi"
+
+[features]
+tsssp = ["sspi/tsssp"]
+
+[dependencies]
+bitflags.workspace = true
+byteorder.workspace = true
+num-derive.workspace = true
+num-traits = { workspace = true, default-features = true }
+uuid = { workspace = true, features = ["std"] }
+picky-asn1.workspace = true
+picky-asn1-der.workspace = true
+picky-krb.workspace = true
+picky-asn1-x509 = { workspace = true, features = ["pkcs7"] }
+sha1.workspace = true
+sha2.workspace = true
+rand.workspace = true
+rand_core.workspace = true
+hmac.workspace = true
+digest = "0.11"
+tracing = { workspace = true, default-features = true }
+whoami.workspace = true
+
+dpapi-core = { workspace = true, features = ["alloc"] }
+dpapi-pdu.workspace = true
+dpapi-transport.workspace = true
+sspi = { path = "../..", version = "0.21" } # public
+
+kbkdf = "=0.1.0-rc.1"
+elliptic-curve = { version = "0.14.0", features = ["sec1", "std"] }
+p521 = { version = "=0.14.0-rc.14", features = ["ecdh"] }
+p256 = { version = "=0.14.0-rc.14", features = ["ecdh"] }
+p384 = { version = "=0.14.0-rc.14", features = ["ecdh"] }
+concat-kdf = { git = "https://github.com/RustCrypto/KDFs.git", rev = "f2f5c03" } # TODO: We need the new version, but it's not released yet.
+typenum = "1.20"
+aes-kw = "0.3"
+aes-gcm = { version = "=0.11.0", features = ["getrandom"] }
+url = "2.5"
+
+thiserror = "2.0"
+regex = "1.12"
+
+getrandom = "0.4"
+
+# Pin transitive dependencies
+# TODO: Remove when stable versions will be released
+ecdsa = "=0.17.0-rc.22"
+pkcs1 = "=0.8.0-rc.4"
+rsa = { version = "=0.10.0-rc.18", default-features = false }
+rustcrypto-ff = "=0.14.0-rc.1"
+rustcrypto-ff_derive = "=0.14.0-rc.0"
+rustcrypto-group = "=0.14.0-rc.1"
+primeorder = "=0.14.0-rc.14"
+ed25519-dalek = "=3.0.0-rc.1"
+curve25519-dalek = "=5.0.0-rc.1"
+x25519-dalek = "=3.0.0-rc.1"
+
+[dev-dependencies]
+paste = "1.0"
+
+[lints]
+workspace = true

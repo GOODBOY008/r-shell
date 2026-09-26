@@ -1,0 +1,36 @@
+[package]
+name = "sspi-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+dpapi-fuzzing.path = "../crates/dpapi-fuzzing"
+libfuzzer-sys = "0.4"
+sspi.path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_ts_request"
+path = "fuzz_targets/fuzz_ts_request.rs"
+
+[[bin]]
+name = "dpapi_round_trip"
+path = "fuzz_targets/dpapi_round_trip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dpapi_decoding"
+path = "fuzz_targets/dpapi_decoding.rs"
+test = false
+doc = false
+bench = false
