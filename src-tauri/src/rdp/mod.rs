@@ -1051,6 +1051,513 @@ mod e2e_tests {
         cancel.cancel();
     }
 
+    /// Decisive experiment for "left/right clicks do nothing" against the
+    /// real Windows VM: right-click the wallpaper (a context menu must
+    /// appear) and left-click the Start button (the Start menu must open).
+    /// Both are asserted via frame-region diffs. A full-frame refresh is
+    /// requested before every capture so both sides of each diff are
+    /// complete pictures (session takeover + reactivation otherwise leaves
+    /// the composite mid-repaint and poisons the diff).
+    #[tokio::test]
+    #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
+    async fn rdp_vm_clicks_open_context_menu() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        // Drain whatever arrives, then force a full repaint so the baseline
+        // is a complete picture of the current desktop.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut before = vec![0u8; (w as usize) * (h as usize) * 4];
+        let n0 = collect_frames(&mut event_rx, &mut before, w, h, 4).await;
+        println!("baseline frames: {n0}");
+        save_png("target/rdp_click_before.png", &before, w, h);
+
+        // ── Right-click the wallpaper (right side, below mid-height). ──
+        let (rx, ry) = ((w as u32) * 85 / 100, (h as u32) * 25 / 100);
+        client
+            .send_pointer_button(rx as u16, ry as u16, 0x02, true)
+            .await
+            .expect("right press");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        client
+            .send_pointer_button(rx as u16, ry as u16, 0x02, false)
+            .await
+            .expect("right release");
+        // Give the menu time to render, then sync a complete picture.
+        tokio::time::sleep(Duration::from_millis(900)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut after = vec![0u8; before.len()];
+        let _ = collect_frames(&mut event_rx, &mut after, w, h, 3).await;
+        save_png("target/rdp_click_right_after.png", &after, w, h);
+
+        let menu = fb_region_diff(&before, &after, w, h, 0.55, 0.05, 1.0, 0.95);
+        println!("right-click region change: {:.2}%", menu * 100.0);
+
+        // Dismiss the menu with Escape (also re-proves the keyboard path).
+        client.send_key(27, true).await.expect("esc down");
+        client.send_key(27, false).await.expect("esc up");
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut settled = vec![0u8; before.len()];
+        let _ = collect_frames(&mut event_rx, &mut settled, w, h, 3).await;
+
+        // ── Left-click the Start button (bottom-left taskbar). ──
+        let (sx, sy) = ((w as u32) * 36 / 100, (h as u32) * 977 / 1000);
+        client
+            .send_pointer_button(sx as u16, sy as u16, 0x01, true)
+            .await
+            .expect("left press");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        client
+            .send_pointer_button(sx as u16, sy as u16, 0x01, false)
+            .await
+            .expect("left release");
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut after2 = vec![0u8; settled.len()];
+        let _ = collect_frames(&mut event_rx, &mut after2, w, h, 3).await;
+        save_png("target/rdp_click_left_after.png", &after2, w, h);
+
+        let start = fb_region_diff(&settled, &after2, w, h, 0.05, 0.30, 0.60, 1.0);
+        println!("left-click (Start) region change: {:.2}%", start * 100.0);
+
+        println!("RESULT: right-click menu diff {menu:.4}, start-menu diff {start:.4}");
+
+        assert!(
+            menu > 0.02 || start > 0.02,
+            "neither right-click (context menu) nor left-click (Start menu) changed the desktop: \
+             right {:.2}%, left {:.2}% — the button path is dead against this server",
+            menu * 100.0,
+            start * 100.0
+        );
+
+        cancel.cancel();
+    }
+
+    /// End-to-end left+right click validation on the real Windows VM.
+    /// After connecting, the sign-in/welcome transition can take minutes on
+    /// a small VM, so the test first waits for the desktop to settle
+    /// (consecutive stable full-frames), then right-clicks the wallpaper
+    /// (context menu must appear) and left-clicks Start (Start menu must
+    /// open). Both steps are asserted via region diffs with PNG evidence.
+    #[tokio::test]
+    #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
+    async fn rdp_vm_clicks_end_to_end() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        // ── Wake the display and wait for the desktop to settle. ──
+        // The VM idle-locks and powers off its display; input wakes it.
+        let size = (w as usize) * (h as usize) * 4;
+        let black_ratio = |fb: &[u8]| {
+            let px = fb.len() / 4;
+            let black = fb.chunks_exact(4).filter(|p| p[0] < 8 && p[1] < 8 && p[2] < 8).count();
+            black as f64 / px as f64
+        };
+        let mut prev = vec![0u8; size];
+        for _ in 0..6 {
+            client.request_full_frame().await.expect("full frame");
+            let _ = collect_frames(&mut event_rx, &mut prev, w, h, 3).await;
+            let r = black_ratio(&prev);
+            println!("wake poll: black ratio {r:.2}");
+            if r < 0.5 {
+                break;
+            }
+            // Keyboard input wakes the display / dismisses the lock screen.
+            client.send_key(27, true).await.expect("esc");
+            client.send_key(27, false).await.expect("esc");
+            tokio::time::sleep(Duration::from_millis(900)).await;
+        }
+        let mut settled = 0u32;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(150);
+        while tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            client.request_full_frame().await.expect("full frame");
+            let mut cur = vec![0u8; size];
+            let _ = collect_frames(&mut event_rx, &mut cur, w, h, 3).await;
+            let d = fb_region_diff(&prev, &cur, w, h, 0.0, 0.0, 1.0, 1.0);
+            println!("settle poll: frame change {d:.3}%");
+            if d < 0.001 {
+                settled += 1;
+                if settled >= 2 {
+                    break;
+                }
+            } else {
+                settled = 0;
+            }
+            prev = cur;
+        }
+        save_png("target/rdp_click_e2e_0_desktop.png", &prev, w, h);
+        println!("desktop settled");
+
+        // ── Keyboard control: type into the focused cmd window. ──
+        for kc in ['H' as u32, 'I' as u32] {
+            let sc = crate::rdp_keymap::keycode_to_scancode(kc).expect("sc");
+            client.send_key(sc as u32, true).await.expect("down");
+            client.send_key(sc as u32, false).await.expect("up");
+        }
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut kb = vec![0u8; prev.len()];
+        let _ = collect_frames(&mut event_rx, &mut kb, w, h, 3).await;
+        let kb_diff = fb_region_diff(&prev, &kb, w, h, 0.05, 0.10, 0.65, 0.45);
+        save_png("target/rdp_click_e2e_kb.png", &kb, w, h);
+        println!("keyboard 'HI' in cmd: region change {kb_diff:.2}%");
+
+        // ── Right-click the wallpaper → context menu. ──
+        let (rx, ry) = ((w as u32) * 85 / 100, (h as u32) * 25 / 100);
+        // Move the tracked cursor onto the target first (every real client
+        // streams moves; a cold button event may be delivered at the
+        // server's last-known cursor position).
+        client.send_pointer(rx as u16, ry as u16, 0x00).await.expect("move");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        client
+            .send_pointer_button(rx as u16, ry as u16, 0x02, true)
+            .await
+            .expect("right press");
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        client
+            .send_pointer_button(rx as u16, ry as u16, 0x02, false)
+            .await
+            .expect("right release");
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut after3 = vec![0u8; prev.len()];
+        let _ = collect_frames(&mut event_rx, &mut after3, w, h, 3).await;
+        save_png("target/rdp_click_e2e_3_rightmenu.png", &after3, w, h);
+        let menu = fb_region_diff(&prev, &after3, w, h, 0.55, 0.05, 1.0, 0.70);
+        println!("step3 right-click wallpaper: menu region change {menu:.2}%");
+        assert!(menu > 0.03, "context menu did not appear after right-click ({menu:.2}%)");
+
+        // Dismiss the menu.
+        client.send_key(27, true).await.expect("esc");
+        client.send_key(27, false).await.expect("esc");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut settled2 = vec![0u8; prev.len()];
+        let _ = collect_frames(&mut event_rx, &mut settled2, w, h, 3).await;
+
+        // ── Left-click Start → Start menu. ──
+        let (sx, sy) = ((w as u32) * 36 / 100, (h as u32) * 977 / 1000);
+        client.send_pointer(sx as u16, sy as u16, 0x00).await.expect("move");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        client
+            .send_pointer_button(sx as u16, sy as u16, 0x01, true)
+            .await
+            .expect("left press");
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        client
+            .send_pointer_button(sx as u16, sy as u16, 0x01, false)
+            .await
+            .expect("left release");
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut after4 = vec![0u8; settled2.len()];
+        let _ = collect_frames(&mut event_rx, &mut after4, w, h, 3).await;
+        save_png("target/rdp_click_e2e_4_startmenu.png", &after4, w, h);
+        let start = fb_region_diff(&settled2, &after4, w, h, 0.05, 0.30, 0.60, 1.0);
+        println!("step4 left-click Start: menu region change {start:.2}%");
+        assert!(start > 0.05, "Start menu did not open after left-click ({start:.2}%)");
+
+        println!("PASS: right click (context menu) and left click (Start menu) both acted on real Windows");
+
+        // Keep the VM usable for the next e2e run: disable display sleep via
+        // the keyboard channel (a cmd window is focused here).
+        async fn type_text(client: &RdpClient, text: &str) {
+            for ch in text.chars() {
+                let kc = match ch {
+                    'a'..='z' => (ch as u32) - ('a' as u32) + 65,
+                    '0'..='9' => (ch as u32) - ('0' as u32) + 48,
+                    ' ' => 32,
+                    '-' => 189,
+                    '/' => 191,
+                    _ => panic!("unmapped char {ch}"),
+                };
+                let sc = crate::rdp_keymap::keycode_to_scancode(kc).expect("sc");
+                client.send_key(sc as u32, true).await.expect("down");
+                client.send_key(sc as u32, false).await.expect("up");
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+        }
+        // Launch a cmd via the Start menu search (the Start menu is open).
+        type_text(&client, "cmd").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        type_text(&client, "powercfg /change monitor-timeout-ac 0").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        type_text(&client, "powercfg /change standby-timeout-ac 0").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        type_text(&client, "powercfg /change monitor-timeout-dc 0").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut shot = vec![0u8; prev.len()];
+        let _ = collect_frames(&mut event_rx, &mut shot, w, h, 3).await;
+        save_png("target/rdp_click_e2e_5_powercfg.png", &shot, w, h);
+        println!("powercfg commands typed (display sleep disabled)");
+        cancel.cancel();
+    }
+
+    /// Empirical probe: which wire bit acts as the LEFT button for real
+    /// Windows? Clicks the Start button with each candidate bit on the
+    /// settled desktop and reports which one opens the Start menu.
+    #[tokio::test]
+    #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
+    async fn rdp_vm_left_button_bit_probe() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut baseline = vec![0u8; (w as usize) * (h as usize) * 4];
+        let _ = collect_frames(&mut event_rx, &mut baseline, w, h, 4).await;
+        save_png("target/rdp_probe_baseline.png", &baseline, w, h);
+
+        // ── Drag-select text inside the focused cmd window: the selection
+        // highlight is an unambiguous mouse-visual. The cmd window sits at
+        // roughly (55..1165, 60..675) of the 1920×1080 desktop.
+        let (dx0, dy0) = ((w as u32) * 8 / 100, (h as u32) * 13 / 100);
+        let (dx1, dy1) = ((w as u32) * 45 / 100, (h as u32) * 13 / 100);
+        client.send_pointer(dx0 as u16, dy0 as u16, 0x01).await.expect("drag down");
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        for step in 1..8 {
+            let xx = dx0 + (dx1 - dx0) * step / 8;
+            client.send_pointer(xx as u16, dy0 as u16, 0x01).await.expect("drag move");
+            tokio::time::sleep(Duration::from_millis(60)).await;
+        }
+        client.send_pointer(dx1 as u16, dy0 as u16, 0x00).await.expect("drag up");
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut drag_after = vec![0u8; baseline.len()];
+        let _ = collect_frames(&mut event_rx, &mut drag_after, w, h, 3).await;
+        save_png("target/rdp_probe_drag.png", &drag_after, w, h);
+        let drag = fb_region_diff(&baseline, &drag_after, w, h, 0.03, 0.08, 0.55, 0.20);
+        println!("PROBE drag-select: cmd text region change {drag:.2}%");
+
+        let (sx, sy) = ((w as u32) * 3 / 100, (h as u32) * 8 / 100);
+        for bit in [0x1000u16] {
+            // double-click Recycle Bin (VM top-left): opens a window
+            client
+                .send_pointer_button(sx as u16, sy as u16, 0x01, true)
+                .await
+                .expect("press");
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            client
+                .send_pointer_button(sx as u16, sy as u16, 0x01, false)
+                .await
+                .expect("release");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            client
+                .send_pointer_button(sx as u16, sy as u16, 0x01, true)
+                .await
+                .expect("press2");
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            client
+                .send_pointer_button(sx as u16, sy as u16, 0x01, false)
+                .await
+                .expect("release2");
+            tokio::time::sleep(Duration::from_millis(1800)).await;
+            client.request_full_frame().await.expect("full frame");
+            let mut after = vec![0u8; baseline.len()];
+            let _ = collect_frames(&mut event_rx, &mut after, w, h, 3).await;
+            let d = fb_region_diff(&baseline, &after, w, h, 0.05, 0.30, 0.60, 1.0);
+            save_png(&format!("target/rdp_probe_{bit:#06x}.png"), &after, w, h);
+            println!("PROBE bit {bit:#06x}: start-region change {d:.2}%");
+            client.send_key(27, true).await.expect("esc");
+            client.send_key(27, false).await.expect("esc");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            client.request_full_frame().await.expect("full frame");
+            let _ = collect_frames(&mut event_rx, &mut baseline, w, h, 3).await;
+        }
+
+        cancel.cancel();
+    }
+
+    /// Keyboard-only probe: type 'HI' + Enter into whatever has focus and
+    /// diff the screen. Distinguishes "all input dead" from "mouse only".
+    #[tokio::test]
+    #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
+    async fn rdp_vm_keyboard_probe() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut before = vec![0u8; (w as usize) * (h as usize) * 4];
+        let _ = collect_frames(&mut event_rx, &mut before, w, h, 4).await;
+        save_png("target/rdp_kb_before.png", &before, w, h);
+
+        // Type "HI" (H = JS 72, I = 73) then Enter (13).
+        for kc in [72u32, 73] {
+            let sc = crate::rdp_keymap::keycode_to_scancode(kc).expect("sc");
+            client.send_key(sc as u32, true).await.expect("down");
+            client.send_key(sc as u32, false).await.expect("up");
+        }
+        client.send_key(13, true).await.expect("enter down");
+        client.send_key(13, false).await.expect("enter up");
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut after = vec![0u8; before.len()];
+        let _ = collect_frames(&mut event_rx, &mut after, w, h, 3).await;
+        save_png("target/rdp_kb_after.png", &after, w, h);
+        let d = fb_region_diff(&before, &after, w, h, 0.0, 0.0, 1.0, 1.0);
+        println!("KEYBOARD PROBE: screen change after typing HI+Enter: {d:.2}%");
+        if d < 0.001 {
+            println!("KEYBOARD IS DEAD TOO");
+        } else {
+            println!("KEYBOARD ALIVE");
+        }
+
+        cancel.cancel();
+    }
+
+    /// One-time VM configuration: disable display sleep so the idle lock /
+    /// display-off never again makes input look dead during e2e runs.
+    /// Types the powercfg commands through the Run flow (Ctrl+Esc search).
+    #[tokio::test]
+    #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
+    async fn rdp_vm_disable_display_sleep() {
+        let _ = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_target(false)
+            .try_init();
+
+        async fn type_text(client: &RdpClient, text: &str) {
+            for ch in text.chars() {
+                let kc = match ch {
+                    'a'..='z' => (ch as u32) - ('a' as u32) + 65,
+                    '0'..='9' => (ch as u32) - ('0' as u32) + 48,
+                    ' ' => 32,
+                    '-' => 189,
+                    '/' => 191,
+                    ':' => 186,
+                    _ => panic!("unmapped char {ch}"),
+                };
+                let sc = crate::rdp_keymap::keycode_to_scancode(kc).expect("sc");
+                client.send_key(sc as u32, true).await.expect("down");
+                client.send_key(sc as u32, false).await.expect("up");
+                tokio::time::sleep(Duration::from_millis(60)).await;
+            }
+        }
+
+        let config = test_config();
+        let mut client = RdpClient::connect(&config).await.expect("connect");
+        let (w, h) = client.desktop_size();
+        println!("connected: desktop {w}x{h}");
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let cancel = CancellationToken::new();
+        client
+            .start_frame_loop(event_tx, cancel.clone())
+            .await
+            .expect("start_frame_loop");
+
+        // Let the NLA logon/desktop settle before injecting input.
+        tokio::time::sleep(Duration::from_secs(12)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut pre = vec![0u8; (w as usize) * (h as usize) * 4];
+        let _ = collect_frames(&mut event_rx, &mut pre, w, h, 3).await;
+        save_png("target/rdp_pwrcfg_pre.png", &pre, w, h);
+
+        // Ctrl+Esc opens the Start menu (search focused).
+        client.send_key(17, true).await.expect("ctrl down");
+        client.send_key(27, true).await.expect("esc down");
+        client.send_key(27, false).await.expect("esc up");
+        client.send_key(17, false).await.expect("ctrl up");
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+
+        type_text(&client, "cmd").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut shot = vec![0u8; (w as usize) * (h as usize) * 4];
+        let _ = collect_frames(&mut event_rx, &mut shot, w, h, 3).await;
+        save_png("target/rdp_pwrcfg_0_cmd.png", &shot, w, h);
+
+        type_text(&client, "powercfg /change monitor-timeout-ac 0").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        type_text(&client, "powercfg /change standby-timeout-ac 0").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        type_text(&client, "powercfg /change monitor-timeout-dc 0").await;
+        client.send_key(13, true).await.expect("enter");
+        client.send_key(13, false).await.expect("enter");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut shot2 = vec![0u8; shot.len()];
+        let _ = collect_frames(&mut event_rx, &mut shot2, w, h, 3).await;
+        save_png("target/rdp_pwrcfg_1_done.png", &shot2, w, h);
+        println!("powercfg commands sent; check target/rdp_pwrcfg_1_done.png for errors");
+        cancel.cancel();
+    }
+
     /// Diagnostic for "clicking a user on the logon screen does nothing":
     /// settle the picture, click the user tile, measure whether the remote
     /// repaints, then press Enter as a keyboard-channel control. Distinguishes

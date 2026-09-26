@@ -97,6 +97,28 @@ pub(super) async fn rdp_session_loop(
     let mut keep_alive = tokio::time::interval(Duration::from_secs(10));
     keep_alive.tick().await; // consume the first immediate tick
 
+    // MS-RDPBCGR 3.2.5.1.4: publish the keyboard LED state with a Sync Event
+    // right after the connection is established (mstsc does the same).
+    // Without it some servers ignore subsequent input events.
+    {
+        use ironrdp::pdu::input::fast_path::{FastPathInputEvent, SynchronizeFlags};
+        let sync: smallvec::SmallVec<[FastPathInputEvent; 1]> =
+            smallvec::smallvec![FastPathInputEvent::SyncEvent(
+                SynchronizeFlags::NUM_LOCK
+            )];
+        let outputs = active_stage
+            .process_fastpath_input(&mut image, &sync)
+            .unwrap_or_default();
+        for output in outputs {
+            if let ActiveStageOutput::ResponseFrame(frame) = output {
+                framed
+                    .write_all(&frame)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("RDP sync write failed: {}", e))?;
+            }
+        }
+    }
+
     // ── Main session loop ───────────────────────────────────────────
     let mut consecutive_errors = 0;
     loop {
