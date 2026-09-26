@@ -70,6 +70,28 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: Windows loader diagnostics
+        if: failure() && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "src-tauri\target\debug\deps\r_shell_lib-*.exe" | Select-Object -First 1
+          Write-Host "EXE: $($exe.FullName) size=$($exe.Length)"
+          Write-Host "--- DLLs in deps dir ---"
+          Get-ChildItem "src-tauri\target\debug\deps\*.dll" | ForEach-Object { Write-Host "$($_.Name) $($_.Length)" }
+          Write-Host "--- dumpbin /DEPENDENTS ---"
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -find "**\dumpbin.exe" | Select-Object -First 1
+          if ($dumpbin) { & $dumpbin /DEPENDENTS $exe.FullName } else { Write-Host "dumpbin not found" }
+          Write-Host "--- direct run attempt ---"
+          $out = & $exe.FullName --list 2>&1 | Out-String
+          Write-Host "exit=$LASTEXITCODE"
+          Write-Host $out
+          Write-Host "--- WER / Application events ---"
+          try {
+            Get-WinEvent -LogName Application -MaxEvents 60 -ErrorAction Stop |
+              Where-Object { $_.Message -match "r_shell_lib|0xc0000139" } |
+              Select-Object -First 5 | ForEach-Object { Write-Host "----"; Write-Host $_.TimeCreated; Write-Host $_.Message }
+          } catch { Write-Host "no matching events" }
+
       - name: Run Rust clippy
         working-directory: src-tauri
         run: cargo clippy -- -D warnings

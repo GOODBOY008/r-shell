@@ -52,6 +52,7 @@ sys-locale = "0.3"
 keyring = "4"
 aes-gcm = "0.10"
 rand = "0.8"
+socket2 = "0.5"
 
 [dev-dependencies]
 tempfile = "3"

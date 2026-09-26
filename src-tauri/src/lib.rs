@@ -10,6 +10,7 @@ mod quit_guard;
 mod rdp_client;
 mod sftp_client;
 mod sftp_transfer;
+mod socks_proxy;
 mod ssh;
 mod vnc_client;
 mod websocket_server;
@@ -335,6 +336,9 @@ pub fn run() {
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
+                // Let the connection manager emit SOCKS proxy list changes
+                connection_manager_clone.set_app_handle(app.handle().clone());
+
                 // Register native macOS menu and forward item events to the frontend
                 #[cfg(target_os = "macos")]
                 {
@@ -507,6 +511,10 @@ pub fn run() {
             commands::get_update_context,
             commands::updater_check,
             commands::updater_download_and_install,
+            // SOCKS proxy (Dynamic port forwarding) commands
+            commands::start_socks_proxy,
+            commands::stop_socks_proxy,
+            commands::list_socks_proxies,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])
