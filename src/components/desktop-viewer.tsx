@@ -177,6 +177,15 @@ export function DesktopViewer({
             const cmd = view.getUint8(0);
             if (cmd !== 0x02) return; // not a desktop frame
             lastFrameRef.current = Date.now();
+            // A frame is definitive proof the session is alive: clear the
+            // missing-session overlay. A stale `desktop_session_ended` from
+            // the previous session's teardown can arrive after the new
+            // DesktopStarted (reconnect race) and must not mask a live
+            // stream behind the disconnected panel.
+            if (sessionMissingRef.current) {
+              sessionMissingRef.current = false;
+              setSessionMissing(false);
+            }
             const idLen = view.getUint16(1, false); // big-endian
             const headerSize = 1 + 2 + idLen + 8;
             if (event.data.byteLength < headerSize) return;
