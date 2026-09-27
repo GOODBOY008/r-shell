@@ -430,6 +430,7 @@ mod tests {
                 compression: true,
                 keepalive_interval: Some(60),
                 keepalive_max: Some(3),
+                connect_timeout: 10,
                 proxy: None,
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
