@@ -1041,6 +1041,11 @@ impl SshClient {
         Ok(SftpSession::new_with_config(channel.into_stream(), config).await?)
     }
 
+    /// Clone the session handle for use in SOCKS proxy / port forwarding.
+    pub fn get_session_handle(&self) -> Option<Arc<client::Handle<Client>>> {
+        self.session.clone()
+    }
+
     pub async fn upload_file_from_bytes(&self, data: &[u8], remote_path: &str) -> Result<u64> {
         if !self.is_connected() {
             return Err(anyhow::anyhow!("Not connected"));
