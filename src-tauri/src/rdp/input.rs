@@ -1,6 +1,10 @@
 use crate::rdp_keymap;
+use ironrdp::core::WriteBuf;
 use ironrdp::pdu::input::fast_path::{FastPathInputEvent, KeyboardFlags};
 use ironrdp::pdu::input::mouse::{MousePdu, PointerFlags};
+use ironrdp::pdu::input::scan_code::KeyboardFlags as SlowKeyboardFlags;
+use ironrdp::pdu::input::{InputEvent, InputEventPdu, ScanCodePdu};
+use ironrdp::pdu::rdp::headers::{encode_share_data, ShareDataPdu};
 use smallvec::SmallVec;
 
 /// Wire bits for `pointerFlags` per MS-RDPBCGR 2.2.8.1.1.3.1.1.3 —
@@ -9,6 +13,19 @@ use smallvec::SmallVec;
 /// suspicion that they were shuffled was wrong); they are kept here as an
 /// explicit, documented mapping because the empirical debugging history
 /// (black-screen VM states) made the wire values hard to reason about.
+///
+/// EVENT SHAPES (2026-09-28 round-2 e2e finding): the Windows Insider VM
+/// (26200.9457) accepts our slow-path KEYBOARD events (Ctrl+Esc opened the
+/// Start search — visible as an update flood in the e2e log) but ignored
+/// every MOUSE event we sent — on fast-path AND slow-path. The one
+/// structural difference from mstsc/FreeRDP wire captures was the
+/// PTRFLAGS_MOVE bit (0x0800) we OR-ed into every button event
+/// (`bit | MOVE | DOWN`). Real clients never combine them: a move is a
+/// MOVE-only event, a press is DOWN|BUTTON, a release is BUTTON. A build
+/// that treats any event carrying MOVE as a move-only event silently
+/// swallows those clicks — which matches every observation since the
+/// first user report. Button events here therefore NEVER carry MOVE; the
+/// cursor is positioned by a preceding MOVE-only event.
 mod pointer_wire {
     pub const DOWN: u16 = 0x8000;
     pub const MOVE: u16 = 0x0800;
@@ -76,8 +93,10 @@ pub fn map_input(cmd: &InputCommand) -> SmallVec<[FastPathInputEvent; 4]> {
     }
 }
 
-/// Explicit button press/release: always emits the corresponding DOWN or
-/// RELEASE event (plus MOVE), independent of any previously seen state.
+/// Explicit button press/release, shaped like mstsc/FreeRDP: a press is
+/// preceded by a MOVE-only event to the target position, and the button
+/// events themselves carry ONLY the button bit (+ DOWN on press) — never
+/// the MOVE bit (see the `pointer_wire` module docs for why).
 fn map_pointer_button(
     x: u16,
     y: u16,
@@ -93,11 +112,14 @@ fn map_pointer_button(
             return SmallVec::new();
         }
     };
-    let mut flags = bit | pointer_wire::MOVE;
+    let mut events = SmallVec::new();
     if down {
-        flags |= pointer_wire::DOWN;
+        events.push(mouse_event(pointer_wire::MOVE, x, y));
+        events.push(mouse_event(bit | pointer_wire::DOWN, x, y));
+    } else {
+        events.push(mouse_event(bit, x, y));
     }
-    smallvec::smallvec![mouse_event(flags, x, y)]
+    events
 }
 
 fn map_key(scancode: u16, down: bool) -> SmallVec<[FastPathInputEvent; 4]> {
@@ -141,9 +163,12 @@ fn map_pointer(x: u16, y: u16, mask: u8, prev_mask: u8) -> SmallVec<[FastPathInp
         let was_down = prev_mask & bit != 0;
         let is_down = mask & bit != 0;
         if is_down && !was_down {
-            events.push(mouse_event(flag | pointer_wire::DOWN | pointer_wire::MOVE, x, y));
+            // Move to the position first, then press — never combine the
+            // MOVE bit with a button event (see pointer_wire docs).
+            events.push(mouse_event(pointer_wire::MOVE, x, y));
+            events.push(mouse_event(flag | pointer_wire::DOWN, x, y));
         } else if !is_down && was_down {
-            events.push(mouse_event(flag | pointer_wire::MOVE, x, y));
+            events.push(mouse_event(*flag, x, y));
         }
     }
 
@@ -153,6 +178,105 @@ fn map_pointer(x: u16, y: u16, mask: u8, prev_mask: u8) -> SmallVec<[FastPathInp
     }
 
     events
+}
+
+/// Encode input events as SLOW-PATH TS_INPUT_EVENT PDUs (MS-RDPBCGR 2.2.8.1.1)
+/// on the RDP IO channel — the path mstsc uses as its primary input route,
+/// where fast-path input is merely an optional, capability-negotiated
+/// optimization.
+///
+/// Why slow-path (wire history, so nobody re-litigates this blind):
+/// - ironrdp-pdu 0.9.0's `FastPathInput::encode` framing was audited
+///   byte-for-byte against MS-RDPBCGR 2.2.8.1.2 and FreeRDP's
+///   `fastpath_send_multiple_input_pdu` (`fpInputHeader` action|numEvents<<2,
+///   PER-style length, well-formed TS_FP_INPUT_EVENTs) — the framing was
+///   NEVER the bug. The intermediate "strip ironrdp's 2-byte header"
+///   compensation (75edff6) left the events BARE on the wire (no
+///   fpInputHeader at all), which made the server drop EVERY input event —
+///   mouse and keyboard — as parse garbage (the 2026-09-27 round-1 e2e
+///   failure: right-click 0.00%, 'HI' 0.00%).
+/// - With valid fast-path framing the keyboard demonstrably reached this
+///   VM (Ctrl+Esc→cmd acceptance passed repeatedly), but mouse events —
+///   equally well-formed on the wire — never produced any reaction in
+///   every controlled state across days.
+/// - Round 2 (2026-09-28) moved input to THIS slow path: the keyboard
+///   demonstrably works on it (Ctrl+Esc opened the Start search — update
+///   flood in target/rdp_e2e_debug.log 21:05:07-11), while mouse events
+///   were STILL ignored — proving the drop is specific to the mouse
+///   events' CONTENT, not the transport. The remaining structural
+///   difference from mstsc/FreeRDP was the PTRFLAGS_MOVE bit on button
+///   events; button events are therefore shaped exactly like real
+///   clients' now (see the pointer_wire module docs).
+/// - Slow-path client→server ShareData PDUs (Control, Synchronize,
+///   FontList, DisplayControl) are exercised by this VM on every
+///   connection and work. `ShareDataPdu::Input` rides exactly the same
+///   transport: TPKT + X.224 + MCS SendDataRequest + ShareDataHeader
+///   (pduType2 = 0x1C) + InputEventPdu, produced by
+///   `encode_share_data` below.
+///
+/// One PDU PER input event (mstsc/FreeRDP's granularity — each
+/// TS_INPUT_EVENT rides in its own ShareData PDU). Returns an empty Vec
+/// when no event converts (e.g. the never-sent Sync event, which resets
+/// this build's connection — see session.rs).
+pub fn encode_slow_path_input_pdus(
+    user_channel_id: u16,
+    io_channel_id: u16,
+    share_id: u32,
+    events: &[FastPathInputEvent],
+) -> Vec<Vec<u8>> {
+    let mut pdus = Vec::with_capacity(events.len());
+    for event in events {
+        let Some(slow_event) = to_slow_path_event(event) else {
+            continue;
+        };
+        let mut buf = WriteBuf::new();
+        let pdu = ShareDataPdu::Input(InputEventPdu(vec![slow_event]));
+        if encode_share_data(user_channel_id, io_channel_id, share_id, pdu, &mut buf).is_err() {
+            continue;
+        }
+        pdus.push(buf.filled().to_vec());
+    }
+    pdus
+}
+
+/// Map a fast-path input event to its slow-path `InputEvent` equivalent.
+///
+/// The keyboard flag sets differ between the two directions: fast-path
+/// marks only RELEASE (0x01) / EXTENDED (0x02) / EXTENDED1 (0x04) in a u8 —
+/// a press is the absence of RELEASE — while the slow-path TS_KEYBOARD_EVENT
+/// (MS-RDPBCGR 2.2.8.1.1.3.1.1.1) carries explicit DOWN (0x4000, KbDownFlag)
+/// / RELEASE (0x8000) / EXTENDED (0x0100) / EXTENDED_1 (0x0200) bits. Mouse
+/// events share the same `MousePdu` type in both directions.
+fn to_slow_path_event(event: &FastPathInputEvent) -> Option<InputEvent> {
+    match event {
+        FastPathInputEvent::MouseEvent(pdu) => Some(InputEvent::Mouse(*pdu)),
+        FastPathInputEvent::KeyboardEvent(flags, code) => {
+            let mut slow_flags = SlowKeyboardFlags::empty();
+            if flags.contains(KeyboardFlags::RELEASE) {
+                slow_flags |= SlowKeyboardFlags::RELEASE;
+            } else {
+                slow_flags |= SlowKeyboardFlags::DOWN;
+            }
+            if flags.contains(KeyboardFlags::EXTENDED) {
+                slow_flags |= SlowKeyboardFlags::EXTENDED;
+            }
+            if flags.contains(KeyboardFlags::EXTENDED1) {
+                slow_flags |= SlowKeyboardFlags::EXTENDED_1;
+            }
+            Some(InputEvent::ScanCode(ScanCodePdu {
+                flags: slow_flags,
+                key_code: u16::from(*code),
+            }))
+        }
+        // This Windows build resets the connection on sync events
+        // (102f370); LED sync is never sent, so one surfacing here is
+        // dropped rather than risk the connection.
+        FastPathInputEvent::SyncEvent(_) => None,
+        other => {
+            tracing::debug!("RDP input: unmapped fast-path event {other:?} dropped");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -169,10 +293,11 @@ mod tests {
 
     #[test]
     fn left_button_press_emits_down_event() {
-        // prev=0 (up) -> mask=0x01 (left down): one MouseEvent
+        // prev=0 (up) -> mask=0x01 (left down): MOVE + press event
         let evs = map_input(&InputCommand::Pointer { x: 10, y: 20, mask: 0x01, prev_mask: 0x00 });
-        assert_eq!(evs.len(), 1);
+        assert_eq!(evs.len(), 2);
         assert!(matches!(evs[0], FastPathInputEvent::MouseEvent(_)));
+        assert!(matches!(evs[1], FastPathInputEvent::MouseEvent(_)));
     }
 
     #[test]
@@ -195,9 +320,8 @@ mod tests {
 
     /// Locks the actual wire bytes against MS-RDPBCGR 2.2.8.1.1.3.1.1.3.
     /// The encoded `TS_MOUSE_EVENT` body for a left press at (100, 200)
-    /// must be `00 E0 64 00 C8 00`: flags 0xE000 (DOWN|MOVE|LEFTBUTTON)
-    /// little-endian, then x=100 LE, y=200 LE. (The one-byte fast-path
-    /// event header is prepended by the outer fast-path frame encoder.)
+    /// must be `00 90 64 00 C8 00`: flags 0x9000 (DOWN|LEFTBUTTON, never
+    /// MOVE — see pointer_wire docs) little-endian, then x=100 LE, y=200 LE.
     /// This is the regression test for ironrdp-pdu 0.9.0's shuffled
     /// PointerFlags (see the module docs on `pointer_wire`) that made
     /// every click a no-op on real Windows.
@@ -211,11 +335,11 @@ mod tests {
             button: 0x01,
             down: true,
         });
-        assert_eq!(evs.len(), 1);
-        let FastPathInputEvent::MouseEvent(pdu) = &evs[0] else {
+        assert_eq!(evs.len(), 2);
+        let FastPathInputEvent::MouseEvent(pdu) = &evs[1] else {
             panic!("expected a mouse event");
         };
-        assert_eq!(pdu.flags.bits(), 0x9800);
+        assert_eq!(pdu.flags.bits(), 0x9000);
 
         let mut buf = [0u8; 8];
         let n = {
@@ -225,7 +349,7 @@ mod tests {
         };
         assert_eq!(
             &buf[..n],
-            [0x00, 0x98, 0x64, 0x00, 0xC8, 0x00],
+            [0x00, 0x90, 0x64, 0x00, 0xC8, 0x00],
             "left press must encode to the spec-defined bytes"
         );
     }
@@ -238,11 +362,11 @@ mod tests {
             button: 0x02,
             down: true,
         });
-        let FastPathInputEvent::MouseEvent(pdu) = &evs[0] else {
+        let FastPathInputEvent::MouseEvent(pdu) = &evs[1] else {
             panic!("expected a mouse event");
         };
-        // DOWN | MOVE | BUTTON2/RIGHT — 0x8000 | 0x0800 | 0x2000.
-        assert_eq!(pdu.flags.bits(), 0xA800);
+        // DOWN | BUTTON2/RIGHT — 0x8000 | 0x2000, and NEVER the MOVE bit.
+        assert_eq!(pdu.flags.bits(), 0xA000);
     }
 
     #[test]
@@ -268,7 +392,7 @@ mod tests {
     fn explicit_button_down_emits_down_even_after_desync() {
         // A stale prev-mask state must not swallow an explicit press.
         let evs = map_input(&InputCommand::PointerButton { x: 10, y: 20, button: 0x01, down: true });
-        assert_eq!(evs.len(), 1);
+        assert_eq!(evs.len(), 2, "MOVE + press");
     }
 
     #[test]
@@ -280,5 +404,131 @@ mod tests {
     #[test]
     fn explicit_unknown_button_bit_is_ignored() {
         assert!(map_input(&InputCommand::PointerButton { x: 1, y: 2, button: 0x08, down: true }).is_empty());
+    }
+
+    /// Locks the full client→server SLOW-PATH input frames for a single
+    /// left press at (100, 200): TWO PDUs (mstsc granularity) — a MOVE-only
+    /// event followed by the press DOWN|BUTTON1 — each TPKT + X.224 DT +
+    /// MCS SendDataRequest + ShareDataHeader (pduType2 = 0x1C TDIN_INPUT) +
+    /// one TS_INPUT_EVENT. The press event must NOT carry PTRFLAGS_MOVE
+    /// (0x0800): this Windows Insider build treats MOVE-carrying button
+    /// events as move-only and silently drops the click (see the
+    /// pointer_wire module docs).
+    #[test]
+    fn left_press_slow_path_input_pdu_wire_bytes() {
+        let evs = map_input(&InputCommand::PointerButton {
+            x: 100,
+            y: 200,
+            button: 0x01,
+            down: true,
+        });
+        assert_eq!(evs.len(), 2, "press = MOVE event + button-down event");
+        let pdus = encode_slow_path_input_pdus(1002, 1003, 0x0001_0EA0, &evs);
+        assert_eq!(pdus.len(), 2, "one PDU per event");
+
+        for (i, pdu) in pdus.iter().enumerate() {
+            // TPKT: version 3, total length BE16 matching the buffer.
+            assert_eq!(&pdu[..2], &[0x03, 0x00], "pdu {i}");
+            assert_eq!(
+                u16::from_be_bytes([pdu[2], pdu[3]]) as usize,
+                pdu.len(),
+                "TPKT length must cover the whole frame"
+            );
+            // X.224 Data TPDU: DT with EOT.
+            assert_eq!(&pdu[4..7], &[0x02, 0xF0, 0x80], "pdu {i}");
+
+            // ShareDataHeader occupies the 12 bytes right before the
+            // InputEventPdu header (nEvents u16 + pad 2) and the 12-byte
+            // TS_INPUT_EVENT: shareId (LE) + pad + streamId +
+            // uncompressedLength + pduType2 (0x1C) + compressedType +
+            // compressedLength.
+            let hdr = &pdu[pdu.len() - 28..pdu.len() - 16];
+            assert_eq!(&hdr[..4], &0x0001_0EA0u32.to_le_bytes(), "share_id");
+            assert_eq!(hdr[4], 0x00, "pad1");
+            assert_eq!(hdr[5], 0x02, "streamId (StreamPriority::Medium)");
+            assert_eq!(&hdr[6..8], &16u16.to_le_bytes(), "uncompressedLength");
+            assert_eq!(hdr[8], 0x1C, "pduType2 = TDIN_INPUT");
+            assert_eq!(hdr[9], 0x00, "compressedType (ignored)");
+            assert_eq!(
+                &hdr[10..12],
+                &0u16.to_le_bytes(),
+                "compressedLength (0 = uncompressed)"
+            );
+            // InputEventPdu header: one event + 2 pad bytes.
+            assert_eq!(
+                &pdu[pdu.len() - 16..pdu.len() - 12],
+                &[0x01, 0x00, 0x00, 0x00],
+                "pdu {i}"
+            );
+        }
+
+        // First PDU: the positioning move — PTRFLAGS_MOVE (0x0800) ONLY.
+        assert_eq!(
+            &pdus[0][pdus[0].len() - 12..],
+            &[0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00, 0x08, 0x64, 0x00, 0xC8, 0x00],
+            "MOVE-only event at (100, 200)"
+        );
+        // Second PDU: the press — DOWN | BUTTON1 (0x9000), NO MOVE bit.
+        assert_eq!(
+            &pdus[1][pdus[1].len() - 12..],
+            &[0x00, 0x00, 0x00, 0x00, 0x01, 0x80, 0x00, 0x90, 0x64, 0x00, 0xC8, 0x00],
+            "DOWN|BUTTON1 event at (100, 200), no MOVE bit"
+        );
+    }
+
+    /// A keyboard tap converts to the slow-path TS_KEYBOARD_EVENT with the
+    /// explicit DOWN bit on press and RELEASE (0x8000) on release.
+    #[test]
+    fn key_tap_slow_path_events_carry_down_and_release_flags() {
+        let pdus = encode_slow_path_input_pdus(
+            1002,
+            1003,
+            0x5566_7788,
+            &map_input(&InputCommand::Key { scancode: 0x2A, down: true }),
+        );
+        assert_eq!(pdus.len(), 1);
+        let down = &pdus[0];
+        // ScanCode events are 12 bytes too: time(4) + type(2, 0x0004) +
+        // keyFlags(2) + keyCode(2) + pad(2).
+        let ev = &down[down.len() - 12..];
+        assert_eq!(&ev[..6], &[0x00, 0x00, 0x00, 0x00, 0x04, 0x00]);
+        assert_eq!(&ev[6..8], &0x4000u16.to_le_bytes(), "KbDownFlag on press");
+        assert_eq!(&ev[8..10], &0x2Au16.to_le_bytes(), "scancode");
+        // pduType2 0x1C sits in the ShareDataHeader, 16 bytes before the
+        // event's end (event 12 + InputEventPdu header 4).
+        assert_eq!(down[down.len() - 28 + 8], 0x1C);
+
+        let pdus = encode_slow_path_input_pdus(
+            1002,
+            1003,
+            0x5566_7788,
+            &map_input(&InputCommand::Key { scancode: 0x2A, down: false }),
+        );
+        assert_eq!(pdus.len(), 1);
+        let up = &pdus[0];
+        let ev = &up[up.len() - 12..];
+        assert_eq!(&ev[6..8], &0x8000u16.to_le_bytes(), "RELEASE on release");
+    }
+
+    /// A right-press converts to a MOVE event followed by a press event
+    /// carrying DOWN|BUTTON2 with NO MOVE bit.
+    #[test]
+    fn right_press_maps_to_slow_path_mouse_event() {
+        let evs = map_input(&InputCommand::PointerButton {
+            x: 10,
+            y: 20,
+            button: 0x02,
+            down: true,
+        });
+        assert_eq!(evs.len(), 2);
+        let pdus = encode_slow_path_input_pdus(1002, 1003, 0, &evs);
+        assert_eq!(pdus.len(), 2);
+        let ev = &pdus[0][pdus[0].len() - 12..];
+        assert_eq!(&ev[4..6], &0x8001u16.to_le_bytes(), "eventType Mouse");
+        assert_eq!(&ev[6..8], &0x0800u16.to_le_bytes(), "MOVE only");
+        let ev = &pdus[1][pdus[1].len() - 12..];
+        assert_eq!(&ev[6..8], &0xA000u16.to_le_bytes(), "DOWN|BUTTON2, no MOVE");
+        assert_eq!(&ev[8..10], &10u16.to_le_bytes());
+        assert_eq!(&ev[10..12], &20u16.to_le_bytes());
     }
 }

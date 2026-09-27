@@ -7,12 +7,11 @@ use super::native_render::NativeRenderer;
 use super::ErasedStream;
 use super::SessionSignal;
 use crate::desktop_protocol::{DesktopEvent, FrameUpdate};
-use crate::rdp::input::{map_input, InputCommand};
+use crate::rdp::input::{encode_slow_path_input_pdus, map_input, InputCommand};
 use anyhow::Result;
 use ironrdp::connector::ConnectionResult;
 use ironrdp::graphics::image_processing::PixelFormat;
 use ironrdp::session::image::DecodedImage;
-use ironrdp::pdu::input::fast_path::FastPathInputEvent;
 use ironrdp::session::{ActiveStage, ActiveStageOutput};
 use ironrdp_tokio::FramedWrite;
 use std::time::Duration;
@@ -60,6 +59,14 @@ pub(super) async fn rdp_session_loop(
     } = state;
 
     let desktop_size = connection_result.desktop_size;
+    // Slow-path input routing: the PDU rides the IO channel, is addressed
+    // from the user channel, and must carry the CURRENT share id (updated
+    // on every Deactivate-Reactivation below).
+    let mut route = InputRoute {
+        user_channel_id: connection_result.user_channel_id,
+        io_channel_id: connection_result.io_channel_id,
+        share_id: connection_result.share_id,
+    };
     let mut image = DecodedImage::new(
         PixelFormat::RgbA32,
         desktop_size.width,
@@ -221,6 +228,7 @@ pub(super) async fn rdp_session_loop(
                     InputCommand::PointerButton { x, y, button, down } => {
                         last_pointer_pos = (x, y);
                         map_input_to_outputs(
+                            route,
                             enable_server_pointer,
                             &mut active_stage,
                             &mut image,
@@ -246,6 +254,7 @@ pub(super) async fn rdp_session_loop(
                             );
                         }
                         map_input_to_outputs(
+                            route,
                             enable_server_pointer,
                             &mut active_stage,
                             &mut image,
@@ -257,6 +266,7 @@ pub(super) async fn rdp_session_loop(
                             last_pointer_pos = (x, y);
                         }
                         map_input_to_outputs(
+                            route,
                             enable_server_pointer,
                             &mut active_stage,
                             &mut image,
@@ -282,6 +292,7 @@ pub(super) async fn rdp_session_loop(
                 // awake) and is harmless on its own — a pointer move is not.
                 tracing::debug!("RDP: sending keep-alive shift tap");
                 map_input_to_outputs(
+                    route,
                     enable_server_pointer,
                     &mut active_stage,
                     &mut image,
@@ -378,6 +389,15 @@ pub(super) async fn rdp_session_loop(
         for output in outputs {
             match output {
                 ActiveStageOutput::ResponseFrame(frame) => {
+                    if frame.is_empty() {
+                        // ironrdp returns empty frames for server updates
+                        // that need no client response; a zero-byte write
+                        // is a no-op, and logging it as a "PDU" poisoned
+                        // wire diagnosis (the 2026-09-27 0-byte-input-PDU
+                        // red herring).
+                        tracing::debug!("RDP: skipping empty ResponseFrame");
+                        continue;
+                    }
                     if frame.len() < 24 {
                         tracing::info!(
                             "RDP input PDU ({} bytes): {:02x?}",
@@ -426,6 +446,7 @@ pub(super) async fn rdp_session_loop(
                         }
                         Ok(Some((w, h, share_id))) => {
                             tracing::info!("RDP reactivation done: {}x{} share_id={}", w, h, share_id);
+                            route.share_id = share_id;
                             image = DecodedImage::new(PixelFormat::RgbA32, w, h);
                             active_stage.set_share_id(share_id);
                             match mode {
@@ -658,45 +679,25 @@ async fn run_reactivation(
     }
 }
 
-/// Encode fast-path input events into the exact client→server wire format:
-/// a bare sequence of TS_FP_INPUT_EVENTs, each starting with its own
-/// eventHeader byte (eventCode in bits 5–7, eventFlags in bits 0–4) —
-/// MS-RDPBCGR 2.2.8.1.2.2. There is NO wrapper PDU: ironrdp-pdu's
-/// `FastPathInput::encode` prepends a server→client *output* header
-/// (action/numEvents/length) that the input direction does not define, and
-/// a Windows server parses those wrapper bytes as phantom keystrokes
-/// (0x04 0x07 = a stuck scancode-0x07 event) before each real event.
-fn encode_fastpath_events_wire(events: &[FastPathInputEvent]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(events.len() * 8);
-    for event in events {
-        match event {
-            FastPathInputEvent::MouseEvent(pdu) => {
-                // eventCode MOUSE (1) << 5; pointerFlags carried in the u16.
-                out.push(0x20);
-                out.extend_from_slice(&pdu.flags.bits().to_le_bytes());
-                out.extend_from_slice(&pdu.x_position.to_le_bytes());
-                out.extend_from_slice(&pdu.y_position.to_le_bytes());
-            }
-            FastPathInputEvent::KeyboardEvent(flags, sc) => {
-                // eventCode SCANCODE (0); RELEASE flag in bit 0, EXTENDED in bit 1.
-                out.push((flags.bits() & 0x1f) as u8);
-                out.push(*sc);
-            }
-            FastPathInputEvent::SyncEvent(flags) => {
-                // eventCode SYNC (3) << 5 with the LED flags in bits 0–4.
-                out.push(0x60 | (flags.bits() & 0x1f));
-            }
-            other => {
-                tracing::debug!("RDP input: unmapped fast-path event {other:?} dropped");
-            }
-        }
-    }
-    out
+/// Routing for slow-path input PDUs: the MCS initiator (user channel), the
+/// IO channel the input PDU is sent on, and the CURRENT share id — the
+/// server rejects input tagged with a stale share id, so the session loop
+/// refreshes it after every Deactivate-Reactivation.
+#[derive(Debug, Clone, Copy)]
+struct InputRoute {
+    user_channel_id: u16,
+    io_channel_id: u16,
+    share_id: u32,
 }
 
-/// Map a non-Resize `InputCommand` to fast-path input events and feed them to
-/// the active stage. `Resize` is handled separately (via `encode_resize`).
+/// Map a non-Resize `InputCommand` to input events and feed them to the
+/// active stage, then encode the events as a SLOW-PATH input PDU
+/// (`ShareDataPdu::Input`, mstsc's primary input route — this Windows
+/// Insider build drops fast-path pointer events; see
+/// `input::encode_slow_path_input_pdus`). `Resize` is handled separately
+/// (via `encode_resize`).
 fn map_input_to_outputs(
+    route: InputRoute,
     enable_server_pointer: bool,
     active_stage: &mut ActiveStage,
     image: &mut DecodedImage,
@@ -713,6 +714,7 @@ fn map_input_to_outputs(
                 (ironrdp::pdu::input::fast_path::KeyboardFlags::RELEASE, 0x2a),
             ] {
                 outputs.extend(map_input_to_outputs(
+                    route,
                     enable_server_pointer,
                     active_stage,
                     image,
@@ -732,25 +734,33 @@ fn map_input_to_outputs(
         return Vec::new();
     }
 
+    // Keep the software-cursor side effect of `process_fastpath_input` (it
+    // updates the local pointer state used when rendering frames), but
+    // discard the PDUs it produces: those are fast-path input PDUs, and
+    // this build drops fast-path pointer events — the events travel on the
+    // slow path below instead.
     let mut output = active_stage
         .process_fastpath_input(image, &events)
         .unwrap_or_default();
+    output.retain(|o| !matches!(o, ActiveStageOutput::ResponseFrame(_)));
 
-    // Strip ironrdp-pdu's `FastPathInput` wrapper (an action/numEvents byte
-    // plus a length byte — a server→client *output* shape that the
-    // client→server input direction does not define, with a length value
-    // that does not even match the payload). What remains is the bare
-    // TS_FP_INPUT_EVENT sequence — exactly what mstsc/FreeRDP put on the
-    // wire — so the server's input parser stays in sync and mouse events
-    // are no longer shredded into reserved-bit garbage.
-    for stage_output in output.iter_mut() {
-        if let ActiveStageOutput::ResponseFrame(frame) = stage_output {
-            if frame.len() > 2 {
-                *frame = frame[2..].to_vec();
-            }
-        }
+    for frame in encode_slow_path_input_pdus(
+        route.user_channel_id,
+        route.io_channel_id,
+        route.share_id,
+        &events,
+    ) {
+        // Log head AND tail: the head proves the transport framing, the
+        // tail carries the actual TS_INPUT_EVENT (time/type/flags/x/y) —
+        // the part the previous round's head-only log could not show.
+        tracing::info!(
+            "RDP slow-path input PDU ({} bytes): head {:02x?} tail {:02x?}",
+            frame.len(),
+            &frame[..frame.len().min(8)],
+            &frame[frame.len().saturating_sub(16)..]
+        );
+        output.push(ActiveStageOutput::ResponseFrame(frame));
     }
-
     output
 }
 

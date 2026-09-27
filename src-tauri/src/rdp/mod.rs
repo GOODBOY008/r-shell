@@ -416,6 +416,23 @@ mod tests {
 /// E2E tests requiring a live RDP server at 192.168.20.180:3389.
 /// Run with: cargo test e2e -- --ignored
 #[cfg(test)]
+/// E2E session diagnostics log to a file instead of stdout: the INFO-level
+/// session loop output overflows any stdout capture (world.run caps at
+/// 256KB), while the file stays readable for debugging.
+pub fn init_e2e_logging() {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("target/rdp_e2e_debug.log")
+        .expect("open target/rdp_e2e_debug.log");
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_target(false)
+        .with_writer(move || file.try_clone().expect("clone rdp_e2e_debug.log"))
+        .try_init();
+}
+
+#[cfg(test)]
 mod e2e_tests {
     use super::*;
     use crate::desktop_protocol::{DesktopEvent, RdpConfig};
@@ -447,10 +464,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires live RDP server at 192.168.20.180"]
     async fn rdp_connect_and_capture_frames() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config)
@@ -597,10 +611,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
     async fn rdp_nla_bad_credentials_rejected() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let mut config = test_config();
         config.password = "definitely-not-the-password".to_string();
@@ -636,10 +647,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires a live NLA host with valid credentials (RDP_E2E_* vars)"]
     async fn rdp_nla_full_logon_opens_cmd() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config)
@@ -713,10 +721,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires live RDP server at 192.168.20.180"]
     async fn rdp_render_mode_swap() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let client = RdpClient::connect(&config)
@@ -901,10 +906,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires live RDP server at 192.168.20.180"]
     async fn rdp_full_logon_flow() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config).await.expect("connect");
@@ -1002,10 +1004,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires live RDP server at 192.168.20.180"]
     async fn rdp_click_avatar_shows_password_box() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config).await.expect("connect");
@@ -1065,10 +1064,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
     async fn rdp_vm_clicks_open_context_menu() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config).await.expect("connect");
@@ -1159,13 +1155,13 @@ mod e2e_tests {
     /// (consecutive stable full-frames), then right-clicks the wallpaper
     /// (context menu must appear) and left-clicks Start (Start menu must
     /// open). Both steps are asserted via region diffs with PNG evidence.
+    /// A final step double-clicks the Recycle Bin desktop icon and asserts
+    /// its folder window opens (explicit user requirement: double-click
+    /// coverage).
     #[tokio::test]
     #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
     async fn rdp_vm_clicks_end_to_end() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config).await.expect("connect");
@@ -1223,7 +1219,10 @@ mod e2e_tests {
         save_png("target/rdp_click_e2e_0_desktop.png", &prev, w, h);
         println!("desktop settled");
 
-        // ── Keyboard control: type into the focused cmd window. ──
+        // ── Keyboard control: type H, I into whatever has focus. ──
+        // Informational only: on a freshly settled desktop nothing is
+        // focused, so a ~0.00% region change is EXPECTED here (no cmd window
+        // exists yet — the mouse steps below prove the input path first).
         for kc in ['H' as u32, 'I' as u32] {
             let sc = crate::rdp_keymap::keycode_to_scancode(kc).expect("sc");
             client.send_key(sc as u32, true).await.expect("down");
@@ -1334,6 +1333,48 @@ mod e2e_tests {
         let _ = collect_frames(&mut event_rx, &mut shot, w, h, 3).await;
         save_png("target/rdp_click_e2e_5_powercfg.png", &shot, w, h);
         println!("powercfg commands typed (display sleep disabled)");
+
+        // ── Double-click the Recycle Bin (top-left desktop icon) → its
+        //    folder window must open. The cmd window opened above sits in
+        //    the screen center; the icon at the top-left corner stays
+        //    exposed. (Explicit user requirement: double-click coverage.)
+        client.request_full_frame().await.expect("full frame");
+        let mut base5 = vec![0u8; prev.len()];
+        let _ = collect_frames(&mut event_rx, &mut base5, w, h, 3).await;
+
+        let (bx, by) = ((w as u32) * 18 / 1000, (h as u32) * 38 / 1000);
+        client
+            .send_pointer(bx as u16, by as u16, 0x00)
+            .await
+            .expect("move to Recycle Bin");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        // Two press/release pairs well inside the 500 ms double-click window.
+        for _ in 0..2 {
+            client
+                .send_pointer_button(bx as u16, by as u16, 0x01, true)
+                .await
+                .expect("double-click press");
+            tokio::time::sleep(Duration::from_millis(90)).await;
+            client
+                .send_pointer_button(bx as u16, by as u16, 0x01, false)
+                .await
+                .expect("double-click release");
+            tokio::time::sleep(Duration::from_millis(110)).await;
+        }
+        // Give the Explorer window time to open and repaint.
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut after5 = vec![0u8; prev.len()];
+        let _ = collect_frames(&mut event_rx, &mut after5, w, h, 3).await;
+        save_png("target/rdp_click_e2e_6_recycle.png", &after5, w, h);
+        let recycle = fb_region_diff(&base5, &after5, w, h, 0.0, 0.02, 0.80, 0.92);
+        println!("step6 double-click Recycle Bin: window region change {recycle:.2}%");
+        assert!(
+            recycle > 0.02,
+            "Recycle Bin window did not open after double-click ({recycle:.2}%)"
+        );
+
+        println!("PASS: right-click, left-click and double-click all acted on real Windows");
         cancel.cancel();
     }
 
@@ -1343,10 +1384,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
     async fn rdp_vm_left_button_bit_probe() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config).await.expect("connect");
@@ -1461,10 +1499,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
     async fn rdp_vm_keyboard_probe() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config).await.expect("connect");
@@ -1514,10 +1549,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires a live NLA-enforcing RDP host (RDP_E2E_* vars)"]
     async fn rdp_vm_disable_display_sleep() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         async fn type_text(client: &RdpClient, text: &str) {
             for ch in text.chars() {
@@ -1600,10 +1632,7 @@ mod e2e_tests {
     #[tokio::test]
     #[ignore = "requires live RDP server at 192.168.20.180"]
     async fn rdp_logon_click_diagnostic() {
-        let _ = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::INFO)
-            .with_target(false)
-            .try_init();
+        crate::rdp::init_e2e_logging();
 
         let config = test_config();
         let mut client = RdpClient::connect(&config).await.expect("connect");
