@@ -51,6 +51,10 @@ pub enum InputCommand {
     PointerNorm { xn: f32, yn: f32, mask: u8, prev_mask: u8 },
     Resize { width: u16, height: u16 },
     FullFrame,
+    /// Internal: the keep-alive tap (a Shift press+release) — real user
+    /// activity that resets the server's idle timers and keeps its display
+    /// awake; a pointer move does not count.
+    KeyboardTap,
 }
 
 /// Maps an `InputCommand` to zero or more fast-path input events.
@@ -65,6 +69,9 @@ pub fn map_input(cmd: &InputCommand) -> SmallVec<[FastPathInputEvent; 4]> {
         // PointerNorm must be resolved to a concrete remote position by the
         // session (which knows the remote size) before mapping.
         InputCommand::PointerNorm { .. } => SmallVec::new(),
+        // The keep-alive tap is expanded into Shift press/release by the
+        // caller before reaching this function.
+        InputCommand::KeyboardTap => SmallVec::new(),
         InputCommand::Resize { .. } | InputCommand::FullFrame => SmallVec::new(),
     }
 }

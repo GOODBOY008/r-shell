@@ -105,12 +105,15 @@ impl RdpClient {
                 // Phase 1: Handshake (TCP → TLS → connect_finalize)
                 let state = match rdp_connect_inner(&cfg, input_rx).await {
                     Ok((framed, connection_result, new_input_rx)) => {
+                        let enable_server_pointer =
+                            connection_result.enable_server_pointer;
                         let size = connection_result.desktop_size;
                         let _ = result_tx.send(Ok((size.width, size.height)));
                         SessionState {
                             framed,
                             connection_result,
                             input_rx: new_input_rx,
+                            enable_server_pointer,
                         }
                     }
                     Err(e) => {
@@ -313,6 +316,7 @@ impl DesktopProtocol for RdpClient {
     /// legacy mask-diff path stays coherent) but emits a stateless
     /// PointerButton that always produces the requested DOWN/RELEASE.
     async fn send_pointer_button(&self, x: u16, y: u16, button: u8, pressed: bool) -> Result<()> {
+        tracing::info!("RDP client send_pointer_button: x={} y={} button={:#04x} pressed={}", x, y, button, pressed);
         let prev = if pressed {
             self.prev_pointer_mask.fetch_or(button, Ordering::Relaxed)
         } else {
@@ -1382,6 +1386,36 @@ mod e2e_tests {
         save_png("target/rdp_probe_drag.png", &drag_after, w, h);
         let drag = fb_region_diff(&baseline, &drag_after, w, h, 0.03, 0.08, 0.55, 0.20);
         println!("PROBE drag-select: cmd text region change {drag:.2}%");
+
+        // ── DPI-scale probe: right-click at HALF coordinates. If the VM's
+        // input space is scaled (e.g. 150% display scaling → a 1280×720
+        // input space over a 1920×1080 framebuffer), the full-space click
+        // lands out of bounds and is ignored, while the half-space click
+        // opens the desktop context menu.
+        let (hx, hy) = ((w as u32) * 85 / 200, (h as u32) * 25 / 200);
+        client.send_pointer(hx as u16, hy as u16, 0x00).await.ok();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        client
+            .send_pointer_button(hx as u16, hy as u16, 0x02, true)
+            .await
+            .expect("half right press");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        client
+            .send_pointer_button(hx as u16, hy as u16, 0x02, false)
+            .await
+            .expect("half right release");
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        client.request_full_frame().await.expect("full frame");
+        let mut half_after = vec![0u8; baseline.len()];
+        let _ = collect_frames(&mut event_rx, &mut half_after, w, h, 3).await;
+        save_png("target/rdp_probe_half_rc.png", &half_after, w, h);
+        let half_menu = fb_region_diff(&baseline, &half_after, w, h, 0.2, 0.02, 0.9, 0.6);
+        println!("PROBE half-coord right-click: region change {half_menu:.2}%");
+        client.send_key(27, true).await.expect("esc");
+        client.send_key(27, false).await.expect("esc");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        client.request_full_frame().await.expect("full frame");
+        let _ = collect_frames(&mut event_rx, &mut baseline, w, h, 3).await;
 
         let (sx, sy) = ((w as u32) * 3 / 100, (h as u32) * 8 / 100);
         for bit in [0x1000u16] {
