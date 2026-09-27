@@ -70,6 +70,45 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: Windows imports validation
+        if: always() && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $exe = Get-ChildItem "src-tauri\target\debug\deps\r_shell_lib-*.exe" | Select-Object -First 1
+          Write-Host "EXE: $($exe.FullName)"
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -find "**\dumpbin.exe" | Select-Object -First 1
+          $raw = & $dumpbin /IMPORTS $exe.FullName | Out-String
+          $raw -split "`r?`n" | ForEach-Object { Write-Host $_ }
+          # Parse imports: lines like "    KERNEL32.dll" then indented symbol lines with hex ordinal
+          $current = $null
+          $imports = @{}
+          foreach ($line in ($raw -split "`r?`n")) {
+            if ($line -match '^\s+(\S+\.dll)\s*$') { $current = $Matches[1]; if (-not $imports[$current]) { $imports[$current] = @() } }
+            elseif ($current -and $line -match '^\s+[0-9A-Fa-f]+\s+(\S+)') { $imports[$current] += $Matches[1] }
+          }
+          Write-Host "=== symbol validation ==="
+          foreach ($dll in $imports.Keys) {
+            $name = $dll; $sys = "C:\Windows\System32\$dll"
+            if (-not (Test-Path $sys)) { Write-Host "DLL NOT FOUND: $dll"; continue }
+            $exp = & $dumpbin /EXPORTS $sys | Out-String
+            $exports = @($exp -split "`r?`n" | ForEach-Object { if ($_ -match '^\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)') { $Matches[1] } })
+            $expset = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+            foreach ($e in $exports) { [void]$expset.Add($e) }
+            foreach ($sym in $imports[$dll]) {
+              if (-not $expset.Contains($sym)) { Write-Host "MISSING ENTRYPOINT: $sym in $dll" }
+            }
+          }
+          Write-Host "=== WER events ==="
+          Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=(Get-Date).AddHours(-1)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match 'r_shell_lib' } | Select-Object -First 3 |
+            ForEach-Object { Write-Host "---- $($_.TimeCreated)"; Write-Host $_.Message }
+          Write-Host "=== SideBySide events ==="
+          Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=(Get-Date).AddHours(-1)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -match 'SideBySide' } | Select-Object -First 3 |
+            ForEach-Object { Write-Host "---- $($_.TimeCreated)"; Write-Host $_.Message }
+          exit 0
+
       - name: Run Rust clippy
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
