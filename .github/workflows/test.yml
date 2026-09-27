@@ -70,6 +70,52 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: A/B import-table diff (branch exe vs main exe)
+        if: always() && matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -find "**\dumpbin.exe" | Select-Object -First 1
+          function Get-Imports([string]$exePath) {
+            $raw = & $dumpbin /IMPORTS $exePath | Out-String
+            $lines = $raw -split "`r?`n"
+            $out = [System.Collections.Generic.List[string]]::new()
+            $dll = $null
+            foreach ($l in $lines) {
+              if ($l -match '^\s+(\S+\.dll)\s*$') { $dll = $Matches[1] }
+              elseif ($dll -and $l -match '^\s+0\s+(\S+)\s*$') { $out.Add("$dll!$($Matches[1])") }
+            }
+            return $out
+          }
+          $exeA = Get-ChildItem "src-tauri\target\debug\deps\r_shell_lib-*.exe" | Sort-Object LastWriteTime | Select-Object -First 1
+          Write-Host "=== A (branch) exe: $($exeA.FullName)"
+          $A = Get-Imports $exeA.FullName
+          Write-Host "A import count: $($A.Count)"
+          Write-Host "=== A direct run:"
+          $p = Start-Process -FilePath $exeA.FullName -ArgumentList "--list" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\a-out.txt" -RedirectStandardError "$env:TEMP\a-err.txt"
+          Write-Host "A exit: $($p.ExitCode)"
+          Get-Content "$env:TEMP\a-out.txt","$env:TEMP\a-err.txt" | Select-Object -First 5 | ForEach-Object { Write-Host $_ }
+
+          Write-Host "=== building main tree (d9d2f6f) for B"
+          git fetch origin d9d2f6f 2>&1 | Out-Null
+          git checkout -q --detach d9d2f6f
+          Push-Location src-tauri
+          cargo test --lib --no-run 2>&1 | Select-Object -Last 5 | ForEach-Object { Write-Host $_ }
+          Pop-Location
+          $exeB = Get-ChildItem "src-tauri\target\debug\deps\r_shell_lib-*.exe" | Sort-Object LastWriteTime | Select-Object -Last 1
+          Write-Host "=== B (main) exe: $($exeB.FullName)"
+          $B = Get-Imports $exeB.FullName
+          Write-Host "B import count: $($B.Count)"
+          Write-Host "=== B direct run:"
+          $p2 = Start-Process -FilePath $exeB.FullName -ArgumentList "--list" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\b-out.txt" -RedirectStandardError "$env:TEMP\b-err.txt"
+          Write-Host "B exit: $($p2.ExitCode)"
+
+          Write-Host "=== imports only in A (branch) ==="
+          Compare-Object $B $A | Where-Object SideIndicator -eq '=>' | ForEach-Object { Write-Host $_.InputObject }
+          Write-Host "=== imports only in B (main) ==="
+          Compare-Object $B $A | Where-Object SideIndicator -eq '<=' | ForEach-Object { Write-Host $_.InputObject }
+          exit 0
+
       - name: Run Rust clippy
         working-directory: src-tauri
         run: cargo clippy -- -D warnings
