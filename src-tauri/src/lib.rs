@@ -336,9 +336,6 @@ pub fn run() {
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
-                // Let the connection manager emit SOCKS proxy list changes
-                connection_manager_clone.set_app_handle(app.handle().clone());
-
                 // Register native macOS menu and forward item events to the frontend
                 #[cfg(target_os = "macos")]
                 {

@@ -13,7 +13,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::Emitter;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -42,10 +41,6 @@ struct SocksProxyEntry {
     exited: Option<tokio::task::JoinHandle<()>>,
     generation: u64,
 }
-
-/// Tauri event emitted on every SOCKS proxy list change, carrying the full
-/// new list. The frontend store listens to this instead of polling.
-pub const SOCKS_PROXIES_CHANGED_EVENT: &str = "socks-proxies-changed";
 
 /// Error from starting a PTY session, distinguishing a dead/unusable SSH
 /// session (the frontend must re-authenticate — a WebSocket retry cannot
@@ -161,10 +156,6 @@ pub struct ConnectionManager {
     /// Monotonic id for each started proxy listener, so a supervisor task
     /// never removes a newer same-id entry that replaced its own.
     socks_generation: AtomicU64,
-    /// App handle for emitting `SOCKS_PROXIES_CHANGED_EVENT`; None in unit
-    /// tests and until lib.rs setup injects it (events are best-effort).
-    /// std lock: only read for the synchronous emit, never held across await.
-    app_handle: Arc<std::sync::RwLock<Option<tauri::AppHandle>>>,
 }
 
 impl ConnectionManager {
@@ -183,7 +174,6 @@ impl ConnectionManager {
             os_info_cache: OsInfoCache::new(),
             socks_proxies: Arc::new(RwLock::new(HashMap::new())),
             socks_generation: AtomicU64::new(0),
-            app_handle: Arc::new(std::sync::RwLock::new(None)),
         }
     }
 
@@ -984,26 +974,6 @@ impl ConnectionManager {
 
     // ===== SOCKS Proxy Management =====
 
-    /// Inject the app handle so proxy-list changes can be emitted as Tauri
-    /// events. Called once from lib.rs setup; without it (unit tests) emits
-    /// are a no-op.
-    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
-        *self.app_handle.write().expect("app_handle lock") = Some(handle);
-    }
-
-    /// Emit [`SOCKS_PROXIES_CHANGED_EVENT`] with the current proxy list.
-    /// Best-effort: no-op without an app handle, errors only logged.
-    /// Callers must NOT hold the `socks_proxies` lock (this reads it).
-    async fn emit_socks_proxies_changed(&self) {
-        let list = self.list_socks_proxies().await;
-        let app = self.app_handle.read().expect("app_handle lock").clone();
-        if let Some(app) = app {
-            if let Err(e) = app.emit(SOCKS_PROXIES_CHANGED_EVENT, &list) {
-                tracing::warn!("failed to emit {SOCKS_PROXIES_CHANGED_EVENT}: {e}");
-            }
-        }
-    }
-
     /// Start a SOCKS4/5 proxy through the given SSH `connection_id`.
     ///
     /// Returns the actual port the proxy is listening on. Restarting with
@@ -1077,7 +1047,6 @@ impl ConnectionManager {
         // (explicit stop, cancel, or SSH session death) — unless a newer
         // generation already replaced it.
         let proxies_map = self.socks_proxies.clone();
-        let app_handle = self.app_handle.clone();
         let supervisor_proxy_id = proxy_id.clone();
         let supervisor = tokio::spawn(async move {
             crate::socks_proxy::run_socks_proxy(listener, handle, cancel).await;
@@ -1091,25 +1060,11 @@ impl ConnectionManager {
                 proxies.remove(&supervisor_proxy_id);
             }
             drop(proxies);
-
-            let app = app_handle.read().expect("app_handle lock").clone();
-            if let Some(app) = app {
-                let list: Vec<SocksProxyInfo> = proxies_map
-                    .read()
-                    .await
-                    .values()
-                    .map(|e| e.info.clone())
-                    .collect();
-                if let Err(e) = app.emit(SOCKS_PROXIES_CHANGED_EVENT, &list) {
-                    tracing::warn!("failed to emit {SOCKS_PROXIES_CHANGED_EVENT}: {e}");
-                }
-            }
         });
 
         // Backfill the join handle for the next same-id restart. If the
         // supervisor already exited (and removed the entry), there is
         // nothing to wait on next time — correct, since the proxy is gone.
-        // Scope the write guard: emit re-acquires the lock for the snapshot.
         {
             let mut proxies = self.socks_proxies.write().await;
             if let Some(entry) = proxies.get_mut(&proxy_id) {
@@ -1118,8 +1073,6 @@ impl ConnectionManager {
                 }
             }
         }
-
-        self.emit_socks_proxies_changed().await;
 
         Ok(actual_port)
     }
@@ -1137,7 +1090,6 @@ impl ConnectionManager {
             }
         };
         if stopped {
-            self.emit_socks_proxies_changed().await;
             Ok(())
         } else {
             Err(anyhow::anyhow!("SOCKS proxy not found: {proxy_id}"))
@@ -1168,7 +1120,6 @@ impl ConnectionManager {
                 entry.cancel.cancel();
             }
         }
-        self.emit_socks_proxies_changed().await;
     }
 }
 
