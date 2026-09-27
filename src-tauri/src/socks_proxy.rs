@@ -1,6 +1,7 @@
 use anyhow::Result;
 use russh::client::Msg;
 use russh::ChannelMsg;
+#[cfg(unix)]
 use socket2::{Domain, Protocol, Socket, Type};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -24,9 +25,14 @@ async fn read_until_null(stream: &mut TcpStream) -> Result<Vec<u8>> {
     }
 }
 
-/// Create a TCP listener with `SO_REUSEADDR` enabled so that restarting a
-/// SOCKS proxy on the same port works immediately, even if the previous
-/// listener's socket is still in `TIME_WAIT` (common on Windows).
+/// Create the SOCKS listener.
+///
+/// On Unix, bind through socket2 with `SO_REUSEADDR` so restarting a proxy
+/// on the same port works immediately even if the previous listener's
+/// socket is still in `TIME_WAIT`. On Windows, use a plain tokio bind:
+/// `SO_REUSEADDR` on Windows has different, unsafe semantics (it lets any
+/// process hijack the port) and is not needed to rebind a closed listener.
+#[cfg(unix)]
 fn bind_with_reuseaddr(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
     let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
     socket.set_reuse_address(true)?;
@@ -35,6 +41,14 @@ fn bind_with_reuseaddr(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
     socket.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(socket.into())?;
     Ok(listener)
+}
+
+#[cfg(windows)]
+fn bind_with_reuseaddr(addr: SocketAddr) -> Result<tokio::net::TcpListener> {
+    use std::net::TcpListener as StdListener;
+    let std_listener = StdListener::bind(addr)?;
+    std_listener.set_nonblocking(true)?;
+    Ok(tokio::net::TcpListener::from_std(std_listener)?)
 }
 
 /// Bind the SOCKS proxy listener on `bind_addr:bind_port` (port 0 picks an
