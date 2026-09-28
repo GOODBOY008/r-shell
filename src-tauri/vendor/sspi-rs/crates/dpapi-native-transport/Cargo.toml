@@ -1,0 +1,18 @@
+[package]
+name = "dpapi-native-transport"
+version = "0.1.0"
+edition = "2024"
+publish = false # not ready yet
+
+[dependencies]
+transport = { git = "https://github.com/Devolutions/devolutions-gateway.git", rev = "4fd9c22" }
+tokio.workspace = true
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+url = "2.5"
+uuid = { workspace = true, features = ["v4"] }
+tracing.workspace = true
+dpapi-transport.workspace = true
+futures-util = "0.3"
+
+[lints]
+workspace = true

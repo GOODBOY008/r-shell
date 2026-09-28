@@ -1,0 +1,14 @@
+[package]
+name = "dpapi-fuzzing"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+dpapi-pdu = { workspace = true, features = ["arbitrary"] }
+dpapi-core = { workspace = true, features = [] }
+arbitrary = { version = "1", features = ["derive"] }
+pretty_assertions = "1.4"
+
+[lints]
+workspace = true

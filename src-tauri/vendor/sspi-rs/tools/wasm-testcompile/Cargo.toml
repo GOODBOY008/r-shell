@@ -1,0 +1,24 @@
+[package]
+name = "wasm-testcompile"
+version = "0.0.0"
+license = "MIT/Apache-2.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sspi = { path = "../..", features = ["scard"] }
+
+whoami = "0.5"
+wasm-bindgen = "0.2"
+
+# Support for WASM.
+# Note that currently, most of our dependencies are still depending on getrandom 0.2, but some already switched to 0.3.
+# We avoid updating the packages in the workspace Cargo.lock, but we are following the evolution of the ecosystem for
+# wasm-testcompile.
+getrandom02 = { package = "getrandom", version = "0.2", default-features = false, features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", default-features = false, features = ["wasm_js"] }
+getrandom04 = { package = "getrandom", version = "0.4.0-rc.0", default-features = false, features = ["wasm_js"] }
+uuid = { version = "1.13", default-features = false, features = ["rng-getrandom"] }

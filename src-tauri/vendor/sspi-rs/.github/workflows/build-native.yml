@@ -1,0 +1,503 @@
+name: Build Native
+
+on:
+  workflow_call:
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-latest
+    outputs:
+      project-version: ${{ steps.get-version.outputs.project-version }}
+      package-version: ${{ steps.get-version.outputs.package-version }}
+
+    steps:
+      - name: Checkout ${{ github.repository }}
+        uses: actions/checkout@v6
+
+      - name: Get version
+        id: get-version
+        shell: pwsh
+        run: |
+          $CsprojXml = [Xml] (Get-Content .\ffi\dotnet\Devolutions.Sspi\Devolutions.Sspi.csproj)
+          $ProjectVersion = $CsprojXml.Project.PropertyGroup.Version | Select-Object -First 1
+          $PackageVersion = $ProjectVersion -Replace "^(\d+)\.(\d+)\.(\d+).(\d+)$", "`$1.`$2.`$3"
+          echo "project-version=$ProjectVersion" >> $Env:GITHUB_OUTPUT
+          echo "package-version=$PackageVersion" >> $Env:GITHUB_OUTPUT
+
+  build-native:
+    name: Native build
+    runs-on: ${{ matrix.runner }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ win, osx, linux, ios, iossimulator, android ]
+        arch: [ x86, x64, arm, arm64 ]
+        build: [ debug, release ]
+        include:
+          - os: win
+            runner: windows-2022
+          - os: osx
+            runner: macos-14
+          - os: linux
+            runner: ubuntu-22.04
+          - os: ios
+            runner: macos-14
+          - os: iossimulator
+            runner: macos-14
+          - os: android
+            runner: ubuntu-22.04
+        exclude:
+          - arch: arm
+            os: win
+          - arch: arm
+            os: osx
+          - arch: arm
+            os: linux
+          - arch: arm
+            os: ios
+          - arch: x86
+            os: win
+          - arch: x86
+            os: osx
+          - arch: x86
+            os: linux
+          - arch: x86
+            os: ios
+          - arch: x64
+            os: ios
+          - arch: arm
+            os: iossimulator
+          - arch: x86
+            os: iossimulator
+          - arch: x64
+            os: iossimulator
+
+    steps:
+      - name: Checkout ${{ github.repository }}
+        uses: actions/checkout@v6
+
+      - name: Configure Android NDK
+        uses: Devolutions/actions-public/cargo-android-ndk@v1
+        if: matrix.os == 'android'
+        with:
+          android_api_level: "21"
+
+      - name: Install dependencies for rustls
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install ninja nasm
+
+          # We need to add the NASM binary folder to the PATH manually.
+          # We don’t need to do that for ninja.
+          Write-Output "PATH=$Env:PATH;$Env:ProgramFiles\NASM" >> $Env:GITHUB_ENV
+
+          # libclang / LLVM is a requirement for AWS LC.
+          # https://aws.github.io/aws-lc-rs/requirements/windows.html#libclang--llvm
+          $VSINSTALLDIR = $(vswhere.exe -latest -requires Microsoft.VisualStudio.Component.VC.Llvm.Clang -property installationPath)
+          Write-Output "LIBCLANG_PATH=$VSINSTALLDIR\VC\Tools\Llvm\x64\bin" >> $Env:GITHUB_ENV
+
+          # Install Visual Studio Developer PowerShell Module for cmdlets such as Enter-VsDevShell
+          Install-Module VsDevShell -Force
+
+      - name: Install dependencies
+        if: matrix.os == 'ios' || matrix.os == 'iossimulator'
+        run: cargo install --force --locked bindgen-cli
+
+      - name: Setup build environment
+        shell: pwsh
+        run: |
+          if ('${{ matrix.os }}' -Eq 'osx') {
+            echo "MACOSX_DEPLOYMENT_TARGET=10.10" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
+          } elseif ('${{ matrix.os }}' -Eq 'ios') {
+            echo "IPHONEOS_DEPLOYMENT_TARGET=12.1" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
+          } elseif ('${{ matrix.os }}' -Eq 'iossimulator') {
+            echo "IPHONESIMULATOR_DEPLOYMENT_TARGET=12.1" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
+            $SimulatorSdk = xcrun --sdk iphonesimulator --show-sdk-path
+            echo "SDKROOT=$SimulatorSdk" | Out-File -FilePath $Env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Setup LLVM
+        uses: Devolutions/actions-public/setup-llvm@v1
+        if: matrix.os == 'linux'
+        with:
+          version: "18.1.8"
+
+      - name: Setup CBake
+        uses: Devolutions/actions-public/setup-cbake@v1
+        if: matrix.os == 'linux'
+        with:
+          sysroots: |
+            - ubuntu-20.04-amd64
+            - ubuntu-20.04-arm64
+          cargo_env_scripts: true
+
+      - name: Build sspi (${{matrix.os}}-${{matrix.arch}}) (${{matrix.build}})
+        shell: pwsh
+        run: |
+          Set-PSDebug -Trace 1
+
+          $BuildType = '${{matrix.build}}'
+          $DotNetOs = '${{matrix.os}}'
+          $DotNetArch = '${{matrix.arch}}'
+          $DotNetRid = '${{matrix.os}}-${{matrix.arch}}'
+          $RustArch = @{'x64'='x86_64';'arm64'='aarch64';
+            'x86'='i686';'arm'='armv7'}[$DotNetArch]
+          $AppleArch = @{'x64'='x86_64';'arm64'='arm64';
+            'x86'='i386';'arm'='arm'}[$DotNetArch]
+          $MsvcArch = @{'x64'='x64';'arm64'='arm64'}[$DotNetArch]
+          $RustPlatform = @{'win'='pc-windows-msvc';
+            'osx'='apple-darwin';'ios'='apple-ios';'iossimulator'='apple-ios-sim';
+            'linux'='unknown-linux-gnu';'android'='linux-android'}[$DotNetOs]
+          $LibPrefix = @{'win'='';'osx'='lib';'ios'='lib';'iossimulator'='lib';
+            'linux'='lib';'android'='lib'}[$DotNetOs]
+          $LibSuffix = @{'win'='.dll';'osx'='.dylib';'ios'='.dylib';'iossimulator'='.dylib';
+            'linux'='.so';'android'='.so'}[$DotNetOs]
+          $RustTarget = "$RustArch-$RustPlatform"
+          $TargetFolder = @{'debug'='debug';'release'='ffi-production'}[$BuildType]
+
+          if (($DotNetOs -eq 'android') -and ($DotNetArch -eq 'arm')) {
+            $RustTarget = "armv7-linux-androideabi"
+          }
+
+          if ($DotNetOs -eq 'osx') {
+            Set-Item "Env:CFLAGS_${RustArch}-apple-darwin" "-arch $AppleArch"
+          }
+
+          rustup target add $RustTarget
+
+          if ($DotNetOs -eq 'win') {
+            Enter-VsDevShell $MsvcArch
+            $Env:RUSTFLAGS="-C target-feature=+crt-static"
+          }
+
+          $ProjectVersion = '${{ needs.preflight.outputs.project-version }}'
+          $PackageVersion = '${{ needs.preflight.outputs.package-version }}'
+
+          $CargoToml = Get-Content .\ffi\Cargo.toml
+          $CargoToml = $CargoToml | ForEach-Object {
+            if ($_.StartsWith("version =")) { "version = `"$PackageVersion`"" } else { $_ }
+          }
+          Set-Content -Path .\ffi\Cargo.toml -Value $CargoToml
+
+          $CargoArgs = @('build', '-vvv', '-p', 'sspi-ffi', '--target', $RustTarget)
+
+          if (-Not ($BuildType -Eq 'debug')) {
+            $CargoArgs += @('--profile', 'ffi-production')
+          }
+
+          if ($DotNetOs -Eq 'win') {
+            $CargoArgs += @('--features', 'tsssp')
+          }
+
+          # No pregenerated Android bindings are provided for aws-lc-sys at this time.
+          # See: https://github.com/aws/aws-lc-rs/tree/main/aws-lc-sys#pregenerated-bindings-availability
+          # For simplicity, we’re using the ring crypto backend.
+          if ($DotNetOs -Eq 'android') {
+            $CargoArgs += @('--no-default-features', '--features', 'scard,ring')
+          }
+
+          if ($DotNetOs -eq 'linux') {
+            $LinuxArch = @{'x64'='amd64';'arm64'='arm64'}[$DotNetArch]
+            $Env:SYSROOT_NAME = "ubuntu-20.04-$LinuxArch"
+            . "$HOME/.cargo/cbake/${RustTarget}-enter.ps1"
+            $Env:AWS_LC_SYS_CMAKE_BUILDER="true"
+          }
+
+          $CargoCmd = $(@('cargo') + $CargoArgs) -Join ' '
+          Write-Host $CargoCmd
+          & cargo $CargoArgs | Out-Host
+        
+          $OutputLibraryName = "${LibPrefix}sspi$LibSuffix"
+          $RenamedLibraryName = "${LibPrefix}DevolutionsSspi$LibSuffix"
+
+          $OutputLibrary = Join-Path "target" $RustTarget $TargetFolder $OutputLibraryName
+          $OutputPath = Join-Path "dependencies" "runtimes" $DotNetRid "native"
+
+          New-Item -ItemType Directory -Path $OutputPath | Out-Null
+          Copy-Item $OutputLibrary $(Join-Path $OutputPath $RenamedLibraryName)
+
+          # Export variables for symbol collection step
+          echo "RUST_TARGET=$RustTarget" >> $Env:GITHUB_ENV
+          echo "TARGET_FOLDER=$TargetFolder" >> $Env:GITHUB_ENV
+          echo "LIB_PREFIX=$LibPrefix" >> $Env:GITHUB_ENV
+          echo "DOTNET_OS=$DotNetOs" >> $Env:GITHUB_ENV
+          echo "DOTNET_RID=$DotNetRid" >> $Env:GITHUB_ENV
+
+      - name: Collect debug symbols
+        if: matrix.build == 'release'
+        shell: pwsh
+        run: |
+          Set-PSDebug -Trace 1
+
+          $DotNetOs = $Env:DOTNET_OS
+          $DotNetRid = $Env:DOTNET_RID
+          $RustTarget = $Env:RUST_TARGET
+          $TargetFolder = $Env:TARGET_FOLDER
+          $LibPrefix = $Env:LIB_PREFIX
+
+          $SymbolsPath = Join-Path "symbols" $DotNetRid
+          New-Item -ItemType Directory -Path $SymbolsPath -Force | Out-Null
+
+          $TargetDir = Join-Path "target" $RustTarget $TargetFolder
+
+          if ($DotNetOs -eq 'win') {
+            # Windows: Copy PDB file
+            $PdbFile = Join-Path $TargetDir "sspi.pdb"
+            if (Test-Path $PdbFile) {
+              Copy-Item $PdbFile (Join-Path $SymbolsPath "DevolutionsSspi.pdb")
+              Write-Host "Copied PDB: $PdbFile"
+            } else {
+              Write-Warning "PDB file not found: $PdbFile"
+              Get-ChildItem $TargetDir -Filter "*.pdb" | ForEach-Object { Write-Host "Found PDB: $($_.FullName)" }
+            }
+          } elseif ($DotNetOs -eq 'osx' -or $DotNetOs -eq 'ios' -or $DotNetOs -eq 'iossimulator') {
+            # macOS/iOS: Generate dSYM bundle using dsymutil
+            $DylibFile = Join-Path $TargetDir "${LibPrefix}sspi.dylib"
+            $DsymOutput = Join-Path $SymbolsPath "libDevolutionsSspi.dylib.dSYM"
+            if (Test-Path $DylibFile) {
+              & dsymutil $DylibFile -o $DsymOutput
+              Write-Host "Generated dSYM: $DsymOutput"
+            } else {
+              Write-Warning "Dylib file not found: $DylibFile"
+            }
+          } elseif ($DotNetOs -eq 'linux' -or $DotNetOs -eq 'android') {
+            # Linux/Android: Extract debug info into a separate file
+            $DwpFile = Join-Path $TargetDir "${LibPrefix}sspi.dwp"
+            $SoFile = Join-Path $TargetDir "${LibPrefix}sspi.so"
+            $DebugOutput = Join-Path $SymbolsPath "libDevolutionsSspi.so.debug"
+            if (Test-Path $DwpFile) {
+              # split-debuginfo=packed may produce a .dwp file
+              Copy-Item $DwpFile (Join-Path $SymbolsPath "libDevolutionsSspi.so.dwp")
+              Write-Host "Copied DWP: $DwpFile"
+            } elseif (Test-Path $SoFile) {
+              # Extract debug sections from the binary using objcopy
+              if ($DotNetOs -eq 'android') {
+                $ObjCopy = Join-Path $Env:ANDROID_NDK_HOME "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-objcopy"
+                if (-not (Test-Path $ObjCopy)) {
+                  throw "llvm-objcopy not found at $ObjCopy"
+                }
+              } else {
+                $ObjCopy = 'llvm-objcopy'
+                $ObjCopyCmd = Get-Command $ObjCopy -ErrorAction SilentlyContinue
+                if (-not $ObjCopyCmd) {
+                  throw "llvm-objcopy not found on PATH"
+                }
+              }
+              Write-Host "Extracting debug info with: $ObjCopy --only-keep-debug"
+              & $ObjCopy --only-keep-debug $SoFile $DebugOutput 2>&1 | Write-Host
+              Write-Host "Extracted debug info: $DebugOutput"
+              $SizeMB = [math]::Round((Get-Item $DebugOutput).Length / 1MB, 2)
+              Write-Host "Debug file size: $SizeMB MB"
+            } else {
+              Write-Warning "No debug symbols found for Linux/Android"
+            }
+          }
+
+          # List collected symbols
+          Write-Host "Collected symbols:"
+          Get-ChildItem -Recurse $SymbolsPath | ForEach-Object { Write-Host $_.FullName }
+
+      - name: Strip release binaries
+        if: matrix.build == 'release'
+        shell: pwsh
+        run: |
+          $DotNetOs = $Env:DOTNET_OS
+          $DotNetRid = $Env:DOTNET_RID
+          $LibPrefix = $Env:LIB_PREFIX
+          $RuntimePath = Join-Path "dependencies" "runtimes" "$DotNetRid" "native"
+          
+          if ($DotNetOs -eq 'win') {
+            # Windows: DLL is already separate from PDB, no stripping needed
+            Write-Host "Windows binaries are already compact (PDB is separate)"
+          } elseif ($DotNetOs -eq 'osx' -or $DotNetOs -eq 'ios' -or $DotNetOs -eq 'iossimulator') {
+            $DylibFile = Join-Path $RuntimePath "${LibPrefix}DevolutionsSspi.dylib"
+            if (Test-Path $DylibFile) {
+              & strip -Sx $DylibFile
+              Write-Host "Stripped dylib: $DylibFile"
+              $SizeMB = [math]::Round((Get-Item $DylibFile).Length / 1MB, 2)
+              Write-Host "Size after stripping: $SizeMB MB"
+            }
+          } elseif ($DotNetOs -eq 'android' -or $DotNetOs -eq 'linux') {
+            $SoFile = Join-Path $RuntimePath "${LibPrefix}DevolutionsSspi.so"
+            if (Test-Path $SoFile) {
+              if ($DotNetOs -eq 'android') {
+                $StripTool = Join-Path $Env:ANDROID_NDK_HOME "toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+              } else {
+                $StripTool = 'llvm-strip'
+              }
+              Write-Host "Using strip tool: $StripTool"
+              & $StripTool --strip-unneeded $SoFile 2>&1 | Write-Host
+              Write-Host "Stripped .so ($DotNetOs): $SoFile"
+              $SizeMB = [math]::Round((Get-Item $SoFile).Length / 1MB, 2)
+              Write-Host "Size after stripping: $SizeMB MB"
+            }
+          }
+
+      - name: Framework (${{matrix.os}}-${{matrix.arch}}) (${{matrix.build}})
+        if: matrix.os == 'ios' || matrix.os == 'iossimulator'
+        shell: pwsh
+        run: |
+          $Version = '${{ needs.preflight.outputs.project-version }}'
+          $ShortVersion = '${{ needs.preflight.outputs.package-version }}'
+          $BundleName = "libDevolutionsSspi"
+          $RuntimesDir = Join-Path "dependencies" "runtimes" "${{ matrix.os }}-${{ matrix.arch }}" "native"
+          $FrameworkDir = Join-Path "$RuntimesDir" "$BundleName.framework"
+          New-Item -Path $FrameworkDir -ItemType "directory" -Force
+          $FrameworkExecutable = Join-Path $FrameworkDir $BundleName
+          Copy-Item -Path (Join-Path "$RuntimesDir" "$BundleName.dylib") -Destination $FrameworkExecutable -Force
+
+          $RPathCmd = $(@('install_name_tool', '-id', "@rpath/$BundleName.framework/$BundleName", "$FrameworkExecutable")) -Join ' '
+          Write-Host $RPathCmd
+          Invoke-Expression $RPathCmd
+
+          [xml] $InfoPlistXml = Get-Content "Info.plist"
+          Select-Xml -xml $InfoPlistXml -XPath "/plist/dict/key[. = 'CFBundleIdentifier']/following-sibling::string[1]" |
+          %{
+          $_.Node.InnerXml = "com.devolutions.sspi"
+          }
+          Select-Xml -xml $InfoPlistXml -XPath "/plist/dict/key[. = 'CFBundleExecutable']/following-sibling::string[1]" |
+          %{
+          $_.Node.InnerXml = $BundleName
+          }
+          Select-Xml -xml $InfoPlistXml -XPath "/plist/dict/key[. = 'CFBundleVersion']/following-sibling::string[1]" |
+          %{
+          $_.Node.InnerXml = $Version
+          }
+          Select-Xml -xml $InfoPlistXml -XPath "/plist/dict/key[. = 'CFBundleShortVersionString']/following-sibling::string[1]" |
+          %{
+          $_.Node.InnerXml = $ShortVersion
+          }
+
+          # Write the plist *without* a BOM
+          $Encoding = New-Object System.Text.UTF8Encoding($false)
+          $Writer = New-Object System.IO.StreamWriter((Join-Path $FrameworkDir "Info.plist"), $false, $Encoding)
+          $InfoPlistXml.Save($Writer)
+          $Writer.Close()
+
+          # .NET XML document inserts two square brackets at the end of the DOCTYPE tag
+          # It's perfectly valid XML, but we're dealing with plists here and dyld will not be able to read the file
+          ((Get-Content -Path (Join-Path $FrameworkDir "Info.plist") -Raw) -Replace 'PropertyList-1.0.dtd"\[\]', 'PropertyList-1.0.dtd"') | Set-Content -Path (Join-Path $FrameworkDir "Info.plist")
+
+      - name: Upload native components
+        uses: actions/upload-artifact@v7
+        with:
+          name: sspi-${{matrix.os}}-${{matrix.arch}}-${{matrix.build}}
+          path: dependencies/runtimes/${{matrix.os}}-${{matrix.arch}}
+
+      - name: Upload debug symbols
+        if: matrix.build == 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sspi-${{matrix.os}}-${{matrix.arch}}-${{matrix.build}}-symbols
+          path: symbols/${{matrix.os}}-${{matrix.arch}}
+
+  build-universal:
+    name: Universal Build
+    runs-on: ubuntu-24.04
+    needs: [preflight, build-native]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ osx ]
+        build: [ debug, release ]
+
+    steps:
+      - name: Checkout ${{ github.repository }}
+        uses: actions/checkout@v6
+
+      - name: Setup CCTools
+        uses: Devolutions/actions-public/setup-cctools@v1
+
+      - name: Install Apple strip (cctools)
+        if: matrix.build == 'release'
+        shell: pwsh
+        run: |
+          $DownloadVersion = "v2025.2.0"
+          $HostPlatform = "ubuntu-$(lsb_release -rs)"
+          $HostArch = @{'X64'='x86_64';'ARM64'='aarch64'}['${{ runner.arch }}']
+          $PackageBaseName = "cctools-$HostArch-$HostPlatform"
+          $DownloadFile = "${PackageBaseName}.tar.xz"
+          $BaseDownloadUrl = "https://github.com/awakecoding/llvm-prebuilt/releases/download/$DownloadVersion"
+
+          curl -L -o $DownloadFile "${BaseDownloadUrl}/${DownloadFile}"
+          tar -xf $DownloadFile -C /tmp
+          sudo mv "/tmp/${PackageBaseName}/bin/strip" /usr/bin/apple-strip
+          sudo chmod +x /usr/bin/apple-strip
+          Remove-Item $DownloadFile -Force | Out-Null
+
+      - name: Setup LLVM
+        uses: Devolutions/actions-public/setup-llvm@v1
+        if: matrix.build == 'release'
+        with:
+          version: "18.1.8"
+
+      - name: Download native components
+        uses: actions/download-artifact@v8
+        with:
+          path: dependencies/runtimes
+
+      - name: Lipo (${{matrix.build}})
+        shell: pwsh
+        run: |
+          Set-Location "dependencies/runtimes"
+          # No RID for universal binaries, see: https://github.com/dotnet/runtime/issues/53156
+          $OutputPath = Join-Path "${{ matrix.os }}-universal" "native"
+          New-Item -ItemType Directory -Path $OutputPath | Out-Null
+          $Libraries = Get-ChildItem -Recurse -Path "sspi-${{ matrix.os }}-*-${{ matrix.build }}" -Filter "*.dylib" | Foreach-Object { $_.FullName } | Select -Unique
+          $LipoCmd = $(@('lipo', '-create', '-output', (Join-Path -Path $OutputPath -ChildPath "libDevolutionsSspi.dylib")) + $Libraries) -Join ' '
+          Write-Host $LipoCmd
+          Invoke-Expression $LipoCmd
+
+      - name: Generate universal dSYM
+        if: matrix.build == 'release'
+        shell: pwsh
+        run: |
+          Set-PSDebug -Trace 1
+
+          $SymbolsPath = Join-Path "symbols" "${{ matrix.os }}-universal"
+          New-Item -ItemType Directory -Path $SymbolsPath -Force | Out-Null
+
+          $DylibFile = Join-Path "dependencies" "runtimes" "${{ matrix.os }}-universal" "native" "libDevolutionsSspi.dylib"
+          $DsymOutput = Join-Path $SymbolsPath "libDevolutionsSspi.dylib.dSYM"
+
+          if (Test-Path $DylibFile) {
+            & dsymutil $DylibFile -o $DsymOutput
+            Write-Host "Generated universal dSYM: $DsymOutput"
+          } else {
+            Write-Warning "Universal dylib not found: $DylibFile"
+          }
+
+          # List collected symbols
+          Write-Host "Collected symbols:"
+          Get-ChildItem -Recurse $SymbolsPath | ForEach-Object { Write-Host $_.FullName }
+
+      - name: Strip universal binary
+        if: matrix.build == 'release'
+        shell: pwsh
+        run: |
+          $DylibFile = Join-Path "dependencies" "runtimes" "${{ matrix.os }}-universal" "native" "libDevolutionsSspi.dylib"
+          if (Test-Path $DylibFile) {
+            if (-not (Test-Path "/usr/bin/apple-strip")) {
+              throw "apple-strip not found at /usr/bin/apple-strip"
+            }
+            & /usr/bin/apple-strip -Sx $DylibFile
+            Write-Host "Stripped universal dylib with: /usr/bin/apple-strip -Sx"
+            $SizeMB = [math]::Round((Get-Item $DylibFile).Length / 1MB, 2)
+            Write-Host "Size after stripping: $SizeMB MB"
+          }
+
+      - name: Upload native components
+        uses: actions/upload-artifact@v7
+        with:
+          name: sspi-${{ matrix.os }}-universal-${{ matrix.build }}
+          path: dependencies/runtimes/${{ matrix.os }}-universal
+
+      - name: Upload universal debug symbols
+        if: matrix.build == 'release'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sspi-${{ matrix.os }}-universal-${{ matrix.build }}-symbols
+          path: symbols/${{ matrix.os }}-universal

@@ -1,0 +1,72 @@
+[package]
+name = "sspi-ffi"
+version = "0.0.0"
+license = "MIT/Apache-2.0"
+homepage = "https://github.com/devolutions/sspi-rs"
+repository = "https://github.com/devolutions/sspi-rs"
+keywords = ["ntlm", "auth", "sspi", "windows", "kerberos"]
+edition = "2024"
+publish = false
+
+[lib]
+name = "sspi"
+crate-type = ["cdylib"]
+
+[features]
+default = ["aws-lc-rs", "scard", "dpapi"]
+tsssp = ["sspi/tsssp", "dpapi/tsssp"]
+scard = ["sspi/scard", "dep:ffi-types", "dep:winscard", "dep:bitflags", "dep:picky-asn1-x509", "dep:picky-asn1", "dep:picky", "dep:cryptoki"]
+aws-lc-rs = ["sspi/aws-lc-rs"]
+ring = ["sspi/ring"]
+dpapi = ["dep:dpapi", "dep:dpapi-transport", "dep:dpapi-native-transport", "dep:tokio", "dep:url", "dep:ffi-types"]
+
+[dependencies]
+cfg-if.workspace = true
+num-traits = { workspace = true, default-features = true }
+whoami.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+ffi-types = { workspace = true, features = ["winscard"], optional = true }
+
+picky = { workspace = true, features = ["x509"], optional = true }
+picky-asn1-der.workspace = true
+picky-asn1 = { workspace = true, optional = true }
+picky-asn1-x509 = { workspace = true, optional = true }
+
+uuid.workspace = true
+winscard = { workspace = true, features = ["std"], optional = true }
+dpapi = { workspace = true, optional = true }
+dpapi-transport = { workspace = true, optional = true }
+dpapi-native-transport = { workspace = true, optional = true }
+url = { version = "2.5", optional = true }
+tokio = { workspace = true, optional = true, features = ["rt"]}
+# logging
+tracing = { workspace = true, default-features = true }
+tracing-subscriber = { workspace = true, features = ["std", "fmt", "local-time", "env-filter"] }
+
+libc = "0.2"
+sspi = { path = "..", default-features = false, features = ["network_client"] }
+cryptoki = { version = "0.12", optional = true }
+widestring = "1.2"
+
+[target.'cfg(windows)'.dependencies]
+symbol-rename-macro = { path = "./symbol-rename-macro" }
+windows = { version = "0.62", features = ["Win32_Security_Cryptography", "Win32_Security_Credentials", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_Security"] }
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
+[target.'cfg(not(windows))'.dependencies]
+bitflags = { workspace = true, optional = true }
+
+[target.'cfg(not(any(target_os="macos", target_os="ios", windows)))'.dependencies]
+sspi = { path = "..", default-features = false, features = ["dns_resolver"] }
+
+[build-dependencies]
+csbindgen = "1.9"
+
+[dev-dependencies]
+sspi = { path = "..", features = ["__test-data"] }
+
+[lints]
+workspace = true

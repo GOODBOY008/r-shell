@@ -1,0 +1,66 @@
+[package]
+name = "dpapi-web"
+version = "0.0.0"
+edition = "2024"
+description = "WebAssembly high-level bindings targeting web browsers"
+readme = "README.md"
+license = "MIT/Apache-2.0"
+homepage = "https://github.com/devolutions/sspi-rs"
+repository = "https://github.com/devolutions/sspi-rs"
+authors = ["Devolutions Inc. <infos@devolutions.net>"]
+publish = false
+
+[lib]
+doctest = false
+test = false
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["panic_hook"]
+panic_hook = ["dep:console_error_panic_hook"]
+
+[dependencies]
+
+# DPAPI
+dpapi.workspace = true
+dpapi-transport.workspace = true
+sspi = { path = "../..", version = "0.21" }
+
+# WASM
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+gloo-net = { version = "0.7", default-features = false, features = ["websocket", "http", "io-util"] }
+gloo-timers = { version = "0.4", default-features = false, features = ["futures"] }
+tracing-web = "0.1"
+
+# Async
+futures-util = { version = "0.3", features = ["io"] }
+
+# Logging
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["time"] }
+
+# The `console_error_panic_hook` crate provides better debugging of panics by
+# logging them with `console.error`. This is great for development, but requires
+# all the `std::fmt` and `std::panicking` infrastructure, so isn't great for
+# code size when deploying.
+console_error_panic_hook = { version = "0.1", optional = true }
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
+rustls-pki-types = { version = "1.14", features = ["web"] }
+
+# Utils
+anyhow = "1"
+url = "2.5"
+
+uuid = { workspace = true, default-features = false }
+
+# Enable WebAssembly support for a few crates
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom02 = { package = "getrandom", version = "0.2", default-features = false, features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", default-features = false, features = ["wasm_js"] }
+time = { workspace = true, features = ["wasm-bindgen"] }
+
+[lints]
+workspace = true

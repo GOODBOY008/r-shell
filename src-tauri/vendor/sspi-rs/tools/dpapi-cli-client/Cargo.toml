@@ -1,0 +1,20 @@
+[package]
+name = "dpapi-cli-client"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+xflags = "0.3"
+tokio = { version = "1.43", features = ["rt-multi-thread"] }
+url = "2.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots"] }
+
+sspi = { path = "../..", features = ["network_client"] }
+uuid = { version = "1.15", features = ["std"] }
+dpapi.path = "../../crates/dpapi"
+dpapi-transport.path = "../../crates/dpapi-transport"
+dpapi-native-transport.path = "../../crates/dpapi-native-transport"
+serde = { version = "1", features = ["derive"] }
+
+tracing-subscriber = { version = "0.3", features = ["std", "fmt", "local-time", "env-filter"] }

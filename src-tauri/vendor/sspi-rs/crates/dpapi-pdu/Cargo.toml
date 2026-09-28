@@ -1,0 +1,26 @@
+[package]
+name = "dpapi-pdu"
+version = "0.1.0"
+edition = "2024"
+publish = false # not ready yet
+
+[features]
+std = []
+arbitrary = ["uuid/arbitrary", "bitflags/arbitrary", "dep:arbitrary", "std"]
+
+[dependencies]
+dpapi-core = { workspace = true, features = ["alloc"] }
+uuid.workspace = true
+crypto-bigint.workspace = true
+bitflags.workspace = true
+num-derive.workspace = true
+num-traits = { workspace = true, default-features = true }
+
+thiserror = { version = "2.0", default-features = false }
+arbitrary = {  version = "1", optional = true, features = ["derive"] }
+
+[dev-dependencies]
+paste = "1.0"
+
+[lints]
+workspace = true
