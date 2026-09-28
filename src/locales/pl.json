@@ -94,6 +94,7 @@
     "monitor": "Monitor",
     "logs": "Logi",
     "quickCommands": "Polecenia",
+    "portForwarding": "Przek. portów",
     "systemMonitor": "Monitor systemu",
     "logMonitor": "Monitor logów",
     "quickConnected": "Szybkie połączenie",
@@ -264,7 +265,8 @@
     },
     "hint": {
       "savedPasswordKept": "Dla tego połączenia zapisano hasło. Pozostaw pole puste, aby je zachować, albo wpisz nowe, aby je zastąpić."
-    }
+    },
+    "passwordSavingDisabledHint": "Zapisywanie haseł jest wyłączone w ustawieniach — połączenie zadziała, ale dane logowania nie zostaną zapisane."
   },
   "settings": {
     "title": "Ustawienia i preferencje",
@@ -342,21 +344,13 @@
       "desc": "Skonfiguruj opcje bezpieczeństwa i uwierzytelniania.",
       "hostKeyVerification": "Weryfikacja klucza hosta",
       "hostKeyVerificationDesc": "Weryfikuj klucze hostów SSH dla większego bezpieczeństwa",
-      "savePasswords": "Zapisuj hasła",
-      "savePasswordsDesc": "Przechowuj hasła lokalnie (zaszyfrowane)",
-      "autoLockTimeout": "Czas do automatycznej blokady: {{timeout}} min",
-      "autoLockTimeoutDesc": "Automatycznie blokuj aplikację po tym okresie bezczynności"
+      "allowPasswordSaving": "Zezwalaj na zapisywanie haseł lokalnie",
+      "allowPasswordSavingDesc": "Określa, czy okno połączenia oferuje zapisywanie danych logowania. Zapisane dane pozostają nietknięte i są zawsze szyfrowane AES-256-GCM."
     },
     "interface": {
       "title": "Ustawienia interfejsu",
       "desc": "Dostosuj interfejs aplikacji i panele.",
       "appTheme": "Motyw aplikacji",
-      "panelVisibility": "Widoczność paneli",
-      "connectionManager": "Menedżer połączeń",
-      "systemMonitor": "Monitor systemu",
-      "statusBar": "Pasek stanu",
-      "enableNotifications": "Włącz powiadomienia",
-      "enableNotificationsDesc": "Pokazuj powiadomienia systemowe o ważnych zdarzeniach",
       "autostart": "Uruchamiaj przy logowaniu",
       "autostartDesc": "Uruchamiaj r-shell automatycznie po zalogowaniu",
       "autostartFailed": "Nie udało się zmienić ustawienia uruchamiania przy logowaniu"
@@ -369,13 +363,13 @@
       "nextTab": "Następna karta",
       "previousTab": "Poprzednia karta",
       "note": "Zmiany skrótów klawiszowych zaczną działać po zapisaniu.",
-      "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}"
+      "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}",
+      "recorderHint": "Naciśnij kombinację klawiszy (Esc, aby anulować)"
     },
     "advanced": {
       "title": "Ustawienia zaawansowane",
       "desc": "Skonfiguruj opcje zaawansowane i diagnostyczne.",
-      "logLevel": "Poziom logowania",
-      "maxLogSize": "Maksymalny rozmiar logu: {{size}} MB",
+      "version": "Wersja",
       "checkUpdates": "Sprawdzaj aktualizacje",
       "checkUpdatesDesc": "Automatycznie sprawdzaj dostępność aktualizacji aplikacji",
       "checkNow": "Sprawdź teraz",
@@ -383,8 +377,6 @@
       "updateProxyDesc": "Opcjonalne proxy HTTP lub HTTPS używane do sprawdzania i pobierania aktualizacji.",
       "updateProxyPlaceholder": "http://127.0.0.1:7890",
       "updateProxyInvalid": "Podaj prawidłowy adres proxy HTTP lub HTTPS.",
-      "enableTelemetry": "Włącz telemetrię",
-      "enableTelemetryDesc": "Pomóż ulepszać aplikację, wysyłając anonimowe dane o użyciu",
       "configBackup": "Kopia zapasowa konfiguracji",
       "configBackupDesc": "Wyeksportuj lub zaimportuj pełną konfigurację, aby przenieść połączenia i ustawienia na inny komputer.",
       "exportConfig": "Eksportuj konfigurację",
@@ -429,12 +421,6 @@
       "center": "Wyśrodkuj (oryginalny rozmiar)",
       "tile": "Kafelki (powtarzaj)"
     },
-    "logLevel": {
-      "error": "Błąd",
-      "warn": "Ostrzeżenie",
-      "info": "Informacja",
-      "debug": "Diagnostyka"
-    },
     "tabScrollLeft": "Przewiń w lewo",
     "tabScrollRight": "Przewiń w prawo",
     "updates": {
@@ -448,7 +434,9 @@
       "homebrewManaged": {
         "title": "Zarządzane przez Homebrew",
         "desc": "Ta kopia została zainstalowana przez Homebrew, więc aktualizacjami zarządza brew. Aktualizacje w aplikacji są wyłączone, aby uniknąć konfliktu.",
-        "command": "brew upgrade --cask r-shell"
+        "command": "brew upgrade --cask r-shell",
+        "copyCommand": "Kopiuj komendę aktualizacji",
+        "commandCopied": "Komenda aktualizacji została skopiowana do schowka"
       }
     }
   },
@@ -540,6 +528,8 @@
     "clearScreen": "Wyczyść ekran",
     "options": "Opcje...",
     "checkForUpdates": "Sprawdź aktualizacje",
+    "updateAvailablePill": "Zaktualizuj do {{version}}",
+    "restartToUpdatePill": "Uruchom ponownie, aby zaktualizować",
     "newTab": "Nowa karta",
     "duplicateTab": "Powiel kartę",
     "nextTab": "Następna karta",
@@ -548,12 +538,13 @@
     "disconnect": "Rozłącz",
     "undo": "Cofnij",
     "redo": "Ponów",
-    "about": "R-shell — informacje",
+    "about": "R-Shell — informacje",
+    "help": "Pomoc",
     "services": "Usługi",
-    "hide": "Ukryj r-shell",
+    "hide": "Ukryj R-Shell",
     "hideOthers": "Ukryj pozostałe",
     "showAll": "Pokaż wszystko",
-    "quit": "Zakończ r-shell",
+    "quit": "Zakończ R-Shell",
     "minimize": "Minimalizuj",
     "zoom": "Powiększ",
     "fullscreen": "Przejdź na pełny ekran",
@@ -569,6 +560,9 @@
     "toggleZenMode": "Przełącz tryb zen",
     "closeTab": "Zamknij kartę",
     "window": "Okno"
+  },
+  "aboutDialog": {
+    "version": "Wersja"
   },
   "toolbar": {
     "newConnection": "Nowe połączenie",
@@ -815,7 +809,10 @@
     "downloadFailedFallback": "Nie udało się pobrać aktualizacji.",
     "installFailedFallback": "Nie udało się zainstalować aktualizacji.",
     "homebrewManaged": "Aktualizacjami zarządza Homebrew",
-    "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew. Uruchom \"brew upgrade --cask r-shell\", aby zaktualizować."
+    "homebrewManagedDesc": "Ta kopia została zainstalowana przez Homebrew, więc aktualizacje w aplikacji są wyłączone.",
+    "homebrewCommandCopied": "Komenda aktualizacji została skopiowana — uruchom ją w terminalu.",
+    "autoToastTitle": "Dostępna nowa wersja {{version}}",
+    "autoToastDesc": "Kliknij „Pobierz aktualizację”, aby pobrać i zainstalować."
   },
   "syncDialog": {
     "title": "Synchronizacja katalogów",
@@ -1196,6 +1193,7 @@
   },
   "terminal": {
     "search": "Szukaj...",
+    "unreadOutput": "Nieprzeczytane dane wyjściowe terminala",
     "groupAriaLabel": "Grupa terminali {{id}}",
     "a11y": {
       "tabMovedToPosition": "Przeniesiono na pozycję {{position}} z {{total}}",
@@ -1458,6 +1456,22 @@
       "updated": "Zaktualizowano fragment",
       "deleted": "Usunięto fragment"
     }
+  },
+  "portForwarding": {
+    "title": "Przekazywanie portów",
+    "noProxies": "Brak uruchomionych proxy SOCKS",
+    "newProxy": "Nowe proxy SOCKS",
+    "bindAddress": "Adres powiązania",
+    "bindPort": "Port",
+    "start": "Uruchom",
+    "stop": "Zatrzymaj proxy",
+    "started": "Proxy SOCKS nasłuchuje na {{address}}:{{port}}",
+    "startFailed": "Nie udało się uruchomić proxy",
+    "stopped": "Proxy zatrzymane",
+    "stopFailed": "Nie udało się zatrzymać proxy",
+    "noConnection": "Brak aktywnego połączenia",
+    "invalidPort": "Nieprawidłowy numer portu",
+    "alreadyRunning": "Serwer proxy na tym porcie już działa dla tego połączenia"
   },
   "hostKey": {
     "changedTitle": "Klucz hosta uległ zmianie",

@@ -92,6 +92,7 @@
     "monitor": "监视器",
     "logs": "日志",
     "quickCommands": "命令",
+    "portForwarding": "端口转发",
     "systemMonitor": "系统监视器",
     "logMonitor": "日志监视器",
     "quickConnected": "快速连接成功",
@@ -262,7 +263,8 @@
     },
     "hint": {
       "savedPasswordKept": "此连接已保存密码。留空保持不变，输入新密码即可替换。"
-    }
+    },
+    "passwordSavingDisabledHint": "已在设置中关闭密码保存——连接可正常建立，但不会存储凭据。"
   },
   "settings": {
     "title": "设置与首选项",
@@ -340,21 +342,13 @@
       "desc": "配置安全选项和认证设置。",
       "hostKeyVerification": "主机密钥验证",
       "hostKeyVerificationDesc": "验证 SSH 主机密钥以增强安全性",
-      "savePasswords": "保存密码",
-      "savePasswordsDesc": "在本地存储密码（加密）",
-      "autoLockTimeout": "自动锁定超时：{{timeout}}分钟",
-      "autoLockTimeoutDesc": "在此无活动时间后自动锁定应用程序"
+      "allowPasswordSaving": "允许在本地保存密码",
+      "allowPasswordSavingDesc": "控制连接对话框是否提供保存密码选项。已保存的凭据不受影响，始终以 AES-256-GCM 加密存储。"
     },
     "interface": {
       "title": "界面设置",
       "desc": "自定义应用程序界面和面板。",
       "appTheme": "应用主题",
-      "panelVisibility": "面板可见性",
-      "connectionManager": "连接管理器",
-      "systemMonitor": "系统监视器",
-      "statusBar": "状态栏",
-      "enableNotifications": "启用通知",
-      "enableNotificationsDesc": "显示重要事件的系统通知",
       "autostart": "登录时自动启动",
       "autostartDesc": "登录系统时自动启动 r-shell",
       "autostartFailed": "无法更新自动启动设置"
@@ -367,13 +361,13 @@
       "nextTab": "下一个标签页",
       "previousTab": "上一个标签页",
       "note": "键盘快捷键更改将在保存后生效。",
-      "registerFailed": "快捷键 {{shortcut}} 注册失败"
+      "registerFailed": "快捷键 {{shortcut}} 注册失败",
+      "recorderHint": "按下组合键（Esc 取消）"
     },
     "advanced": {
       "title": "高级设置",
       "desc": "配置高级选项和诊断设置。",
-      "logLevel": "日志级别",
-      "maxLogSize": "最大日志大小：{{size}}MB",
+      "version": "版本",
       "checkUpdates": "检查更新",
       "checkUpdatesDesc": "自动检查应用程序更新",
       "checkNow": "立即检查",
@@ -381,8 +375,6 @@
       "updateProxyDesc": "用于检查和下载更新的可选 HTTP 或 HTTPS 代理。",
       "updateProxyPlaceholder": "http://127.0.0.1:7890",
       "updateProxyInvalid": "请输入有效的 HTTP 或 HTTPS 代理地址。",
-      "enableTelemetry": "启用遥测",
-      "enableTelemetryDesc": "通过发送匿名使用数据帮助改进应用程序",
       "configBackup": "配置备份",
       "configBackupDesc": "导出或导入完整配置，以便将连接和设置迁移到另一台设备。",
       "exportConfig": "导出配置",
@@ -427,12 +419,6 @@
       "center": "居中（原始大小）",
       "tile": "平铺（重复）"
     },
-    "logLevel": {
-      "error": "错误",
-      "warn": "警告",
-      "info": "信息",
-      "debug": "调试"
-    },
     "tabScrollLeft": "向左滚动",
     "tabScrollRight": "向右滚动",
     "updates": {
@@ -446,7 +432,9 @@
       "homebrewManaged": {
         "title": "由 Homebrew 管理",
         "desc": "此副本通过 Homebrew 安装，更新由 brew 负责。为避免冲突，应用内更新已停用。",
-        "command": "brew upgrade --cask r-shell"
+        "command": "brew upgrade --cask r-shell",
+        "copyCommand": "复制更新命令",
+        "commandCopied": "更新命令已复制到剪贴板"
       }
     }
   },
@@ -532,6 +520,8 @@
     "clearScreen": "清屏",
     "options": "选项...",
     "checkForUpdates": "检查更新",
+    "updateAvailablePill": "更新到 {{version}}",
+    "restartToUpdatePill": "重启以更新",
     "newTab": "新建标签页",
     "duplicateTab": "复制标签页",
     "nextTab": "下一个标签页",
@@ -540,12 +530,13 @@
     "disconnect": "断开连接",
     "undo": "撤销",
     "redo": "重做",
-    "about": "关于 r-shell",
+    "about": "关于 R-Shell",
+    "help": "帮助",
     "services": "服务",
-    "hide": "隐藏 r-shell",
+    "hide": "隐藏 R-Shell",
     "hideOthers": "隐藏其他",
     "showAll": "全部显示",
-    "quit": "退出 r-shell",
+    "quit": "退出 R-Shell",
     "minimize": "最小化",
     "zoom": "缩放",
     "fullscreen": "进入全屏",
@@ -561,6 +552,9 @@
     "toggleZenMode": "切换禅定模式",
     "closeTab": "关闭标签页",
     "window": "窗口"
+  },
+  "aboutDialog": {
+    "version": "版本"
   },
   "toolbar": {
     "newConnection": "新建连接",
@@ -797,7 +791,10 @@
     "downloadFailedFallback": "更新下载失败。",
     "installFailedFallback": "更新安装失败。",
     "homebrewManaged": "更新由 Homebrew 管理",
-    "homebrewManagedDesc": "此副本通过 Homebrew 安装，请运行 brew upgrade --cask r-shell 获取更新。"
+    "homebrewManagedDesc": "此副本通过 Homebrew 安装，应用内更新已停用。",
+    "homebrewCommandCopied": "升级命令已复制，请在终端中运行。",
+    "autoToastTitle": "发现新版本 {{version}}",
+    "autoToastDesc": "点击「下载更新」即可下载并安装。"
   },
   "syncDialog": {
     "title": "目录同步",
@@ -1148,6 +1145,7 @@
   },
   "terminal": {
     "search": "搜索...",
+    "unreadOutput": "终端有未读输出",
     "groupAriaLabel": "终端组 {{id}}",
     "a11y": {
       "tabMovedToPosition": "已移到第 {{position}} 位（共 {{total}} 个标签页）",
@@ -1408,6 +1406,22 @@
       "updated": "命令片段已更新",
       "deleted": "命令片段已删除"
     }
+  },
+  "portForwarding": {
+    "title": "端口转发",
+    "noProxies": "没有正在运行的 SOCKS 代理",
+    "newProxy": "新建 SOCKS 代理",
+    "bindAddress": "绑定地址",
+    "bindPort": "端口",
+    "start": "启动",
+    "stop": "停止代理",
+    "started": "SOCKS 代理已监听 {{address}}:{{port}}",
+    "startFailed": "启动代理失败",
+    "stopped": "代理已停止",
+    "stopFailed": "停止代理失败",
+    "noConnection": "没有活动连接",
+    "invalidPort": "端口号无效",
+    "alreadyRunning": "该连接在此端口上已有正在运行的代理"
   },
   "hostKey": {
     "changedTitle": "主机密钥已更改",

@@ -48,7 +48,7 @@ import {
   ContextMenuTrigger,
 } from './ui/context-menu';
 import { toast } from 'sonner';
-import { DEFAULT_APP_KEYBOARD_SHORTCUTS, formatKeyboardShortcut } from '../lib/keyboard-shortcuts';
+import { formatKeyboardShortcut, loadKeyboardShortcutSettings } from '../lib/keyboard-shortcuts';
 
 export interface DetachedSession {
   connectionId: string;
@@ -114,8 +114,9 @@ export function ConnectionManager({
   onCloseDetachedSession,
 }: ConnectionManagerProps) {
   const { t } = useTranslation();
+  // Badge follows the customizable binding, not a fixed chord.
   const newConnectionShortcut = formatKeyboardShortcut(
-    DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+    loadKeyboardShortcutSettings().newSession,
     navigator.platform.toUpperCase().includes('MAC'),
   );
   // Load connections from storage

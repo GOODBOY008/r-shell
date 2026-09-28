@@ -19,6 +19,7 @@ function makeTab(id: string): TerminalTab {
     name: id,
     connectionStatus: 'connected',
     reconnectCount: 0,
+    hasUnreadOutput: false,
   };
 }
 
@@ -49,7 +50,12 @@ describe('serialize / deserialize', () => {
     const json = serialize(state);
     const parsed = JSON.parse(json);
     expect(parsed.version).toBe(STATE_VERSION);
-    expect(parsed.data).toEqual(state);
+    expect(parsed.data).toEqual({
+      ...state,
+      groups: { '1': { ...state.groups['1'], tabs: [{
+        id: 't1', name: 't1', connectionStatus: 'connected', reconnectCount: 0,
+      }] } },
+    });
   });
 
   it('returns null for invalid JSON', () => {
@@ -255,5 +261,40 @@ describe('createDefaultState', () => {
     if (state.gridLayout.type === 'leaf') {
       expect(state.gridLayout.groupId).toBe(state.activeGroupId);
     }
+  });
+});
+
+describe('unread output persistence boundary', () => {
+  beforeEach(() => localStorage.clear());
+
+  it.each([true, false])('never serializes hasUnreadOutput=%s, and does not mutate runtime state', (unread) => {
+    const state = makeState();
+    state.groups['1'].tabs[0].hasUnreadOutput = unread;
+    expect(serialize(state)).not.toContain('hasUnreadOutput');
+    saveState(state);
+    expect(localStorage.getItem(STORAGE_KEY)).not.toContain('hasUnreadOutput');
+    expect(state.groups['1'].tabs[0].hasUnreadOutput).toBe(unread);
+    expect(loadState()?.groups['1'].tabs[0].hasUnreadOutput).toBe(false);
+  });
+
+  it.each([true, false, undefined])('resets persisted or legacy unread %s on deserialize', (unread) => {
+    const state = makeState();
+    state.groups['1'].tabs[0].hasUnreadOutput = unread;
+    const restored = deserialize(JSON.stringify({ version: STATE_VERSION, data: state }));
+    expect(restored?.groups['1'].tabs[0]).toEqual({ ...state.groups['1'].tabs[0], hasUnreadOutput: false });
+  });
+
+  it('preserves editor filtering, active-tab fallback and the reverse map', () => {
+    const state = makeState();
+    state.groups['1'].tabs.push({ ...makeTab('edit'), tabType: 'editor', hasUnreadOutput: true });
+    state.groups['1'].activeTabId = 'edit';
+    state.tabToGroupMap.edit = '1';
+    state.groups['1'].tabs[0].hasUnreadOutput = true;
+    saveState(state);
+    const restored = loadState();
+    expect(restored?.groups['1'].tabs.map((tab) => tab.id)).toEqual(['t1']);
+    expect(restored?.groups['1'].activeTabId).toBe('t1');
+    expect(restored?.tabToGroupMap).toEqual({ t1: '1' });
+    expect(restored?.groups['1'].tabs[0].hasUnreadOutput).toBe(false);
   });
 });

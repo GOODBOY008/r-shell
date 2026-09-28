@@ -14,6 +14,7 @@ const arbitraryTransferStatus = fc.constantFrom<TransferItem['status']>(
 
 const arbitraryTransferItem: fc.Arbitrary<TransferItem> = fc.record({
   id: fc.uuid(),
+  connectionId: fc.string({ minLength: 1, maxLength: 20 }),
   fileName: fc.string({ minLength: 1, maxLength: 50 }),
   sourcePath: fc.string({ minLength: 1, maxLength: 100 }),
   destinationPath: fc.string({ minLength: 1, maxLength: 100 }),

@@ -30,6 +30,7 @@ import type {
   TransferAction,
 } from "@/lib/transfer-queue-reducer";
 import { getActiveTransferCount } from "@/lib/transfer-queue-reducer";
+import { cancelTransfer } from "@/lib/transfer-queue-service";
 import { formatSize } from "@/lib/file-entry-types";
 
 // ---------- Legacy type export for backward compatibility ----------
@@ -278,9 +279,7 @@ export function TransferQueue({
                       size="icon"
                       className="h-5 w-5 shrink-0"
                       title={t('transferQueue.cancel')}
-                      onClick={() =>
-                        dispatch({ type: "CANCEL", id: item.id })
-                      }
+                      onClick={() => cancelTransfer(item.id)}
                     >
                       <X className="h-3 w-3" />
                     </Button>

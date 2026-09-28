@@ -18,6 +18,7 @@ import {
 function makeItem(overrides: Partial<TransferItem> = {}): TransferItem {
   return {
     id: overrides.id ?? "t-1",
+    connectionId: "conn-1",
     fileName: "test.txt",
     direction: "upload",
     sourcePath: "/local/test.txt",
@@ -43,6 +44,7 @@ describe("transfer-queue-reducer", () => {
         type: "ENQUEUE",
         items: [
           {
+            connectionId: "conn-1",
             fileName: "a.txt",
             direction: "upload",
             sourcePath: "/a.txt",
@@ -50,6 +52,7 @@ describe("transfer-queue-reducer", () => {
             totalBytes: 100,
           },
           {
+            connectionId: "conn-1",
             fileName: "b.txt",
             direction: "download",
             sourcePath: "/r/b.txt",
@@ -73,6 +76,7 @@ describe("transfer-queue-reducer", () => {
         type: "ENQUEUE",
         items: [
           {
+            connectionId: "conn-1",
             fileName: "new.txt",
             direction: "upload",
             sourcePath: "/new.txt",
@@ -91,6 +95,7 @@ describe("transfer-queue-reducer", () => {
         type: "ENQUEUE",
         items: [
           {
+            connectionId: "conn-1",
             fileName: "a.txt",
             direction: "upload",
             sourcePath: "/a",
@@ -98,6 +103,7 @@ describe("transfer-queue-reducer", () => {
             totalBytes: 10,
           },
           {
+            connectionId: "conn-1",
             fileName: "b.txt",
             direction: "upload",
             sourcePath: "/b",
@@ -196,9 +202,63 @@ describe("transfer-queue-reducer", () => {
       });
       expect(next[0].status).toBe("completed");
       expect(next[0].progress).toBe(100);
-      // Note: COMPLETE sets progress=100 but does not update bytesTransferred
-      expect(next[0].bytesTransferred).toBe(500);
+      // COMPLETE finalizes byte accounting from the known total
+      expect(next[0].bytesTransferred).toBe(1000);
+      expect(next[0].speed).toBe(0);
       expect(next[0].completedAt).toBeDefined();
+    });
+
+    it("keeps transferred bytes when the total is unknown (0)", () => {
+      // FTP SIZE / SFTP fstat unavailable: the queue never learns the total,
+      // but the progress channel still records the bytes actually moved.
+      const state = [
+        makeItem({
+          id: "t1",
+          status: "transferring",
+          totalBytes: 0,
+          bytesTransferred: 12345,
+          progress: 100,
+        }),
+      ];
+      const next = transferQueueReducer(state, {
+        type: "COMPLETE",
+        id: "t1",
+      });
+      expect(next[0].status).toBe("completed");
+      expect(next[0].progress).toBe(100);
+      expect(next[0].bytesTransferred).toBe(12345);
+    });
+  });
+
+  describe("PROGRESS totalBytes override", () => {
+    it("adopts the backend-provided total when it differs from the enqueued size", () => {
+      const state = [
+        makeItem({ id: "t1", status: "transferring", totalBytes: 100 }),
+      ];
+      const next = transferQueueReducer(state, {
+        type: "PROGRESS",
+        id: "t1",
+        progress: 10,
+        bytesTransferred: 300,
+        speed: 50,
+        totalBytes: 3000,
+      });
+      expect(next[0].totalBytes).toBe(3000);
+      expect(next[0].bytesTransferred).toBe(300);
+    });
+
+    it("keeps the enqueued total when the backend total is absent", () => {
+      const state = [
+        makeItem({ id: "t1", status: "transferring", totalBytes: 100 }),
+      ];
+      const next = transferQueueReducer(state, {
+        type: "PROGRESS",
+        id: "t1",
+        progress: 10,
+        bytesTransferred: 10,
+        speed: 5,
+      });
+      expect(next[0].totalBytes).toBe(100);
     });
   });
 
@@ -215,6 +275,80 @@ describe("transfer-queue-reducer", () => {
       });
       expect(next[0].status).toBe("failed");
       expect(next[0].error).toBe("Network error");
+    });
+  });
+
+  // ── State-machine guards (late-result resurrection bugs) ──
+  //
+  // The invoke for a cancelled transfer can still resolve later (backend
+  // cancel is best-effort, timeouts land late). FAIL / COMPLETE / PROGRESS
+  // arriving after the item settled must be discarded, not applied.
+
+  describe("late-result guards", () => {
+    it("FAIL does not resurrect a cancelled item (the 120 s timeout case)", () => {
+      const state = [makeItem({ id: "t1", status: "cancelled" })];
+      const next = transferQueueReducer(state, {
+        type: "FAIL",
+        id: "t1",
+        error: "Request timeout after 120s",
+      });
+      expect(next[0].status).toBe("cancelled");
+      expect(next[0].error).toBeUndefined();
+    });
+
+    it("COMPLETE does not resurrect a cancelled item (success after quick cancel)", () => {
+      const state = [makeItem({ id: "t1", status: "cancelled" })];
+      const next = transferQueueReducer(state, { type: "COMPLETE", id: "t1" });
+      expect(next[0].status).toBe("cancelled");
+    });
+
+    it("PROGRESS does not update a cancelled item", () => {
+      const state = [
+        makeItem({ id: "t1", status: "cancelled", bytesTransferred: 10 }),
+      ];
+      const next = transferQueueReducer(state, {
+        type: "PROGRESS",
+        id: "t1",
+        progress: 90,
+        bytesTransferred: 900,
+        speed: 100,
+      });
+      expect(next[0].status).toBe("cancelled");
+      expect(next[0].bytesTransferred).toBe(10);
+    });
+
+    it("FAIL does not overwrite a completed item", () => {
+      const state = [makeItem({ id: "t1", status: "completed" })];
+      const next = transferQueueReducer(state, {
+        type: "FAIL",
+        id: "t1",
+        error: "late error",
+      });
+      expect(next[0].status).toBe("completed");
+    });
+
+    it("PROGRESS does not update a queued item (events only valid while transferring)", () => {
+      const state = [makeItem({ id: "t1", status: "queued" })];
+      const next = transferQueueReducer(state, {
+        type: "PROGRESS",
+        id: "t1",
+        progress: 50,
+        bytesTransferred: 500,
+        speed: 10,
+      });
+      expect(next[0].status).toBe("queued");
+      expect(next[0].progress).toBe(0);
+      expect(next[0].bytesTransferred).toBe(0);
+    });
+
+    it("guard returns the same items for non-transferring targets", () => {
+      // The map still runs; non-target items keep object identity so
+      // useSyncExternalStore doesn't churn on discarded events.
+      const unaffected = makeItem({ id: "other", status: "transferring" });
+      const state = [makeItem({ id: "t1", status: "cancelled" }), unaffected];
+      const next = transferQueueReducer(state, { type: "COMPLETE", id: "t1" });
+      expect(next[0].status).toBe("cancelled");
+      expect(next[1]).toBe(unaffected);
     });
   });
 
@@ -396,6 +530,7 @@ describe("transfer-queue-reducer property tests", () => {
       fc.property(
         fc.array(
           fc.record({
+            connectionId: fc.string({ minLength: 1, maxLength: 20 }),
             fileName: fc.string({ minLength: 1, maxLength: 20 }),
             direction: fc.constantFrom("upload" as const, "download" as const),
             sourcePath: fc.string({ minLength: 1, maxLength: 50 }),

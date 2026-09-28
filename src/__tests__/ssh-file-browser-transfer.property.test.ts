@@ -19,6 +19,7 @@ import {
 const arbitraryDirection = fc.constantFrom<TransferDirection>("upload", "download");
 
 const arbitraryEnqueueItem = fc.record({
+  connectionId: fc.string({ minLength: 1, maxLength: 20 }),
   fileName: fc.string({ minLength: 1, maxLength: 50 }),
   direction: arbitraryDirection,
   sourcePath: fc.string({ minLength: 1, maxLength: 100 }),
@@ -36,6 +37,7 @@ const arbitraryStatus = fc.constantFrom<TransferStatus>(
 
 const arbitraryTransferItem: fc.Arbitrary<TransferItem> = fc.record({
   id: fc.uuid(),
+  connectionId: fc.string({ minLength: 1, maxLength: 20 }),
   fileName: fc.string({ minLength: 1, maxLength: 50 }),
   direction: arbitraryDirection,
   sourcePath: fc.string({ minLength: 1, maxLength: 100 }),
@@ -91,7 +93,7 @@ describe("Property 1: ENQUEUE preserves inputs and count", () => {
     );
   });
 
-  it("new items preserve fileName, direction, sourcePath, destinationPath, totalBytes", () => {
+  it("new items preserve connectionId, fileName, direction, sourcePath, destinationPath, totalBytes", () => {
     fc.assert(
       fc.property(
         fc.array(arbitraryEnqueueItem, { minLength: 1, maxLength: 10 }),
@@ -101,6 +103,7 @@ describe("Property 1: ENQUEUE preserves inputs and count", () => {
             items: newItems,
           });
           for (let i = 0; i < newItems.length; i++) {
+            expect(result[i].connectionId).toBe(newItems[i].connectionId);
             expect(result[i].fileName).toBe(newItems[i].fileName);
             expect(result[i].direction).toBe(newItems[i].direction);
             expect(result[i].sourcePath).toBe(newItems[i].sourcePath);
@@ -158,14 +161,17 @@ describe("Property 2: Sequential transfer enforcement", () => {
 
 // ── Property 3: COMPLETE sets terminal state correctly ──
 
-describe("Property 3: COMPLETE sets terminal state", () => {
-  it("sets status to completed, progress to 100, assigns completedAt", () => {
+describe("Property 3: COMPLETE sets terminal state (guarded)", () => {
+  it("sets status to completed, progress to 100, assigns completedAt for a transferring item", () => {
     fc.assert(
       fc.property(
         fc.array(arbitraryTransferItem, { minLength: 1, maxLength: 10 }),
         fc.nat({ max: 9 }),
         (items, rawIdx) => {
           const idx = rawIdx % items.length;
+          // COMPLETE is only meaningful while transferring (late results for
+          // settled items are discarded by the state-machine guard).
+          items[idx] = { ...items[idx], status: "transferring" };
           const targetId = items[idx].id;
           const result = transferQueueReducer(items, {
             type: "COMPLETE",
@@ -184,12 +190,30 @@ describe("Property 3: COMPLETE sets terminal state", () => {
       ),
     );
   });
+
+  it("discards COMPLETE for non-transferring items (no resurrection)", () => {
+    fc.assert(
+      fc.property(
+        arbitraryTransferItem,
+        fc.constantFrom("queued", "completed", "failed", "cancelled") as fc.Arbitrary<
+          TransferItem["status"]
+        >,
+        (item, status) => {
+          const result = transferQueueReducer([{ ...item, status }], {
+            type: "COMPLETE",
+            id: item.id,
+          });
+          expect(result[0].status).toBe(status);
+        },
+      ),
+    );
+  });
 });
 
 // ── Property 4: FAIL stores error and sets terminal state ──
 
-describe("Property 4: FAIL stores error and sets terminal state", () => {
-  it("sets status to failed, stores error string, assigns completedAt", () => {
+describe("Property 4: FAIL stores error and sets terminal state (guarded)", () => {
+  it("sets status to failed, stores error string, assigns completedAt for a transferring item", () => {
     fc.assert(
       fc.property(
         fc.array(arbitraryTransferItem, { minLength: 1, maxLength: 10 }),
@@ -197,6 +221,7 @@ describe("Property 4: FAIL stores error and sets terminal state", () => {
         fc.string({ minLength: 1, maxLength: 100 }),
         (items, rawIdx, errorMsg) => {
           const idx = rawIdx % items.length;
+          items[idx] = { ...items[idx], status: "transferring" };
           const targetId = items[idx].id;
           const result = transferQueueReducer(items, {
             type: "FAIL",
@@ -211,6 +236,28 @@ describe("Property 4: FAIL stores error and sets terminal state", () => {
             if (i !== idx) {
               expect(result[i].status).toBe(items[i].status);
             }
+          }
+        },
+      ),
+    );
+  });
+
+  it("discards FAIL for non-transferring items (the late-timeout case)", () => {
+    fc.assert(
+      fc.property(
+        arbitraryTransferItem,
+        fc.constantFrom("queued", "completed", "failed", "cancelled") as fc.Arbitrary<
+          TransferItem["status"]
+        >,
+        (item, status) => {
+          const result = transferQueueReducer([{ ...item, status }], {
+            type: "FAIL",
+            id: item.id,
+            error: "late error",
+          });
+          expect(result[0].status).toBe(status);
+          if (status !== "failed") {
+            expect(result[0].error).toBe(item.error);
           }
         },
       ),

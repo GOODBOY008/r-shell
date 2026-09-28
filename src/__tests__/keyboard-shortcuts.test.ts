@@ -8,6 +8,7 @@ import {
   DEFAULT_LAYOUT_SHORTCUTS,
   DEFAULT_SPLIT_VIEW_SHORTCUTS,
   formatKeyboardShortcut,
+  isShortcutRecording,
   KeyboardShortcut,
   loadKeyboardShortcutSettings,
   parseKeyboardShortcut,
@@ -328,7 +329,20 @@ describe('keyboard shortcut settings', () => {
       closeTab: 'Alt+W',
       nextTab: 'Ctrl+PageDown',
       prevTab: 'Ctrl+PageUp',
+      newSession: DEFAULT_SPLIT_VIEW_SHORTCUTS.newSession,
     });
+  });
+
+  it('loads a saved newSession shortcut and falls back to the default', () => {
+    localStorage.setItem('sshClientSettings', JSON.stringify({
+      newSession: 'Alt+N',
+    }));
+
+    const loaded = loadKeyboardShortcutSettings();
+    expect(loaded.newSession).toBe('Alt+N');
+
+    localStorage.removeItem('sshClientSettings');
+    expect(loadKeyboardShortcutSettings().newSession).toBe(DEFAULT_SPLIT_VIEW_SHORTCUTS.newSession);
   });
 
   it('migrates the former Ctrl+Shift+W close shortcut to the new default', () => {
@@ -337,6 +351,38 @@ describe('keyboard shortcut settings', () => {
     }));
 
     expect(loadKeyboardShortcutSettings().closeTab).toBe(DEFAULT_SPLIT_VIEW_SHORTCUTS.closeTab);
+  });
+});
+
+describe('isShortcutRecording', () => {
+  afterEach(() => {
+    // Detach whatever the test focused so later suites start clean.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+  });
+
+  it('is true only while focus sits inside a shortcut-recorder input', () => {
+    expect(isShortcutRecording()).toBe(false);
+
+    const host = document.createElement('div');
+    host.innerHTML = '<input data-shortcut-recorder="" />';
+    const recorder = host.firstElementChild as HTMLElement;
+    document.body.appendChild(host);
+    recorder.focus();
+    expect(isShortcutRecording()).toBe(true);
+
+    recorder.blur();
+    expect(isShortcutRecording()).toBe(false);
+    host.remove();
+  });
+
+  it('is false for ordinary inputs and the document body', () => {
+    const host = document.createElement('div');
+    host.innerHTML = '<input />';
+    const plain = host.firstElementChild as HTMLElement;
+    document.body.appendChild(host);
+    plain.focus();
+    expect(isShortcutRecording()).toBe(false);
+    host.remove();
   });
 });
 

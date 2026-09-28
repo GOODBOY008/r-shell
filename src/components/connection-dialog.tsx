@@ -17,6 +17,7 @@ import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connect
 import { ConnectionStorageManager } from '../lib/connection-storage';
 import { SECRET_FIELDS, sealSecret, openSecret } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import { sshConnect } from '@/lib/ssh-connect';
 import { toast } from 'sonner';
 import {
@@ -127,6 +128,63 @@ const EMPTY_STORED_SECRETS: StoredSecrets = {
   tunnelPassphrase: '',
 };
 
+/**
+ * Password-saving master switch from Settings. Only an explicit `false`
+ * disables saving — a missing key or unparsable settings keep the current
+ * behaviour (saving allowed). Uses the `allowPasswordSaving` key (not the
+ * legacy dead `savePasswords` field) since stale `false` values written by
+ * the old dead switch must never flip the gate off for existing users.
+ */
+function isPasswordSavingAllowed(): boolean {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return true;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return true;
+    return (parsed as Record<string, unknown>).allowPasswordSaving !== false;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Default protocol for NEW connections, from the Settings "Default Protocol"
+ * dropdown. Only values the dropdown offers are honored; anything else keeps
+ * the historical 'SSH' default.
+ */
+function getDefaultProtocolSetting(): ConnectionConfig['protocol'] {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return 'SSH';
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return 'SSH';
+    const value = (parsed as Record<string, unknown>).defaultProtocol;
+    return value === 'SSH' || value === 'Telnet' || value === 'Raw' ? value : 'SSH';
+  } catch {
+    return 'SSH';
+  }
+}
+
+/**
+ * Default keepalive prefill for NEW connections, from the Settings
+ * "Keep Alive Interval" slider (30–300). Out-of-range or non-numeric values
+ * keep the historical 60 s default.
+ */
+function getDefaultKeepAliveIntervalSetting(): number {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return 60;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return 60;
+    const value = (parsed as Record<string, unknown>).keepAliveInterval;
+    return typeof value === 'number' && Number.isInteger(value) && value >= 30 && value <= 300
+      ? value
+      : 60;
+  } catch {
+    return 60;
+  }
+}
+
 export function ConnectionDialog({
   open,
   onOpenChange,
@@ -135,11 +193,12 @@ export function ConnectionDialog({
   editingConnection,
   initialFolder
 }: ConnectionDialogProps) {
+  const prefilledProtocol = getDefaultProtocolSetting();
   const defaultConfig: ConnectionConfig = {
     name: '',
-    protocol: 'SSH',
+    protocol: prefilledProtocol,
     host: '',
-    port: 22,
+    port: getDefaultPort(prefilledProtocol),
     username: '',
     authMethod: 'password',
     password: '',
@@ -160,7 +219,7 @@ export function ConnectionDialog({
     tunnelPassphrase: '',
     compression: true,
     keepAlive: true,
-    keepAliveInterval: 60,
+    keepAliveInterval: getDefaultKeepAliveIntervalSetting(),
     serverAliveCountMax: 3
   };
 
@@ -174,10 +233,10 @@ export function ConnectionDialog({
   // the field to be empty while editing — React controlled inputs need
   // value="" to render empty, but ConnectionConfig uses strict number types.
   const initialDisplayValues = {
-    port: 22 as number | '',
+    port: getDefaultPort(prefilledProtocol) as number | '',
     proxyPort: 8080 as number | '',
     tunnelPort: 22 as number | '',
-    keepAliveInterval: 60 as number | '',
+    keepAliveInterval: getDefaultKeepAliveIntervalSetting() as number | '',
     serverAliveCountMax: 3 as number | '',
   };
   const [displayValues, setDisplayValues] = useState(initialDisplayValues);
@@ -347,6 +406,17 @@ export function ConnectionDialog({
    * encrypted (sealed) so plaintext never reaches localStorage.
    */
   const resolveSecretsForSave = async (): Promise<Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>> => {
+    // Password-saving master switch (Settings) off → never write NEW
+    // secrets: the connect request below still uses the typed value from
+    // `config`, so the connection itself works, and an edited connection
+    // keeps its previously stored sealed values (returning them unchanged
+    // is what "existing saved credentials are untouched" promises — an
+    // empty string here would overwrite them in updateConnection's merge).
+    // Typing a replacement secret while the switch is off does not persist
+    // it; turn the switch back on to update stored credentials.
+    if (!isPasswordSavingAllowed()) {
+      return { ...previousSecrets };
+    }
     const result: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'> = {
       password: '',
       passphrase: '',
@@ -1456,6 +1526,11 @@ const handleCancelConnectionAttempt = async () => {
                   </Select>
                 )}
               </div>
+            )}
+            {isPasswordSavingAllowed() ? null : (
+              <p className="text-xs text-muted-foreground">
+                {t('connectionDialog.passwordSavingDisabledHint')}
+              </p>
             )}
 
             {/* Action Buttons */}

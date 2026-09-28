@@ -177,6 +177,26 @@ function removeGroupFromState(state: TerminalGroupState, groupId: string): Termi
   };
 }
 
+/** Visibility is per rendered split group; activeGroupId only tracks keyboard focus. */
+export function isTerminalTabVisible(state: TerminalGroupState, tabId: string): boolean {
+  const groupId = state.tabToGroupMap[tabId];
+  return !!groupId && state.groups[groupId]?.activeTabId === tabId &&
+    findLeafPath(state.gridLayout, groupId) !== null;
+}
+
+/** Session/layout restoration never carries unread activity into a new runtime. */
+export function resetUnreadOutput(state: TerminalGroupState): TerminalGroupState {
+  if (Object.values(state.groups).every((group) =>
+    group.tabs.every((tab) => tab.hasUnreadOutput === false))) return state;
+  return {
+    ...state,
+    groups: Object.fromEntries(Object.entries(state.groups).map(([id, group]) => [id, {
+      ...group,
+      tabs: group.tabs.map((tab) => ({ ...tab, hasUnreadOutput: false })),
+    }])),
+  };
+}
+
 // ── Main reducer ──
 
 export function terminalGroupReducer(
@@ -507,6 +527,32 @@ export function terminalGroupReducer(
       return newState;
     }
 
+    case 'MARK_TAB_UNREAD_OUTPUT':
+    case 'ACKNOWLEDGE_TAB_OUTPUT': {
+      const { tabId } = action;
+      const groupId = state.tabToGroupMap[tabId];
+      const group = state.groups[groupId];
+      if (!group) return state;
+      const index = group.tabs.findIndex((tab) => tab.id === tabId);
+      const tab = group.tabs[index];
+      if (!tab || (tab.tabType !== undefined && tab.tabType !== 'terminal')) return state;
+
+      const visible = isTerminalTabVisible(state, tabId);
+      const hasUnreadOutput = action.type === 'MARK_TAB_UNREAD_OUTPUT';
+      if (action.type === 'MARK_TAB_UNREAD_OUTPUT') {
+        // A queued callback from a previous reconnect must not mark the new session.
+        if (visible || action.reconnectCount !== (tab.reconnectCount ?? 0)) return state;
+      } else if (!visible || tab.connectionStatus === 'pending') {
+        // Selection alone is not an acknowledgement: only a committed, visible
+        // terminal portal may report a view (not a lazy-restore placeholder).
+        return state;
+      }
+      if (!!tab.hasUnreadOutput === hasUnreadOutput) return state;
+      const tabs = [...group.tabs];
+      tabs[index] = { ...tab, hasUnreadOutput };
+      return { ...state, groups: { ...state.groups, [groupId]: { ...group, tabs } } };
+    }
+
     case 'UPDATE_TAB_STATUS': {
       const { tabId, status } = action;
       const groupId = state.tabToGroupMap[tabId];
@@ -592,7 +638,7 @@ export function terminalGroupReducer(
     }
 
     case 'RESTORE_LAYOUT': {
-      return action.state;
+      return resetUnreadOutput(action.state);
     }
 
     default:

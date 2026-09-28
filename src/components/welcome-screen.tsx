@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { cn } from '@/lib/utils';
-import { formatKeyboardShortcut, DEFAULT_APP_KEYBOARD_SHORTCUTS, DEFAULT_LAYOUT_SHORTCUTS } from '@/lib/keyboard-shortcuts';
+import { formatKeyboardShortcut, DEFAULT_LAYOUT_SHORTCUTS, loadKeyboardShortcutSettings } from '@/lib/keyboard-shortcuts';
 import { ConnectionStorageManager } from '@/lib/connection-storage';
 import { quickConnectConnection } from '@/lib/app-events';
 import { useLayout } from '@/lib/layout-context';
@@ -51,6 +51,8 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
   const { layout, toggleLeftSidebar } = useLayout();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const formatShortcut = (shortcut: string) => formatKeyboardShortcut(shortcut, isMac);
+  // Badge follows the customizable binding, not a fixed chord.
+  const newSessionShortcut = loadKeyboardShortcutSettings().newSession;
 
   // The Connection Manager lives in the left sidebar; the tile reveals it
   // (idempotent — clicking when the sidebar is already open keeps it open).
@@ -214,7 +216,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
                 aria-hidden
                 className="ml-1 rounded border border-primary-foreground/25 px-1.5 py-0.5 font-mono text-[10px] font-normal leading-none opacity-70"
               >
-                {formatShortcut(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession)}
+                {formatShortcut(newSessionShortcut)}
               </span>
             </Button>
             <p className="text-xs text-muted-foreground">

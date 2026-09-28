@@ -10,6 +10,8 @@ mod quit_guard;
 mod rdp;
 mod rdp_keymap;
 mod sftp_client;
+mod sftp_transfer;
+mod socks_proxy;
 mod ssh;
 mod vnc_client;
 mod websocket_server;
@@ -300,12 +302,12 @@ fn default_menu_text(key: &str) -> String {
         "menuBar.tools" => "Tools",
         "menuBar.connection" => "Connection",
         "menuBar.window" => "Window",
-        "menuBar.about" => "About r-shell",
+        "menuBar.about" => "About R-Shell",
         "menuBar.services" => "Services",
-        "menuBar.hide" => "Hide r-shell",
+        "menuBar.hide" => "Hide R-Shell",
         "menuBar.hideOthers" => "Hide Others",
         "menuBar.showAll" => "Show All",
-        "menuBar.quit" => "Quit r-shell",
+        "menuBar.quit" => "Quit R-Shell",
         "menuBar.newConnection" => "New Connection...",
         "menuBar.saveConnection" => "Save Connection",
         "menuBar.closeTab" => "Close Tab",
@@ -360,6 +362,9 @@ pub fn run() {
         .setup({
             let connection_manager_clone = connection_manager.clone();
             move |app| {
+                // Let the connection manager emit SOCKS proxy list changes
+                connection_manager_clone.set_app_handle(app.handle().clone());
+
                 // RDP server certificates are pinned TOFU-style (like the SSH
                 // client's known_hosts); the fingerprint store lives in the
                 // app data directory.
@@ -614,6 +619,7 @@ pub fn run() {
             commands::download_remote_file,
             commands::download_remote_file_confined,
             commands::upload_remote_file,
+            commands::cancel_transfer,
             commands::delete_remote_item,
             commands::create_remote_directory,
             commands::rename_remote_item,
@@ -652,6 +658,10 @@ pub fn run() {
             commands::get_update_context,
             commands::updater_check,
             commands::updater_download_and_install,
+            // SOCKS proxy (Dynamic port forwarding) commands
+            commands::start_socks_proxy,
+            commands::stop_socks_proxy,
+            commands::list_socks_proxies,
             // Note: PTY terminal I/O now uses WebSocket instead of IPC
             // WebSocket server runs on a dynamically assigned port (9001-9010)
         ])

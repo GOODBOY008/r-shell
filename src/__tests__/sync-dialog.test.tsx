@@ -7,7 +7,10 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
+vi.mock('@tauri-apps/api/core', async () => {
+  const { ChannelStub } = await import('./helpers/tauri-channel-stub');
+  return { invoke: mocks.invoke, Channel: ChannelStub };
+});
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn() },
 }));
@@ -90,6 +93,8 @@ describe('SyncDialog remote downloads', () => {
         destinationRoot: 'C:/Downloads/release',
         remoteRelativePath: 'nested/report.txt',
         destinationRelativePath: 'nested/report.txt',
+        transferId: expect.anything(),
+        onProgress: expect.anything(),
       });
     });
     expect(mocks.invoke.mock.calls.some(([command]) => command === 'download_remote_file')).toBe(false);

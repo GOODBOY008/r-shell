@@ -432,6 +432,15 @@ export function GroupTabBar({
                         }`}
                       />
                       <span className="text-sm truncate">{getTabDisplayName(tab, tabs)}</span>
+                      {tab.hasUnreadOutput && tab.id !== activeTabId &&
+                        (tab.tabType === undefined || tab.tabType === 'terminal') && (
+                          <span
+                            role="img"
+                            aria-label={t('terminal.unreadOutput')}
+                            title={t('terminal.unreadOutput')}
+                            className="h-1.5 w-1.5 rounded-full shrink-0 bg-blue-500"
+                          />
+                        )}
                     </div>
 
                     <Button

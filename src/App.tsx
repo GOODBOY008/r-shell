@@ -8,6 +8,8 @@ import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
+import { PortForwardingPanel } from './components/port-forwarding-panel';
+import { initSocksProxyStore, savedProxiesFor, startSocksProxy } from './lib/socks-proxy-store';
 import { StatusBar } from './components/status-bar';
 import { ConnectionDialog, ConnectionConfig } from './components/connection-dialog';
 import { HostKeyChangedDialog } from './components/host-key-changed-dialog';
@@ -15,22 +17,25 @@ import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
-import { UpdateChecker } from './components/update-checker';
+import { UpdateChecker, type UpdateAnnouncement } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
 import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, markSealFailed, clearSealFailed } from './lib/connection-storage';
 import { ConnectionProfileManager } from './lib/connection-profiles';
 import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
-import { buildSftpConnectRequest, buildSshConnectRequest } from './lib/ssh-connect-request';
+import { buildSftpConnectRequest, buildSshConnectRequest, getConnectionTimeoutSetting } from './lib/ssh-connect-request';
 import { sshConnect } from '@/lib/ssh-connect';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
   APP_SETTINGS_CHANGED_EVENT,
+  createConfiguredShortcut,
   createLayoutShortcuts,
   createSplitViewShortcuts,
+  DEFAULT_APP_KEYBOARD_SHORTCUTS,
+  isShortcutRecording,
   loadKeyboardShortcutSettings,
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
@@ -65,7 +70,10 @@ import {
   type EditorWindowEventPayload,
 } from './lib/editor-windows-store';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
-import { getRestoreTiming } from './lib/restore-timing';
+import {
+  effectiveConnectTimeoutMs,
+  effectiveOverallTimeoutMs,
+} from './lib/restore-timing';
 import { isRestoreSessionsOnStartupEnabled } from './lib/startup-restore';
 
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from './components/ui/resizable';
@@ -155,6 +163,10 @@ function AppContent() {
   // Incremented after any save/connect dialog close to trigger sidebar refresh
   const [connectionSaveTrigger, setConnectionSaveTrigger] = useState(0);
   const [updateCheckSignal, setUpdateCheckSignal] = useState(0);
+  // MenuBar update pill state, fed by UpdateChecker's announcement callback.
+  const [updateAnnouncement, setUpdateAnnouncement] = useState<UpdateAnnouncement | null>(null);
+  // Incremented when the MenuBar pill is clicked to open the update dialog.
+  const [updateDialogSignal, setUpdateDialogSignal] = useState(0);
   const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
     () => loadKeyboardShortcutSettings(),
   );
@@ -201,6 +213,13 @@ function AppContent() {
   const allTabs = useMemo(() => {
     return Object.values(state.groups).flatMap(g => g.tabs);
   }, [state.groups]);
+
+  // tab.id → tab name: the port-forwarding panel labels each proxy's owning
+  // session (a proxy's connection_id is a tab id).
+  const connectionNames = useMemo(
+    () => Object.fromEntries(allTabs.map(tab => [tab.id, tab.name])),
+    [allTabs],
+  );
 
   // Memoized set of active connection IDs — stable reference prevents
   // ConnectionManager from rebuilding its tree on every parent render.
@@ -348,7 +367,6 @@ function AppContent() {
     toggleZenMode,
   }), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode]);
 
-  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts], true);
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
@@ -368,6 +386,29 @@ function AppContent() {
       ActiveConnectionsManager.clearActiveConnections();
     }
   }, [allTabs]);
+
+  // SOCKS proxy state is event-driven: the backend emits
+  // `socks-proxies-changed` on every start/stop/cleanup, the store persists
+  // exactly on each change, and this init wires the module-level listener
+  // once (it outlives any panel mount, so persistence never gaps while the
+  // right sidebar is hidden).
+  useEffect(() => {
+    void initSocksProxyStore();
+  }, []);
+
+  // Restart the SOCKS proxies a connection had running when the previous
+  // session ended. Called right after its SSH session is re-established;
+  // individual failures warn but never block the restore.
+  const restoreSocksProxies = useCallback(async (connectionId: string, name: string) => {
+    for (const proxy of savedProxiesFor(connectionId)) {
+      const res = await startSocksProxy(connectionId, proxy.bind_address, proxy.bind_port);
+      if (res.ok) {
+        console.log(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} restored for ${name}`);
+      } else {
+        console.warn(`[Restore] SOCKS proxy ${proxy.bind_address}:${proxy.bind_port} failed for ${name}:`, res.error);
+      }
+    }
+  }, []);
 
   // One-time migration: encrypt any legacy plaintext secrets still sitting in
   // localStorage (from app versions before encrypted-at-rest storage). The
@@ -450,7 +491,9 @@ function AppContent() {
       return false;
     }
 
-    const { connectTimeoutMs } = getRestoreTiming();
+    // A configured Connection Timeout above the restore default must not be
+    // raced to death by this wrapper — take the larger of the two.
+    const connectTimeout = effectiveConnectTimeoutMs(getConnectionTimeoutSetting());
     const isDesktop = tab.tabType === 'desktop';
     const isFileBrowser = tab.tabType === 'file-browser'
       || (!isDesktop && (tab.protocol === 'SFTP' || tab.protocol === 'FTP'));
@@ -472,7 +515,7 @@ function AppContent() {
               color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
             }
           }),
-          connectTimeoutMs,
+          connectTimeout,
           `desktop_connect ${connectionData.name}`,
         );
       } else if (isFileBrowser) {
@@ -481,7 +524,7 @@ function AppContent() {
             invoke('sftp_connect', {
               request: buildSftpConnectRequest(tab.id, connectionData)
             }),
-            connectTimeoutMs,
+            connectTimeout,
             `sftp_connect ${connectionData.name}`,
           );
         } else {
@@ -497,14 +540,14 @@ function AppContent() {
                 anonymous: connectionData.authMethod === 'anonymous',
               }
             }),
-            connectTimeoutMs,
+            connectTimeout,
             `ftp_connect ${connectionData.name}`,
           );
         }
       } else {
         const result = await withTimeout(
           sshConnect(buildSshConnectRequest(tab.id, connectionData)),
-          connectTimeoutMs,
+          connectTimeout,
           `ssh_connect ${connectionData.name}`,
         );
         if (!result.success) {
@@ -512,6 +555,9 @@ function AppContent() {
           markFailed();
           return false;
         }
+        // SOCKS proxies ride on the SSH session: restart the ones this
+        // connection had running when the previous session ended.
+        await restoreSocksProxies(tab.id, connectionData.name);
       }
 
       if (!tab.originalConnectionId) {
@@ -528,7 +574,7 @@ function AppContent() {
       markFailed();
       return false;
     }
-  }, [dispatch]);
+  }, [dispatch, restoreSocksProxies]);
 
   // Chrome-style lazy restore: a background tab from the previous session
   // reconnects the first time it becomes the active tab, not at startup.
@@ -541,8 +587,6 @@ function AppContent() {
 
   // Restore connections on mount
   useEffect(() => {
-    const { overallTimeoutMs: OVERALL_RESTORE_TIMEOUT_MS } = getRestoreTiming();
-
     // Soft-cancel flag: once the overall timeout fires, the restore loop stops
     // initiating NEW connections. The connection currently in flight is allowed
     // to finish naturally so a just-succeeding host is not killed mid-handshake.
@@ -676,7 +720,11 @@ function AppContent() {
       }
     };
 
-    withTimeout(restoreActiveSessions(), OVERALL_RESTORE_TIMEOUT_MS, 'Session restore').catch((err) => {
+    // Scale the overall budget with the configured Connection Timeout so a
+    // slow host restored in sequence cannot trip the escape hatch early.
+    const sessionCount = ActiveConnectionsManager.getActiveConnections().length;
+    const overallRestoreTimeoutMs = effectiveOverallTimeoutMs(getConnectionTimeoutSetting(), sessionCount);
+    withTimeout(restoreActiveSessions(), overallRestoreTimeoutMs, 'Session restore').catch((err) => {
       // Distinguish the overall-timeout rejection from an unexpected error
       // thrown by restoreActiveSessions itself (e.g. storage parse). Only the
       // former should cancel the loop and show the timeout toast.
@@ -934,6 +982,26 @@ function AppContent() {
     setPendingConnectionId(null);
     setPendingReconnectTabId(null);
   }, []);
+
+  // Customizable new-session binding (Settings → Keyboard). Kept in its own
+  // memo below handleNewTab so the factory can reference it; the shortcut is
+  // ignored while a terminal owns the keystroke (Ctrl+N is readline
+  // next-history) and the macOS registration layer separately skips chords
+  // owned by the native menu (⌘N).
+  const newSessionShortcut = useMemo(
+    () => ({
+      ...createConfiguredShortcut(
+        keyboardShortcutSettings.newSession,
+        DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+        () => handleNewTab(),
+        'New session',
+      ),
+      ignoreInTerminal: true,
+    }),
+    [keyboardShortcutSettings.newSession, handleNewTab],
+  );
+
+  useKeyboardShortcuts([...layoutShortcuts, ...splitViewShortcuts, newSessionShortcut], true);
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
@@ -1724,6 +1792,12 @@ function AppContent() {
       if (!document.hasFocus()) {
         return;
       }
+      // While the user records a shortcut in Settings, the native menu's key
+      // equivalents must not fire their actions — the recorder owns the
+      // keystroke (otherwise ⌘N in the recorder opens a new session).
+      if (isShortcutRecording()) {
+        return;
+      }
       switch (event.payload) {
         case 'new_connection':
         case 'new_tab':
@@ -2101,7 +2175,11 @@ function AppContent() {
 
   return (
     <div className="h-screen flex flex-col bg-background">
-      <UpdateChecker checkSignal={updateCheckSignal} />
+      <UpdateChecker
+        checkSignal={updateCheckSignal}
+        openDialogSignal={updateDialogSignal}
+        onAnnouncement={setUpdateAnnouncement}
+      />
 
       {/* Web menu bar – on macOS shows only layout controls (native system menu handles File/Edit); on Windows/Linux shows full menus */}
       <MenuBar
@@ -2138,6 +2216,8 @@ function AppContent() {
         onClearScreen={() => runActiveTerminalCommand('clear-screen')}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
+        updateAnnouncement={updateAnnouncement}
+        onOpenUpdateDialog={() => setUpdateDialogSignal((current) => current + 1)}
         closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
         nextTabShortcutLabel={keyboardShortcutSettings.nextTab}
         previousTabShortcutLabel={keyboardShortcutSettings.prevTab}
@@ -2272,6 +2352,7 @@ function AppContent() {
                     <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
                     <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
+                    <TabsTrigger value="port-forwarding" className="text-xs px-2">{t('app.portForwarding')}</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
@@ -2304,6 +2385,15 @@ function AppContent() {
                         </ErrorBoundary>
                       </div>
                     </TabsContent>
+
+                    <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                      <ErrorBoundary label={t('app.portForwarding')}>
+                        <PortForwardingPanel
+                          connectionId={activeConnection?.connectionId ?? null}
+                          connectionNames={connectionNames}
+                        />
+                      </ErrorBoundary>
+                    </TabsContent>
                   </div>
                 </Tabs>
               </ResizablePanel>
@@ -2335,10 +2425,6 @@ function AppContent() {
       <SettingsModal
         open={settingsModalOpen}
         onOpenChange={setSettingsModalOpen}
-        onAppearanceChange={() => {
-          // Appearance changes are handled by individual PtyTerminal instances
-          // via their own settings listeners in TerminalGroupView
-        }}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />
 

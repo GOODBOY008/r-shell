@@ -5,7 +5,6 @@ use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::ssh::{Client, HostKeyPolicy, TunnelConfig};
 
@@ -21,6 +20,14 @@ pub struct SftpConfig {
     /// Host-key policy for this connection and its jump host.
     #[serde(default)]
     pub host_key_policy: HostKeyPolicy,
+    /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
+    /// Timeout" slider. `None` keeps the backend default (10 s).
+    #[serde(default = "default_sftp_connect_timeout")]
+    pub connect_timeout: u64,
+}
+
+fn default_sftp_connect_timeout() -> u64 {
+    10
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -131,7 +138,9 @@ impl StandaloneSftpClient {
             },
             ..client::Config::default()
         };
-        let connection_timeout = Duration::from_secs(10);
+        // Floor at 1 s so a zero/garbage value from the settings can't time
+        // out instantly.
+        let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
         let (handler, host_key_error) =
             Client::new(&config.host, config.port, config.host_key_policy);
@@ -154,7 +163,8 @@ impl StandaloneSftpClient {
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "SFTP connection timed out after 10 seconds. Please check the host and network."
+                    "SFTP connection timed out after {} seconds. Please check the host and network.",
+                    connection_timeout.as_secs()
                 )
             })?
             .map_err(|e| {
@@ -177,7 +187,8 @@ impl StandaloneSftpClient {
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
-                    "SFTP connection timed out after 10 seconds. Please check the host and network."
+                    "SFTP connection timed out after {} seconds. Please check the host and network.",
+                    connection_timeout.as_secs()
                 )
             })?
             .map_err(|e| {
@@ -298,60 +309,62 @@ impl StandaloneSftpClient {
     }
 
     /// Download a remote file to a local path. Returns bytes downloaded.
+    ///
+    /// Uses the pipelined streaming engine on a dedicated SFTP channel so
+    /// large transfers neither buffer the whole file in memory nor stall the
+    /// shared listing session.
     pub async fn download_file(&self, remote_path: &str, local_path: &str) -> Result<u64> {
-        let sftp = self
-            .sftp
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
+        self.download_file_with_progress(
+            remote_path,
+            local_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
 
-        let mut remote_file = sftp
-            .open(remote_path)
+    /// Clone the russh session handle out so a caller can drop the map read
+    /// guard before starting a long transfer.
+    pub fn transfer_session(&self) -> Result<Arc<client::Handle<Client>>> {
+        self.session
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))
+    }
+
+    pub async fn download_file_with_progress(
+        &self,
+        remote_path: &str,
+        local_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<u64> {
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
             .await
-            .map_err(|e| anyhow::anyhow!("Failed to open remote file '{}': {}", remote_path, e))?;
-
-        let mut buffer = Vec::new();
-        let mut temp_buf = vec![0u8; 32768];
-        let mut total_bytes = 0u64;
-
-        loop {
-            let n = remote_file.read(&mut temp_buf).await?;
-            if n == 0 {
-                break;
-            }
-            buffer.extend_from_slice(&temp_buf[..n]);
-            total_bytes += n as u64;
-        }
-
-        tokio::fs::write(local_path, buffer).await?;
-        Ok(total_bytes)
     }
 
     /// Upload a local file to a remote path. Returns bytes uploaded.
+    ///
+    /// Streams from disk through the pipelined transfer engine.
     pub async fn upload_file(&self, local_path: &str, remote_path: &str) -> Result<u64> {
-        let sftp = self
-            .sftp
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("SFTP session not connected"))?;
+        self.upload_file_with_progress(
+            local_path,
+            remote_path,
+            None,
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+    }
 
-        let data = tokio::fs::read(local_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to read local file '{}': {}", local_path, e))?;
-        let total_bytes = data.len() as u64;
-
-        let mut remote_file = sftp.create(remote_path).await.map_err(|e| {
-            anyhow::anyhow!("Failed to create remote file '{}': {}", remote_path, e)
-        })?;
-
-        let chunk_size = 32768;
-        let mut offset = 0;
-        while offset < data.len() {
-            let end = std::cmp::min(offset + chunk_size, data.len());
-            remote_file.write_all(&data[offset..end]).await?;
-            offset = end;
-        }
-        remote_file.flush().await?;
-
-        Ok(total_bytes)
+    pub async fn upload_file_with_progress(
+        &self,
+        local_path: &str,
+        remote_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<u64> {
+        let session = self.transfer_session()?;
+        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
     }
 
     /// Create a directory on the remote server.

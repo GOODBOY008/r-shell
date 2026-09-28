@@ -210,15 +210,6 @@ export function Toolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="sm">
-              <Lock className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Lock Session</TooltipContent>
-        </Tooltip>
-
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm">
               <Palette className="w-4 h-4" />
             </Button>
           </TooltipTrigger>

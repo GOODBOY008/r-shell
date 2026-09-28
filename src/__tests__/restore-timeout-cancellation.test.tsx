@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
 import App from '../App';
-import { getRestoreTiming, setRestoreTimingForTests } from '../lib/restore-timing';
+import { setRestoreTimingForTests } from '../lib/restore-timing';
 
 const lifecycle = vi.hoisted(() => ({
   invoke: vi.fn(),

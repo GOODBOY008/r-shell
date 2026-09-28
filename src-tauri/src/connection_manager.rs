@@ -6,16 +6,51 @@ use crate::sftp_client::StandaloneSftpClient;
 use crate::ssh::{PtySession, SshClient, SshConfig};
 use crate::vnc_client::VncClient;
 use anyhow::Result;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tauri::Emitter;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+
+/// State of a single active SOCKS proxy rule. Every entry in the manager's
+/// map is live by construction — the accept-loop supervisor removes the
+/// entry when the listener stops (explicit stop, cancel, or SSH session
+/// death), so there is no separate "active" flag to go stale.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SocksProxyInfo {
+    pub proxy_id: String,
+    pub connection_id: String,
+    pub bind_address: String,
+    pub bind_port: u16,
+}
+
+/// A tracked SOCKS proxy: its public state, the cancel token that stops the
+/// accept loop, the supervisor task's join handle (awaited on same-port
+/// restart so the old socket is closed before rebinding — backfilled after
+/// spawn), and the generation that guards the restart race (an old
+/// supervisor exiting must not remove a newer same-id entry that replaced
+/// it).
+struct SocksProxyEntry {
+    info: SocksProxyInfo,
+    cancel: CancellationToken,
+    exited: Option<tokio::task::JoinHandle<()>>,
+    generation: u64,
+}
+
+/// Tauri event emitted on every SOCKS proxy list change, carrying the full
+/// new list. The frontend store listens to this instead of polling.
+pub const SOCKS_PROXIES_CHANGED_EVENT: &str = "socks-proxies-changed";
+
+/// App handle for emitting [`SOCKS_PROXIES_CHANGED_EVENT`]; injected once
+/// from lib.rs setup via `set_app_handle`. A process-global instead of a
+/// struct field so the manager's type stays tauri-free.
+static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
 /// Error from starting a PTY session, distinguishing a dead/unusable SSH
 /// session (the frontend must re-authenticate — a WebSocket retry cannot
@@ -109,14 +144,28 @@ pub struct ConnectionManager {
     pending_connections: Arc<RwLock<HashMap<String, CancellationToken>>>,
     /// Standalone SFTP connections (no PTY)
     sftp_connections: Arc<RwLock<HashMap<String, StandaloneSftpClient>>>,
-    /// FTP/FTPS connections
-    ftp_connections: Arc<RwLock<HashMap<String, FtpClient>>>,
+    /// FTP/FTPS connections. Values are per-connection mutexes: the FTP
+    /// control connection is inherently serial, and locking per connection
+    /// (instead of holding the map write lock) keeps one connection's
+    /// long transfer from blocking every other connection's operations.
+    ftp_connections: Arc<RwLock<HashMap<String, Arc<tokio::sync::Mutex<FtpClient>>>>>,
     /// Remote desktop (RDP/VNC) connections
     desktop_connections: Arc<RwLock<HashMap<String, Arc<RwLock<Box<dyn DesktopProtocol>>>>>>,
     /// Track protocol type per connection ID ("SSH", "SFTP", "FTP", "RDP", "VNC")
     connection_types: Arc<RwLock<HashMap<String, String>>>,
+    /// In-flight transfer jobs, keyed by (connection_id, transfer_id). The
+    /// transfer commands register a CancellationToken here and must remove it
+    /// on every outcome; connection close/eviction cancels all tokens for the
+    /// connection so transfers resolve promptly instead of waiting out the
+    /// SFTP per-request timeout.
+    transfer_jobs: Arc<RwLock<HashMap<(String, String), CancellationToken>>>,
     /// Cached OS info per SSH connection (auto-detected on first monitoring call)
     os_info_cache: OsInfoCache,
+    /// Active SOCKS proxy sessions (proxy_id → entry)
+    socks_proxies: Arc<RwLock<HashMap<String, SocksProxyEntry>>>,
+    /// Monotonic id for each started proxy listener, so a supervisor task
+    /// never removes a newer same-id entry that replaced its own.
+    socks_generation: AtomicU64,
 }
 
 impl ConnectionManager {
@@ -131,7 +180,10 @@ impl ConnectionManager {
             ftp_connections: Arc::new(RwLock::new(HashMap::new())),
             desktop_connections: Arc::new(RwLock::new(HashMap::new())),
             connection_types: Arc::new(RwLock::new(HashMap::new())),
+            transfer_jobs: Arc::new(RwLock::new(HashMap::new())),
             os_info_cache: OsInfoCache::new(),
+            socks_proxies: Arc::new(RwLock::new(HashMap::new())),
+            socks_generation: AtomicU64::new(0),
         }
     }
 
@@ -182,6 +234,11 @@ impl ConnectionManager {
     }
 
     pub async fn close_connection(&self, connection_id: &str) -> Result<()> {
+        // Transfers on this connection must stop first: an engine parked on a
+        // stalled request otherwise lingers until the per-request timeout,
+        // and (pre-fix) it held the client read guard, blocking the disconnect.
+        self.cancel_all_connection_transfers(connection_id).await;
+
         let mut connections = self.connections.write().await;
         if let Some(client) = connections.remove(connection_id) {
             let mut client = client.write().await;
@@ -197,12 +254,73 @@ impl ConnectionManager {
         }
         // Clean up cached OS info for this connection
         self.os_info_cache.remove(connection_id).await;
+        // Clean up SOCKS proxies for this connection
+        self.cleanup_socks_proxies(connection_id).await;
         Ok(())
     }
 
     /// Access the OS info cache (for distro-aware monitoring commands).
     pub fn os_info_cache(&self) -> &OsInfoCache {
         &self.os_info_cache
+    }
+
+    // ===== Transfer job registry =====
+
+    /// Register an in-flight transfer and return its cancellation token.
+    /// The transfer command MUST call [`Self::finish_transfer`] on every
+    /// outcome (success, failure, cancellation) or the token leaks.
+    pub async fn register_transfer(
+        &self,
+        connection_id: &str,
+        transfer_id: &str,
+    ) -> CancellationToken {
+        let token = CancellationToken::new();
+        self.transfer_jobs.write().await.insert(
+            (connection_id.to_string(), transfer_id.to_string()),
+            token.clone(),
+        );
+        token
+    }
+
+    /// Remove a transfer's token after it settled (any outcome).
+    pub async fn finish_transfer(&self, connection_id: &str, transfer_id: &str) {
+        self.transfer_jobs
+            .write()
+            .await
+            .remove(&(connection_id.to_string(), transfer_id.to_string()));
+    }
+
+    /// Cancel one transfer by its (globally unique) transfer id. Returns
+    /// whether an active transfer was found and cancelled.
+    pub async fn cancel_transfer_by_id(&self, transfer_id: &str) -> bool {
+        let mut jobs = self.transfer_jobs.write().await;
+        let key = jobs.keys().find(|(_, tid)| tid == transfer_id).cloned();
+        match key {
+            Some(key) => {
+                if let Some(token) = jobs.remove(&key) {
+                    token.cancel();
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Cancel every active transfer for a connection. Called on explicit
+    /// disconnect and dead-connection eviction so their pending transfers
+    /// resolve immediately instead of timing out 120 s later.
+    pub async fn cancel_all_connection_transfers(&self, connection_id: &str) {
+        let mut jobs = self.transfer_jobs.write().await;
+        let keys: Vec<(String, String)> = jobs
+            .keys()
+            .filter(|(cid, _)| cid == connection_id)
+            .cloned()
+            .collect();
+        for key in keys {
+            if let Some(token) = jobs.remove(&key) {
+                token.cancel();
+            }
+        }
     }
 
     pub async fn list_connections(&self) -> Vec<String> {
@@ -348,6 +466,10 @@ impl ConnectionManager {
             connections.remove(connection_id);
         }
         tracing::info!("Evicted dead SSH session for {}", connection_id);
+
+        // The connection is gone — its transfers cannot make progress and
+        // must not wait out the SFTP per-request timeout.
+        self.cancel_all_connection_transfers(connection_id).await;
 
         // Best-effort DISCONNECT so the server can clean up promptly.
         let mut client = expected.write().await;
@@ -739,6 +861,7 @@ impl ConnectionManager {
     }
 
     pub async fn close_sftp_connection(&self, connection_id: &str) -> Result<()> {
+        self.cancel_all_connection_transfers(connection_id).await;
         let mut sftp_connections = self.sftp_connections.write().await;
         if let Some(mut client) = sftp_connections.remove(connection_id) {
             client.disconnect().await?;
@@ -757,19 +880,27 @@ impl ConnectionManager {
     ) -> Result<()> {
         let client = FtpClient::connect(&config).await?;
         let mut ftp_connections = self.ftp_connections.write().await;
-        ftp_connections.insert(connection_id.clone(), client);
+        ftp_connections.insert(
+            connection_id.clone(),
+            Arc::new(tokio::sync::Mutex::new(client)),
+        );
         let mut types = self.connection_types.write().await;
         types.insert(connection_id, "FTP".to_string());
         Ok(())
     }
 
-    pub async fn get_ftp_connection(&self) -> Arc<RwLock<HashMap<String, FtpClient>>> {
+    pub async fn get_ftp_connection(
+        &self,
+    ) -> Arc<RwLock<HashMap<String, Arc<tokio::sync::Mutex<FtpClient>>>>> {
         self.ftp_connections.clone()
     }
 
     pub async fn close_ftp_connection(&self, connection_id: &str) -> Result<()> {
+        // Stop in-flight transfers before waiting on the client mutex.
+        self.cancel_all_connection_transfers(connection_id).await;
         let mut ftp_connections = self.ftp_connections.write().await;
-        if let Some(mut client) = ftp_connections.remove(connection_id) {
+        if let Some(client) = ftp_connections.remove(connection_id) {
+            let mut client = client.lock().await;
             client.disconnect().await?;
         }
         let mut types = self.connection_types.write().await;
@@ -901,6 +1032,191 @@ impl ConnectionManager {
             .ok_or_else(|| anyhow::anyhow!("Desktop connection not found: {}", connection_id))?;
         let client = client.read().await;
         client.resize_native_surface(width, height).await
+    }
+
+    // ===== SOCKS Proxy Management =====
+
+    /// Inject the app handle so proxy-list changes can be emitted as Tauri
+    /// events. Called once from lib.rs setup; without it (unit tests) emits
+    /// are a no-op.
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        let _ = APP_HANDLE.set(handle);
+    }
+
+    /// Emit [`SOCKS_PROXIES_CHANGED_EVENT`] with the current proxy list.
+    /// Best-effort: no-op without an app handle, errors only logged.
+    /// Callers must NOT hold the `socks_proxies` lock (this reads it).
+    async fn emit_socks_proxies_changed(&self) {
+        if let Some(app) = APP_HANDLE.get() {
+            let list = self.list_socks_proxies().await;
+            if let Err(e) = app.emit(SOCKS_PROXIES_CHANGED_EVENT, &list) {
+                tracing::warn!("failed to emit {SOCKS_PROXIES_CHANGED_EVENT}: {e}");
+            }
+        }
+    }
+
+    /// Start a SOCKS4/5 proxy through the given SSH `connection_id`.
+    ///
+    /// Returns the actual port the proxy is listening on. Restarting with
+    /// the same `proxy_id` fully stops the old listener first (and waits for
+    /// its socket to close), so rebinding the same port is deterministic —
+    /// a failed restart leaves no proxy running, like any service restart.
+    pub async fn start_socks_proxy(
+        &self,
+        proxy_id: String,
+        connection_id: &str,
+        bind_address: String,
+        bind_port: u16,
+    ) -> Result<u16> {
+        // Get the SSH session handle
+        let connections = self.connections.read().await;
+        let client = connections
+            .get(connection_id)
+            .ok_or_else(|| anyhow::anyhow!("Connection not found: {connection_id}"))?;
+        let handle = {
+            let client = client.read().await;
+            client
+                .get_session_handle()
+                .ok_or_else(|| anyhow::anyhow!("SSH session not available"))?
+        };
+        drop(connections);
+
+        // Restart semantics: stop an existing proxy with the same id and wait
+        // for its supervisor (accept loop + cleanup) to finish before
+        // binding, so the same port can be rebound without an EADDRINUSE
+        // race. The await happens OUTSIDE the proxies lock — the supervisor's
+        // cleanup needs that lock.
+        let old = {
+            let mut proxies = self.socks_proxies.write().await;
+            proxies.remove(&proxy_id)
+        };
+        if let Some(old) = old {
+            old.cancel.cancel();
+            if let Some(exited) = old.exited {
+                let _ = tokio::time::timeout(Duration::from_secs(1), exited).await;
+            }
+        }
+
+        let (listener, actual_port) =
+            crate::socks_proxy::bind_socks_listener(&bind_address, bind_port)?;
+
+        let generation = self.socks_generation.fetch_add(1, Ordering::Relaxed);
+        let cancel = CancellationToken::new();
+
+        // Insert the entry BEFORE spawning the supervisor: if the session is
+        // already dead the supervisor can exit immediately, and its
+        // remove-if-generation-matches cleanup must find this entry.
+        {
+            let mut proxies = self.socks_proxies.write().await;
+            proxies.insert(
+                proxy_id.clone(),
+                SocksProxyEntry {
+                    info: SocksProxyInfo {
+                        proxy_id: proxy_id.clone(),
+                        connection_id: connection_id.to_string(),
+                        bind_address: bind_address.clone(),
+                        bind_port: actual_port,
+                    },
+                    cancel: cancel.clone(),
+                    exited: None,
+                    generation,
+                },
+            );
+        }
+
+        // Supervisor: run the accept loop, then drop the entry when it exits
+        // (explicit stop, cancel, or SSH session death) — unless a newer
+        // generation already replaced it.
+        let proxies_map = self.socks_proxies.clone();
+        let supervisor_proxy_id = proxy_id.clone();
+        let supervisor = tokio::spawn(async move {
+            crate::socks_proxy::run_socks_proxy(listener, handle, cancel).await;
+
+            let mut proxies = proxies_map.write().await;
+            let superseded = match proxies.get(&supervisor_proxy_id) {
+                Some(entry) => entry.generation != generation,
+                None => true,
+            };
+            if !superseded {
+                proxies.remove(&supervisor_proxy_id);
+            }
+            drop(proxies);
+
+            if let Some(app) = APP_HANDLE.get() {
+                let list: Vec<SocksProxyInfo> = proxies_map
+                    .read()
+                    .await
+                    .values()
+                    .map(|e| e.info.clone())
+                    .collect();
+                if let Err(e) = app.emit(SOCKS_PROXIES_CHANGED_EVENT, &list) {
+                    tracing::warn!("failed to emit {SOCKS_PROXIES_CHANGED_EVENT}: {e}");
+                }
+            }
+        });
+
+        // Backfill the join handle for the next same-id restart. If the
+        // supervisor already exited (and removed the entry), there is
+        // nothing to wait on next time — correct, since the proxy is gone.
+        {
+            let mut proxies = self.socks_proxies.write().await;
+            if let Some(entry) = proxies.get_mut(&proxy_id) {
+                if entry.generation == generation {
+                    entry.exited = Some(supervisor);
+                }
+            }
+        }
+
+        self.emit_socks_proxies_changed().await;
+
+        Ok(actual_port)
+    }
+
+    /// Stop a SOCKS proxy by ID.
+    pub async fn stop_socks_proxy(&self, proxy_id: &str) -> Result<()> {
+        let stopped = {
+            let mut proxies = self.socks_proxies.write().await;
+            match proxies.remove(proxy_id) {
+                Some(entry) => {
+                    entry.cancel.cancel();
+                    true
+                }
+                None => false,
+            }
+        };
+        if stopped {
+            self.emit_socks_proxies_changed().await;
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("SOCKS proxy not found: {proxy_id}"))
+        }
+    }
+
+    /// List all active SOCKS proxies.
+    pub async fn list_socks_proxies(&self) -> Vec<SocksProxyInfo> {
+        let proxies = self.socks_proxies.read().await;
+        proxies.values().map(|e| e.info.clone()).collect()
+    }
+
+    /// Clean up all SOCKS proxies for a given connection (called on disconnect).
+    pub async fn cleanup_socks_proxies(&self, connection_id: &str) {
+        let victim_ids: Vec<String> = {
+            let proxies = self.socks_proxies.read().await;
+            proxies
+                .iter()
+                .filter(|(_, entry)| entry.info.connection_id == connection_id)
+                .map(|(id, _)| id.clone())
+                .collect()
+        };
+        if victim_ids.is_empty() {
+            return;
+        }
+        for id in &victim_ids {
+            if let Some(entry) = self.socks_proxies.write().await.remove(id) {
+                entry.cancel.cancel();
+            }
+        }
+        self.emit_socks_proxies_changed().await;
     }
 }
 
@@ -1136,10 +1452,7 @@ mod tests {
         // Populate the subsystem maps one by one.
         {
             let mut connections = mgr.connections.write().await;
-            connections.insert(
-                "c-1".to_string(),
-                Arc::new(RwLock::new(SshClient::new())),
-            );
+            connections.insert("c-1".to_string(), Arc::new(RwLock::new(SshClient::new())));
         }
         {
             let mut generations = mgr.pty_generations.write().await;
@@ -1256,9 +1569,10 @@ mod tests {
     }
 
     fn insert_ssh_connection(mgr: &ConnectionManager, id: &str) {
-        mgr.connections
-            .blocking_write()
-            .insert(id.to_string(), Arc::new(tokio::sync::RwLock::new(SshClient::new())));
+        mgr.connections.blocking_write().insert(
+            id.to_string(),
+            Arc::new(tokio::sync::RwLock::new(SshClient::new())),
+        );
     }
 
     /// The quit prompt must only count sessions quitting would actually
@@ -1277,9 +1591,10 @@ mod tests {
         // 2) Open, connected terminal tab: live PTY session.
         insert_ssh_connection(&mgr, "open-tab");
         let (resize_tx, _rx) = mpsc::channel::<(u32, u32)>(1);
-        mgr.pty_sessions
-            .blocking_write()
-            .insert("open-tab".to_string(), Arc::new(fake_pty_session(resize_tx)));
+        mgr.pty_sessions.blocking_write().insert(
+            "open-tab".to_string(),
+            Arc::new(fake_pty_session(resize_tx)),
+        );
 
         // 3) Zombie: PTY entry present but the SSH channel already died.
         insert_ssh_connection(&mgr, "zombie");
@@ -1376,6 +1691,101 @@ mod tests {
         // Evicting with the matching Arc removes it.
         mgr.evict_dead_connection("conn-1", &live_client).await;
         assert!(mgr.get_connection("conn-1").await.is_none());
+    }
+
+    // ===== Transfer job registry =====
+
+    #[tokio::test]
+    async fn test_cancel_transfer_by_id_cancels_and_clears() {
+        let mgr = ConnectionManager::new();
+        let token = mgr.register_transfer("conn-1", "tr-1").await;
+        assert!(!token.is_cancelled());
+
+        assert!(mgr.cancel_transfer_by_id("tr-1").await);
+        assert!(token.is_cancelled());
+
+        // The entry is gone — a second cancel reports not found.
+        assert!(!mgr.cancel_transfer_by_id("tr-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_finish_transfer_removes_token_without_cancelling() {
+        let mgr = ConnectionManager::new();
+        let token = mgr.register_transfer("conn-1", "tr-done").await;
+        mgr.finish_transfer("conn-1", "tr-done").await;
+        // A settled transfer must neither leak nor be cancellable afterwards.
+        assert!(!token.is_cancelled());
+        assert!(!mgr.cancel_transfer_by_id("tr-done").await);
+    }
+
+    #[tokio::test]
+    async fn test_transfer_ids_are_unique_across_connections() {
+        // Distinct connections may reuse an external id namespace; the key
+        // is the pair, so both entries coexist and cancel independently.
+        let mgr = ConnectionManager::new();
+        let t1 = mgr.register_transfer("conn-a", "tr-x").await;
+        let t2 = mgr.register_transfer("conn-b", "tr-x").await;
+
+        assert!(mgr.cancel_transfer_by_id("tr-x").await);
+        // Exactly one of the two same-named transfers was cancelled.
+        assert!(t1.is_cancelled() ^ t2.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn test_cancel_all_connection_transfers_scopes_to_connection() {
+        let mgr = ConnectionManager::new();
+        let mine = mgr.register_transfer("conn-1", "tr-1").await;
+        let other = mgr.register_transfer("conn-2", "tr-2").await;
+
+        mgr.cancel_all_connection_transfers("conn-1").await;
+        assert!(mine.is_cancelled());
+        assert!(!other.is_cancelled());
+        // The untouched connection's transfer is still cancellable later.
+        assert!(mgr.cancel_transfer_by_id("tr-2").await);
+    }
+
+    #[tokio::test]
+    async fn test_close_connection_cancels_active_transfers() {
+        let mgr = ConnectionManager::new();
+        let token = mgr.register_transfer("conn-1", "tr-1").await;
+        mgr.close_connection("conn-1").await.unwrap();
+        assert!(
+            token.is_cancelled(),
+            "close_connection must cancel the connection's transfers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_evict_dead_connection_cancels_active_transfers() {
+        let mgr = ConnectionManager::new();
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        {
+            let mut connections = mgr.connections.write().await;
+            connections.insert("conn-1".to_string(), client.clone());
+        }
+        let token = mgr.register_transfer("conn-1", "tr-1").await;
+        mgr.evict_dead_connection("conn-1", &client).await;
+        assert!(
+            token.is_cancelled(),
+            "eviction must cancel the connection's transfers"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_close_ftp_cancels_active_transfers() {
+        let mgr = ConnectionManager::new();
+        // Insert a bare FTP entry so close has something to remove; the
+        // client is never connected so disconnect is a no-op.
+        {
+            let mut ftp = mgr.ftp_connections.write().await;
+            ftp.insert(
+                "ftp-1".to_string(),
+                Arc::new(tokio::sync::Mutex::new(FtpClient::new())),
+            );
+        }
+        let token = mgr.register_transfer("ftp-1", "tr-1").await;
+        mgr.close_ftp_connection("ftp-1").await.unwrap();
+        assert!(token.is_cancelled());
     }
 
     #[tokio::test]
@@ -1514,7 +1924,10 @@ mod tests {
         // No SSH session exists, so after the zombie is dropped the start must
         // escalate to SshSessionDead (frontend then does a full reconnect)
         // instead of reattaching the dead shell.
-        let err = mgr.start_pty_connection("zombie-1", 80, 24).await.unwrap_err();
+        let err = mgr
+            .start_pty_connection("zombie-1", 80, 24)
+            .await
+            .unwrap_err();
         assert!(matches!(err, PtyStartError::SshSessionDead(_)));
         // The zombie was removed and must not be parked/reattachable again.
         assert!(!mgr.has_detached_session("zombie-1").await);
@@ -1542,12 +1955,22 @@ mod tests {
 
         // Data flows while the channel is open.
         output_tx.send(b"hello".to_vec()).await.unwrap();
-        assert_eq!(mgr.read_from_pty("r-dead-1", None).await.unwrap().unwrap(), b"hello");
+        assert_eq!(
+            mgr.read_from_pty("r-dead-1", None).await.unwrap().unwrap(),
+            b"hello"
+        );
 
         // Dropping the sender (SSH channel gone) → next read errors AND marks dead.
         drop(output_tx);
         assert!(mgr.read_from_pty("r-dead-1", None).await.is_err());
-        assert!(mgr.pty_sessions.read().await.get("r-dead-1").unwrap().dead.load(Ordering::SeqCst));
+        assert!(mgr
+            .pty_sessions
+            .read()
+            .await
+            .get("r-dead-1")
+            .unwrap()
+            .dead
+            .load(Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -1562,5 +1985,116 @@ mod tests {
         // StartPty reattach it and re-enter the error loop.
         assert!(!mgr.has_detached_session("dead-act-1").await);
         assert!(!mgr.pty_sessions.read().await.contains_key("dead-act-1"));
+    }
+
+    // End-to-end SOCKS lifecycle tests against the docker fixture in
+    // src-tauri/docker/default-key-sshd (user `testuser`, committed
+    // throwaway keypair). The stock image disables TCP forwarding, so run
+    // the container with the override:
+    //
+    //   docker build -t rshell-default-key-sshd src-tauri/docker/default-key-sshd
+    //   docker run -d --name rshell-sshd-default-key -p 2224:22 \
+    //     rshell-default-key-sshd /usr/sbin/sshd -D -e -o AllowTcpForwarding=yes
+    //
+    // Then: cargo test --lib socks_proxy_restart -- --ignored --nocapture
+    use crate::ssh::{AuthMethod, SshConfig as TestSshConfig};
+
+    fn socks_endpoint() -> (String, u16) {
+        let host =
+            std::env::var("RSHELL_TEST_SSH_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("RSHELL_TEST_SSH_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(2224);
+        (host, port)
+    }
+
+    /// Manager-level restart semantics: starting the same proxy id on the
+    /// same port must deterministically rebind (old listener fully closed
+    /// first), leave exactly one entry, and the old supervisor must not
+    /// delete the replacement entry when it finishes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore]
+    async fn socks_proxy_restart_same_id_rebinds_and_keeps_one_entry() {
+        let mgr = ConnectionManager::new();
+        let (host, port) = socks_endpoint();
+        let mut client = SshClient::new();
+        client
+            .connect(&TestSshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::PublicKey {
+                    key_path: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("docker/default-key-sshd/id_rsa")
+                        .to_string_lossy()
+                        .into_owned(),
+                    passphrase: None,
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                connect_timeout: 10,
+                proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                tunnel: None,
+            })
+            .await
+            .expect("SSH connect to fixture");
+        {
+            let mut connections = mgr.connections.write().await;
+            connections.insert("c-restart".to_string(), Arc::new(RwLock::new(client)));
+        }
+
+        let first = mgr
+            .start_socks_proxy("px".to_string(), "c-restart", "127.0.0.1".to_string(), 0)
+            .await
+            .expect("first start");
+        // Same id, same port: must rebind deterministically.
+        let second = mgr
+            .start_socks_proxy(
+                "px".to_string(),
+                "c-restart",
+                "127.0.0.1".to_string(),
+                first,
+            )
+            .await
+            .expect("same-port restart must rebind");
+        assert_eq!(first, second);
+
+        assert_eq!(1, mgr.list_socks_proxies().await.len());
+        assert_eq!(first, mgr.list_socks_proxies().await[0].bind_port);
+
+        // The replacement still relays: SOCKS5 CONNECT to the fixture's own
+        // sshd must succeed and return the SSH banner.
+        let mut s = tokio::net::TcpStream::connect(("127.0.0.1", second))
+            .await
+            .expect("connect to restarted proxy");
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        s.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method = [0u8; 2];
+        s.read_exact(&mut method).await.unwrap();
+        assert_eq!([0x05, 0x00], method);
+        s.write_all(&[
+            0x05, 0x01, 0x00, 0x03, 9, b'l', b'o', b'c', b'a', b'l', b'h', b'o', b's', b't', 0, 22,
+        ])
+        .await
+        .unwrap();
+        let mut reply = [0u8; 10];
+        s.read_exact(&mut reply).await.unwrap();
+        assert_eq!(0x00, reply[1], "CONNECT through restarted proxy");
+
+        // Give the old supervisor's exit path a chance to (wrongly) remove
+        // the replacement entry — it must not.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(
+            1,
+            mgr.list_socks_proxies().await.len(),
+            "old supervisor must not remove the replacement entry"
+        );
+
+        // Full teardown: connection cleanup removes the proxy.
+        mgr.cleanup_socks_proxies("c-restart").await;
+        assert!(mgr.list_socks_proxies().await.is_empty());
     }
 }
