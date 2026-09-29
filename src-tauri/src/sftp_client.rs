@@ -387,7 +387,14 @@ impl StandaloneSftpClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
         let session = self.transfer_session()?;
-        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
+        crate::sftp_transfer::upload_file(
+            std::slice::from_ref(&session),
+            local_path,
+            remote_path,
+            progress,
+            cancel,
+        )
+        .await
     }
 
     /// Create a directory on the remote server.

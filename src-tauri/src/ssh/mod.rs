@@ -164,6 +164,10 @@ pub struct SshSession {
 
 pub struct SshClient {
     session: Option<Arc<client::Handle<Client>>>,
+    /// The configuration this client connected with, kept so bulk transfers
+    /// can dial additional independent SSH connections (parallel segmented
+    /// upload — bbcp/Globus style). `None` until `connect` succeeds.
+    config: Option<SshConfig>,
 }
 
 // PTY session handle for interactive shell
@@ -690,13 +694,18 @@ pub async fn connect_via_ssh_tunnel(
 
 impl SshClient {
     pub fn new() -> Self {
-        Self { session: None }
+        Self {
+            session: None,
+            config: None,
+        }
     }
 
-    pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+    /// The russh-level client configuration shared by every connection this
+    /// client dials (the main one in `connect` and the extra bulk-transfer
+    /// connections), so windows/keepalive/limits behave identically.
+    fn build_russh_client_config(config: &SshConfig) -> client::Config {
         let keepalive_interval = config.keepalive_interval.map(Duration::from_secs);
-
-        let ssh_config = client::Config {
+        client::Config {
             preferred: russh::Preferred {
                 key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
                 compression: std::borrow::Cow::Borrowed(compression_preferences(
@@ -722,7 +731,11 @@ impl SshClient {
             // server-initiated rekey replaces it.
             limits: Limits::new(1 << 30, 1 << 30, Duration::from_secs(7 * 24 * 60 * 60)),
             ..client::Config::default()
-        };
+        }
+    }
+
+    pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+        let ssh_config = Self::build_russh_client_config(config);
 
         // Connection timeout: configurable via the Settings "Connection
         // Timeout" slider (SshConfig::connect_timeout); floor at 1 s so a
@@ -783,7 +796,91 @@ impl SshClient {
         authenticate_session(&mut ssh_session, &config.username, &config.auth_method).await?;
 
         self.session = Some(Arc::new(ssh_session));
+        self.config = Some(config.clone());
         Ok(())
+    }
+
+    /// Dial `count` additional, fully independent SSH connections to the
+    /// same server (own TCP socket, own handshake, own authentication) for
+    /// parallel segmented upload — the bbcp/Globus multi-connection trick.
+    /// All channels of one connection share the server's per-connection TCP
+    /// receive window, so high-RTT links need separate connections, not just
+    /// separate channels, to saturate the link.
+    ///
+    /// Direct connections only: a jump-host or proxy setup is NOT replicated
+    /// (an empty result just means the transfer runs single-connection).
+    /// Failures are tolerated per connection — whatever dials and
+    /// authenticates in time is returned (possibly fewer than `count`,
+    /// possibly none); the transfer falls back to the main session.
+    pub(crate) async fn open_extra_upload_sessions(
+        &self,
+        count: usize,
+        cancel: &CancellationToken,
+    ) -> Vec<Arc<client::Handle<Client>>> {
+        let Some(config) = &self.config else {
+            return Vec::new();
+        };
+        if config.tunnel.is_some() || config.proxy.is_some() || count == 0 {
+            return Vec::new();
+        }
+        let timeout = Duration::from_secs(config.connect_timeout.max(1));
+        let dials = (0..count).map(|_| {
+            let ssh_config = Arc::new(Self::build_russh_client_config(config));
+            let (handler, host_key_error) =
+                Client::new(&config.host, config.port, config.host_key_policy);
+            let host = config.host.clone();
+            async move {
+                let mut session = tokio::time::timeout(
+                    timeout,
+                    client::connect(ssh_config, (&host[..], config.port), handler),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "extra session connect timed out after {}s",
+                        timeout.as_secs()
+                    )
+                })?
+                .map_err(|e| {
+                    host_key_error
+                        .explain_or(anyhow::anyhow!("extra session connect failed: {}", e))
+                })?;
+                authenticate_session(&mut session, &config.username, &config.auth_method).await?;
+                Ok::<_, anyhow::Error>(Arc::new(session))
+            }
+        });
+        let raced = tokio::select! {
+            results = futures::future::join_all(dials) => results,
+            _ = cancel.cancelled() => return Vec::new(),
+        };
+        let ok: Vec<_> = raced
+            .into_iter()
+            .filter_map(|r| match r {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    tracing::warn!(error = %e, "extra upload session unavailable");
+                    None
+                }
+            })
+            .collect();
+        tracing::info!(
+            requested = count,
+            opened = ok.len(),
+            "extra upload connections"
+        );
+        ok
+    }
+
+    /// Politely close extra upload connections (best effort, bounded — they
+    /// carry nothing after the transfer).
+    pub(crate) async fn close_extra_sessions(sessions: Vec<Arc<client::Handle<Client>>>) {
+        for session in sessions {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(500),
+                session.disconnect(russh::Disconnect::ByApplication, "", "english"),
+            )
+            .await;
+        }
     }
 
     // Changed to &self instead of &mut self to allow concurrent access
@@ -1086,6 +1183,12 @@ impl SshClient {
     /// Upload via the pipelined streaming engine (`sftp_transfer`), with
     /// optional progress callbacks. Streams from disk instead of loading
     /// the whole file into memory. Cancelling `cancel` aborts promptly.
+    ///
+    /// High-RTT links additionally get bbcp/Globus-style parallel
+    /// connections: for large files the engine may want more streams than
+    /// one connection's server window can feed, so we dial independent SSH
+    /// connections up front (see [`SshClient::open_extra_upload_sessions`])
+    /// and hand them to the engine.
     pub async fn upload_file_with_progress(
         &self,
         local_path: &str,
@@ -1094,7 +1197,26 @@ impl SshClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
         let session = self.transfer_session()?;
-        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
+        // Only large files can use extra connections; anything smaller (or a
+        // forced single-stream run) never leaves this connection.
+        let wants = crate::sftp_transfer::upload_stream_target(local_path);
+        let extra = if wants > 1 {
+            self.open_extra_upload_sessions(wants - 1, cancel).await
+        } else {
+            Vec::new()
+        };
+        let mut sessions = vec![session];
+        sessions.extend(extra);
+        let result =
+            crate::sftp_transfer::upload_file(&sessions, local_path, remote_path, progress, cancel)
+                .await;
+        // Every handle except the first is an extra connection we dialed;
+        // drop their transports instead of leaving idle sockets behind.
+        if sessions.len() > 1 {
+            let extras = sessions.split_off(1);
+            Self::close_extra_sessions(extras).await;
+        }
+        result
     }
 
     /// Open an SFTP subsystem session for small one-shot operations (viewer

@@ -145,16 +145,36 @@ fn upload_stream_count_for(rtt: Duration, total: u64) -> usize {
     usize::try_from(needed.clamp(1, MAX_UPLOAD_STREAMS as u64)).unwrap_or(1)
 }
 
-/// [`upload_stream_count_for`] plus the `RSHELL_UPLOAD_STREAMS` override
-/// (tests and benchmarks pin the stream count so results are reproducible;
-/// values outside 1..=MAX are clamped).
+/// `RSHELL_UPLOAD_STREAMS` override (tests and benchmarks pin the stream
+/// count so results are reproducible; values outside 1..=MAX are clamped).
+fn forced_stream_count() -> Option<usize> {
+    let v = std::env::var("RSHELL_UPLOAD_STREAMS").ok()?;
+    v.trim()
+        .parse::<usize>()
+        .ok()
+        .map(|n| n.clamp(1, MAX_UPLOAD_STREAMS))
+}
+
+/// [`upload_stream_count_for`] plus the `RSHELL_UPLOAD_STREAMS` override.
 fn upload_stream_count(rtt: Duration, total: u64) -> usize {
-    if let Ok(v) = std::env::var("RSHELL_UPLOAD_STREAMS") {
-        if let Ok(n) = v.trim().parse::<usize>() {
-            return n.clamp(1, MAX_UPLOAD_STREAMS);
-        }
+    forced_stream_count().unwrap_or_else(|| upload_stream_count_for(rtt, total))
+}
+
+/// Pre-connection estimate for the wrapper: how many streams are worth
+/// provisioning for `local_path` before RTT can be measured. Large files
+/// request the cap (the engine trims to the measured-RTT decision and
+/// hands back unused connections); small files and forced single streams
+/// never dial at all.
+pub(crate) fn upload_stream_target(local_path: &str) -> usize {
+    if let Some(n) = forced_stream_count() {
+        return n;
     }
-    upload_stream_count_for(rtt, total)
+    let total = std::fs::metadata(local_path).map(|m| m.len()).unwrap_or(0);
+    if total >= PARALLEL_UPLOAD_MIN_SIZE {
+        MAX_UPLOAD_STREAMS
+    } else {
+        1
+    }
 }
 
 /// Minimum interval between progress callbacks.
@@ -482,13 +502,22 @@ where
 /// writes. Returns the number of bytes transferred. Cancelling `cancel`
 /// aborts the transfer promptly; the remote file may remain partial (same
 /// policy as downloads).
+///
+/// `sessions[0]` is the caller's main SSH connection; any further entries
+/// are additional independent connections (bbcp/Globus style) the wrapper
+/// dialed for high-RTT links — all channels of one connection share the
+/// server's per-connection TCP receive window, so saturating such links
+/// needs separate connections, not just separate channels. The engine
+/// trims the RTT-adaptive stream count to what is actually available, so
+/// an empty slice tail degrades to fewer streams, never to an error.
 pub(crate) async fn upload_file(
-    session: &russh::client::Handle<Client>,
+    sessions: &[Arc<russh::client::Handle<Client>>],
     local_path: &str,
     remote_path: &str,
     progress: ProgressCallback<'_>,
     cancel: &CancellationToken,
 ) -> Result<u64> {
+    debug_assert!(!sessions.is_empty());
     let mut local = tokio::fs::File::open(local_path)
         .await
         .map_err(|e| anyhow!("Failed to read local file '{}': {}", local_path, e))?;
@@ -502,7 +531,8 @@ pub(crate) async fn upload_file(
     let (raw, handle, write_len, rtt) = tokio::select! {
         setup = async {
             let started = Instant::now();
-            let (raw, _read_len, write_len) = open_raw_transfer_session(session).await?;
+            let (raw, _read_len, write_len) =
+                open_raw_transfer_session(&sessions[0]).await?;
             let handle = raw
                 .open(
                     remote_path,
@@ -521,7 +551,7 @@ pub(crate) async fn upload_file(
     // (≈20 MB/s at 100 ms — the HPN-SSH problem), so high-RTT links need
     // several parallel SFTP sessions, each with its own server window, to
     // saturate the link. See `upload_stream_count_for`.
-    let streams = upload_stream_count(rtt, total);
+    let streams = upload_stream_count(rtt, total).min(sessions.len());
     if streams <= 1 {
         let depth = write_pipeline_depth_for(write_len);
         return upload_via_raw(
@@ -531,13 +561,14 @@ pub(crate) async fn upload_file(
     }
     tracing::info!(
         streams,
+        connections = sessions.len(),
         rtt_ms = rtt.as_millis() as u64,
         bytes = total,
         remote_path,
         "parallel segmented upload"
     );
     parallel_upload(
-        session,
+        sessions,
         raw,
         handle,
         write_len,
@@ -551,14 +582,14 @@ pub(crate) async fn upload_file(
     .await
 }
 
-/// Open the remaining upload streams and run [`upload_segments`]. Any
-/// failure while opening the extra sessions (a server capping sessions per
-/// connection below our stream count, or a non-OpenSSH server disliking the
-/// pattern) falls back to the single-stream path on the already-open probe
-/// stream — the transfer then completes, just slower.
+/// Open one raw SFTP session per extra connection and run
+/// [`upload_segments`]. Any failure while opening them (a dead connection,
+/// a non-OpenSSH server disliking the pattern) falls back to the
+/// single-stream path on the already-open probe stream — the transfer then
+/// completes, just slower.
 #[allow(clippy::too_many_arguments)]
 async fn parallel_upload(
-    session: &russh::client::Handle<Client>,
+    connections: &[Arc<russh::client::Handle<Client>>],
     raw0: Arc<RawSftpSession>,
     handle0: String,
     write_len0: u32,
@@ -582,14 +613,20 @@ async fn parallel_upload(
         .collect();
 
     // Stream 0 (the TRUNCATEd probe stream) opens first and sequentially, so
-    // the truncation strictly precedes every other stream's writes — the
-    // other handles must NOT truncate, or they could erase writes that
-    // landed between their open and stream 0's.
+    // the truncation strictly precedes every other stream's writes — no
+    // other stream truncates, or it could erase writes that landed between
+    // its open and stream 0's. Extra streams are distributed round-robin
+    // over the available CONNECTIONS: every channel of one connection
+    // shares the server's per-connection TCP receive window, so callers
+    // that hand us multiple connections (bbcp/Globus style) multiply that
+    // budget, while a single-connection caller keeps today's channel
+    // parallelism.
     let extra: Vec<(Arc<RawSftpSession>, String, u32)> = {
-        let opens = (1..streams).map(|_| {
+        let opens = (1..streams).map(|i| {
+            let connection = &connections[i % connections.len()];
             let remote_path = remote_path.to_string();
             async move {
-                let (raw, _read_len, write_len) = open_raw_transfer_session(session).await?;
+                let (raw, _read_len, write_len) = open_raw_transfer_session(connection).await?;
                 let handle = raw
                     .open(
                         &remote_path,

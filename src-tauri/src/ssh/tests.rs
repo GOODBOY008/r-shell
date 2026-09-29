@@ -957,10 +957,11 @@ mod shell_integration_tests {
 
             let compression =
                 std::env::var("RSHELL_REKEY_COMPRESSION").ok().as_deref() == Some("1");
-            let mut session = rekey_fixture_session_on(None, 32 * 1024 * 1024, compression).await;
+            let session =
+                Arc::new(rekey_fixture_session_on(None, 32 * 1024 * 1024, compression).await);
             let remote_path = "/tmp/rshell-rekey-upload-e2e.bin";
             let n = crate::sftp_transfer::upload_file(
-                &session,
+                std::slice::from_ref(&session),
                 local_src.path().to_string_lossy().as_ref(),
                 remote_path,
                 None,
@@ -1078,10 +1079,11 @@ mod shell_integration_tests {
                 .await
                 .expect("write source file");
 
-            let mut session = rekey_fixture_session_on(Some(port), 1 << 30, compression).await;
+            let session =
+                Arc::new(rekey_fixture_session_on(Some(port), 1 << 30, compression).await);
             let remote_path = "/tmp/rshell-server-rekey-upload-e2e.bin";
             let n = crate::sftp_transfer::upload_file(
-                &session,
+                std::slice::from_ref(&session),
                 local_src.path().to_string_lossy().as_ref(),
                 remote_path,
                 None,
@@ -1104,6 +1106,70 @@ mod shell_integration_tests {
             assert_eq!(back, size);
             let got = tokio::fs::read(downloaded.path()).await.expect("read back");
             assert_eq!(fold_hash(&got), expected_hash, "bytes must survive rekeys");
+        }
+
+        /// End-to-end multi-CONNECTION segmented upload through the real
+        /// `SshClient::upload_file_with_progress` path: `RSHELL_UPLOAD_
+        /// STREAMS=3` makes the wrapper dial 2 extra SSH connections (own
+        /// TCP socket, own handshake and auth), the engine segments the file
+        /// across all three, and the roundtrip must be byte-exact. This is
+        /// the bbcp/Globus path — separate connections, not just channels.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_upload_multi_connection_roundtrip() {
+            let size: u64 = 96 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let mut client = fixture_client().await;
+            let remote_path = "/tmp/rshell-multi-conn-e2e.bin";
+            let n = client
+                .upload_file_with_progress(
+                    local_src.path().to_string_lossy().as_ref(),
+                    remote_path,
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("multi-connection upload");
+            assert_eq!(n, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = client
+                .download_file_with_progress(
+                    remote_path,
+                    downloaded.path().to_string_lossy().as_ref(),
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("download back on the main connection");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(
+                fold_hash(&got),
+                expected_hash,
+                "roundtrip must be byte-exact"
+            );
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
         }
     }
 }

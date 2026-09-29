@@ -2858,8 +2858,14 @@ pub async fn upload_remote_file(
                             .ok_or_else(|| anyhow::anyhow!("SFTP connection not found"))?;
                         client.transfer_session()?
                     };
-                    sftp_transfer::upload_file(&session, &local, &remote, progress_ref, &cancel)
-                        .await
+                    sftp_transfer::upload_file(
+                        std::slice::from_ref(&session),
+                        &local,
+                        &remote,
+                        progress_ref,
+                        &cancel,
+                    )
+                    .await
                 }
                 Some("FTP") => {
                     let ftp_map = state.get_ftp_connection().await;
@@ -2889,8 +2895,14 @@ pub async fn upload_remote_file(
                         let client = connection.read().await;
                         client.transfer_session()?
                     };
-                    sftp_transfer::upload_file(&session, &local, &remote, progress_ref, &cancel)
-                        .await
+                    sftp_transfer::upload_file(
+                        std::slice::from_ref(&session),
+                        &local,
+                        &remote,
+                        progress_ref,
+                        &cancel,
+                    )
+                    .await
                 }
             }
         },
