@@ -1,6 +1,6 @@
 use anyhow::Result;
+use russh::keys::*;
 use russh::*;
-use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -136,6 +136,10 @@ impl StandaloneSftpClient {
                 key: std::borrow::Cow::Borrowed(crate::ssh::PREFERRED_HOST_KEY_ALGOS),
                 ..russh::Preferred::DEFAULT
             },
+            // The "SFTP" connection type transfers over this session, so it
+            // needs the same large receive window as the terminal-oriented
+            // connections — see crate::ssh::CHANNEL_WINDOW_SIZE.
+            window_size: crate::ssh::CHANNEL_WINDOW_SIZE,
             ..client::Config::default()
         };
         // Floor at 1 s so a zero/garbage value from the settings can't time
@@ -220,21 +224,25 @@ impl StandaloneSftpClient {
                     ));
                 }
 
-                let key =
-                    decode_secret_key(&expanded_path, passphrase.as_deref()).map_err(|e| {
-                        if e.to_string().contains("encrypted")
-                            || e.to_string().contains("passphrase")
-                        {
-                            anyhow::anyhow!(
-                                "Failed to decrypt SSH key. Please provide the correct passphrase."
-                            )
-                        } else {
-                            anyhow::anyhow!("Failed to load SSH key from {}: {}.", key_path, e)
-                        }
-                    })?;
+                // load_secret_key takes the key *path* and handles both
+                // OpenSSH and PEM private keys (the previous code passed the
+                // path to decode_secret_key, which expects the file content —
+                // publickey SFTP logins silently fell back to failures).
+                let key = load_secret_key(&expanded_path, passphrase.as_deref()).map_err(|e| {
+                    if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
+                        anyhow::anyhow!(
+                            "Failed to decrypt SSH key. Please provide the correct passphrase."
+                        )
+                    } else {
+                        anyhow::anyhow!("Failed to load SSH key from {}: {}.", key_path, e)
+                    }
+                })?;
 
-                let authenticated = ssh_session
-                    .authenticate_publickey(&config.username, Arc::new(key))
+                let mut authenticated = ssh_session
+                    .authenticate_publickey(
+                        &config.username,
+                        PrivateKeyWithHashAlg::new(Arc::new(key.clone()), Some(HashAlg::Sha256)),
+                    )
                     .await
                     .map_err(|e| {
                         anyhow::anyhow!(
@@ -243,7 +251,22 @@ impl StandaloneSftpClient {
                             e
                         )
                     })?;
-                if !authenticated {
+                if !authenticated.success() {
+                    authenticated = ssh_session
+                        .authenticate_publickey(
+                            &config.username,
+                            PrivateKeyWithHashAlg::new(Arc::new(key.clone()), None),
+                        )
+                        .await
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "SFTP public key authentication failed with key {}: {}.",
+                                expanded_path,
+                                e
+                            )
+                        })?;
+                }
+                if !authenticated.success() {
                     return Err(anyhow::anyhow!(
                         "SFTP public key authentication failed with key {}. The key may not be authorized on the server.",
                         expanded_path
@@ -253,7 +276,7 @@ impl StandaloneSftpClient {
             }
         };
 
-        if !authenticated {
+        if !authenticated.success() {
             return Err(anyhow::anyhow!(
                 "SFTP authentication failed. Please check your credentials."
             ));

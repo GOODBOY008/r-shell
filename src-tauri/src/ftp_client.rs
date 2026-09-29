@@ -1,5 +1,5 @@
 use anyhow::Result;
-use async_std::io::{ReadExt, WriteExt as FtpStreamWriteExt};
+use futures_lite::io::{AsyncReadExt, AsyncWriteExt as FtpStreamWriteExt};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt as TokioReadExt, AsyncWriteExt as TokioWriteExt};
@@ -63,11 +63,13 @@ impl FtpClient {
             config.anonymous
         );
 
-        // Use async_std timeout since suppaftp uses async_std internally
+        // The suppaftp connect futures drive their I/O through async-io's
+        // own lazy polling thread (no executor affinity), so a tokio timer
+        // wrapper is equivalent to the async_std one it replaces.
         let timeout_duration = Duration::from_secs(15);
 
         let mut stream_kind = if config.ftps_enabled {
-            let ftp_stream = async_std::future::timeout(
+            let ftp_stream = tokio::time::timeout(
                 timeout_duration,
                 suppaftp::AsyncNativeTlsFtpStream::connect(&addr),
             )
@@ -96,19 +98,17 @@ impl FtpClient {
             tracing::info!("FTPS TLS handshake complete");
             FtpStreamKind::Secure(secure_stream)
         } else {
-            let ftp_stream = async_std::future::timeout(
-                timeout_duration,
-                suppaftp::AsyncFtpStream::connect(&addr),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "FTP connection timed out after 15s. Check host {} and port {}.",
-                    config.host,
-                    config.port
-                )
-            })?
-            .map_err(|e| anyhow::anyhow!("FTP TCP connect to {} failed: {}", addr, e))?;
+            let ftp_stream =
+                tokio::time::timeout(timeout_duration, suppaftp::AsyncFtpStream::connect(&addr))
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!(
+                            "FTP connection timed out after 15s. Check host {} and port {}.",
+                            config.host,
+                            config.port
+                        )
+                    })?
+                    .map_err(|e| anyhow::anyhow!("FTP TCP connect to {} failed: {}", addr, e))?;
 
             tracing::info!("FTP TCP connected to {}", addr);
             FtpStreamKind::Plain(ftp_stream)

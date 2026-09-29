@@ -713,13 +713,14 @@ mod shell_integration_tests {
     #[tokio::test]
     #[ignore]
     async fn docker_ssh_auth_failure_names_attempted_key() {
-        use russh_keys::{encode_pkcs8_pem, key::KeyPair};
+        use russh::keys::{encode_pkcs8_pem, Algorithm, PrivateKey};
         use std::io::Write;
 
         let (host, port) = default_key_endpoint();
 
         // A fresh key the fixture server does NOT authorize.
-        let key = KeyPair::generate_ed25519().expect("generate unauthorized key");
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
+            .expect("generate unauthorized key");
         let mut pem = Vec::new();
         encode_pkcs8_pem(&key, &mut pem).expect("encode unauthorized key");
         let mut wrong_key = tempfile::NamedTempFile::new().expect("temp unauthorized key");
@@ -925,6 +926,185 @@ mod shell_integration_tests {
                 .ok();
             client.disconnect().await.ok();
         }
+
+        /// Repro for "uploading a large file kills the whole SSH connection".
+        /// russh 0.44.1 client-rekeys every `rekey_write_limit` bytes written
+        /// to the wire; `Limits::new` asserts the limit ≤ 1 GiB so it cannot
+        /// be raised, and the read limit is never checked anywhere — which is
+        /// why only uploads (bytes SENT) cross the threshold in the field
+        /// while downloads never do. Shrink the limit to 32 MiB so a 256 MB
+        /// upload crosses 8 mid-transfer rekeys: the same code path a
+        /// multi-GiB real-world upload hits exactly once, at localhost speed.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_upload_survives_mid_transfer_rekeys() {
+            let size: u64 = 256 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let compression =
+                std::env::var("RSHELL_REKEY_COMPRESSION").ok().as_deref() == Some("1");
+            let mut session = rekey_fixture_session_on(None, 32 * 1024 * 1024, compression).await;
+            let remote_path = "/tmp/rshell-rekey-upload-e2e.bin";
+            let n = crate::sftp_transfer::upload_file(
+                &session,
+                local_src.path().to_string_lossy().as_ref(),
+                remote_path,
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("upload must survive 8 mid-transfer rekeys");
+            assert_eq!(n, size);
+
+            // The transport must still be healthy after the rekeys: download
+            // the file back through the same session and compare bytes.
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = crate::sftp_transfer::download_file(
+                &session,
+                remote_path,
+                downloaded.path().to_string_lossy().as_ref(),
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("download on the rekeyed session must still work");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(fold_hash(&got), expected_hash, "bytes must survive rekeys");
+        }
+
+        /// Connect to the default-key fixture with a custom russh config whose
+        /// data-rekey limit is shrunk — `SshClient::connect` hardcodes its
+        /// limits inside `connect()`, so this bypasses it and mirrors the
+        /// connect + authenticate sequence directly. `port_override` points at
+        /// a fixture variant (e.g. an sshd with a tiny server-side RekeyLimit).
+        async fn rekey_fixture_session_on(
+            port_override: Option<u16>,
+            rekey_write_limit: usize,
+            compression: bool,
+        ) -> russh::client::Handle<crate::ssh::Client> {
+            let (host, port) = super::default_key_endpoint();
+            let port = port_override.unwrap_or(port);
+            let ssh_config = russh::client::Config {
+                preferred: russh::Preferred {
+                    compression: std::borrow::Cow::Borrowed(crate::ssh::compression_preferences(
+                        compression,
+                    )),
+                    ..russh::Preferred::DEFAULT
+                },
+                limits: russh::Limits::new(
+                    rekey_write_limit,
+                    1 << 30,
+                    std::time::Duration::from_secs(7 * 24 * 60 * 60),
+                ),
+                ..russh::client::Config::default()
+            };
+            let (handler, _host_key_report) =
+                crate::ssh::Client::new(&host, port, crate::ssh::HostKeyPolicy::default());
+            let mut session =
+                russh::client::connect(Arc::new(ssh_config), (&host[..], port), handler)
+                    .await
+                    .expect("connect to default-key fixture");
+            let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("docker/default-key-sshd/id_rsa");
+            crate::ssh::authenticate_session(
+                &mut session,
+                "testuser",
+                &AuthMethod::PublicKey {
+                    key_path: fixture_key.to_string_lossy().into_owned(),
+                    passphrase: None,
+                },
+            )
+            .await
+            .expect("authenticate to default-key fixture");
+            session
+        }
+
+        async fn rekey_fixture_session(
+            rekey_write_limit: usize,
+        ) -> russh::client::Handle<crate::ssh::Client> {
+            rekey_fixture_session_on(None, rekey_write_limit, false).await
+        }
+
+        /// Same connection as the field: the SERVER decides when to rekey.
+        /// OpenSSH's sshd rekeys after ~1 GiB of traffic by default, which a
+        /// multi-GiB upload crosses — so mid-upload the server sends KEXINIT
+        /// while the client still has queued channel writes. Run against a
+        /// fixture started with `-o RekeyLimit=32M -o LogLevel=VERBOSE`
+        /// (docker run --name rshell-sshd-rekey-test -p 2298:22
+        /// rshell-default-key-sshd /usr/sbin/sshd -D -e -o RekeyLimit=32M
+        /// -o LogLevel=VERBOSE) so a 256 MB upload crosses ~8 server-initiated
+        /// rekeys. Client limits stay at the production values.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_upload_survives_server_initiated_rekeys() {
+            let port: u16 = std::env::var("RSHELL_REKEY_SERVER_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(2298);
+            // RSHELL_REKEY_COMPRESSION=1 turns SSH compression on (a user
+            // setting), so one test binary covers the compression × rekey
+            // matrix against the default and the RekeyLimit fixtures.
+            let compression =
+                std::env::var("RSHELL_REKEY_COMPRESSION").ok().as_deref() == Some("1");
+            let size: u64 = 256 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let mut session = rekey_fixture_session_on(Some(port), 1 << 30, compression).await;
+            let remote_path = "/tmp/rshell-server-rekey-upload-e2e.bin";
+            let n = crate::sftp_transfer::upload_file(
+                &session,
+                local_src.path().to_string_lossy().as_ref(),
+                remote_path,
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("upload must survive server-initiated rekeys");
+            assert_eq!(n, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = crate::sftp_transfer::download_file(
+                &session,
+                remote_path,
+                downloaded.path().to_string_lossy().as_ref(),
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("download on the rekeyed session must still work");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(fold_hash(&got), expected_hash, "bytes must survive rekeys");
+        }
     }
 }
 
@@ -932,14 +1112,15 @@ mod shell_integration_tests {
 
 #[cfg(test)]
 mod key_loading_tests {
-    use russh_keys::{decode_secret_key, encode_pkcs8_pem, key::KeyPair};
+    use russh::keys::{decode_secret_key, encode_pkcs8_pem, Algorithm, PrivateKey};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
     /// Generate a fresh Ed25519 key pair and return its PKCS#8 PEM encoding as a
     /// `String` with Unix (`\n`) line endings.
     fn generate_pem_lf() -> String {
-        let key = KeyPair::generate_ed25519().expect("Ed25519 generation must succeed");
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 generation must succeed");
         let mut buf = Vec::new();
         encode_pkcs8_pem(&key, &mut buf).expect("PEM encoding must succeed");
         String::from_utf8(buf).expect("PEM is valid UTF-8")
@@ -1164,5 +1345,63 @@ mod compression_pref_tests {
         let prefs = compression_preferences(false);
         assert_eq!(prefs, &[NONE]);
         assert_eq!(negotiate(prefs, "none,zlib@openssh.com"), Some("none"));
+    }
+}
+
+// ── Compression round-trip (vendored russh patch regression) ─────────────────
+
+#[cfg(test)]
+mod compression_roundtrip_tests {
+    use russh::compression::{Compress, Compression, Decompress, ZLIB};
+
+    /// russh 0.44.1's compressor broke out of its loop on `Status::Ok` even
+    /// when the output buffer was full, silently truncating packets whose
+    /// compressed size exceeded the `input_len + 10` reserve — exactly what
+    /// incompressible ~16–64 KiB payloads (bulk SFTP WRITEs) produce. With
+    /// SSH compression enabled this corrupted every bulk upload and the
+    /// server disconnected the whole session ("channel_input_data: get data:
+    /// incomplete message"). The fix landed upstream in newer russh (compress
+    /// retries while the buffer is full); this round-trip over incompressible
+    /// sizes spanning the stored-block boundary is the regression guard that
+    /// motivated the 0.63 upgrade. Sizes stay under russh 0.63's decompressed
+    /// packet limit (256 KiB); real SSH packets are chunked to ≤32 KiB
+    /// payloads anyway, so the bound never bites in production.
+    #[test]
+    fn incompressible_packets_survive_compress_roundtrip() {
+        for &len in &[1usize, 1024, 16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024] {
+            // xorshift pattern: deterministic and incompressible, so deflate
+            // emits stored blocks and hits the +10 reserve boundary.
+            let input: Vec<u8> = {
+                let mut x = 0x9E3779B97F4A7C15u64;
+                (0..len)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        x as u8
+                    })
+                    .collect()
+            };
+
+            let mut comp = Compress::None;
+            Compression::new(&ZLIB).init_compress(&mut comp);
+            let mut compressed = Vec::new();
+            let compressed = comp
+                .compress(&input, &mut compressed)
+                .expect("compress must succeed");
+
+            let mut decomp = Decompress::None;
+            Compression::new(&ZLIB).init_decompress(&mut decomp);
+            let mut out = Vec::new();
+            let roundtripped = decomp
+                .decompress(compressed, &mut out)
+                .expect("decompress must succeed");
+            assert_eq!(
+                roundtripped.len(),
+                len,
+                "packet of {len} bytes was truncated by the compressor"
+            );
+            assert_eq!(roundtripped, &input[..], "packet of {len} bytes corrupted");
+        }
     }
 }

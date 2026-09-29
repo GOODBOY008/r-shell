@@ -3990,9 +3990,9 @@ fn load_or_create_file_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
         return read_file_key(path);
     }
 
-    use rand::RngCore;
+    use rand::Rng;
     let mut fresh = vec![0u8; 32];
-    rand::thread_rng().fill_bytes(&mut fresh);
+    rand::rng().fill_bytes(&mut fresh);
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -4053,9 +4053,9 @@ fn master_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
                 .map_err(|e| format!("Stored master key is corrupt: {e}"))?,
             Err(keyring::Error::NoEntry) => {
                 // First use: generate a random 32-byte key and persist it.
-                use rand::RngCore;
+                use rand::Rng;
                 let mut fresh = vec![0u8; 32];
-                rand::thread_rng().fill_bytes(&mut fresh);
+                rand::rng().fill_bytes(&mut fresh);
                 entry
                     .set_password(&BASE64.encode(&fresh))
                     .map_err(|e| format!("Failed to store master key: {e}"))?;
@@ -4082,9 +4082,9 @@ fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
 
-    use rand::RngCore;
+    use rand::Rng;
     let mut nonce_bytes = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    rand::rng().fill_bytes(&mut nonce_bytes);
 
     let ciphertext = cipher
         .encrypt(Nonce::from_slice(&nonce_bytes), secret.as_bytes())
