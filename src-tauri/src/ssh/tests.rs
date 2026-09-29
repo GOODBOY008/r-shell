@@ -776,12 +776,19 @@ mod shell_integration_tests {
 
         async fn fixture_client() -> SshClient {
             let (host, port) = super::default_key_endpoint();
+            fixture_client_on(&host, port).await
+        }
+
+        /// Same fixture credentials against an explicit endpoint — used by
+        /// the relay roundtrip, which reaches the bench container through
+        /// the latency-injecting relay instead of the shared :2224 fixture.
+        async fn fixture_client_on(host: &str, port: u16) -> SshClient {
             let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("docker/default-key-sshd/id_rsa");
             let mut client = SshClient::new();
             client
                 .connect(&SshConfig {
-                    host,
+                    host: host.to_string(),
                     port,
                     username: "testuser".to_string(),
                     auth_method: AuthMethod::PublicKey {
@@ -1163,6 +1170,166 @@ mod shell_integration_tests {
                 fold_hash(&got),
                 expected_hash,
                 "roundtrip must be byte-exact"
+            );
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
+        }
+
+        /// Latency-injected roundtrip through the userspace relay
+        /// (`out/latency-relay.py`), self-contained: ensures the bench
+        /// container listens on 127.0.0.1:12224, spawns the relay on
+        /// 127.0.0.1:12324, and runs the full byte-exact roundtrip through
+        /// `SshClient`. The shared :2224 fixture is never touched, so this
+        /// runs next to it.
+        ///
+        /// One-way delay comes from `RSHELL_RELAY_ONE_WAY_MS` (default 5 →
+        /// 10 ms RTT; the earlier 100 ms scenarios used 50). Throughput is
+        /// printed, not asserted — the relay adds pure latency, so it is a
+        /// latency/behaviour fixture, not a bandwidth oracle.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_transfer_roundtrip_relay() {
+            const RELAY_LISTEN: u16 = 12324;
+            const BENCH_PORT: u16 = 12224;
+
+            // 1) Bench container on 12224 — reused when already running.
+            let have_bench = std::process::Command::new("docker")
+                .args(["ps", "--format", "{{.Names}}"])
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|l| l.trim() == "rshell-sshd-relay-bench")
+                })
+                .unwrap_or(false);
+            if !have_bench {
+                let _ = std::process::Command::new("docker")
+                    .args(["rm", "-f", "rshell-sshd-relay-bench"])
+                    .output();
+                let started = std::process::Command::new("docker")
+                    .args([
+                        "run",
+                        "-d",
+                        "--name",
+                        "rshell-sshd-relay-bench",
+                        "-p",
+                        "12224:22",
+                        "rshell-default-key-sshd:latest",
+                    ])
+                    .output()
+                    .expect("docker must be available to start the bench container");
+                assert!(
+                    started.status.success(),
+                    "bench container failed to start: {}",
+                    String::from_utf8_lossy(&started.stderr)
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            // 2) Relay process with the requested one-way delay.
+            let one_way_ms = std::env::var("RSHELL_RELAY_ONE_WAY_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(5);
+            let relay_script =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../out/latency-relay.py");
+            let mut relay = std::process::Command::new("python3")
+                .args([
+                    relay_script.to_string_lossy().as_ref(),
+                    &RELAY_LISTEN.to_string(),
+                    &BENCH_PORT.to_string(),
+                    &one_way_ms.to_string(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn latency relay (python3)");
+            struct KillGuard<'a>(&'a mut std::process::Child);
+            impl Drop for KillGuard<'_> {
+                fn drop(&mut self) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+            let _relay_guard = KillGuard(&mut relay);
+            let mut relay_up = false;
+            for _ in 0..50 {
+                if tokio::net::TcpStream::connect(("127.0.0.1", RELAY_LISTEN))
+                    .await
+                    .is_ok()
+                {
+                    relay_up = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            assert!(relay_up, "relay did not start listening on {RELAY_LISTEN}");
+
+            // 3) Full roundtrip through the relay.
+            let size: u64 = 256 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let mut client = fixture_client_on("127.0.0.1", RELAY_LISTEN).await;
+            let remote_path = "/tmp/rshell-relay-e2e.bin";
+
+            let started = Instant::now();
+            let n = client
+                .upload_file_with_progress(
+                    local_src.path().to_string_lossy().as_ref(),
+                    remote_path,
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("upload through relay");
+            let elapsed = started.elapsed().as_secs_f64();
+            println!(
+                "upload ({one_way_ms}ms one-way): {n} bytes in {elapsed:.2}s = {:.1} MB/s",
+                n as f64 / 1024.0 / 1024.0 / elapsed
+            );
+            assert_eq!(n, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let started = Instant::now();
+            let back = client
+                .download_file_with_progress(
+                    remote_path,
+                    downloaded.path().to_string_lossy().as_ref(),
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("download through relay");
+            let elapsed = started.elapsed().as_secs_f64();
+            println!(
+                "download ({one_way_ms}ms one-way): {back} bytes in {elapsed:.2}s = {:.1} MB/s",
+                back as f64 / 1024.0 / 1024.0 / elapsed
+            );
+            assert_eq!(back, size);
+
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(
+                fold_hash(&got),
+                expected_hash,
+                "roundtrip through the relay must be byte-exact"
             );
 
             client
