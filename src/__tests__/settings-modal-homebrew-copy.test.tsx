@@ -86,7 +86,14 @@ describe('SettingsModal Homebrew banner copy button', () => {
   it('copies the brew upgrade command to the clipboard on click', async () => {
     render(<SettingsModal open onOpenChange={vi.fn()} />);
 
-    const copyButton = await screen.findByRole('button', { name: 'Copy update command' });
+    const copyButton = await screen.findByRole(
+      'button',
+      { name: 'Copy update command' },
+      // The banner waits on an `invoke` round-trip, and the default 1 s budget
+      // is not enough when the full suite saturates every worker. This is a
+      // jsdom-timing budget, not an application SLA.
+      { timeout: 5000 },
+    );
     fireEvent.click(copyButton);
 
     expect(mockWriteText).toHaveBeenCalledWith('brew upgrade --cask r-shell');
@@ -100,7 +107,14 @@ describe('SettingsModal Homebrew banner copy button', () => {
 
     render(<SettingsModal open onOpenChange={vi.fn()} />);
 
-    const copyButton = await screen.findByRole('button', { name: 'Copy update command' });
+    const copyButton = await screen.findByRole(
+      'button',
+      { name: 'Copy update command' },
+      // The banner waits on an `invoke` round-trip, and the default 1 s budget
+      // is not enough when the full suite saturates every worker. This is a
+      // jsdom-timing budget, not an application SLA.
+      { timeout: 5000 },
+    );
     fireEvent.click(copyButton);
     await act(async () => { await Promise.resolve(); });
     expect(mockWriteText).toHaveBeenCalledWith('brew upgrade --cask r-shell');
