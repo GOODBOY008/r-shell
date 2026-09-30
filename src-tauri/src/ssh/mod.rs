@@ -1144,13 +1144,17 @@ impl SshClient {
     /// Download via the pipelined streaming engine (`sftp_transfer`), with
     /// optional progress callbacks. Keeps whole files out of memory.
     /// Cancelling `cancel` aborts the transfer promptly.
-    pub async fn download_file_with_progress(
+    /// Sessions a bulk download should run over: the main session plus
+    /// extra independently-dialed connections when the remote size warrants
+    /// parallel segments. The caller holds its client lock only for this
+    /// preparation and runs the engine afterwards without it (a long
+    /// transfer must not block disconnect()). Returns the sessions and the
+    /// remote size the decision was based on (0 when unknown).
+    pub(crate) async fn prepare_download_transfer_sessions(
         &self,
         remote_path: &str,
-        local_path: &str,
-        progress: crate::sftp_transfer::ProgressCallback<'_>,
         cancel: &tokio_util::sync::CancellationToken,
-    ) -> Result<u64> {
+    ) -> Result<(Vec<Arc<client::Handle<Client>>>, u64)> {
         let session = self.transfer_session()?;
         // Remote size decides whether to dial extra connections for a
         // parallel segmented download (loss smoothing on saturated links).
@@ -1158,18 +1162,49 @@ impl SshClient {
             .await
             .unwrap_or(0);
         let wants = crate::sftp_transfer::download_stream_target(total);
-        let extra = if wants > 1 {
-            self.open_extra_transfer_sessions(
-                wants - 1,
-                crate::sftp_transfer::DOWNLOAD_CONN_WINDOW_SIZE,
-                cancel,
-            )
-            .await
-        } else {
-            Vec::new()
-        };
         let mut sessions = vec![session];
-        sessions.extend(extra);
+        if wants > 1 {
+            sessions.extend(
+                self.open_extra_transfer_sessions(
+                    wants - 1,
+                    crate::sftp_transfer::DOWNLOAD_CONN_WINDOW_SIZE,
+                    cancel,
+                )
+                .await,
+            );
+        }
+        Ok((sessions, total))
+    }
+
+    /// Sessions a bulk upload should run over (see
+    /// [`Self::prepare_download_transfer_sessions`]).
+    pub(crate) async fn prepare_upload_transfer_sessions(
+        &self,
+        local_path: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<Vec<Arc<client::Handle<Client>>>> {
+        let session = self.transfer_session()?;
+        let wants = crate::sftp_transfer::upload_stream_target(local_path);
+        let mut sessions = vec![session];
+        if wants > 1 {
+            sessions.extend(
+                self.open_extra_transfer_sessions(wants - 1, CHANNEL_WINDOW_SIZE, cancel)
+                    .await,
+            );
+        }
+        Ok(sessions)
+    }
+
+    pub async fn download_file_with_progress(
+        &self,
+        remote_path: &str,
+        local_path: &str,
+        progress: crate::sftp_transfer::ProgressCallback<'_>,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<u64> {
+        let (mut sessions, _total) = self
+            .prepare_download_transfer_sessions(remote_path, cancel)
+            .await?;
         let result = crate::sftp_transfer::download_file(
             &sessions,
             remote_path,
@@ -1234,18 +1269,9 @@ impl SshClient {
         progress: crate::sftp_transfer::ProgressCallback<'_>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self.transfer_session()?;
-        // Only large files can use extra connections; anything smaller (or a
-        // forced single-stream run) never leaves this connection.
-        let wants = crate::sftp_transfer::upload_stream_target(local_path);
-        let extra = if wants > 1 {
-            self.open_extra_transfer_sessions(wants - 1, CHANNEL_WINDOW_SIZE, cancel)
-                .await
-        } else {
-            Vec::new()
-        };
-        let mut sessions = vec![session];
-        sessions.extend(extra);
+        let mut sessions = self
+            .prepare_upload_transfer_sessions(local_path, cancel)
+            .await?;
         let result =
             crate::sftp_transfer::upload_file(&sessions, local_path, remote_path, progress, cancel)
                 .await;

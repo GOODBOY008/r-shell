@@ -2674,23 +2674,31 @@ async fn download_remote_file_to_path(
             match conn_type.as_deref() {
                 Some("SFTP") => {
                     let sftp_map = state.get_sftp_connection().await;
-                    let session = {
+                    // Prepare (stat + dial extra connections for parallel
+                    // segments) under the map read guard, then drop the
+                    // guard — a long transfer must not block other clients.
+                    let mut sessions = {
                         let connections = sftp_map.read().await;
                         let client = connections
                             .get(connection_id)
                             .ok_or_else(|| anyhow::anyhow!("SFTP connection not found"))?;
-                        client.transfer_session()?
+                        client
+                            .prepare_download_transfer_sessions(remote_path, &cancel)
+                            .await?
                     };
-                    // The session handle is cloned out so the map read guard
-                    // is NOT held across the (potentially long) transfer.
-                    sftp_transfer::download_file(
-                        std::slice::from_ref(&session),
+                    let result = sftp_transfer::download_file(
+                        &sessions.0,
                         remote_path,
                         local_path,
                         progress_ref,
                         &cancel,
                     )
-                    .await
+                    .await;
+                    if sessions.0.len() > 1 {
+                        let extras = sessions.0.split_off(1);
+                        crate::ssh::SshClient::close_extra_sessions(extras).await;
+                    }
+                    result
                 }
                 Some("FTP") => {
                     let ftp_map = state.get_ftp_connection().await;
@@ -2712,25 +2720,33 @@ async fn download_remote_file_to_path(
                 None => {
                     // Fallback: try SSH connection (integrated file browser
                     // uses SSH connections which are not registered in
-                    // connection_types). The session handle is cloned out so
-                    // the client read guard is dropped before the transfer —
-                    // otherwise a long download would block disconnect().
+                    // connection_types). Sessions (incl. parallel-transfer
+                    // extras) are prepared under the client read guard, then
+                    // the guard is dropped — a long download must not block
+                    // disconnect().
                     let connection =
                         state.get_connection(connection_id).await.ok_or_else(|| {
                             anyhow::anyhow!("No connection found for '{}'", connection_id)
                         })?;
-                    let session = {
+                    let mut sessions = {
                         let client = connection.read().await;
-                        client.transfer_session()?
+                        client
+                            .prepare_download_transfer_sessions(remote_path, &cancel)
+                            .await?
                     };
-                    sftp_transfer::download_file(
-                        std::slice::from_ref(&session),
+                    let result = sftp_transfer::download_file(
+                        &sessions.0,
                         remote_path,
                         local_path,
                         progress_ref,
                         &cancel,
                     )
-                    .await
+                    .await;
+                    if sessions.0.len() > 1 {
+                        let extras = sessions.0.split_off(1);
+                        crate::ssh::SshClient::close_extra_sessions(extras).await;
+                    }
+                    result
                 }
             }
         },
@@ -2851,21 +2867,30 @@ pub async fn upload_remote_file(
             match conn_type.as_deref() {
                 Some("SFTP") => {
                     let sftp_map = state.get_sftp_connection().await;
-                    let session = {
+                    // Prepare (dial extra connections for parallel segments)
+                    // under the map read guard, then drop the guard.
+                    let mut sessions = {
                         let connections = sftp_map.read().await;
                         let client = connections
                             .get(&conn_id)
                             .ok_or_else(|| anyhow::anyhow!("SFTP connection not found"))?;
-                        client.transfer_session()?
+                        client
+                            .prepare_upload_transfer_sessions(&local, &cancel)
+                            .await?
                     };
-                    sftp_transfer::upload_file(
-                        std::slice::from_ref(&session),
+                    let result = sftp_transfer::upload_file(
+                        &sessions,
                         &local,
                         &remote,
                         progress_ref,
                         &cancel,
                     )
-                    .await
+                    .await;
+                    if sessions.len() > 1 {
+                        let extras = sessions.split_off(1);
+                        crate::ssh::SshClient::close_extra_sessions(extras).await;
+                    }
+                    result
                 }
                 Some("FTP") => {
                     let ftp_map = state.get_ftp_connection().await;
@@ -2885,24 +2910,32 @@ pub async fn upload_remote_file(
                 None => {
                     // Fallback: try SSH connection (integrated file browser uses
                     // SSH connections which are not registered in
-                    // connection_types). Session handle cloned out — see the
-                    // download path for why the guard must not be held.
+                    // connection_types). Sessions are prepared under the
+                    // client read guard, then the guard is dropped — a long
+                    // upload must not block disconnect().
                     let connection = state
                         .get_connection(&conn_id)
                         .await
                         .ok_or_else(|| anyhow::anyhow!("No connection found for '{}'", conn_id))?;
-                    let session = {
+                    let mut sessions = {
                         let client = connection.read().await;
-                        client.transfer_session()?
+                        client
+                            .prepare_upload_transfer_sessions(&local, &cancel)
+                            .await?
                     };
-                    sftp_transfer::upload_file(
-                        std::slice::from_ref(&session),
+                    let result = sftp_transfer::upload_file(
+                        &sessions,
                         &local,
                         &remote,
                         progress_ref,
                         &cancel,
                     )
-                    .await
+                    .await;
+                    if sessions.len() > 1 {
+                        let extras = sessions.split_off(1);
+                        crate::ssh::SshClient::close_extra_sessions(extras).await;
+                    }
+                    result
                 }
             }
         },
