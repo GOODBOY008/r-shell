@@ -52,6 +52,14 @@ pub const SOCKS_PROXIES_CHANGED_EVENT: &str = "socks-proxies-changed";
 /// struct field so the manager's type stays tauri-free.
 static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
+/// The process-global app handle, if it was injected (lib.rs setup). Single
+/// injection point for every backend → frontend event, including the X11
+/// dispatcher's `x11-local-server-unreachable`; `None` in unit tests, where
+/// emits are skipped.
+pub(crate) fn app_handle() -> Option<tauri::AppHandle> {
+    APP_HANDLE.get().cloned()
+}
+
 /// Error from starting a PTY session, distinguishing a dead/unusable SSH
 /// session (the frontend must re-authenticate — a WebSocket retry cannot
 /// recover) from other failures that leave the session intact.
@@ -166,10 +174,6 @@ pub struct ConnectionManager {
     /// Monotonic id for each started proxy listener, so a supervisor task
     /// never removes a newer same-id entry that replaced its own.
     socks_generation: AtomicU64,
-    /// Tauri app handle, cloned into each SshClient so the X11 dispatcher can
-    /// emit failure events (e.g. the macOS "install XQuartz" toast). `None` in
-    /// unit tests (the emit is then skipped).
-    app_handle: Option<tauri::AppHandle>,
 }
 
 impl ConnectionManager {
@@ -188,22 +192,11 @@ impl ConnectionManager {
             os_info_cache: OsInfoCache::new(),
             socks_proxies: Arc::new(RwLock::new(HashMap::new())),
             socks_generation: AtomicU64::new(0),
-            app_handle: None,
         }
-    }
-
-    /// Attach a Tauri app handle so SSH clients can emit X11 failure events.
-    /// Called in production setup; omitted in unit tests.
-    pub fn with_app_handle(mut self, app_handle: tauri::AppHandle) -> Self {
-        self.app_handle = Some(app_handle);
-        self
     }
 
     pub async fn create_connection(&self, connection_id: String, config: SshConfig) -> Result<()> {
         let mut client = SshClient::new();
-        if let Some(handle) = self.app_handle.clone() {
-            client = client.with_app_handle(handle);
-        }
         let cancel_token = self.register_pending_connection(&connection_id).await;
 
         let connect_result = tokio::select! {

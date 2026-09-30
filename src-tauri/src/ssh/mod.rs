@@ -181,11 +181,6 @@ pub struct SshClient {
     x11_config: Option<crate::x11::X11Config>,
     /// Connection id, used to key the dispatcher registry.
     connection_id: Option<String>,
-    /// Tauri app handle, used to emit X11 failure events to the frontend
-    /// (e.g. the macOS "install XQuartz" toast). Cloned into the dispatcher
-    /// task so it can emit asynchronously when a local X server is unreachable.
-    /// `None` in unit tests (the emit is then simply skipped).
-    app_handle: Option<tauri::AppHandle>,
 }
 
 // PTY session handle for interactive shell
@@ -802,16 +797,7 @@ impl SshClient {
             x11_registry: Arc::new(crate::x11::X11DispatcherRegistry::new()),
             x11_config: None,
             connection_id: None,
-            app_handle: None,
         }
-    }
-
-    /// Attach a Tauri app handle so the X11 dispatcher can emit failure events
-    /// (e.g. the macOS "install XQuartz" toast). Called by ConnectionManager
-    /// in production; omitted in unit tests.
-    pub fn with_app_handle(mut self, app_handle: tauri::AppHandle) -> Self {
-        self.app_handle = Some(app_handle);
-        self
     }
 
     /// The russh-level client configuration shared by every connection this
@@ -1209,7 +1195,10 @@ impl SshClient {
                                 // than re-parsing per channel inside the loop.
                                 let registry = self.x11_registry.clone();
                                 let cid = connection_id.to_string();
-                                let app_handle = self.app_handle.clone();
+                                // Single process-global injection point (lib.rs
+                                // setup); None in unit tests, where the emit
+                                // below is skipped.
+                                let app_handle = crate::connection_manager::app_handle();
                                 tokio::spawn(async move {
                                     // Emit the macOS XQuartz hint at most once per
                                     // session: a flapping remote X app must not
