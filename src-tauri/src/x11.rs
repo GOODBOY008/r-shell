@@ -278,6 +278,7 @@ pub(crate) fn read_cookie_from(path: &std::path::Path, parsed: &ParsedDisplay) -
             // FamilyLocal entries carry an empty (or hostname/unix) address;
             // the socket path itself is not recorded. Any addr with the right
             // display number is accepted for unix displays.
+            #[cfg(unix)]
             LocalXServer::Unix(_) => true,
         }
     };
@@ -285,6 +286,7 @@ pub(crate) fn read_cookie_from(path: &std::path::Path, parsed: &ParsedDisplay) -
     for (cookie, family, addr) in &candidates {
         let family_ok = match &parsed.server {
             LocalXServer::Tcp { .. } => *family == FAMILY_INTERNET || *family == FAMILY_INTERNET6,
+            #[cfg(unix)]
             LocalXServer::Unix(_) => *family == FAMILY_LOCAL,
         };
         if family_ok && want_host(addr) {
@@ -627,6 +629,7 @@ mod tests {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 6010);
             }
+            #[cfg(unix)]
             _ => panic!("expected Tcp"),
         }
         assert_eq!(p.screen, 0);
@@ -640,6 +643,7 @@ mod tests {
                 assert_eq!(host, "myhost");
                 assert_eq!(port, 6000);
             }
+            #[cfg(unix)]
             _ => panic!("expected Tcp"),
         }
     }
@@ -668,6 +672,7 @@ mod tests {
                 assert_eq!(host, "127.0.0.1");
                 assert_eq!(port, 6000);
             }
+            #[cfg(unix)]
             _ => panic!("expected Tcp"),
         }
         assert_eq!(p.screen, 0);
@@ -681,6 +686,7 @@ mod tests {
                 assert_eq!(host, "myhost.lab.local");
                 assert_eq!(port, 6005);
             }
+            #[cfg(unix)]
             _ => panic!("expected Tcp"),
         }
         assert_eq!(p.screen, 2);
