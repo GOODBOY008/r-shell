@@ -40,6 +40,7 @@ const mocks = vi.hoisted(() => {
     refresh = vi.fn();
     writeln = vi.fn();
     write = vi.fn((_data: string, callback?: () => void) => callback?.());
+    paste = vi.fn();
     onSelectionChange = vi.fn(() => ({ dispose: vi.fn() }));
     onLineFeed = vi.fn(() => ({ dispose: vi.fn() }));
     attachCustomKeyEventHandler = vi.fn();
@@ -524,10 +525,11 @@ describe('PtyTerminal activation', () => {
     expect(terminal.write).toHaveBeenCalledWith(expect.stringContaining('Press R'));
   });
 
-  it('lets xterm handle Ctrl+V paste without duplicate custom send', async () => {
+  it('pastes the clipboard on Windows Ctrl+V instead of letting xterm send ^V (#194)', async () => {
     const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
     const readTextMock = vi.mocked(readText);
     readTextMock.mockClear();
+    readTextMock.mockResolvedValue('pasted-by-ctrl-v');
     Object.defineProperty(navigator, 'platform', {
       configurable: true,
       value: 'Win32',
@@ -543,13 +545,19 @@ describe('PtyTerminal activation', () => {
       key: 'v',
       ctrlKey: true,
       metaKey: false,
+      shiftKey: false,
+      altKey: false,
       preventDefault,
     } as unknown as KeyboardEvent);
     await flushPromises();
 
-    expect(handled).toBe(true);
-    expect(preventDefault).not.toHaveBeenCalled();
-    expect(readTextMock).not.toHaveBeenCalled();
+    // On Windows/Linux xterm evaluates Ctrl+V into control byte 0x16 and the
+    // native paste event never fires — the handler must intercept it and
+    // route through the clipboard → term.paste() path instead.
+    expect(handled).toBe(false);
+    expect(preventDefault).toHaveBeenCalledTimes(1);
+    expect(readTextMock).toHaveBeenCalledTimes(1);
+    expect(mocks.terminals[0].paste).toHaveBeenCalledWith('pasted-by-ctrl-v');
   });
 
   it('lets xterm handle Command+V paste without duplicate custom send on macOS', async () => {

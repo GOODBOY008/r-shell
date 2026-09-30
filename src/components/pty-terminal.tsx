@@ -509,6 +509,20 @@ export function PtyTerminal({
         return false;
       }
 
+      // Handle paste shortcut (Windows/Linux). xterm maps Ctrl+V to the
+      // control byte 0x16 (LNEXT) and preventDefaults the keydown, so the
+      // native paste event never fires on those platforms — without this
+      // branch the literal ^V goes to the remote. preventDefault() here is
+      // what suppresses the browser's native paste so we don't paste twice.
+      // macOS is excluded on purpose: Cmd+V already reaches xterm's textarea
+      // paste listener natively, and literal Ctrl+V stays a useful
+      // quoted-insert (0x16) for readline users.
+      if (!isMac && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && key === 'v') {
+        event.preventDefault();
+        void pasteClipboardIntoPty();
+        return false;
+      }
+
       // Handle search shortcut
       if (modKey && key === 'f') {
         event.preventDefault();
