@@ -116,6 +116,57 @@ describe('SettingsModal launch-at-login', () => {
     expect(mockEnable).not.toHaveBeenCalled();
   });
 
+  it('never calls the autostart plugin when the toggle was not touched (#196)', async () => {
+    renderModal();
+    await waitFor(() => expect(getAutostartSwitch().getAttribute('aria-checked')).toBe('false'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Save Settings' })).toBeTruthy());
+
+    // Untouched toggle: no enable/disable, and not even a fresh isEnabled
+    // query — only the open-time one happened.
+    expect(mockEnable).not.toHaveBeenCalled();
+    expect(mockDisable).not.toHaveBeenCalled();
+    expect(mockIsEnabled).toHaveBeenCalledTimes(1);
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('does not repeat plugin calls when saving again after a successful toggle (#196)', async () => {
+    renderModal();
+    await waitFor(() => expect(getAutostartSwitch().getAttribute('aria-checked')).toBe('false'));
+
+    fireEvent.click(getAutostartSwitch());
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    await waitFor(() => expect(mockEnable).toHaveBeenCalledTimes(1));
+
+    // Second save without touching the toggle → no further OS churn.
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    await waitFor(() => expect(mockToast.error).not.toHaveBeenCalled());
+
+    expect(mockEnable).toHaveBeenCalledTimes(1);
+    expect(mockDisable).not.toHaveBeenCalled();
+  });
+
+  it('skips the disable call when the OS already has launch-at-login off (#196)', async () => {
+    // Windows: auto-launch's disable() on a missing HKCU Run value errors
+    // with "os error 2" — the source of the every-save error toast. A
+    // deliberate toggle-off must check the OS state first and skip.
+    mockIsEnabled.mockResolvedValue(false);
+    renderModal();
+    await waitFor(() => expect(getAutostartSwitch().getAttribute('aria-checked')).toBe('false'));
+
+    // Cycle the toggle on→off so `settings.autostart` is false but the
+    // toggle was touched.
+    fireEvent.click(getAutostartSwitch());
+    fireEvent.click(getAutostartSwitch());
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+    await waitFor(() => expect(mockIsEnabled).toHaveBeenCalledTimes(2));
+    expect(mockDisable).not.toHaveBeenCalled();
+    expect(mockEnable).not.toHaveBeenCalled();
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
   it('keeps a manual toggle made while the OS state is still loading', async () => {
     let resolveIsEnabled!: (value: boolean) => void;
     mockIsEnabled.mockImplementation(
