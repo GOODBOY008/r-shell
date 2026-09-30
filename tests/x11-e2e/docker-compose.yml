@@ -12,7 +12,10 @@ services:
     image: r-shell-sshd-x11:latest
     container_name: r-shell-sshd-x11
     ports:
-      - "127.0.0.1:2222:22"
+      # Port overridable via env so concurrent fixture runs never collide;
+      # tests/x11-e2e/run.sh exports X11_E2E_PORT (a free port) and mirrors
+      # it into RSHELL_TEST_X11_SSH_PORT for the Rust test process.
+      - "127.0.0.1:${X11_E2E_PORT:-2222}:22"
     # A healthcheck confirming sshd is accepting connections on 22. The
     # test runner waits for this before connecting. Uses nc (installed in
     # the image via the base packages) to avoid /bin/sh /dev/tcp dialect

@@ -1733,15 +1733,29 @@ mod compression_roundtrip_tests {
 /// run in CI without an explicit `--ignored` flag.
 #[cfg(all(test, feature = "x11-e2e"))]
 mod x11_e2e_tests {
-    use crate::ssh::{AuthMethod, SshClient, SshConfig};
+    use crate::ssh::{AuthMethod, HostKeyPolicy, SshClient, SshConfig};
     use crate::x11::X11Config;
     use std::sync::Once;
     use std::time::{Duration, Instant};
 
-    const E2E_HOST: &str = "127.0.0.1";
-    const E2E_PORT: u16 = 2222;
     const E2E_USER: &str = "testuser";
     const E2E_PASS: &str = "testpass";
+
+    /// X11 E2E endpoint, following the `RSHELL_TEST_*` convention of the other
+    /// live-server fixtures. The port MUST match the container's mapped port —
+    /// `tests/x11-e2e/run.sh` picks a free port, exports
+    /// `RSHELL_TEST_X11_SSH_PORT` for the test and `X11_E2E_PORT` for
+    /// docker-compose, so concurrent fixture runs never collide (2223/2224
+    /// are used by other local fixtures).
+    fn e2e_endpoint() -> (String, u16) {
+        let host = std::env::var("RSHELL_TEST_X11_SSH_HOST")
+            .unwrap_or_else(|_| "127.0.0.1".to_string());
+        let port = std::env::var("RSHELL_TEST_X11_SSH_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(2222);
+        (host, port)
+    }
 
     // Initialise tracing once per process so `--nocapture` surfaces the X11
     // handshake logs ([X11] forwarding requested / request_x11 rejected / ...).
@@ -1754,13 +1768,29 @@ mod x11_e2e_tests {
     }
 
     fn x11_config(enabled: bool, display: Option<&str>) -> SshConfig {
+        let (host, port) = e2e_endpoint();
         SshConfig {
-            host: E2E_HOST.to_string(),
-            port: E2E_PORT,
+            host,
+            port,
             username: E2E_USER.to_string(),
             auth_method: AuthMethod::Password {
                 password: E2E_PASS.to_string(),
             },
+            // The container regenerates its host keys on every rebuild, so a
+            // Strict policy would refuse the second run against the same
+            // port. AcceptNew is the fixture's documented "host-key
+            // auto-accepted" contract (tests/x11-e2e/Dockerfile).
+            compression: true,
+            keepalive_interval: Some(60),
+            keepalive_max: Some(3),
+            proxy: None,
+            // The container regenerates its host keys on every rebuild, so a
+            // Strict policy would refuse the second run against the same
+            // port. AcceptNew is the fixture's documented "host-key
+            // auto-accepted" contract (tests/x11-e2e/Dockerfile).
+            host_key_policy: HostKeyPolicy::AcceptNew,
+            connect_timeout: 10,
+            tunnel: None,
             x11: Some(X11Config {
                 enabled,
                 display: display.map(str::to_string),
