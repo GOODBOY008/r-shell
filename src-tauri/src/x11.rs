@@ -802,7 +802,10 @@ mod tests {
         path
     }
 
+    // On Windows `:0` resolves to the TCP loopback fallback, so the
+    // FamilyLocal matching these tests assert does not exist there.
     #[test]
+    #[cfg(unix)]
     fn cookie_unix_display_skips_remote_host_entry() {
         // A past `ssh -Y remote.example.com` recorded a FamilyInternet entry
         // for display 10. The LOCAL unix display :0 must resolve to the local
@@ -864,7 +867,10 @@ mod tests {
         assert!(read_cookie_from(&path, &parsed).is_err());
     }
 
+    // FamilyLocal records only match a unix display, which Windows resolves
+    // to TCP instead — see cookie_unix_display_skips_remote_host_entry.
     #[test]
+    #[cfg(unix)]
     fn cookie_non_cookie_names_are_skipped() {
         let path = write_xauth(&[
             xauth_record(256, b"", "0", b"XDM-AUTHORIZATION-1", &cookie(0xDD)),
