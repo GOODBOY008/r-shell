@@ -561,6 +561,7 @@ export function ConnectionDialog({
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
             serverAliveCountMax: config.serverAliveCountMax,
+            x11: config.x11,
             domain: config.domain,
             rdpResolution: config.rdpResolution,
             vncColorDepth: config.vncColorDepth,
@@ -597,6 +598,7 @@ export function ConnectionDialog({
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
             serverAliveCountMax: config.serverAliveCountMax,
+            x11: config.x11,
             domain: config.domain,
             rdpResolution: config.rdpResolution,
             vncColorDepth: config.vncColorDepth,
@@ -647,6 +649,7 @@ export function ConnectionDialog({
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
         serverAliveCountMax: config.serverAliveCountMax,
+            x11: config.x11,
         lastConnected: new Date().toISOString(),
       });
     } else if (saveAsConnection) {
@@ -678,6 +681,7 @@ export function ConnectionDialog({
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
         serverAliveCountMax: config.serverAliveCountMax,
+            x11: config.x11,
       });
     }
 
@@ -808,6 +812,7 @@ const handleCancelConnectionAttempt = async () => {
       keepAlive: config.keepAlive,
       keepAliveInterval: config.keepAliveInterval,
       serverAliveCountMax: config.serverAliveCountMax,
+            x11: config.x11,
       domain: config.domain,
       rdpResolution: config.rdpResolution,
       vncColorDepth: config.vncColorDepth,
