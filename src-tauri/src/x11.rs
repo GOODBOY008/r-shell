@@ -162,40 +162,67 @@ fn tcp_port_for_display(num: u32, display: &str) -> anyhow::Result<u16> {
 /// new crate. On non-Unix (where X11 forwarding is uncommon), falls back to a
 /// time+pid-seeded RNG and logs a warning.
 pub fn generate_fake_cookie() -> String {
+    cookie_bytes_to_hex(&generate_fake_cookie_bytes())
+}
+
+/// 16 raw bytes of a freshly generated throwaway cookie.
+pub fn generate_fake_cookie_bytes() -> [u8; 16] {
     #[cfg(unix)]
     {
         use std::io::Read;
         if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
             let mut buf = [0u8; 16];
             if f.read_exact(&mut buf).is_ok() {
-                return buf.iter().map(|b| format!("{:02x}", b)).collect();
+                return buf;
             }
         }
         tracing::warn!("/dev/urandom unavailable; using weak fallback for X11 cookie");
-        weak_cookie()
+        weak_cookie_bytes()
     }
     #[cfg(not(unix))]
     {
         tracing::warn!("X11 cookie generation on non-Unix uses a weak fallback");
-        weak_cookie()
+        weak_cookie_bytes()
     }
+}
+
+/// Decode a 32-char lowercase hex cookie into its 16 bytes.
+pub fn cookie_hex_to_bytes(hex: &str) -> Option<[u8; 16]> {
+    if hex.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(hex.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Encode 16 cookie bytes as lowercase hex.
+pub fn cookie_bytes_to_hex(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 #[allow(dead_code)]
 fn weak_cookie() -> String {
+    cookie_bytes_to_hex(&weak_cookie_bytes())
+}
+
+#[allow(dead_code)]
+fn weak_cookie_bytes() -> [u8; 16] {
     use std::time::{SystemTime, UNIX_EPOCH};
     let mut seed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(0xdeadbeef);
     seed ^= std::process::id() as u64;
-    let mut out = String::with_capacity(32);
-    for _ in 0..2 {
+    let mut out = [0u8; 16];
+    for chunk in out.chunks_exact_mut(8) {
         // xorshift64
         seed ^= seed << 13;
         seed ^= seed >> 7;
         seed ^= seed << 17;
-        out.push_str(&format!("{:016x}", seed));
+        chunk.copy_from_slice(&seed.to_le_bytes());
     }
     out
 }
@@ -339,6 +366,19 @@ pub(crate) fn next_dispatcher_token() -> u64 {
     NEXT_DISPATCHER_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// OpenSSH `-Y` cookie handling: the `x11-req` carries `fake`, and the real
+/// local xauth cookie stays on this machine until the bridge swaps it into
+/// the X11 setup of each inbound channel. With `real: None` (no xauth entry
+/// for the display) the fake cookie reaches the local X server and is
+/// rejected — failing closed exactly like `ssh -Y` without an xauth entry.
+#[derive(Clone, Copy)]
+pub struct X11CookieSwap {
+    /// Cookie bytes presented to the remote host in the `x11-req`.
+    pub fake: [u8; 16],
+    /// Cookie bytes the local X server actually expects, when known.
+    pub real: Option<[u8; 16]>,
+}
+
 /// One registered dispatcher: the sender the russh `Client` handler routes
 /// inbound X11 channels into, plus the token used for last-writer-wins
 /// cleanup (see [`X11DispatcherRegistry::remove_if_current`]).
@@ -375,6 +415,15 @@ impl X11DispatcherRegistry {
         if is_current {
             senders.remove(connection_id);
         }
+    }
+
+    /// Drop every entry. Called when the owning SSH client disconnects: the
+    /// entry holds the only sender its dispatcher's `recv()` waits on, so
+    /// dropping it is what lets the dispatcher observe the disconnect, exit,
+    /// and release its registry Arc. Without this the dispatcher task is
+    /// pinned forever by its own registration (PR #64 review, medium).
+    pub async fn shutdown(&self) {
+        self.senders.write().await.clear();
     }
 }
 
@@ -472,6 +521,94 @@ pub async fn connect_local_x_server(parsed: &ParsedDisplay) -> anyhow::Result<Lo
     }
 }
 
+/// Outcome of checking the buffered prefix of an X11 client's initial
+/// connection setup against a [`X11CookieSwap`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum SetupSwap {
+    /// The setup's auth-data matched the fake cookie and was replaced in
+    /// place with the real one.
+    Swapped,
+    /// The setup is complete but carries something else (different auth
+    /// name, different data, or no real cookie known) — pass through.
+    PassedThrough,
+    /// `buf` does not yet hold the whole setup; keep buffering until it
+    /// reaches the returned total length.
+    NeedMore(usize),
+}
+
+/// Total byte length of the X11 client initial setup once `buf` holds at
+/// least its 12-byte header, else `None`. Layout (big-endian): byte-order,
+/// unused, protocol-major:u16, protocol-minor:u16, auth-name-len:u16,
+/// auth-data-len:u16, spare:u16, then name and data, each padded to 4 bytes.
+fn x11_setup_len(buf: &[u8]) -> Option<usize> {
+    if buf.len() < 12 {
+        return None;
+    }
+    let (name_len, data_len) = setup_lengths(buf);
+    let pad = |n: usize| (n + 3) & !3;
+    Some(12 + pad(name_len) + pad(data_len))
+}
+
+/// The 16-bit setup fields follow the byte order the client declared in its
+/// first byte: 'l' (0x6c) is LSB-first, 'B' (0x42) is MSB-first.
+fn setup_lengths(buf: &[u8]) -> (usize, usize) {
+    let read = |hi: usize| -> usize {
+        let bytes = [buf[hi], buf[hi + 1]];
+        if buf[0] == b'B' {
+            u16::from_be_bytes(bytes) as usize
+        } else {
+            u16::from_le_bytes(bytes) as usize
+        }
+    };
+    (read(6), read(8))
+}
+
+/// Replace the setup's MIT-MAGIC-COOKIE-1 auth data with the real local
+/// cookie when it matches the fake one (OpenSSH `-Y` client-side behavior).
+/// `buf` is modified in place; nothing outside the auth-data bytes moves.
+pub fn swap_x11_setup_cookie(buf: &mut [u8], swap: &X11CookieSwap) -> SetupSwap {
+    let Some(total) = x11_setup_len(buf) else {
+        return SetupSwap::NeedMore(12usize.saturating_sub(buf.len()));
+    };
+    if buf.len() < total {
+        return SetupSwap::NeedMore(total - buf.len());
+    }
+    let (name_len, data_len) = setup_lengths(buf);
+    let pad = |n: usize| (n + 3) & !3;
+    let name = &buf[12..12 + name_len];
+    let data_at = 12 + pad(name_len);
+    let real = match (
+        name,
+        data_len,
+        swap.real,
+        buf.get(data_at..data_at + data_len),
+    ) {
+        (b"MIT-MAGIC-COOKIE-1", 16, Some(real), Some(data)) if data == swap.fake => real,
+        (name, data_len, real, _) => {
+            // Diagnostic only — never log cookie bytes. Distinguishes a
+            // non-MIT auth name, an unexpected data length, a cookie the
+            // remote replaced (sshd generated its own), and a missing local
+            // xauth entry, which are the ways this swap can pass through.
+            let reason = if name != b"MIT-MAGIC-COOKIE-1" {
+                "auth name is not MIT-MAGIC-COOKIE-1"
+            } else if data_len != 16 {
+                "auth data is not a 16-byte cookie"
+            } else if real.is_none() {
+                "no local xauth cookie was available to swap in"
+            } else {
+                "presented cookie differs from the fake one we issued"
+            };
+            tracing::info!("[X11] setup cookie swap skipped: {reason}");
+            return SetupSwap::PassedThrough;
+        }
+    };
+    buf[data_at..data_at + 16].copy_from_slice(&real);
+    SetupSwap::Swapped
+}
+
+/// Splice an inbound (SSH-side) X11 channel to the local X server.
+/// `cookie_swap` enables the OpenSSH `-Y` cookie rewrite on the setup bytes
+/// the remote client sends first; `None` bridges verbatim.
 /// Bridge a single inbound X11 SSH channel to a local X-server connection.
 ///
 /// Spawns two cooperating tasks linked by a SYMMETRIC cancellation token:
@@ -493,6 +630,7 @@ pub fn bridge_x11_channel(
     mut channel: Channel<Msg>,
     socket: LocalXConnection,
     cancel: CancellationToken,
+    cookie_swap: Option<X11CookieSwap>,
 ) -> tokio::task::JoinHandle<()> {
     let channel_id = channel.id();
     tracing::info!("[X11] bridge started for channel {}", channel_id);
@@ -546,6 +684,13 @@ pub fn bridge_x11_channel(
     // --- Task A: SSH channel -> local socket (returned handle) ---
     tokio::spawn(async move {
         let link = link_a;
+        // OpenSSH -Y: the remote client presents the fake cookie from our
+        // x11-req; hold the first bytes until the whole initial setup is in
+        // hand, swap the real cookie in, then stream verbatim. Give up on
+        // buffering past SETUP_CAP (bogus or hostile peer) and pass through.
+        const SETUP_CAP: usize = 128 * 1024;
+        let mut pending: Vec<u8> = Vec::new();
+        let mut in_setup = cookie_swap.is_some();
         loop {
             tokio::select! {
                 biased;
@@ -553,11 +698,35 @@ pub fn bridge_x11_channel(
                 msg = channel.wait() => {
                     match msg {
                         Some(ChannelMsg::Data { ref data }) => {
+                            let data: &[u8] = if in_setup {
+                                pending.extend_from_slice(data);
+                                let swap = cookie_swap.expect("in_setup implies swap");
+                                match swap_x11_setup_cookie(&mut pending, &swap) {
+                                    SetupSwap::NeedMore(total) if pending.len() < SETUP_CAP => {
+                                        tracing::debug!(
+                                            "[X11] {} setup incomplete: have {} need {} (name_len={} data_len={})",
+                                            channel_id, pending.len(), total,
+                                            u16::from_be_bytes([pending.get(6).copied().unwrap_or(0), pending.get(7).copied().unwrap_or(0)]),
+                                            u16::from_be_bytes([pending.get(8).copied().unwrap_or(0), pending.get(9).copied().unwrap_or(0)]),
+                                        );
+                                        continue;
+                                    }
+                                    SetupSwap::Swapped => {
+                                        tracing::info!("[X11] {} swapped fake cookie for the real local one", channel_id);
+                                        in_setup = false;
+                                    }
+                                    _ => in_setup = false,
+                                }
+                                &pending
+                            } else {
+                                data
+                            };
                             if let Err(e) = sock_write.write_all(data).await {
                                 tracing::warn!("[X11] {} socket write failed: {}", channel_id, e);
                                 break;
                             }
                             let _ = sock_write.flush().await;
+                            pending.clear();
                         }
                         Some(ChannelMsg::ExtendedData { ref data, .. }) => {
                             let _ = sock_write.write_all(data).await;
@@ -965,5 +1134,137 @@ mod tests {
         registry.remove_if_current("c1", token).await;
         registry.remove_if_current("c1", token).await; // second call: no-op
         assert!(registry.senders.read().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn registry_shutdown_ends_dispatcher() {
+        let registry = X11DispatcherRegistry::new();
+        let (tx, mut rx) = mpsc::unbounded_channel::<InboundX11Channel>();
+        registry.senders.write().await.insert(
+            "c1".into(),
+            X11DispatcherEntry {
+                tx,
+                token: next_dispatcher_token(),
+            },
+        );
+        registry.shutdown().await;
+        assert!(registry.senders.read().await.is_empty());
+        // The dispatcher blocks on recv() until every sender is gone; the
+        // shutdown dropped the registry's copy, so it must observe None now.
+        assert!(rx.recv().await.is_none());
+    }
+
+    /// Build an X11 client initial setup buffer with the given auth name and
+    /// data (each padded to 4 bytes, per the wire format).
+    fn setup_buffer(name: &[u8], data: &[u8]) -> Vec<u8> {
+        let pad = |n: usize| (4 - n % 4) % 4;
+        let mut b = Vec::new();
+        b.push(b'l'); // byte-order: LSB-first
+        b.push(0); // unused
+        b.extend_from_slice(&11u16.to_le_bytes()); // protocol-major
+        b.extend_from_slice(&0u16.to_le_bytes()); // protocol-minor
+        b.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        b.extend_from_slice(&(data.len() as u16).to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes()); // spare
+        b.extend_from_slice(name);
+        b.extend(std::iter::repeat(0).take(pad(name.len())));
+        b.extend_from_slice(data);
+        b.extend(std::iter::repeat(0).take(pad(data.len())));
+        b
+    }
+
+    #[test]
+    fn swap_replaces_matching_fake_cookie() {
+        let swap = X11CookieSwap {
+            fake: cookie(0x11),
+            real: Some(cookie(0x22)),
+        };
+        let mut buf = setup_buffer(b"MIT-MAGIC-COOKIE-1", &swap.fake);
+        assert_eq!(swap_x11_setup_cookie(&mut buf, &swap), SetupSwap::Swapped);
+        let data_at = buf.len() - 16;
+        assert_eq!(&buf[data_at..], &swap.real.unwrap());
+        // Nothing else moved: the name is intact.
+        assert_eq!(&buf[12..32], b"MIT-MAGIC-COOKIE-1\0\0");
+    }
+
+    #[test]
+    fn swap_ignores_unrelated_auth_name() {
+        let swap = X11CookieSwap {
+            fake: cookie(0x11),
+            real: Some(cookie(0x22)),
+        };
+        let mut buf = setup_buffer(b"SOME-OTHER-AUTH", &swap.fake);
+        assert_eq!(
+            swap_x11_setup_cookie(&mut buf, &swap),
+            SetupSwap::PassedThrough
+        );
+    }
+
+    #[test]
+    fn swap_ignores_non_matching_data() {
+        let swap = X11CookieSwap {
+            fake: cookie(0x11),
+            real: Some(cookie(0x22)),
+        };
+        let mut buf = setup_buffer(b"MIT-MAGIC-COOKIE-1", &cookie(0x99));
+        assert_eq!(
+            swap_x11_setup_cookie(&mut buf, &swap),
+            SetupSwap::PassedThrough
+        );
+    }
+
+    #[test]
+    fn swap_passes_through_when_no_real_cookie() {
+        let swap = X11CookieSwap {
+            fake: cookie(0x11),
+            real: None,
+        };
+        let mut buf = setup_buffer(b"MIT-MAGIC-COOKIE-1", &swap.fake);
+        assert_eq!(
+            swap_x11_setup_cookie(&mut buf, &swap),
+            SetupSwap::PassedThrough
+        );
+    }
+
+    #[test]
+    fn swap_handles_little_endian_setup() {
+        // LSB-first clients (xlogo/xeyes on common Linux) are the norm; the
+        // length fields must be read in the byte order the client declared.
+        let swap = X11CookieSwap {
+            fake: cookie(0x11),
+            real: Some(cookie(0x22)),
+        };
+        let mut b = Vec::new();
+        b.push(b'l');
+        b.push(0);
+        b.extend_from_slice(&11u16.to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(&18u16.to_le_bytes());
+        b.extend_from_slice(&16u16.to_le_bytes());
+        b.extend_from_slice(&0u16.to_le_bytes());
+        b.extend_from_slice(b"MIT-MAGIC-COOKIE-1");
+        b.extend_from_slice(&[0, 0]); // pad to 4
+        b.extend_from_slice(&swap.fake);
+        assert_eq!(swap_x11_setup_cookie(&mut b, &swap), SetupSwap::Swapped);
+        assert_eq!(&b[b.len() - 16..], &swap.real.unwrap());
+    }
+
+    #[test]
+    fn swap_reports_needed_bytes_for_partial_setup() {
+        let swap = X11CookieSwap {
+            fake: cookie(0x11),
+            real: Some(cookie(0x22)),
+        };
+        let full = setup_buffer(b"MIT-MAGIC-COOKIE-1", &swap.fake);
+        let mut partial = full[..10].to_vec();
+        assert_eq!(
+            swap_x11_setup_cookie(&mut partial, &swap),
+            SetupSwap::NeedMore(2)
+        );
+        let mut partial = full[..30].to_vec(); // header + name, data missing
+        match swap_x11_setup_cookie(&mut partial, &swap) {
+            SetupSwap::NeedMore(n) => assert_eq!(30 + n, full.len()),
+            other => panic!("expected NeedMore, got {other:?}"),
+        }
     }
 }
