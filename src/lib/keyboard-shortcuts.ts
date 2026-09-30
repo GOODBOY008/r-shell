@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type RefObject } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
-import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
+import { register, unregister, unregisterAll, isRegistered } from '@tauri-apps/plugin-global-shortcut';
 import { toast } from 'sonner';
 import i18n from '@/lib/i18n';
 
@@ -515,6 +515,11 @@ const MACOS_MENU_OWNED_ACCELERATORS = new Set([
  */
 const SIBLING_FOCUS_POLL_INTERVAL_MS = 2000;
 
+// Delay before the post-sync registration verification pass (#195). Short
+// enough to heal a lost accelerator before the user notices, long enough to
+// let any same-instance serialized register/unregister chain drain first.
+const REGISTRATION_VERIFY_DELAY_MS = 600;
+
 type FocusContext = 'app' | 'terminal' | 'editable';
 
 /**
@@ -726,13 +731,115 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     return byAccelerator;
   };
 
+  // Per-accelerator IPC serialization (#195): `register` and `unregister`
+  // are separate fire-and-forget invokes with no ordering guarantee. On a
+  // fast blur→focus round trip a focus-side register could reach the backend
+  // while the blur-side unregister for the same accelerator was still in
+  // flight; Win32 RegisterHotKey enforces system-wide uniqueness including
+  // our own pending registration, so the register failed with
+  // AlreadyRegistered (toast) and — once the late unregister landed — left
+  // the accelerator dead until the next focus change. Chaining every op for
+  // an accelerator behind the previous one makes overtaking impossible.
+  const pendingOps = new Map<string, Promise<void>>();
+
+  const serializeOp = (accel: string, op: () => Promise<void>): Promise<void> => {
+    const prev = pendingOps.get(accel);
+    // Fast path: nothing in flight for this accelerator — dispatch the IPC
+    // synchronously, keeping the immediate-call semantics of the
+    // unserialized version. Only a genuinely queued predecessor defers the
+    // op (and then behind both its success and its rejection — a failed
+    // unregister must not block the register queued behind it).
+    const chained = prev ? prev.then(op, op) : op();
+    const tail = chained.catch(() => undefined);
+    pendingOps.set(accel, tail);
+    void tail.then(() => {
+      if (pendingOps.get(accel) === tail) {
+        pendingOps.delete(accel);
+      }
+    });
+    return chained;
+  };
+
+  const registerAccelerator = (accel: string) => {
+    void serializeOp(accel, async () => {
+      try {
+        await register(accel, (event) => {
+          if (event.state !== 'Pressed') {
+            return;
+          }
+          // Resolve the handler at event time so the OS registration survives
+          // re-renders without re-registering (the effect only re-runs when the
+          // accelerator set changes).
+          const current = shortcutsRef.current.find((s) => acceleratorForShortcut(s) === accel);
+          current?.handler();
+        });
+        failed.delete(accel);
+      } catch {
+        // `isRegistered` reports whether THIS app owns the accelerator
+        // (another application holding it reports false). If we own it, the
+        // outcome we wanted already holds — e.g. the sibling window's hook
+        // registered the same accelerator during a focus transfer between two
+        // windows of this app — so this is success, not a user-visible
+        // failure.
+        const ownedByUs = await isRegistered(accel).catch(() => false);
+        if (ownedByUs) {
+          failed.delete(accel);
+          return;
+        }
+        registered.delete(accel);
+        if (failed.has(accel)) {
+          return;
+        }
+        failed.add(accel);
+        toast.error(i18n.t('settings.keyboard.registerFailed', { shortcut: accel }));
+      }
+    });
+  };
+
+  // Reconciliation (#195): serialized ops rule out in-flight overtaking
+  // within this hook, but a focus transfer between two windows of this app
+  // serializes per hook instance, not across instances — the previously
+  // focused window's late unregister can still remove a registration the
+  // newly focused window just established. A debounced pass after every sync
+  // that queued registrations compares OS truth with our bookkeeping and
+  // re-registers anything that went missing.
+  let verifyTimer: number | undefined;
+
+  const verifyRegistrations = async () => {
+    verifyTimer = undefined;
+    if (disposed) {
+      return;
+    }
+    for (const accel of [...registered.keys()]) {
+      // IPC failure counts as "still ours": a false negative here would
+      // re-register needlessly (and possibly toast) on a healthy setup.
+      const owned = await isRegistered(accel).catch(() => true);
+      if (disposed || !registered.has(accel)) {
+        return;
+      }
+      if (!owned) {
+        registerAccelerator(accel);
+      }
+    }
+  };
+
+  const scheduleVerify = () => {
+    if (verifyTimer !== undefined) {
+      window.clearTimeout(verifyTimer);
+    }
+    verifyTimer = window.setTimeout(() => {
+      void verifyRegistrations();
+    }, REGISTRATION_VERIFY_DELAY_MS);
+  };
+
   const sync = () => {
     const desired = desiredAccelerators();
+    let queuedRegistration = false;
 
     for (const [accel] of registered) {
       if (!desired.has(accel)) {
         registered.delete(accel);
-        void unregister(accel).catch(() => {});
+        void serializeOp(accel, () => unregister(accel)).catch(() => {});
       }
     }
 
@@ -741,23 +848,12 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
         continue;
       }
       registered.set(accel, shortcut);
-      register(accel, (event) => {
-        if (event.state !== 'Pressed') {
-          return;
-        }
-        // Resolve the handler at event time so the OS registration survives
-        // re-renders without re-registering (the effect only re-runs when the
-        // accelerator set changes).
-        const shortcut = shortcutsRef.current.find((s) => acceleratorForShortcut(s) === accel);
-        shortcut?.handler();
-      }).catch(() => {
-        registered.delete(accel);
-        if (failed.has(accel)) {
-          return;
-        }
-        failed.add(accel);
-        toast.error(i18n.t('settings.keyboard.registerFailed', { shortcut: accel }));
-      });
+      queuedRegistration = true;
+      registerAccelerator(accel);
+    }
+
+    if (queuedRegistration) {
+      scheduleVerify();
     }
   };
 
@@ -853,6 +949,10 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   return () => {
     disposed = true;
     stopSiblingPolling();
+    if (verifyTimer !== undefined) {
+      window.clearTimeout(verifyTimer);
+      verifyTimer = undefined;
+    }
     document.removeEventListener('focusin', sync);
     document.removeEventListener('focusout', sync);
     window.removeEventListener('blur', handleWindowBlur);
