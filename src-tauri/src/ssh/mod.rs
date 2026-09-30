@@ -1198,10 +1198,6 @@ impl SshClient {
                                 // than re-parsing per channel inside the loop.
                                 let registry = self.x11_registry.clone();
                                 let cid = connection_id.to_string();
-                                // Single process-global injection point (lib.rs
-                                // setup); None in unit tests, where the emit
-                                // below is skipped.
-                                let app_handle = crate::connection_manager::app_handle();
                                 tokio::spawn(async move {
                                     // Emit the macOS XQuartz hint at most once per
                                     // session: a flapping remote X app must not
@@ -1236,13 +1232,7 @@ impl SshClient {
                                                 #[cfg(target_os = "macos")]
                                                 if !hinted {
                                                     hinted = true;
-                                                    if let Some(handle) = app_handle.as_ref() {
-                                                        use tauri::Emitter;
-                                                        let _ = handle.emit(
-                                                            "x11-local-server-unreachable",
-                                                            &cid,
-                                                        );
-                                                    }
+                                                    crate::connection_manager::emit_x11_unreachable(&cid);
                                                 }
                                                 let _ = channel.close().await;
                                             }
