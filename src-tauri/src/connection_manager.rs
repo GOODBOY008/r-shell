@@ -56,8 +56,19 @@ static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::
 /// injection point for every backend → frontend event, including the X11
 /// dispatcher's `x11-local-server-unreachable`; `None` in unit tests, where
 /// emits are skipped.
-pub(crate) fn app_handle() -> Option<tauri::AppHandle> {
+fn app_handle() -> Option<tauri::AppHandle> {
     APP_HANDLE.get().cloned()
+}
+
+/// Emit `x11-local-server-unreachable` for a connection. Lives here rather
+/// than in the ssh layer so `ssh/mod.rs` instantiates no tauri types — a
+/// Windows-only loader failure (0xc0000139, see PR #33) follows tauri type
+/// use around, and the connection manager's unit is proven safe.
+pub(crate) fn emit_x11_unreachable(connection_id: &str) {
+    if let Some(handle) = app_handle() {
+        use tauri::Emitter;
+        let _ = handle.emit("x11-local-server-unreachable", connection_id);
+    }
 }
 
 /// Error from starting a PTY session, distinguishing a dead/unusable SSH
