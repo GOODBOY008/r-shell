@@ -1556,16 +1556,6 @@ function AppContent() {
         }
       }
 
-      // For SSH terminal tabs, the connection-dialog has already re-run
-      // ssh_connect (which on the backend tears down the previous session via
-      // create_connection's teardown_existing_connection). The frontend PTY
-      // must now reconnect: dispatching RECONNECT_TAB bumps reconnectCount,
-      // which is part of PtyTerminal's React key (see terminal-tab-portals),
-      // forcing a remount → fresh WebSocket → StartPty on the new session.
-      if (!isFileBrowser && !isDesktop) {
-        dispatch({ type: 'RECONNECT_TAB', tabId });
-      }
-
       // For SFTP/FTP reconnect flow
       if (isFileBrowser) {
         try {
