@@ -45,9 +45,9 @@ tokio-util = "0.7"
 suppaftp = { version = "12.1", features = ["tokio-async-native-tls"] }
 async-native-tls = { version = "0.6", default-features = false, features = ["runtime-tokio"] }
 futures-lite = "2"
-dirs = "6"
+dirs = "7"
 open = "5"
-base64 = "0.22"
+base64 = "0.23"
 sys-locale = "0.3"
 keyring = "4"
 aes-gcm = "0.10"
