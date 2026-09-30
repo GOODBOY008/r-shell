@@ -270,7 +270,7 @@
     "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored.",
     "x11": {
       "enable": "Enable X11 forwarding",
-      "enableDesc": "Forward remote X11 apps to your local X server (e.g. XQuartz)",
+      "enableDesc": "Forward remote X11 apps to your local X server. Trusted mode (-Y): your real xauth cookie is sent to the remote host",
       "displayOverride": "DISPLAY override",
       "displayPlaceholder": "Auto-detected if blank"
     }

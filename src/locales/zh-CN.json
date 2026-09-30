@@ -270,7 +270,7 @@
     "passwordSavingDisabledHint": "已在设置中关闭密码保存——连接可正常建立，但不会存储凭据。",
     "x11": {
       "enable": "启用 X11 转发",
-      "enableDesc": "将远程 X11 应用转发到本地 X 服务器（如 XQuartz）",
+      "enableDesc": "将远程 X11 应用转发到本地 X 服务器。受信任模式（-Y）：真实的 xauth cookie 将发送到远程主机",
       "displayOverride": "DISPLAY 覆盖",
       "displayPlaceholder": "留空则自动检测"
     }
