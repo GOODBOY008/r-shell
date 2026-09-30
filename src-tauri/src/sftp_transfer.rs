@@ -180,6 +180,77 @@ pub(crate) fn upload_stream_target(local_path: &str) -> usize {
 /// Minimum interval between progress callbacks.
 pub(crate) const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Files smaller than this never use parallel download streams.
+const PARALLEL_DOWNLOAD_MIN_SIZE: u64 = 64 * 1024 * 1024;
+
+/// Streams a parallel download splits into. Unlike the upload count (sized
+/// by the server's window budget against measured RTT), the download driver
+/// is LOSS SMOOTHING: a single TCP flow saturating a link sawtooths hard
+/// under congestion control (one loss event cuts the whole stream's rate),
+/// while N flows carrying 1/N each dip asynchronously and the aggregate
+/// stays flat — the same effect that makes multi-connection uploads stable
+/// where single-flow downloads oscillate. Four flows already cut aggregate
+/// variance ≈2×; more adds connection churn for little gain.
+const DOWNLOAD_STREAMS: usize = 4;
+
+/// Channel window for the extra connections a parallel download dials.
+/// Smaller than [`crate::ssh::CHANNEL_WINDOW_SIZE`] on purpose: 4
+/// connections × 8 MiB keep the same 32 MiB aggregate in-flight budget
+/// while each server-side burst grant shrinks 4×, gentler on switch
+/// buffers. 8 MiB still covers a 100 ms × 100 MB/s path per connection.
+pub(crate) const DOWNLOAD_CONN_WINDOW_SIZE: u32 = 8 * 1024 * 1024;
+
+/// `RSHELL_DOWNLOAD_STREAMS` override (tests and benchmarks; clamped to
+/// 1..=MAX_UPLOAD_STREAMS).
+fn forced_download_stream_count() -> Option<usize> {
+    let v = std::env::var("RSHELL_DOWNLOAD_STREAMS").ok()?;
+    v.trim()
+        .parse::<usize>()
+        .ok()
+        .map(|n| n.clamp(1, MAX_UPLOAD_STREAMS))
+}
+
+/// Streams a download of `total` bytes uses (before trimming to the
+/// available connections). Unknown size (`total == 0`) stays single-stream:
+/// segmentation needs boundaries.
+fn download_stream_count(total: u64) -> usize {
+    forced_download_stream_count().unwrap_or(if total >= PARALLEL_DOWNLOAD_MIN_SIZE {
+        DOWNLOAD_STREAMS
+    } else {
+        1
+    })
+}
+
+/// Pre-connection estimate for the wrapper: whether a download is worth
+/// dialing extra connections for. Mirrors [`upload_stream_target`]; the
+/// remote size comes from a cheap stat the wrapper performs.
+pub(crate) fn download_stream_target(remote_total: u64) -> usize {
+    download_stream_count(remote_total)
+}
+
+/// Remote file size via the raw protocol: open + fstat + close on a fresh
+/// channel of the given session. Used by the download wrapper to decide
+/// whether to dial extra connections before handing off to the engine.
+pub(crate) async fn remote_file_size(
+    session: &russh::client::Handle<Client>,
+    remote_path: &str,
+) -> Result<u64> {
+    let (raw, _read_len, _write_len) = open_raw_transfer_session(session).await?;
+    let handle = raw
+        .open(remote_path, OpenFlags::READ, FileAttributes::default())
+        .await
+        .map_err(|e| anyhow!("Failed to open remote file '{}': {}", remote_path, e))?
+        .handle;
+    let size = raw
+        .fstat(&handle)
+        .await
+        .ok()
+        .and_then(|attrs| attrs.attrs.size)
+        .unwrap_or(0);
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, raw.close(&handle)).await;
+    Ok(size)
+}
+
 /// Progress payload streamed to the frontend during a transfer.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TransferProgress {
@@ -320,18 +391,30 @@ async fn pipelined_write(
 /// Download `remote_path` to `local_path`, streaming to disk with pipelined
 /// reads. Returns the number of bytes transferred. Cancelling `cancel`
 /// aborts the transfer promptly; the partial local file is kept.
+/// Download `remote_path` to `local_path`, streaming to disk with pipelined
+/// reads. Returns the number of bytes transferred. Cancelling `cancel`
+/// aborts the transfer promptly; the partial local file is kept.
+///
+/// `sessions[0]` is the caller's main SSH connection; further entries are
+/// additional independent connections the wrapper dialed (see
+/// [`upload_file`] for why saturating a link needs separate connections).
+/// Large files split into [`DOWNLOAD_STREAMS`] segments across the
+/// connections — loss smoothing, not bandwidth: N flows dip asynchronously
+/// where one flow's congestion-control sawtooth is fully visible.
 pub(crate) async fn download_file(
-    session: &russh::client::Handle<Client>,
+    sessions: &[Arc<russh::client::Handle<Client>>],
     remote_path: &str,
     local_path: &str,
     progress: ProgressCallback<'_>,
     cancel: &CancellationToken,
 ) -> Result<u64> {
+    debug_assert!(!sessions.is_empty());
     // Handshake, open and fstat can each park on a stalled/dead connection
     // for the full request timeout, so they race the token too.
     let (raw, handle, total, read_len) = tokio::select! {
         setup = async {
-            let (raw, read_len, _write_len) = open_raw_transfer_session(session).await?;
+            let (raw, read_len, _write_len) =
+                open_raw_transfer_session(&sessions[0]).await?;
             let handle = raw
                 .open(remote_path, OpenFlags::READ, FileAttributes::default())
                 .await
@@ -348,22 +431,239 @@ pub(crate) async fn download_file(
         _ = cancel.cancelled() => return Err(anyhow!(CANCEL_ERROR)),
     };
 
-    let file = tokio::fs::File::create(local_path)
-        .await
-        .map_err(|e| anyhow!("Failed to create local file '{}': {}", local_path, e))?;
-    let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUF_SIZE, file);
-    let depth = pipeline_depth_for(read_len);
-    download_via_raw(
+    let streams = download_stream_count(total).min(sessions.len());
+    if streams <= 1 || total == 0 {
+        let file = tokio::fs::File::create(local_path)
+            .await
+            .map_err(|e| anyhow!("Failed to create local file '{}': {}", local_path, e))?;
+        let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUF_SIZE, file);
+        let depth = pipeline_depth_for(read_len);
+        return download_via_raw(
+            raw,
+            handle,
+            total,
+            read_len,
+            depth,
+            0,
+            &mut writer,
+            progress,
+            cancel,
+        )
+        .await;
+    }
+    tracing::info!(
+        streams,
+        connections = sessions.len(),
+        bytes = total,
+        remote_path,
+        "parallel segmented download"
+    );
+    parallel_download(
+        sessions,
         raw,
         handle,
-        total,
         read_len,
-        depth,
-        &mut writer,
+        streams,
+        total,
+        local_path,
+        remote_path,
         progress,
         cancel,
     )
     .await
+}
+
+/// Open one raw READ session per extra connection and run
+/// [`download_segments`]; any open failure falls back to the single-stream
+/// path on the already-open probe stream.
+#[allow(clippy::too_many_arguments)]
+async fn parallel_download(
+    connections: &[Arc<russh::client::Handle<Client>>],
+    raw0: Arc<RawSftpSession>,
+    handle0: String,
+    read_len0: u32,
+    streams: usize,
+    total: u64,
+    local_path: &str,
+    remote_path: &str,
+    progress: ProgressCallback<'_>,
+    cancel: &CancellationToken,
+) -> Result<u64> {
+    let seg = total / streams as u64;
+    let ranges: Vec<(u64, u64)> = (0..streams)
+        .map(|i| {
+            let start = i as u64 * seg;
+            let end = if i == streams - 1 { total } else { start + seg };
+            (start, end - start)
+        })
+        .collect();
+
+    let extra: Vec<(Arc<RawSftpSession>, String, u32)> = {
+        let opens = connections[1..streams].iter().map(|connection| {
+            let remote_path = remote_path.to_string();
+            async move {
+                let (raw, read_len, _write_len) = open_raw_transfer_session(connection).await?;
+                let handle = raw
+                    .open(&remote_path, OpenFlags::READ, FileAttributes::default())
+                    .await
+                    .map_err(|e| anyhow!("Failed to open remote file '{}': {}", remote_path, e))?
+                    .handle;
+                Ok::<_, anyhow::Error>((raw, handle, read_len))
+            }
+        });
+        match futures::future::try_join_all(opens).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    streams,
+                    "parallel download streams unavailable; falling back to single stream"
+                );
+                let file = tokio::fs::File::create(local_path)
+                    .await
+                    .map_err(|e| anyhow!("Failed to create local file '{}': {}", local_path, e))?;
+                let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUF_SIZE, file);
+                let depth = pipeline_depth_for(read_len0);
+                return download_via_raw(
+                    raw0,
+                    handle0,
+                    total,
+                    read_len0,
+                    depth,
+                    0,
+                    &mut writer,
+                    progress,
+                    cancel,
+                )
+                .await;
+            }
+        }
+    };
+
+    let mut sessions: Vec<(Arc<RawSftpSession>, String, u32)> = Vec::with_capacity(streams);
+    sessions.push((raw0, handle0, read_len0));
+    sessions.extend(extra);
+
+    download_segments(sessions, &ranges, local_path, total, progress, cancel).await
+}
+
+/// One [`download_via_raw`] per already-opened stream over its contiguous
+/// segment of the remote file. Each stream opens the LOCAL file independently
+/// and seeks to its segment start — independent descriptors have independent
+/// cursors (a `try_clone` would share one, see the upload path's history) —
+/// so parallel sequential writes land disjoint. Mirrors [`upload_segments`]:
+/// aggregated throttled progress, child-token sibling abort, sum check.
+#[allow(clippy::too_many_arguments)]
+async fn download_segments(
+    sessions: Vec<(Arc<RawSftpSession>, String, u32)>,
+    ranges: &[(u64, u64)],
+    local_path: &str,
+    total: u64,
+    progress: ProgressCallback<'_>,
+    cancel: &CancellationToken,
+) -> Result<u64> {
+    let streams = sessions.len();
+    debug_assert_eq!(streams, ranges.len());
+
+    // Truncate exactly once, before any stream opens for writing.
+    tokio::fs::File::create(local_path)
+        .await
+        .map_err(|e| anyhow!("Failed to create local file '{}': {}", local_path, e))?;
+
+    let aggregate = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let throttle = Arc::new(std::sync::Mutex::new(Instant::now() - PROGRESS_INTERVAL));
+    let mut stream_cbs: Vec<Option<Box<dyn Fn(u64, u64) + Send + Sync>>> =
+        Vec::with_capacity(streams);
+    for _ in 0..streams {
+        let cb = match progress {
+            Some(cb) => cb,
+            None => {
+                stream_cbs.push(None);
+                continue;
+            }
+        };
+        let aggregate = Arc::clone(&aggregate);
+        let throttle = Arc::clone(&throttle);
+        let last_seen = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        stream_cbs.push(Some(Box::new(move |now: u64, _stream_total: u64| {
+            let prev = last_seen.swap(now, std::sync::atomic::Ordering::Relaxed);
+            let delta = now.saturating_sub(prev);
+            let agg = aggregate.fetch_add(delta, std::sync::atomic::Ordering::Relaxed) + delta;
+            let mut last_emit = throttle.lock().unwrap_or_else(|e| e.into_inner());
+            if last_emit.elapsed() >= PROGRESS_INTERVAL {
+                *last_emit = Instant::now();
+                cb(agg, total);
+            }
+        })));
+    }
+
+    let run_token = cancel.child_token();
+    let futs = sessions
+        .into_iter()
+        .zip(ranges.iter().copied())
+        .zip(stream_cbs)
+        .map(|(((raw, handle, read_len), (start, len)), cb)| {
+            let token = run_token.clone();
+            let local_path = local_path.to_string();
+            async move {
+                let mut file = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&local_path)
+                    .await
+                    .map_err(|e| anyhow!("Failed to open local file '{}': {}", local_path, e))?;
+                file.seek(std::io::SeekFrom::Start(start))
+                    .await
+                    .map_err(|e| anyhow!("Failed to seek local file: {}", e))?;
+                let mut writer = tokio::io::BufWriter::with_capacity(WRITE_BUF_SIZE, file);
+                let progress = cb.as_deref();
+                let depth = pipeline_depth_for(read_len);
+                let result = download_via_raw(
+                    raw,
+                    handle,
+                    len,
+                    read_len,
+                    depth,
+                    start,
+                    &mut writer,
+                    progress,
+                    &token,
+                )
+                .await;
+                if result.is_err() {
+                    token.cancel();
+                }
+                result
+            }
+        });
+    let results = futures::future::join_all(futs).await;
+
+    let mut transferred: u64 = 0;
+    let mut failure: Option<anyhow::Error> = None;
+    for r in results {
+        match r {
+            Ok(n) => transferred += n,
+            Err(e) => {
+                if failure.is_none() && e.to_string() != CANCEL_ERROR {
+                    failure = Some(e);
+                }
+            }
+        }
+    }
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    if cancel.is_cancelled() {
+        return Err(anyhow!(CANCEL_ERROR));
+    }
+    if transferred != total {
+        return Err(anyhow!(
+            "parallel download incomplete: {transferred} of {total} bytes"
+        ));
+    }
+    if let Some(cb) = progress {
+        cb(transferred, total);
+    }
+    Ok(transferred)
 }
 
 /// Core of [`download_file`]: the sliding-window pipelined read loop over an
@@ -372,13 +672,18 @@ pub(crate) async fn download_file(
 /// server without an SSH transport.
 ///
 /// `read_len` is the per-request READ size and `depth` the number of reads
-/// kept in flight (see [`pipeline_depth_for`]).
+/// kept in flight (see [`pipeline_depth_for`]). `read_offset_base` is added
+/// to every READ offset: 0 for the single-stream path, the stream's segment
+/// start under [`download_segments`] — the writer is expected to be
+/// positioned there already, so writes stay sequential per stream.
+#[allow(clippy::too_many_arguments)]
 async fn download_via_raw<W>(
     raw: Arc<RawSftpSession>,
     handle: String,
     total: u64,
     read_len: u32,
     depth: usize,
+    read_offset_base: u64,
     writer: &mut W,
     progress: ProgressCallback<'_>,
     cancel: &CancellationToken,
@@ -425,13 +730,25 @@ where
         // Top the pipeline back up from the issue cursor. `total == 0`
         // (unknown size) reads unbounded until EOF.
         while inflight.len() < depth && (total == 0 || next_offset < total) {
+            // Clamp the final read of a KNOWN total to the remaining bytes:
+            // under segmented downloads a full-size read would cross into
+            // the next stream's territory — the server happily returns
+            // those bytes, they'd be written past our segment and
+            // double-counted. (Single-stream tails used to be harmless
+            // over-reads; segments make the clamp mandatory.)
+            let request_len = if total == 0 {
+                read_len
+            } else {
+                let remaining = total - next_offset; // loop guard: > 0 here
+                read_len.min(u32::try_from(remaining).unwrap_or(read_len))
+            };
             inflight.push_back(pipelined_read(
                 Arc::clone(&raw),
                 handle.clone(),
-                next_offset,
-                read_len,
+                read_offset_base + next_offset,
+                request_len,
             ));
-            next_offset += u64::from(read_len);
+            next_offset += u64::from(request_len);
         }
 
         // Wait for the next reply in issue order, or for cancellation.
@@ -1049,6 +1366,8 @@ mod tests {
         empty_data_at: Option<u64>,
         /// Reads at offsets >= this value never resolve (stalled server).
         gate_at: Option<u64>,
+        /// The read at exactly this offset fails with a generic status.
+        fail_at: Option<u64>,
         /// Records the offset of every read request that reached the server.
         read_log: Option<Arc<Mutex<Vec<u64>>>>,
     }
@@ -1077,6 +1396,9 @@ mod tests {
                     std::future::pending::<()>().await;
                     unreachable!();
                 }
+            }
+            if self.fail_at == Some(offset) {
+                return Err(StatusCode::Failure);
             }
             if offset >= self.payload.len() as u64 {
                 return Err(StatusCode::Eof);
@@ -1198,6 +1520,7 @@ mod tests {
             total,
             READ_CHUNK_SIZE,
             MIN_PIPELINE_DEPTH,
+            0,
             &mut out,
             Some(&cb),
             &cancel,
@@ -1218,6 +1541,7 @@ mod tests {
             short_read: None,
             empty_data_at: None,
             gate_at: None,
+            fail_at: None,
             read_log: None,
         };
         let (out, expected, transferred, log) =
@@ -1238,6 +1562,7 @@ mod tests {
             short_read: None,
             empty_data_at: None,
             gate_at: None,
+            fail_at: None,
             read_log: None,
         };
         let (out, expected, transferred, log) = download_with(mock, 0).await.expect("download");
@@ -1261,6 +1586,7 @@ mod tests {
             short_read: Some((3 * READ_CHUNK_SIZE as u64, 1_000)),
             empty_data_at: None,
             gate_at: None,
+            fail_at: None,
             read_log: None,
         };
         let (out, expected, transferred, _log) = download_with(mock, 0).await.expect("download");
@@ -1279,6 +1605,7 @@ mod tests {
             short_read: Some((3 * READ_CHUNK_SIZE as u64, 1_000)),
             empty_data_at: None,
             gate_at: None,
+            fail_at: None,
             read_log: None,
         };
         let (out, expected, transferred, log) =
@@ -1295,6 +1622,7 @@ mod tests {
             short_read: None,
             empty_data_at: None,
             gate_at: None,
+            fail_at: None,
             read_log: None,
         };
         let (out, _expected, transferred, log) = download_with(mock, 0).await.expect("download");
@@ -1312,6 +1640,7 @@ mod tests {
             short_read: None,
             empty_data_at: Some(0),
             gate_at: None,
+            fail_at: None,
             read_log: None,
         };
         let (out, _expected, transferred, _log) = download_with(mock, 0).await.expect("download");
@@ -1334,6 +1663,7 @@ mod tests {
             short_read: None,
             empty_data_at: None,
             gate_at: Some(gate_at),
+            fail_at: None,
             read_log: Some(Arc::clone(&read_log)),
         };
         let expected = Arc::clone(&mock.payload);
@@ -1352,6 +1682,7 @@ mod tests {
                     size as u64,
                     READ_CHUNK_SIZE,
                     MIN_PIPELINE_DEPTH,
+                    0,
                     &mut out,
                     Some(&cb),
                     &cancel,
@@ -1421,6 +1752,7 @@ mod tests {
             short_read: None,
             empty_data_at: None,
             gate_at: None,
+            fail_at: None,
             read_log: Some(Arc::clone(&read_log)),
         };
         let raw = Arc::new(mock_session(mock).await);
@@ -1434,6 +1766,7 @@ mod tests {
             READ_CHUNK_SIZE as u64 * 4,
             READ_CHUNK_SIZE,
             MIN_PIPELINE_DEPTH,
+            0,
             &mut out,
             None,
             &cancel,
@@ -1992,6 +2325,172 @@ mod tests {
         assert!(
             err.to_string().contains("Failed to write remote file"),
             "must report the original write failure, got: {}",
+            err
+        );
+        assert_ne!(err.to_string(), CANCEL_ERROR);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    // ── Parallel segmented download ────────────────────────────────────────
+
+    /// Drive [`download_segments`] against `streams` in-process mock servers
+    /// into a temp file. Returns the per-stream read logs and the progress
+    /// log alongside the downloaded file's bytes.
+    async fn parallel_download_with(
+        mocks: Vec<MockFile>,
+        payload: &[u8],
+        streams: usize,
+        cancel: &CancellationToken,
+    ) -> Result<(Vec<u8>, ProgressLog, Vec<Arc<Mutex<Vec<u64>>>>)> {
+        assert_eq!(mocks.len(), streams);
+        let read_logs: Vec<Arc<Mutex<Vec<u64>>>> = mocks
+            .iter()
+            .map(|m| match &m.read_log {
+                Some(log) => Arc::clone(log),
+                None => Arc::new(Mutex::new(Vec::new())),
+            })
+            .collect();
+        let sessions: Vec<(Arc<RawSftpSession>, String, u32)> = {
+            let mut v = Vec::with_capacity(streams);
+            for (i, mock) in mocks.into_iter().enumerate() {
+                let raw = Arc::new(mock_session(mock).await);
+                v.push((raw, format!("stream-{i}"), READ_CHUNK_SIZE));
+            }
+            v
+        };
+
+        let tmp = tempfile::NamedTempFile::new().expect("temp file");
+        let local_path = tmp.path().to_string_lossy().into_owned();
+        let seg = payload.len() as u64 / streams as u64;
+        let ranges: Vec<(u64, u64)> = (0..streams)
+            .map(|i| {
+                let start = i as u64 * seg;
+                let end = if i == streams - 1 {
+                    payload.len() as u64
+                } else {
+                    start + seg
+                };
+                (start, end - start)
+            })
+            .collect();
+
+        let (log, cb) = progress_logger();
+        let transferred = download_segments(
+            sessions,
+            &ranges,
+            &local_path,
+            payload.len() as u64,
+            Some(&cb),
+            cancel,
+        )
+        .await?;
+        assert_eq!(transferred, payload.len() as u64);
+        let out = tokio::fs::read(&local_path).await.expect("read back");
+        drop(tmp);
+        Ok((out, log, read_logs))
+    }
+
+    #[tokio::test]
+    async fn parallel_download_segments_are_byte_exact() {
+        // Three streams over a multi-window payload with a misaligned tail.
+        // Every stream's reads must stay inside its own segment and the
+        // reassembled file must match byte for byte — the download mirror
+        // of the upload segmentation regression (which caught streams
+        // writing at local offsets).
+        let streams = 3;
+        let size = 2 * MIN_PIPELINE_DEPTH * READ_CHUNK_SIZE as usize + 100_000;
+        let payload = deterministic_payload(size);
+        let mocks: Vec<MockFile> = (0..streams)
+            .map(|_| MockFile {
+                payload: Arc::clone(&payload),
+                short_read: None,
+                empty_data_at: None,
+                gate_at: None,
+                fail_at: None,
+                read_log: Some(Arc::new(Mutex::new(Vec::new()))),
+            })
+            .collect();
+        let cancel = CancellationToken::new();
+        let (out, log, read_logs) = parallel_download_with(mocks, &payload, streams, &cancel)
+            .await
+            .expect("parallel download");
+        assert_eq!(out, *payload, "reassembled content must be byte-exact");
+
+        let seg = size as u64 / streams as u64;
+        for (i, rlog) in read_logs.iter().enumerate() {
+            let start = i as u64 * seg;
+            let end = if i == streams - 1 {
+                size as u64
+            } else {
+                start + seg
+            };
+            let offsets = rlog.lock().unwrap();
+            assert!(!offsets.is_empty(), "stream {i} must have read");
+            for &off in offsets.iter() {
+                assert!(
+                    off >= start && off < end,
+                    "stream {i} read at {off} escaped its segment [{start}, {end})"
+                );
+            }
+        }
+        assert_progress_events(&log.lock().unwrap(), size as u64, size as u64);
+    }
+
+    #[tokio::test]
+    async fn parallel_download_cancel_returns_fast() {
+        let streams = 3;
+        let size = 4 * MIN_PIPELINE_DEPTH * READ_CHUNK_SIZE as usize;
+        let payload = deterministic_payload(size);
+        let mocks: Vec<MockFile> = (0..streams)
+            .map(|_| MockFile {
+                payload: Arc::clone(&payload),
+                short_read: None,
+                empty_data_at: None,
+                gate_at: Some(READ_CHUNK_SIZE as u64),
+                fail_at: None,
+                read_log: None,
+            })
+            .collect();
+        let cancel = CancellationToken::new();
+        let started = Instant::now();
+        let handle = tokio::spawn({
+            let cancel = cancel.clone();
+            async move { parallel_download_with(mocks, &payload, streams, &cancel).await }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("cancel must not hang")
+            .expect("task join")
+            .expect_err("gated parallel download must fail");
+        assert_eq!(result.to_string(), CANCEL_ERROR);
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn parallel_download_sibling_failure_aborts_and_reports_original_error() {
+        let streams = 3;
+        let size = 4 * MIN_PIPELINE_DEPTH * READ_CHUNK_SIZE as usize;
+        let payload = deterministic_payload(size);
+        let mocks: Vec<MockFile> = (0..streams)
+            .map(|i| MockFile {
+                payload: Arc::clone(&payload),
+                short_read: None,
+                empty_data_at: None,
+                gate_at: (i != 0).then_some(READ_CHUNK_SIZE as u64),
+                fail_at: (i == 0).then_some(READ_CHUNK_SIZE as u64),
+                read_log: None,
+            })
+            .collect();
+        let cancel = CancellationToken::new();
+        let started = Instant::now();
+        let err = parallel_download_with(mocks, &payload, streams, &cancel)
+            .await
+            .expect_err("failing stream must fail the parallel download");
+        assert!(
+            err.to_string().contains("SFTP read failed"),
+            "must report the original read failure, got: {}",
             err
         );
         assert_ne!(err.to_string(), CANCEL_ERROR);

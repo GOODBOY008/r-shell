@@ -982,7 +982,7 @@ mod shell_integration_tests {
             // the file back through the same session and compare bytes.
             let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
             let back = crate::sftp_transfer::download_file(
-                &session,
+                std::slice::from_ref(&session),
                 remote_path,
                 downloaded.path().to_string_lossy().as_ref(),
                 None,
@@ -1102,7 +1102,7 @@ mod shell_integration_tests {
 
             let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
             let back = crate::sftp_transfer::download_file(
-                &session,
+                std::slice::from_ref(&session),
                 remote_path,
                 downloaded.path().to_string_lossy().as_ref(),
                 None,
@@ -1170,6 +1170,71 @@ mod shell_integration_tests {
                 fold_hash(&got),
                 expected_hash,
                 "roundtrip must be byte-exact"
+            );
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
+        }
+
+        /// Multi-CONNECTION segmented download through the real
+        /// `SshClient::download_file_with_progress` path: seed-upload once
+        /// over the main connection, then download with
+        /// `RSHELL_DOWNLOAD_STREAMS=3` — the wrapper stats the remote file,
+        /// dials 2 extra SSH connections and the engine segments the file
+        /// across all three. Byte-exact roundtrip; the caller asserts the
+        /// server-side auth delta (fixture connect + 2 extra = 3).
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_download_multi_connection_roundtrip() {
+            let size: u64 = 96 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let mut client = fixture_client().await;
+            let remote_path = "/tmp/rshell-multi-conn-download-e2e.bin";
+            let up = client
+                .upload_file_with_progress(
+                    local_src.path().to_string_lossy().as_ref(),
+                    remote_path,
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("seed upload");
+            assert_eq!(up, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = client
+                .download_file_with_progress(
+                    remote_path,
+                    downloaded.path().to_string_lossy().as_ref(),
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("multi-connection download");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(
+                fold_hash(&got),
+                expected_hash,
+                "downloaded content must be byte-exact"
             );
 
             client

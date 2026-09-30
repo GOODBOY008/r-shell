@@ -2684,7 +2684,7 @@ async fn download_remote_file_to_path(
                     // The session handle is cloned out so the map read guard
                     // is NOT held across the (potentially long) transfer.
                     sftp_transfer::download_file(
-                        &session,
+                        std::slice::from_ref(&session),
                         remote_path,
                         local_path,
                         progress_ref,
@@ -2724,7 +2724,7 @@ async fn download_remote_file_to_path(
                         client.transfer_session()?
                     };
                     sftp_transfer::download_file(
-                        &session,
+                        std::slice::from_ref(&session),
                         remote_path,
                         local_path,
                         progress_ref,

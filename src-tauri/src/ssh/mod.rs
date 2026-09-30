@@ -812,9 +812,16 @@ impl SshClient {
     /// Failures are tolerated per connection — whatever dials and
     /// authenticates in time is returned (possibly fewer than `count`,
     /// possibly none); the transfer falls back to the main session.
-    pub(crate) async fn open_extra_upload_sessions(
+    ///
+    /// `window_size` is the channel window the dialed connections advertise:
+    /// uploads keep the full [`CHANNEL_WINDOW_SIZE`], parallel downloads use
+    /// the smaller [`sftp_transfer::DOWNLOAD_CONN_WINDOW_SIZE`] so the
+    /// aggregate in-flight budget stays 32 MiB while per-connection burst
+    /// grants shrink.
+    pub(crate) async fn open_extra_transfer_sessions(
         &self,
         count: usize,
+        window_size: u32,
         cancel: &CancellationToken,
     ) -> Vec<Arc<client::Handle<Client>>> {
         let Some(config) = &self.config else {
@@ -825,7 +832,9 @@ impl SshClient {
         }
         let timeout = Duration::from_secs(config.connect_timeout.max(1));
         let dials = (0..count).map(|_| {
-            let ssh_config = Arc::new(Self::build_russh_client_config(config));
+            let mut ssh_config = Self::build_russh_client_config(config);
+            ssh_config.window_size = window_size;
+            let ssh_config = Arc::new(ssh_config);
             let (handler, host_key_error) =
                 Client::new(&config.host, config.port, config.host_key_policy);
             let host = config.host.clone();
@@ -1143,8 +1152,37 @@ impl SshClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
         let session = self.transfer_session()?;
-        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
+        // Remote size decides whether to dial extra connections for a
+        // parallel segmented download (loss smoothing on saturated links).
+        let total = crate::sftp_transfer::remote_file_size(&session, remote_path)
             .await
+            .unwrap_or(0);
+        let wants = crate::sftp_transfer::download_stream_target(total);
+        let extra = if wants > 1 {
+            self.open_extra_transfer_sessions(
+                wants - 1,
+                crate::sftp_transfer::DOWNLOAD_CONN_WINDOW_SIZE,
+                cancel,
+            )
+            .await
+        } else {
+            Vec::new()
+        };
+        let mut sessions = vec![session];
+        sessions.extend(extra);
+        let result = crate::sftp_transfer::download_file(
+            &sessions,
+            remote_path,
+            local_path,
+            progress,
+            cancel,
+        )
+        .await;
+        if sessions.len() > 1 {
+            let extras = sessions.split_off(1);
+            Self::close_extra_sessions(extras).await;
+        }
+        result
     }
 
     pub async fn download_file_to_memory(&self, remote_path: &str) -> Result<Vec<u8>> {
@@ -1201,7 +1239,8 @@ impl SshClient {
         // forced single-stream run) never leaves this connection.
         let wants = crate::sftp_transfer::upload_stream_target(local_path);
         let extra = if wants > 1 {
-            self.open_extra_upload_sessions(wants - 1, cancel).await
+            self.open_extra_transfer_sessions(wants - 1, CHANNEL_WINDOW_SIZE, cancel)
+                .await
         } else {
             Vec::new()
         };

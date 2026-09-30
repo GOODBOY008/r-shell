@@ -362,8 +362,14 @@ impl StandaloneSftpClient {
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
         let session = self.transfer_session()?;
-        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
-            .await
+        crate::sftp_transfer::download_file(
+            std::slice::from_ref(&session),
+            remote_path,
+            local_path,
+            progress,
+            cancel,
+        )
+        .await
     }
 
     /// Upload a local file to a remote path. Returns bytes uploaded.
