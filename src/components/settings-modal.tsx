@@ -332,12 +332,25 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     // Skipped in browser dev mode where the Tauri backend is absent.
     void (async () => {
       if (!isTauri()) return;
+      // Only touch the OS when the user moved the toggle (or Reset) this
+      // session. An untouched toggle must not fire plugin calls on every
+      // save: on Windows, auto-launch's disable() deletes the HKCU Run value
+      // and surfaces ERROR_FILE_NOT_FOUND ("os error 2") when it doesn't
+      // exist — an error toast on every single save for anyone who never
+      // enabled autostart (#196).
+      if (!autostartTouchedRef.current) return;
       try {
+        const enabled = await isAutostartEnabled().catch(() => undefined);
         if (settings.autostart) {
-          await enableAutostart();
-        } else {
+          // Idempotent in both directions: skip when the OS already matches
+          // the desired state.
+          if (enabled !== true) {
+            await enableAutostart();
+          }
+        } else if (enabled !== false) {
           await disableAutostart();
         }
+        autostartTouchedRef.current = false;
       } catch (error) {
         const actual = await isAutostartEnabled().catch(() => undefined);
         const corrected = actual ?? !settings.autostart;
