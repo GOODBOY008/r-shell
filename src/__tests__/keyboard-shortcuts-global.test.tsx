@@ -2,8 +2,9 @@ import React from 'react';
 import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useKeyboardShortcuts, type KeyboardShortcut } from '../lib/keyboard-shortcuts';
-import { register, unregister, unregisterAll } from '@tauri-apps/plugin-global-shortcut';
+import { register, unregister, unregisterAll, isRegistered } from '@tauri-apps/plugin-global-shortcut';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
+import { toast } from 'sonner';
 
 const focusChangedCaptured: { handler?: (payload: boolean) => void } = {};
 
@@ -35,6 +36,7 @@ vi.mock('@tauri-apps/plugin-global-shortcut', () => ({
   register: vi.fn(async () => {}),
   unregister: vi.fn(async () => {}),
   unregisterAll: vi.fn(async () => {}),
+  isRegistered: vi.fn(async (): Promise<boolean> => false),
 }));
 
 vi.mock('sonner', () => ({
@@ -44,6 +46,7 @@ vi.mock('sonner', () => ({
 const mockedRegister = vi.mocked(register);
 const mockedUnregister = vi.mocked(unregister);
 const mockedUnregisterAll = vi.mocked(unregisterAll);
+const mockedIsRegistered = vi.mocked(isRegistered);
 const mockedGetAllWebviewWindows = vi.mocked(getAllWebviewWindows);
 
 function GlobalShortcutHarness({ shortcuts }: { shortcuts: KeyboardShortcut[] }) {
@@ -92,6 +95,11 @@ let platformSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   isFocusedMock.mockReset();
   isFocusedMock.mockResolvedValue(true);
+  // Default `isRegistered` answer: "not owned by this app" — matching the
+  // plugin's contract for a genuinely conflicting accelerator. Tests for the
+  // #195 race handling override this per-call/per-test.
+  mockedIsRegistered.mockReset();
+  mockedIsRegistered.mockResolvedValue(false);
   mockedGetAllWebviewWindows.mockReset();
   mockedGetAllWebviewWindows.mockResolvedValue([]);
   // Pin a non-macOS host so the macOS menu-ownership paths stay dormant unless
@@ -593,7 +601,9 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     // convention-key default bindings (background hijack fix, #130/#144).
     // (Ctrl+B was already dropped by the terminal context above.)
     expect(focusChangedCaptured.handler).toBeTypeOf('function');
-    act(() => {
+    // Async act: the register/unregister ops serialize per accelerator, so
+    // the re-register below drains one microtask behind the unregister.
+    await act(async () => {
       focusChangedCaptured.handler!(false);
     });
     expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
@@ -602,7 +612,7 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     // terminal context applies: Ctrl+B stays dropped (must NOT be silently
     // re-registered), Ctrl+W re-registers.
     mockedRegister.mockClear();
-    act(() => {
+    await act(async () => {
       focusChangedCaptured.handler!(true);
     });
     expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+W', expect.any(Function));
@@ -709,5 +719,136 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
     unmount();
 
     expect(mockedUnregisterAll).toHaveBeenCalledOnce();
+  });
+});
+
+describe('registration race hardening (#195)', () => {
+  it('never lets a focus-side register overtake an in-flight blur-side unregister', async () => {
+    // Win32 RegisterHotKey enforces system-wide uniqueness including our own
+    // pending registration: if a focus-side register reached the backend
+    // before the blur-side unregister for the same accelerator completed, the
+    // register failed with AlreadyRegistered (toast) and the late unregister
+    // then removed it — leaving a dead accelerator. Serialized ops make the
+    // register wait for the unregister to complete.
+    let releaseUnregister!: () => void;
+    mockedUnregister.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseUnregister = resolve;
+        }),
+    );
+
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn())]} />);
+    });
+    mockedRegister.mockClear();
+    mockedUnregister.mockClear();
+
+    // Fast Alt+Tab round trip: blur queues the unregister (hanging), focus
+    // queues the re-register behind it.
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
+    await act(async () => {});
+
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
+    expect(mockedRegister).not.toHaveBeenCalled();
+
+    releaseUnregister();
+    await act(async () => {});
+
+    expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+  });
+
+  it('treats an AlreadyRegistered failure owned by this app as success (no toast)', async () => {
+    // Focus transfer between two windows of this app: the sibling window's
+    // hook already holds the accelerator, so our register loses the race —
+    // but the app as a whole owns the key, which is the outcome we wanted.
+    mockedRegister.mockRejectedValueOnce(new Error('AlreadyRegistered'));
+    mockedIsRegistered.mockResolvedValueOnce(true);
+
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn())]} />);
+    });
+    await act(async () => {});
+
+    expect(toast.error).not.toHaveBeenCalled();
+
+    // Bookkeeping keeps the accelerator as registered: an immediate context
+    // sync must NOT fire another register attempt (it would have if the
+    // failure path had dropped it from the map).
+    mockedRegister.mockClear();
+    focusBody();
+    await act(async () => {});
+    expect(mockedRegister).not.toHaveBeenCalled();
+  });
+
+  it('toasts exactly once per accelerator for a genuine third-party conflict', async () => {
+    try {
+      mockedRegister.mockRejectedValue(new Error('AlreadyRegistered'));
+      // isRegistered stays false (beforeEach default): another application
+      // owns the accelerator — a real conflict the user must hear about.
+
+      await act(async () => {
+        render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn())]} />);
+      });
+      await act(async () => {});
+      expect(toast.error).toHaveBeenCalledTimes(1);
+
+      // The failed accelerator is dropped from bookkeeping, so a later
+      // focus cycle re-attempts it — but the once-per-accelerator guard
+      // keeps the repeat attempt silent.
+      window.dispatchEvent(new Event('blur'));
+      window.dispatchEvent(new Event('focus'));
+      await act(async () => {});
+
+      const attempts = mockedRegister.mock.calls.filter(([accel]) => accel === 'CommandOrControl+B');
+      expect(attempts.length).toBeGreaterThanOrEqual(2);
+      expect(toast.error).toHaveBeenCalledTimes(1);
+    } finally {
+      mockedRegister.mockImplementation(async () => {});
+    }
+  });
+
+  it('self-heals a registration lost after the fact (verification pass)', async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn())]} />);
+      });
+      await act(async () => {});
+
+      // OS truth says the registration is gone — e.g. the previously focused
+      // sibling window's late unregister removed what this window just
+      // registered (per-instance serialization cannot prevent that).
+      mockedRegister.mockClear();
+      mockedIsRegistered.mockResolvedValue(false);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(700);
+      });
+
+      expect(mockedRegister).toHaveBeenCalledWith('CommandOrControl+B', expect.any(Function));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not re-register when the verification pass finds everything healthy', async () => {
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        render(<GlobalShortcutHarness shortcuts={[layoutCtrlB(vi.fn())]} />);
+      });
+      await act(async () => {});
+
+      mockedRegister.mockClear();
+      mockedIsRegistered.mockResolvedValue(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(700);
+      });
+
+      expect(mockedRegister).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
