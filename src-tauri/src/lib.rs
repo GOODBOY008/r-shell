@@ -321,6 +321,9 @@ pub fn run() {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
+    // Create connection manager
+    let connection_manager = Arc::new(ConnectionManager::new());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

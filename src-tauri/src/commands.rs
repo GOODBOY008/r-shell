@@ -4809,6 +4809,7 @@ mod proxy_config_tests {
 
     pub(super) fn request(proxy_type: Option<&str>) -> ConnectRequest {
         ConnectRequest {
+            x11: None,
             connection_id: "c1".to_string(),
             host: "example.com".to_string(),
             port: 22,
