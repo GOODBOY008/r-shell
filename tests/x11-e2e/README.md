@@ -24,9 +24,20 @@ on the host — they validate the protocol-level forwarding establishment.
 
 ## Run
 
+The one-command harness:
+
 ```bash
-# 1. Start the X11-enabled sshd (builds the image, binds 127.0.0.1:2222 -> 22)
-docker compose -f tests/x11-e2e/docker-compose.yml up -d --build
+tests/x11-e2e/run.sh
+```
+
+It picks a free local port (exporting `RSHELL_TEST_X11_SSH_PORT` for the test
+process and `X11_E2E_PORT` for docker-compose), builds + starts the container,
+waits until healthy, runs the X11 e2e tests, and always tears the container
+down. Manual equivalent:
+
+```bash
+# 1. Start the X11-enabled sshd (default port 2222; override via X11_E2E_PORT)
+X11_E2E_PORT=2222 RSHELL_TEST_X11_SSH_PORT=2222   docker compose -f tests/x11-e2e/docker-compose.yml up -d --build
 
 # 2. Wait until healthy
 docker inspect --format='{{.State.Health.Status}}' r-shell-sshd-x11
