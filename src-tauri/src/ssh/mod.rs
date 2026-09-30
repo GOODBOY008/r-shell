@@ -1062,11 +1062,15 @@ impl SshClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
-        // X11 dispatcher cleanup needs no explicit deregistration here: the
-        // handler holding the registry is dropped with the session below, and
-        // the dispatcher task's own cleanup is token-checked
-        // (`remove_if_current`), so a stale task can never unregister a
-        // successor's entry.
+        // End this client's X11 dispatchers FIRST: each registry entry holds
+        // the only sender its dispatcher's recv() waits on, so dropping the
+        // entries lets those tasks observe the disconnect, exit, and release
+        // their registry Arc. Without this the dispatcher task is pinned
+        // forever by its own registration and leaks per X11-enabled PTY
+        // session (PR #64 final review, medium). The tasks' own cleanup is
+        // token-checked (`remove_if_current`), so a stale task can never
+        // unregister a successor's entry even if it lingers briefly.
+        self.x11_registry.shutdown().await;
 
         if let Some(session) = self.session.take() {
             // Try to unwrap Arc, if we're the only owner
@@ -1133,16 +1137,32 @@ impl SshClient {
 
                 match crate::x11::parse_display(&display_str) {
                     Ok(parsed) => {
-                        // Forwarding is always trusted (-Y): pass the real local
-                        // xauth cookie. Untrusted mode was removed because the X11
-                        // SECURITY extension it requires is rejected by standard
-                        // local X servers. We still fall back to a fake cookie if
-                        // xauth is unreadable: forwarding will then fail at the X
-                        // server (logged), but the SSH session itself is unaffected.
-                        let cookie = crate::x11::read_local_cookie(&parsed).unwrap_or_else(|e| {
-                            tracing::warn!("[X11] xauth read failed ({e}); falling back to fake cookie");
-                            crate::x11::generate_fake_cookie()
-                        });
+                        // Forwarding is always trusted (-Y) with OpenSSH -Y
+                        // cookie semantics: the x11-req carries a per-session
+                        // FAKE cookie and the real xauth cookie never crosses
+                        // the wire — the local bridge swaps it back in when
+                        // the remote client connects (X11CookieSwap). With no
+                        // xauth entry for the display, `real` stays None and
+                        // the local X server rejects the fake, failing closed
+                        // exactly like `ssh -Y` without xauth. (Untrusted mode
+                        // was removed because the X11 SECURITY extension it
+                        // requires is rejected by standard local X servers.)
+                        let real_cookie = crate::x11::read_local_cookie(&parsed)
+                            .ok()
+                            .and_then(|hex| {
+                                crate::x11::cookie_hex_to_bytes(&hex)
+                            });
+                        if real_cookie.is_none() {
+                            tracing::warn!(
+                                "[X11] no local xauth cookie for this display; \
+                                 forwarded X clients will be rejected by the local X server"
+                            );
+                        }
+                        let cookie_swap = crate::x11::X11CookieSwap {
+                            fake: crate::x11::generate_fake_cookie_bytes(),
+                            real: real_cookie,
+                        };
+                        let cookie = crate::x11::cookie_bytes_to_hex(&cookie_swap.fake);
 
                         // C1: do NOT set DISPLAY ourselves. sshd sets the remote
                         // DISPLAY itself (per its X11DisplayOffset) when it handles
@@ -1212,13 +1232,18 @@ impl SshClient {
                                         let _ = (originator_address, originator_port);
                                         // Connect to the local X server and bridge.
                                         // A fresh per-bridge cancel token; session
-                                        // teardown (disconnect) deregisters this
-                                        // dispatcher, whose channel closes and ends
-                                        // both bridge tasks.
+                                        // teardown (disconnect) clears this
+                                        // dispatcher's registry entry, whose
+                                        // channel closes and ends both bridge tasks.
                                         match crate::x11::connect_local_x_server(&parsed).await {
                                             Ok(socket) => {
                                                 let cancel = CancellationToken::new();
-                                                crate::x11::bridge_x11_channel(channel, socket, cancel);
+                                                crate::x11::bridge_x11_channel(
+                                                    channel,
+                                                    socket,
+                                                    cancel,
+                                                    Some(cookie_swap),
+                                                );
                                             }
                                             Err(e) => {
                                                 tracing::warn!("[X11] could not connect to local X server: {}. Remote app will fail to display.", e);
