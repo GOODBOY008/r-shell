@@ -1031,7 +1031,12 @@ mod shell_integration_tests {
                 ..russh::client::Config::default()
             };
             let (handler, _host_key_report) =
-                crate::ssh::Client::new(&host, port, crate::ssh::HostKeyPolicy::default());
+                crate::ssh::Client::new(
+                &host,
+                port,
+                crate::ssh::HostKeyPolicy::default(),
+                crate::ssh::fresh_x11_registry(),
+            );
             let mut session =
                 russh::client::connect(Arc::new(ssh_config), (&host[..], port), handler)
                     .await

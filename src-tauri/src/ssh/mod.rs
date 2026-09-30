@@ -2,6 +2,7 @@ use crate::proxy::ProxyConfig;
 use anyhow::Result;
 use russh::keys::*;
 use russh::*;
+use russh::client::{ChannelOpenHandle, Msg, Session};
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -354,12 +355,35 @@ pub struct Client {
     known_hosts: Option<PathBuf>,
     policy: HostKeyPolicy,
     report: HostKeyReport,
+    /// Registry this handler routes inbound X11 channels into. Exactly ONE
+    /// handler per connection owns the live registry (the main connection's
+    /// handler, which shares `SshClient`'s registry); every other handler
+    /// (jump-host outer session, bulk-transfer dials, standalone SFTP) gets a
+    /// fresh empty one so stray inbound X11 channels can never be routed
+    /// across sessions.
+    x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
 }
 
 impl Client {
     /// Handler for `host:port` using the OpenSSH known_hosts file.
-    pub fn new(host: &str, port: u16, policy: HostKeyPolicy) -> (Self, HostKeyReport) {
-        Self::with_known_hosts(host, port, default_known_hosts_path(), policy)
+    ///
+    /// `x11_registry` decides where inbound X11 channels go: pass the shared
+    /// registry of the owning [`SshClient`] only for the main terminal
+    /// connection; pass a fresh [`X11DispatcherRegistry::new`] everywhere
+    /// else (jump host, bulk dials, standalone SFTP).
+    pub fn new(
+        host: &str,
+        port: u16,
+        policy: HostKeyPolicy,
+        x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
+    ) -> (Self, HostKeyReport) {
+        Self::with_known_hosts(
+            host,
+            port,
+            default_known_hosts_path(),
+            policy,
+            x11_registry,
+        )
     }
 
     /// Handler with an explicit known_hosts location (tests).
@@ -368,6 +392,7 @@ impl Client {
         port: u16,
         known_hosts: Option<PathBuf>,
         policy: HostKeyPolicy,
+        x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
     ) -> (Self, HostKeyReport) {
         let report = HostKeyReport::default();
         (
@@ -377,10 +402,19 @@ impl Client {
                 known_hosts,
                 policy,
                 report: report.clone(),
+                x11_registry,
             },
             report,
         )
     }
+}
+
+/// A fresh, empty X11 dispatcher registry for handlers that must never
+/// receive inbound X11 channels (jump hop, bulk dials, standalone SFTP).
+/// Inbound X11 channels arriving on such a handler are rejected with
+/// `AdministrativelyProhibited` — never routed into another session.
+pub(crate) fn fresh_x11_registry() -> Arc<crate::x11::X11DispatcherRegistry> {
+    Arc::new(crate::x11::X11DispatcherRegistry::new())
 }
 
 impl client::Handler for Client {
@@ -476,29 +510,50 @@ impl client::Handler for Client {
         }
     }
 
+    /// Inbound X11 channel (server → client, opened when a remote X client
+    /// connects to sshd's forwarded DISPLAY listener). russh 0.63 hands us a
+    /// `reply` handle: the request stays pending until we accept it, reject
+    /// it, or drop it (drop ⇒ automatic `AdministrativelyProhibited`).
+    ///
+    /// One SSH session == one R-Shell connection == one active dispatcher
+    /// sender. `values().next()` is used because the Handler has no
+    /// connection_id context; exactly one sender is live per registry
+    /// (session swaps briefly overlap, but the old sender is dropped on
+    /// insert, closing the old receiver). Handlers that must NOT receive X11
+    /// channels (jump host, bulk dials, standalone SFTP) hold an empty
+    /// registry, so this always rejects for them.
     async fn server_channel_open_x11(
         &mut self,
         channel: Channel<Msg>,
         originator_address: &str,
         originator_port: u32,
+        reply: ChannelOpenHandle,
         _session: &mut Session,
     ) -> Result<(), Self::Error> {
-        // One SSH session == one R-Shell connection == one active dispatcher
-        // sender. `values().next()` is used because the Handler has no
-        // connection_id context; in practice exactly one sender is live per
-        // Client (session swaps briefly overlap, but the old sender is dropped
-        // on insert, closing the old receiver).
-        let senders = self.x11_registry.senders.read().await;
-        if let Some(tx) = senders.values().next() {
-            let _ = tx.send(crate::x11::InboundX11Channel {
-                channel,
-                originator_address: originator_address.to_string(),
-                originator_port,
-            });
-        } else {
-            tracing::warn!("[X11] inbound X11 channel but no dispatcher registered; dropping");
-            let _ = channel.close().await;
-        }
+        // Take the sender out under the read lock, then drop the lock before
+        // any await — the registry may be swapped concurrently (reconnect)
+        // and no lock may be held across `.await` (PTY deadlock history).
+        let sender = {
+            let senders = self.x11_registry.senders.read().await;
+            senders.values().next().cloned()
+        };
+        let Some(tx) = sender else {
+            tracing::warn!("[X11] inbound X11 channel but no dispatcher registered; rejecting");
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        // Accept FIRST, then hand the channel to the dispatcher. accept() and
+        // all later channel traffic go through the same queue (FIFO), so the
+        // server sees our confirmation before any channel data we send — and
+        // before the dispatcher task starts bridging.
+        reply.accept().await;
+        let _ = tx.send(crate::x11::InboundX11Channel {
+            channel,
+            originator_address: originator_address.to_string(),
+            originator_port,
+        });
         Ok(())
     }
 }
@@ -683,7 +738,11 @@ pub async fn connect_via_ssh_tunnel(
         ..client::Config::default()
     };
 
-    let (handler, host_key_error) = Client::new(&tunnel.host, tunnel.port, policy);
+    // Jump-host outer session: fresh X11 registry, never the target's —
+    // an inbound X11 channel on the tunneled hop must not be routed into
+    // the target connection's dispatcher (cross-session pollution).
+    let (handler, host_key_error) =
+        Client::new(&tunnel.host, tunnel.port, policy, fresh_x11_registry());
     let mut session = tokio::time::timeout(
         timeout,
         client::connect(
@@ -799,8 +858,12 @@ impl SshClient {
         // zero/garbage value can't time out instantly.
         let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
-        let (handler, host_key_error) =
-            Client::new(&config.host, config.port, config.host_key_policy);
+        let (handler, host_key_error) = Client::new(
+            &config.host,
+            config.port,
+            config.host_key_policy,
+            self.x11_registry.clone(),
+        );
         let mut ssh_session = if let Some(tunnel) = &config.tunnel {
             // Route the connection through an SSH jump host: connect to the
             // tunnel host, open a direct-tcpip channel to the final target,
@@ -892,8 +955,15 @@ impl SshClient {
             let mut ssh_config = Self::build_russh_client_config(config);
             ssh_config.window_size = window_size;
             let ssh_config = Arc::new(ssh_config);
-            let (handler, host_key_error) =
-                Client::new(&config.host, config.port, config.host_key_policy);
+            // Bulk-transfer dials carry no terminal session: fresh X11
+            // registry so inbound X11 channels are rejected, never routed
+            // into the interactive connection's dispatcher.
+            let (handler, host_key_error) = Client::new(
+                &config.host,
+                config.port,
+                config.host_key_policy,
+                fresh_x11_registry(),
+            );
             let host = config.host.clone();
             async move {
                 let mut session = tokio::time::timeout(
@@ -1619,6 +1689,7 @@ mod host_key_tests {
             22,
             Some(path.clone()),
             HostKeyPolicy::Strict,
+            fresh_x11_registry(),
         );
         assert!(client::Handler::check_server_key(
             &mut handler,
@@ -1643,6 +1714,7 @@ mod host_key_tests {
             22,
             Some(path.clone()),
             HostKeyPolicy::Strict,
+            fresh_x11_registry(),
         );
         assert!(client::Handler::check_server_key(
             &mut handler,
@@ -1656,7 +1728,7 @@ mod host_key_tests {
 
         // A different key for the same host: refused, and connect() gets the reason.
         let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::Strict);
+            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::Strict, fresh_x11_registry());
         assert!(!client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1677,7 +1749,7 @@ mod host_key_tests {
     #[tokio::test]
     async fn handler_refuses_everything_without_a_home_directory() {
         let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, None, HostKeyPolicy::Strict);
+            Client::with_known_hosts("example.test", 22, None, HostKeyPolicy::Strict, fresh_x11_registry());
         assert!(!client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1750,7 +1822,7 @@ mod host_key_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("known_hosts");
         let (mut handler, _) =
-            Client::with_known_hosts("example.test", 22, Some(path.clone()), HostKeyPolicy::Off);
+            Client::with_known_hosts("example.test", 22, Some(path.clone()), HostKeyPolicy::Off, fresh_x11_registry());
         assert!(client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1769,7 +1841,7 @@ mod host_key_tests {
         let path = dir.path().join("known_hosts");
         verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
         let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::AcceptNew);
+            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::AcceptNew, fresh_x11_registry());
         assert!(client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1795,6 +1867,7 @@ mod host_key_tests {
             2222,
             Some(path.clone()),
             HostKeyPolicy::Strict,
+            fresh_x11_registry(),
         );
         assert!(!client::Handler::check_server_key(
             &mut handler,
