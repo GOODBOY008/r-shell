@@ -207,8 +207,6 @@ fn weak_cookie() -> String {
 /// case (forwarding will then fail at the X server, but the SSH session is
 /// unaffected).
 pub fn read_local_cookie(parsed: &ParsedDisplay) -> anyhow::Result<String> {
-    let _ = parsed; // display-specific matching reserved for future use
-
     let auth_path = std::env::var("XAUTHORITY")
         .map(std::path::PathBuf::from)
         .or_else(|_| {
@@ -216,16 +214,39 @@ pub fn read_local_cookie(parsed: &ParsedDisplay) -> anyhow::Result<String> {
                 .map(|h| h.join(".Xauthority"))
                 .ok_or_else(|| anyhow::anyhow!("could not determine home directory"))
         })?;
+    read_cookie_from(&auth_path, parsed)
+}
 
-    let bytes = std::fs::read(&auth_path)
-        .map_err(|e| anyhow::anyhow!("failed to read {}: {}", auth_path.display(), e))?;
+/// Read the MIT-MAGIC-COOKIE-1 matching `parsed` from the xauth file at
+/// `path` (xauth binary format: for each record family:u16 BE, addr, disp,
+/// name, data — all but family length-prefixed).
+///
+/// Selection is a two-pass match, never "first cookie in the file":
+///   1. exact — entry family/addr/display match the parsed display;
+///   2. fallback — a `FamilyWild` entry with the same display number.
+///
+/// The .Xauthority file commonly holds entries for REMOTE hosts recorded by
+/// past `ssh -Y` sessions. Blindly taking the first MIT-MAGIC-COOKIE-1 would
+/// hand host A's forwarding cookie to host B (cross-host leak) or present the
+/// wrong cookie to the local X server (auth failure). Display-number matching
+/// with address pinning keeps the choice inside the local display's entries.
+pub(crate) fn read_cookie_from(path: &std::path::Path, parsed: &ParsedDisplay) -> anyhow::Result<String> {
+    let bytes = std::fs::read(path)
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {}", path.display(), e))?;
 
-    // Parse the binary Xauth format (Family + addr + display + name + data).
-    // Each record: family:u16 BE, addr_len:u16, addr, disp_len:u16, disp,
-    //              name_len:u16, name, data_len:u16, data.
+    // xauth family constants (X.h / libXau Family*).
+    const FAMILY_INTERNET: u16 = 0;
+    const FAMILY_INTERNET6: u16 = 6;
+    const FAMILY_LOCAL: u16 = 256;
+    const FAMILY_WILD: u16 = 65535;
+
+    // (cookie_hex, family, addr) of every MIT-MAGIC-COOKIE-1 entry whose
+    // display number matches, in file order.
+    let mut candidates: Vec<(String, u16, Vec<u8>)> = Vec::new();
+
     let mut pos = 0;
     while pos + 2 <= bytes.len() {
-        let _family = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]);
+        let family = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]);
         pos += 2;
         let (addr, next) = read_field(&bytes, pos)?;
         pos = next;
@@ -236,17 +257,51 @@ pub fn read_local_cookie(parsed: &ParsedDisplay) -> anyhow::Result<String> {
         let (data, next) = read_field(&bytes, pos)?;
         pos = next;
 
-        let _ = &addr;
-        let _ = &disp;
-        // Accept the first MIT-MAGIC-COOKIE-1 entry for simplicity — local
-        // single-user X servers almost always have exactly one.
-        if name == b"MIT-MAGIC-COOKIE-1" && data.len() == 16 {
-            return Ok(data.iter().map(|b| format!("{:02x}", b)).collect());
+        if name != b"MIT-MAGIC-COOKIE-1" || data.len() != 16 {
+            continue;
+        }
+        let entry_display: Option<u32> =
+            std::str::from_utf8(&disp).ok().and_then(|d| d.trim().parse().ok());
+        if entry_display != Some(parsed.display_num) {
+            continue;
+        }
+        candidates.push((data.iter().map(|b| format!("{:02x}", b)).collect(), family, addr));
+    }
+
+    let want_host = |addr: &[u8]| -> bool {
+        match &parsed.server {
+            LocalXServer::Tcp { host, .. } => {
+                std::str::from_utf8(addr)
+                    .map(|a| a.eq_ignore_ascii_case(host))
+                    .unwrap_or(false)
+            }
+            // FamilyLocal entries carry an empty (or hostname/unix) address;
+            // the socket path itself is not recorded. Any addr with the right
+            // display number is accepted for unix displays.
+            LocalXServer::Unix(_) => true,
+        }
+    };
+
+    for (cookie, family, addr) in &candidates {
+        let family_ok = match &parsed.server {
+            LocalXServer::Tcp { .. } => *family == FAMILY_INTERNET || *family == FAMILY_INTERNET6,
+            LocalXServer::Unix(_) => *family == FAMILY_LOCAL,
+        };
+        if family_ok && want_host(addr) {
+            return Ok(cookie.clone());
         }
     }
+    // Fallback: a wildcard entry for the same display number.
+    if let Some((cookie, _, _)) = candidates
+        .iter()
+        .find(|(_, family, _)| *family == FAMILY_WILD)
+    {
+        return Ok(cookie.clone());
+    }
     Err(anyhow::anyhow!(
-        "no MIT-MAGIC-COOKIE-1 entry found in {}",
-        auth_path.display()
+        "no MIT-MAGIC-COOKIE-1 entry for display {} in {}",
+        parsed.display_num,
+        path.display()
     ))
 }
 
@@ -669,5 +724,131 @@ mod tests {
         let cfg: X11Config = serde_json::from_str(json).unwrap();
         assert!(cfg.enabled);
         assert_eq!(cfg.display.as_deref(), Some(":1"));
+    }
+
+    // ===== xauth cookie selection =====
+
+    const MIT: &[u8] = b"MIT-MAGIC-COOKIE-1";
+
+    /// One xauth record: family:u16 BE, then length-prefixed addr/disp/name/data.
+    fn xauth_record(family: u16, addr: &[u8], disp: &str, name: &[u8], data: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&family.to_be_bytes());
+        for field in [addr, disp.as_bytes(), name, data] {
+            v.extend_from_slice(&(field.len() as u16).to_be_bytes());
+            v.extend_from_slice(field);
+        }
+        v
+    }
+
+    fn cookie(b: u8) -> [u8; 16] {
+        [b; 16]
+    }
+
+    fn cookie_hex(b: u8) -> String {
+        cookie(b).iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    fn write_xauth(records: &[Vec<u8>]) -> std::path::PathBuf {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Xauthority");
+        let mut bytes = Vec::new();
+        for r in records {
+            bytes.extend_from_slice(r);
+        }
+        std::fs::write(&path, bytes).unwrap();
+        // Leak the tempdir so the file outlives the test body's borrow of path.
+        std::mem::forget(dir);
+        path
+    }
+
+    #[test]
+    fn cookie_unix_display_skips_remote_host_entry() {
+        // A past `ssh -Y remote.example.com` recorded a FamilyInternet entry
+        // for display 10. The LOCAL unix display :0 must resolve to the local
+        // entry, never to the remote one.
+        let path = write_xauth(&[
+            xauth_record(0, b"remote.example.com", "10", MIT, &cookie(0xAA)),
+            xauth_record(256, b"", "0", MIT, &cookie(0xBB)),
+        ]);
+        let parsed = parse_display(":0").unwrap();
+        assert_eq!(
+            read_cookie_from(&path, &parsed).unwrap(),
+            cookie_hex(0xBB)
+        );
+    }
+
+    #[test]
+    fn cookie_tcp_display_matches_host_and_display() {
+        let path = write_xauth(&[
+            xauth_record(256, b"", "0", MIT, &cookie(0xBB)),
+            xauth_record(0, b"remote.example.com", "10", MIT, &cookie(0xAA)),
+        ]);
+        let parsed = parse_display("remote.example.com:10").unwrap();
+        assert_eq!(
+            read_cookie_from(&path, &parsed).unwrap(),
+            cookie_hex(0xAA)
+        );
+    }
+
+    #[test]
+    fn cookie_same_display_number_is_not_crossed_between_hosts() {
+        // The leak scenario: a remote entry for display 10 exists, and the
+        // user's unix DISPLAY is also :10. A unix display must NOT pick up
+        // the remote host's cookie (family mismatch) — fail closed instead.
+        let path = write_xauth(&[
+            xauth_record(0, b"remote.example.com", "10", MIT, &cookie(0xAA)),
+        ]);
+        let parsed = parse_display(":10").unwrap();
+        assert!(read_cookie_from(&path, &parsed).is_err());
+    }
+
+    #[test]
+    fn cookie_wildcard_entry_is_a_fallback_only() {
+        let path = write_xauth(&[
+            xauth_record(65535, b"", "0", MIT, &cookie(0xCC)),
+        ]);
+        let parsed = parse_display(":0").unwrap();
+        assert_eq!(
+            read_cookie_from(&path, &parsed).unwrap(),
+            cookie_hex(0xCC)
+        );
+    }
+
+    #[test]
+    fn cookie_no_matching_display_is_err() {
+        let path = write_xauth(&[
+            xauth_record(256, b"", "0", MIT, &cookie(0xBB)),
+        ]);
+        let parsed = parse_display(":5").unwrap();
+        assert!(read_cookie_from(&path, &parsed).is_err());
+    }
+
+    #[test]
+    fn cookie_non_cookie_names_are_skipped() {
+        let path = write_xauth(&[
+            xauth_record(256, b"", "0", b"XDM-AUTHORIZATION-1", &cookie(0xDD)),
+            xauth_record(256, b"", "0", MIT, &cookie(0xBB)),
+        ]);
+        let parsed = parse_display(":0").unwrap();
+        assert_eq!(
+            read_cookie_from(&path, &parsed).unwrap(),
+            cookie_hex(0xBB)
+        );
+    }
+
+    #[test]
+    fn cookie_truncated_file_is_err() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Xauthority");
+        std::fs::write(&path, [0u8, 0, 0, 1]).unwrap(); // claims a 1-byte addr then EOF
+        let parsed = parse_display(":0").unwrap();
+        assert!(read_cookie_from(&path, &parsed).is_err());
+    }
+
+    #[test]
+    fn cookie_missing_file_is_err() {
+        let parsed = parse_display(":0").unwrap();
+        assert!(read_cookie_from(std::path::Path::new("/nonexistent/.Xauthority"), &parsed).is_err());
     }
 }
