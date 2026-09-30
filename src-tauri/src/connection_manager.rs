@@ -220,7 +220,7 @@ impl ConnectionManager {
             })?;
 
         let connect_result = tokio::select! {
-            res = client.connect(connection_id.clone(), &config) => res,
+            res = client.connect(&config) => res,
             _ = cancel_token.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
         };
 
@@ -446,7 +446,7 @@ impl ConnectionManager {
 
         // Create PTY session. The map lock is released first so a slow or
         // failing handshake can't block unrelated connections.
-        let pty = match client.read().await.create_pty_session(cols, rows).await {
+        let pty = match client.read().await.create_pty_session(cols, rows, connection_id).await {
             Ok(pty) => pty,
             Err(e) => {
                 if is_session_dead_error(&e) {
@@ -2044,6 +2044,7 @@ mod tests {
                 proxy: None,
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
+                x11: None,
             })
             .await
             .expect("SSH connect to fixture");

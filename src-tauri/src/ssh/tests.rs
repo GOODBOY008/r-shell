@@ -76,7 +76,7 @@ mod tests {
         let mut client_write = client.write().await;
         let config = create_test_config();
 
-        let result = client_write.connect("test-conn-1".to_string(), &config).await;
+        let result = client_write.connect(&config).await;
 
         assert!(
             result.is_ok(),
@@ -98,7 +98,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect("test-conn-2".to_string(), &config)
+            .connect(&config)
             .await
             .expect("Failed to connect");
 
@@ -140,7 +140,7 @@ mod tests {
             x11: None,
         };
 
-        let result = client_write.connect("test-conn-3".to_string(), &config).await;
+        let result = client_write.connect(&config).await;
 
         assert!(
             result.is_err(),
@@ -157,7 +157,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect("test-conn".to_string(), &config)
+            .connect(&config)
             .await
             .expect("Failed to connect");
 
@@ -186,7 +186,7 @@ mod tests {
 
         // Connect
         client_write
-            .connect("test-conn".to_string(), &config)
+            .connect(&config)
             .await
             .expect("Failed to connect");
 
@@ -252,6 +252,7 @@ mod tests {
             host_key_policy: crate::ssh::HostKeyPolicy::default(),
             connect_timeout: 3,
             tunnel: None,
+                x11: None,
         }
     }
 
@@ -460,11 +461,12 @@ mod shell_integration_tests {
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 connect_timeout: 3,
                 tunnel: None,
+                    x11: None,
             })
             .await
             .expect("connect to Docker SSH server");
 
-        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let pty = client.create_pty_session(80, 24, "test-conn").await.expect("create PTY");
         let _ = read_until(&pty, b"\x1b\\").await; // first prompt is up
 
         pty.resize_tx
@@ -503,11 +505,12 @@ mod shell_integration_tests {
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 connect_timeout: 3,
                 tunnel: None,
+                    x11: None,
             })
             .await
             .expect("connect to Docker SSH server");
 
-        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let pty = client.create_pty_session(80, 24, "test-conn").await.expect("create PTY");
         let initial_output = read_until(&pty, b"\x1b\\").await;
         assert!(
             String::from_utf8_lossy(&initial_output).contains("/home/testuser"),
@@ -573,12 +576,13 @@ mod shell_integration_tests {
                         password: "testpass".to_string(),
                     },
                 }),
+                x11: None,
             })
             .await
             .expect("connect through SSH tunnel to Docker SSH server");
 
         // The terminal session must work over the tunnel (OSC 7 cwd report).
-        let pty = client.create_pty_session(80, 24).await.expect("create PTY");
+        let pty = client.create_pty_session(80, 24, "test-conn").await.expect("create PTY");
         let initial_output = read_until(&pty, b"\x1b\\").await;
         assert!(
             String::from_utf8_lossy(&initial_output).contains("/home/testuser"),
@@ -696,6 +700,7 @@ mod shell_integration_tests {
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 connect_timeout: 3,
                 tunnel: None,
+                    x11: None,
             })
             .await
             .expect("connect using the default-key fallback");
@@ -862,6 +867,7 @@ mod shell_integration_tests {
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 connect_timeout: 3,
                 tunnel: None,
+                    x11: None,
             })
             .await
             .expect_err("an unauthorized key must be rejected");
@@ -920,6 +926,7 @@ mod shell_integration_tests {
                     host_key_policy: crate::ssh::HostKeyPolicy::default(),
                     connect_timeout: 3,
                     tunnel: None,
+                        x11: None,
                 })
                 .await
                 .expect("connect to default-key fixture");
@@ -1625,7 +1632,7 @@ mod key_loading_tests {
         };
 
         let mut client = SshClient::new();
-        let err = client.connect("test-conn-missing".to_string(), &config).await.unwrap_err();
+        let err = client.connect(&config).await.unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("not found")
@@ -1823,6 +1830,9 @@ mod compression_roundtrip_tests {
             );
             assert_eq!(roundtripped, &input[..], "packet of {len} bytes corrupted");
         }
+    }
+}
+
 /// E2E integration tests for X11 forwarding against a real sshd.
 ///
 /// These require the Dockerized SSH server from `tests/x11-e2e/`:
@@ -1988,7 +1998,7 @@ mod x11_e2e_tests {
         let config = x11_config(true, None);
 
         client
-            .connect("x11-e2e-1".to_string(), &config)
+            .connect(&config)
             .await
             .expect("SSH connect should succeed against the test sshd");
 
@@ -2038,7 +2048,7 @@ mod x11_e2e_tests {
         let config = x11_config(false, None);
 
         client
-            .connect("x11-e2e-2".to_string(), &config)
+            .connect(&config)
             .await
             .expect("SSH connect should succeed");
 
@@ -2224,7 +2234,7 @@ mod auth_timeout_tests {
         let config = x11_config(true, None);
 
         client
-            .connect("x11-e2e-3".to_string(), &config)
+            .connect(&config)
             .await
             .expect("connect");
         let session = client

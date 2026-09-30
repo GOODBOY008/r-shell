@@ -464,6 +464,7 @@ mod tests {
                 proxy: None,
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
+            x11: None,
             })
             .await
             .expect("SSH connect to fixture");
