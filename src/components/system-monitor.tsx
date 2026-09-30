@@ -36,6 +36,13 @@ interface SystemStats {
 
 interface SystemMonitorProps {
   connectionId?: string;
+  /**
+   * Whether this panel's tab is the visible one. The panel stays mounted so its
+   * state survives a tab switch, but while it is hidden it stops polling —
+   * it is the most expensive panel in the sidebar (~6 SSH round trips per
+   * tick) and none of it is visible.
+   */
+  active?: boolean;
 }
 
 interface Process {
@@ -153,7 +160,7 @@ const getProgressColor = (usage: number): string => {
   return '[&>div]:bg-green-500';
 };
 
-export function SystemMonitor({ connectionId }: SystemMonitorProps) {
+export function SystemMonitor({ connectionId, active = true }: SystemMonitorProps) {
   const { t } = useTranslation();
   const [stats, setStats] = useState<SystemStats>({
     cpu: 0,
@@ -288,6 +295,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       setProcesses([]);
       return;
     }
+    // Hidden panel: keep the last reading on screen, stop polling. The visible
+    // tab is whichever one the user is actually looking at.
+    if (!active) return;
 
     let cancelled = false;
 
@@ -320,7 +330,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       clearInterval(processInterval);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchSystemStats/fetchProcesses are stable inline fns; adding them causes infinite re-renders
-  }, [connectionId, processSortBy]);
+  }, [connectionId, processSortBy, active]);
 
   // Fetch disk usage data.
   // Same isCancelled / throw-on-error contract as fetchSystemStats.
@@ -355,6 +365,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
   // if missed: user waits a full minute for first data).
   useEffect(() => {
     if (!connectionId) return;
+    if (!active) return;
 
     let cancelled = false;
 
@@ -373,7 +384,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
 
     return () => { cancelled = true; clearInterval(interval); };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchDiskUsage is a stable inline fn; adding it causes infinite re-renders
-  }, [connectionId]);
+  }, [connectionId, active]);
 
   // GPU Stats fetching.
   // Same isCancelled / throw-on-error contract as fetchSystemStats.
@@ -428,6 +439,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       return;
     }
 
+    // Hidden panel: defer the probe. Re-runs when the tab becomes visible.
+    if (!active) return;
+
     let cancelled = false;
     setGpuDetectionDone(false);
     setGpuDetection(null);
@@ -453,11 +467,12 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     });
 
     return () => { cancelled = true; };
-  }, [connectionId]);
+  }, [connectionId, active]);
 
   // GPU stats polling - only if GPU detected
   useEffect(() => {
     if (!connectionId || !gpuDetection?.available) return;
+    if (!active) return;
 
     let cancelled = false;
 
@@ -475,7 +490,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
 
     return () => { cancelled = true; clearInterval(interval); };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchGpuStats is a stable inline fn; adding it causes infinite re-renders
-  }, [connectionId, gpuDetection?.available]);
+  }, [connectionId, gpuDetection?.available, active]);
 
   const [latencyData, setLatencyData] = useState<LatencyData[]>([]);
   const [networkUsage, setNetworkUsage] = useState<NetworkUsage>({
@@ -503,6 +518,10 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       setInterfaceBandwidthMap(new Map());
       return;
     }
+    // Hidden panel: keep the last reading, stop sampling. The bandwidth probe
+    // costs a remote `sleep 1`, so this is the most expensive thing the panel
+    // does while nobody is looking at it.
+    if (!active) return;
 
     let cancelled = false;
 
@@ -619,7 +638,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     }, 5000);
 
     return () => { cancelled = true; clearInterval(interval); };
-  }, [connectionId, selectedInterface]);
+  }, [connectionId, selectedInterface, active]);
 
   // Network latency monitoring - fetch real ping data
   // OPTIMIZED: Longer interval, use idle callback
@@ -629,6 +648,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       setLatencyData([]);
       return;
     }
+    if (!active) return;
 
     let cancelled = false;
 
@@ -670,7 +690,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     }, 10000);
 
     return () => { cancelled = true; clearInterval(interval); };
-  }, [connectionId]);
+  }, [connectionId, active]);
 
 
 
