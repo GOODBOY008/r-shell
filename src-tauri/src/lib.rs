@@ -370,19 +370,9 @@ pub fn run() {
                     if let Err(e) = ws_server.start().await {
                         tracing::error!("WebSocket server error: {}", e);
                     }
-                    Err(e) => tracing::warn!("Failed to build native menu: {}", e),
-                }
+                });
+                Ok(())
             }
-
-            // Start WebSocket server for terminal I/O
-            // Try ports 9001-9010 to avoid conflicts with other instances
-            let ws_server = Arc::new(WebSocketServer::new(connection_manager));
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = ws_server.start().await {
-                    tracing::error!("WebSocket server error: {}", e);
-                }
-            });
-            Ok(())
         })
         .on_menu_event(|app, event| {
             // Quit goes through the dirty-editor guard; everything else is
