@@ -179,8 +179,6 @@ pub struct SshClient {
     /// The stored X11 config, captured at connect time so create_pty_session
     /// can read it without the caller re-passing it.
     x11_config: Option<crate::x11::X11Config>,
-    /// Connection id, used to key the dispatcher registry.
-    connection_id: Option<String>,
 }
 
 // PTY session handle for interactive shell
@@ -530,7 +528,7 @@ impl client::Handler for Client {
         // and no lock may be held across `.await` (PTY deadlock history).
         let sender = {
             let senders = self.x11_registry.senders.read().await;
-            senders.values().next().cloned()
+            senders.values().next().map(|e| e.tx.clone())
         };
         let Some(tx) = sender else {
             tracing::warn!("[X11] inbound X11 channel but no dispatcher registered; rejecting");
@@ -796,7 +794,6 @@ impl SshClient {
             config: None,
             x11_registry: Arc::new(crate::x11::X11DispatcherRegistry::new()),
             x11_config: None,
-            connection_id: None,
         }
     }
 
@@ -1065,12 +1062,11 @@ impl SshClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
-        // Deregister any X11 dispatcher for this connection so the Handler
-        // stops handing inbound channels to a dead session.
-        if let Some(cid) = &self.connection_id {
-            let mut senders = self.x11_registry.senders.write().await;
-            senders.remove(cid);
-        }
+        // X11 dispatcher cleanup needs no explicit deregistration here: the
+        // handler holding the registry is dropped with the session below, and
+        // the dispatcher task's own cleanup is token-checked
+        // (`remove_if_current`), so a stale task can never unregister a
+        // successor's entry.
 
         if let Some(session) = self.session.take() {
             // Try to unwrap Arc, if we're the only owner
@@ -1167,9 +1163,16 @@ impl SshClient {
                         // Handler would drop it. We insert first, then deregister
                         // on request_x11 failure.
                         let (x11_tx, mut x11_rx) = mpsc::unbounded_channel::<crate::x11::InboundX11Channel>();
+                        let dispatcher_token = crate::x11::next_dispatcher_token();
                         {
                             let mut senders = self.x11_registry.senders.write().await;
-                            senders.insert(connection_id.to_string(), x11_tx);
+                            senders.insert(
+                                connection_id.to_string(),
+                                crate::x11::X11DispatcherEntry {
+                                    tx: x11_tx,
+                                    token: dispatcher_token,
+                                },
+                            );
                         }
 
                         match channel.request_x11(
@@ -1245,9 +1248,9 @@ impl SshClient {
                                             }
                                         }
                                     }
-                                    // Dispatcher shut down (session closing) — deregister.
-                                    let mut senders = registry.senders.write().await;
-                                    senders.remove(&cid);
+                                    // Dispatcher shut down (session closing) — deregister,
+                                    // but only if no successor replaced us meanwhile.
+                                    registry.remove_if_current(&cid, dispatcher_token).await;
                                 });
                             }
                             Err(e) => {
@@ -1255,7 +1258,9 @@ impl SshClient {
                                 // inserted above so the Handler stops routing
                                 // inbound channels to a session whose X11 setup
                                 // failed.
-                                self.x11_registry.senders.write().await.remove(connection_id);
+                                self.x11_registry
+                                    .remove_if_current(connection_id, dispatcher_token)
+                                    .await;
                                 tracing::warn!("[X11] request_x11 rejected by server: {}. Terminal will work without X11.", e);
                             }
                         }

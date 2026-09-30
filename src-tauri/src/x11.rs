@@ -327,18 +327,52 @@ pub struct InboundX11Channel {
     pub originator_port: u32,
 }
 
-/// Connection-keyed map of dispatcher senders. Shared between the `Client`
+/// Monotonic token distinguishing successive dispatcher registrations under
+/// the same connection id (reconnect overwrites the entry; the replaced
+/// dispatcher's cleanup must not remove its successor's entry).
+static NEXT_DISPATCHER_TOKEN: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(1);
+
+pub(crate) fn next_dispatcher_token() -> u64 {
+    NEXT_DISPATCHER_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// One registered dispatcher: the sender the russh `Client` handler routes
+/// inbound X11 channels into, plus the token used for last-writer-wins
+/// cleanup (see [`X11DispatcherRegistry::remove_if_current`]).
+pub struct X11DispatcherEntry {
+    pub tx: mpsc::UnboundedSender<InboundX11Channel>,
+    pub token: u64,
+}
+
+/// Connection-keyed map of dispatcher entries. Shared between the `Client`
 /// handler (producer) and the application (consumer). One SSH session maps to
-/// one R-Shell connection, so in practice exactly one sender is live per
+/// one R-Shell connection, so in practice exactly one entry is live per
 /// `Client`.
 #[derive(Default)]
 pub struct X11DispatcherRegistry {
-    pub senders: Arc<RwLock<HashMap<String, mpsc::UnboundedSender<InboundX11Channel>>>>,
+    pub senders: Arc<RwLock<HashMap<String, X11DispatcherEntry>>>,
 }
 
 impl X11DispatcherRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Remove the entry for `connection_id` only if it is still the one
+    /// registered under `token`. A replaced (reconnected) dispatcher exits
+    /// later than its successor's registration; without the token check its
+    /// cleanup would unregister the live dispatcher and inbound X11 channels
+    /// would be rejected until the next PTY start.
+    pub async fn remove_if_current(&self, connection_id: &str, token: u64) {
+        let mut senders = self.senders.write().await;
+        let is_current = senders
+            .get(connection_id)
+            .map(|e| e.token == token)
+            .unwrap_or(false);
+        if is_current {
+            senders.remove(connection_id);
+        }
     }
 }
 
@@ -850,5 +884,74 @@ mod tests {
     fn cookie_missing_file_is_err() {
         let parsed = parse_display(":0").unwrap();
         assert!(read_cookie_from(std::path::Path::new("/nonexistent/.Xauthority"), &parsed).is_err());
+    }
+
+    // ===== dispatcher registry lifecycle =====
+
+    fn entry() -> X11DispatcherEntry {
+        let (tx, _rx) = mpsc::unbounded_channel::<InboundX11Channel>();
+        X11DispatcherEntry {
+            tx,
+            token: next_dispatcher_token(),
+        }
+    }
+
+    #[tokio::test]
+    async fn registry_reconnect_overwrites_entry() {
+        let registry = X11DispatcherRegistry::new();
+        let first = entry();
+        let second = entry();
+        registry
+            .senders
+            .write()
+            .await
+            .insert("c1".into(), first);
+        // Reconnect under the same id replaces the entry...
+        registry
+            .senders
+            .write()
+            .await
+            .insert("c1".into(), second);
+        assert_eq!(registry.senders.read().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stale_dispatcher_cleanup_never_removes_successor() {
+        let registry = X11DispatcherRegistry::new();
+        let first = entry();
+        let first_token = first.token;
+        registry
+            .senders
+            .write()
+            .await
+            .insert("c1".into(), first);
+        // The successor registers (reconnect); the replaced dispatcher's task
+        // then gets around to its cleanup — it must NOT remove the live entry.
+        let second = entry();
+        let second_token = second.token;
+        registry
+            .senders
+            .write()
+            .await
+            .insert("c1".into(), second);
+        registry.remove_if_current("c1", first_token).await;
+        assert!(
+            registry.senders.read().await.contains_key("c1"),
+            "stale cleanup must not unregister the successor"
+        );
+        // The successor's own cleanup removes it.
+        registry.remove_if_current("c1", second_token).await;
+        assert!(!registry.senders.read().await.contains_key("c1"));
+    }
+
+    #[tokio::test]
+    async fn registry_remove_if_current_is_idempotent() {
+        let registry = X11DispatcherRegistry::new();
+        let e = entry();
+        let token = e.token;
+        registry.senders.write().await.insert("c1".into(), e);
+        registry.remove_if_current("c1", token).await;
+        registry.remove_if_current("c1", token).await; // second call: no-op
+        assert!(registry.senders.read().await.is_empty());
     }
 }
