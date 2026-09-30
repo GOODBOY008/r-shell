@@ -1533,38 +1533,28 @@ pub async fn get_network_bandwidth(
 
     match client.execute_command(command).await {
         Ok(output) => {
-            let lines: Vec<&str> = output.lines().collect();
             let mut bandwidth = Vec::new();
 
-            // Split into before and after measurements
-            let mid = lines.len() / 2;
-            let before = &lines[0..mid];
-            let after = &lines[mid..];
-
-            for (before_line, after_line) in before.iter().zip(after.iter()) {
-                let before_parts: Vec<&str> = before_line.split(',').collect();
-                let after_parts: Vec<&str> = after_line.split(',').collect();
-
-                if before_parts.len() == 3
-                    && after_parts.len() == 3
-                    && before_parts[0] == after_parts[0]
-                {
-                    if let (Ok(rx1), Ok(tx1), Ok(rx2), Ok(tx2)) = (
-                        before_parts[1].parse::<f64>(),
-                        before_parts[2].parse::<f64>(),
-                        after_parts[1].parse::<f64>(),
-                        after_parts[2].parse::<f64>(),
-                    ) {
-                        // Calculate bytes per second
-                        let rx_bytes_per_sec = rx2 - rx1;
-                        let tx_bytes_per_sec = tx2 - tx1;
-
-                        bandwidth.push(NetworkBandwidth {
-                            interface: before_parts[0].to_string(),
-                            rx_bytes_per_sec,
-                            tx_bytes_per_sec,
-                        });
-                    }
+            // The command already diffs its two samples and emits a flat
+            // `interface,rx_per_sec,tx_per_sec` list, so there is nothing to
+            // pair up here. It used to emit both snapshots and match them by
+            // splitting the line count in half, which made this parser depend
+            // on the command emitting exactly two well-formed blocks in order.
+            for line in output.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split(',').collect();
+                if parts.len() != 3 {
+                    continue;
+                }
+                if let (Ok(rx), Ok(tx)) = (parts[1].parse::<f64>(), parts[2].parse::<f64>()) {
+                    bandwidth.push(NetworkBandwidth {
+                        interface: parts[0].to_string(),
+                        rx_bytes_per_sec: rx,
+                        tx_bytes_per_sec: tx,
+                    });
                 }
             }
 
