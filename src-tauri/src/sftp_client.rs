@@ -1,10 +1,11 @@
 use anyhow::Result;
+use russh::keys::*;
 use russh::*;
-use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 use crate::ssh::{Client, HostKeyPolicy, TunnelConfig};
 
@@ -119,6 +120,93 @@ pub(crate) async fn list_sftp_dir(sftp: &SftpSession, path: &str) -> Result<Vec<
 pub struct StandaloneSftpClient {
     session: Option<Arc<client::Handle<Client>>>,
     sftp: Option<SftpSession>,
+    /// Connection configuration, kept so bulk transfers can dial additional
+    /// independent SSH connections (parallel segmented transfer).
+    config: Option<SftpConfig>,
+}
+
+/// Authenticate a freshly connected session per `config` — shared by
+/// [`StandaloneSftpClient::connect`] and the extra bulk-transfer dials.
+async fn authenticate_sftp_session(
+    session: &mut client::Handle<Client>,
+    config: &SftpConfig,
+) -> Result<()> {
+    let authenticated = match &config.auth_method {
+        SftpAuthMethod::Password { password } => session
+            .authenticate_password(&config.username, password)
+            .await
+            .map_err(|e| anyhow::anyhow!("SFTP password authentication failed: {}", e))?,
+        SftpAuthMethod::PublicKey {
+            key_path,
+            passphrase,
+        } => {
+            let expanded_path = crate::os_keypath::expand_tilde(key_path);
+
+            if !std::path::Path::new(&expanded_path).exists() {
+                return Err(anyhow::anyhow!(
+                    "SSH key file not found: {}. Please check the file path.",
+                    key_path
+                ));
+            }
+
+            // load_secret_key takes the key *path* and handles both
+            // OpenSSH and PEM private keys (the previous code passed the
+            // path to decode_secret_key, which expects the file content —
+            // publickey SFTP logins silently fell back to failures).
+            let key = load_secret_key(&expanded_path, passphrase.as_deref()).map_err(|e| {
+                if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
+                    anyhow::anyhow!(
+                        "Failed to decrypt SSH key. Please provide the correct passphrase."
+                    )
+                } else {
+                    anyhow::anyhow!("Failed to load SSH key from {}: {}.", key_path, e)
+                }
+            })?;
+
+            let mut authenticated = session
+                .authenticate_publickey(
+                    &config.username,
+                    PrivateKeyWithHashAlg::new(Arc::new(key.clone()), Some(HashAlg::Sha256)),
+                )
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "SFTP public key authentication failed with key {}: {}.",
+                        expanded_path,
+                        e
+                    )
+                })?;
+            if !authenticated.success() {
+                authenticated = session
+                    .authenticate_publickey(
+                        &config.username,
+                        PrivateKeyWithHashAlg::new(Arc::new(key.clone()), None),
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "SFTP public key authentication failed with key {}: {}.",
+                            expanded_path,
+                            e
+                        )
+                    })?;
+            }
+            if !authenticated.success() {
+                return Err(anyhow::anyhow!(
+                    "SFTP public key authentication failed with key {}. The key may not be authorized on the server.",
+                    expanded_path
+                ));
+            }
+            authenticated
+        }
+    };
+
+    if !authenticated.success() {
+        return Err(anyhow::anyhow!(
+            "SFTP authentication failed. Please check your credentials."
+        ));
+    }
+    Ok(())
 }
 
 impl StandaloneSftpClient {
@@ -126,6 +214,7 @@ impl StandaloneSftpClient {
         Self {
             session: None,
             sftp: None,
+            config: None,
         }
     }
 
@@ -136,6 +225,10 @@ impl StandaloneSftpClient {
                 key: std::borrow::Cow::Borrowed(crate::ssh::PREFERRED_HOST_KEY_ALGOS),
                 ..russh::Preferred::DEFAULT
             },
+            // The "SFTP" connection type transfers over this session, so it
+            // needs the same large receive window as the terminal-oriented
+            // connections — see crate::ssh::CHANNEL_WINDOW_SIZE.
+            window_size: crate::ssh::CHANNEL_WINDOW_SIZE,
             ..client::Config::default()
         };
         // Floor at 1 s so a zero/garbage value from the settings can't time
@@ -201,63 +294,7 @@ impl StandaloneSftpClient {
             })?
         };
 
-        // Authenticate
-        let authenticated = match &config.auth_method {
-            SftpAuthMethod::Password { password } => ssh_session
-                .authenticate_password(&config.username, password)
-                .await
-                .map_err(|e| anyhow::anyhow!("SFTP password authentication failed: {}", e))?,
-            SftpAuthMethod::PublicKey {
-                key_path,
-                passphrase,
-            } => {
-                let expanded_path = crate::os_keypath::expand_tilde(key_path);
-
-                if !std::path::Path::new(&expanded_path).exists() {
-                    return Err(anyhow::anyhow!(
-                        "SSH key file not found: {}. Please check the file path.",
-                        key_path
-                    ));
-                }
-
-                let key =
-                    decode_secret_key(&expanded_path, passphrase.as_deref()).map_err(|e| {
-                        if e.to_string().contains("encrypted")
-                            || e.to_string().contains("passphrase")
-                        {
-                            anyhow::anyhow!(
-                                "Failed to decrypt SSH key. Please provide the correct passphrase."
-                            )
-                        } else {
-                            anyhow::anyhow!("Failed to load SSH key from {}: {}.", key_path, e)
-                        }
-                    })?;
-
-                let authenticated = ssh_session
-                    .authenticate_publickey(&config.username, Arc::new(key))
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "SFTP public key authentication failed with key {}: {}.",
-                            expanded_path,
-                            e
-                        )
-                    })?;
-                if !authenticated {
-                    return Err(anyhow::anyhow!(
-                        "SFTP public key authentication failed with key {}. The key may not be authorized on the server.",
-                        expanded_path
-                    ));
-                }
-                authenticated
-            }
-        };
-
-        if !authenticated {
-            return Err(anyhow::anyhow!(
-                "SFTP authentication failed. Please check your credentials."
-            ));
-        }
+        authenticate_sftp_session(&mut ssh_session, config).await?;
 
         let session = Arc::new(ssh_session);
 
@@ -269,7 +306,118 @@ impl StandaloneSftpClient {
         Ok(Self {
             session: Some(session),
             sftp: Some(sftp),
+            config: Some(config.clone()),
         })
+    }
+
+    /// Sessions for a large-file upload: the main session plus as many
+    /// extra independently-dialed SSH connections as the transfer wants
+    /// (see [`crate::sftp_transfer::upload_stream_target`]). Tunnelled
+    /// configurations dial nothing.
+    pub(crate) async fn prepare_upload_transfer_sessions(
+        &self,
+        local_path: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<Arc<client::Handle<Client>>>> {
+        let mut sessions = vec![self.transfer_session()?];
+        let wants = crate::sftp_transfer::upload_stream_target(local_path);
+        if wants > 1 {
+            sessions.extend(
+                self.dial_extra(wants - 1, crate::ssh::CHANNEL_WINDOW_SIZE, cancel)
+                    .await,
+            );
+        }
+        Ok(sessions)
+    }
+
+    /// Sessions for a large-file download plus the remote size the decision
+    /// was based on (0 when unknown).
+    pub(crate) async fn prepare_download_transfer_sessions(
+        &self,
+        remote_path: &str,
+        cancel: &CancellationToken,
+    ) -> Result<(Vec<Arc<client::Handle<Client>>>, u64)> {
+        let session = self.transfer_session()?;
+        let total = crate::sftp_transfer::remote_file_size(&session, remote_path)
+            .await
+            .unwrap_or(0);
+        let wants = crate::sftp_transfer::download_stream_target(total);
+        let mut sessions = vec![session];
+        if wants > 1 {
+            sessions.extend(
+                self.dial_extra(
+                    wants - 1,
+                    crate::sftp_transfer::DOWNLOAD_CONN_WINDOW_SIZE,
+                    cancel,
+                )
+                .await,
+            );
+        }
+        Ok((sessions, total))
+    }
+
+    /// Dial `count` extra direct SSH connections (own TCP socket, own auth),
+    /// tolerating per-dial failures — whatever authenticates in time is
+    /// returned; the transfer degrades to fewer streams, never errors.
+    async fn dial_extra(
+        &self,
+        count: usize,
+        window_size: u32,
+        cancel: &CancellationToken,
+    ) -> Vec<Arc<client::Handle<Client>>> {
+        let Some(config) = &self.config else {
+            return Vec::new();
+        };
+        if config.tunnel.is_some() || count == 0 {
+            return Vec::new();
+        }
+        let timeout = Duration::from_secs(config.connect_timeout.max(1));
+        let dials = (0..count).map(|_| {
+            let ssh_config = Arc::new(client::Config {
+                preferred: russh::Preferred {
+                    key: std::borrow::Cow::Borrowed(crate::ssh::PREFERRED_HOST_KEY_ALGOS),
+                    ..russh::Preferred::DEFAULT
+                },
+                window_size,
+                ..client::Config::default()
+            });
+            let (handler, host_key_error) =
+                Client::new(&config.host, config.port, config.host_key_policy);
+            let host = config.host.clone();
+            async move {
+                let mut session = tokio::time::timeout(
+                    timeout,
+                    client::connect(ssh_config, (&host[..], config.port), handler),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "extra session connect timed out after {}s",
+                        timeout.as_secs()
+                    )
+                })?
+                .map_err(|e| {
+                    host_key_error
+                        .explain_or(anyhow::anyhow!("extra session connect failed: {}", e))
+                })?;
+                authenticate_sftp_session(&mut session, config).await?;
+                Ok::<_, anyhow::Error>(Arc::new(session))
+            }
+        });
+        let raced = tokio::select! {
+            results = futures::future::join_all(dials) => results,
+            _ = cancel.cancelled() => return Vec::new(),
+        };
+        raced
+            .into_iter()
+            .filter_map(|r| match r {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    tracing::warn!(error = %e, "extra SFTP transfer session unavailable");
+                    None
+                }
+            })
+            .collect()
     }
 
     pub fn is_connected(&self) -> bool {
@@ -338,9 +486,22 @@ impl StandaloneSftpClient {
         progress: crate::sftp_transfer::ProgressCallback<'_>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self.transfer_session()?;
-        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
-            .await
+        let (mut sessions, _total) = self
+            .prepare_download_transfer_sessions(remote_path, cancel)
+            .await?;
+        let result = crate::sftp_transfer::download_file(
+            &sessions,
+            remote_path,
+            local_path,
+            progress,
+            cancel,
+        )
+        .await;
+        if sessions.len() > 1 {
+            let extras = sessions.split_off(1);
+            crate::ssh::SshClient::close_extra_sessions(extras).await;
+        }
+        result
     }
 
     /// Upload a local file to a remote path. Returns bytes uploaded.
@@ -363,8 +524,17 @@ impl StandaloneSftpClient {
         progress: crate::sftp_transfer::ProgressCallback<'_>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self.transfer_session()?;
-        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
+        let mut sessions = self
+            .prepare_upload_transfer_sessions(local_path, cancel)
+            .await?;
+        let result =
+            crate::sftp_transfer::upload_file(&sessions, local_path, remote_path, progress, cancel)
+                .await;
+        if sessions.len() > 1 {
+            let extras = sessions.split_off(1);
+            crate::ssh::SshClient::close_extra_sessions(extras).await;
+        }
+        result
     }
 
     /// Create a directory on the remote server.

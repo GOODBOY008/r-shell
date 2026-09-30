@@ -713,13 +713,14 @@ mod shell_integration_tests {
     #[tokio::test]
     #[ignore]
     async fn docker_ssh_auth_failure_names_attempted_key() {
-        use russh_keys::{encode_pkcs8_pem, key::KeyPair};
+        use russh::keys::{encode_pkcs8_pem, Algorithm, PrivateKey};
         use std::io::Write;
 
         let (host, port) = default_key_endpoint();
 
         // A fresh key the fixture server does NOT authorize.
-        let key = KeyPair::generate_ed25519().expect("generate unauthorized key");
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
+            .expect("generate unauthorized key");
         let mut pem = Vec::new();
         encode_pkcs8_pem(&key, &mut pem).expect("encode unauthorized key");
         let mut wrong_key = tempfile::NamedTempFile::new().expect("temp unauthorized key");
@@ -775,12 +776,19 @@ mod shell_integration_tests {
 
         async fn fixture_client() -> SshClient {
             let (host, port) = super::default_key_endpoint();
+            fixture_client_on(&host, port).await
+        }
+
+        /// Same fixture credentials against an explicit endpoint — used by
+        /// the relay roundtrip, which reaches the bench container through
+        /// the latency-injecting relay instead of the shared :2224 fixture.
+        async fn fixture_client_on(host: &str, port: u16) -> SshClient {
             let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("docker/default-key-sshd/id_rsa");
             let mut client = SshClient::new();
             client
                 .connect(&SshConfig {
-                    host,
+                    host: host.to_string(),
                     port,
                     username: "testuser".to_string(),
                     auth_method: AuthMethod::PublicKey {
@@ -925,6 +933,476 @@ mod shell_integration_tests {
                 .ok();
             client.disconnect().await.ok();
         }
+
+        /// Repro for "uploading a large file kills the whole SSH connection".
+        /// russh 0.44.1 client-rekeys every `rekey_write_limit` bytes written
+        /// to the wire; `Limits::new` asserts the limit ≤ 1 GiB so it cannot
+        /// be raised, and the read limit is never checked anywhere — which is
+        /// why only uploads (bytes SENT) cross the threshold in the field
+        /// while downloads never do. Shrink the limit to 32 MiB so a 256 MB
+        /// upload crosses 8 mid-transfer rekeys: the same code path a
+        /// multi-GiB real-world upload hits exactly once, at localhost speed.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_upload_survives_mid_transfer_rekeys() {
+            let size: u64 = 256 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let compression =
+                std::env::var("RSHELL_REKEY_COMPRESSION").ok().as_deref() == Some("1");
+            let session =
+                Arc::new(rekey_fixture_session_on(None, 32 * 1024 * 1024, compression).await);
+            let remote_path = "/tmp/rshell-rekey-upload-e2e.bin";
+            let n = crate::sftp_transfer::upload_file(
+                std::slice::from_ref(&session),
+                local_src.path().to_string_lossy().as_ref(),
+                remote_path,
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("upload must survive 8 mid-transfer rekeys");
+            assert_eq!(n, size);
+
+            // The transport must still be healthy after the rekeys: download
+            // the file back through the same session and compare bytes.
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = crate::sftp_transfer::download_file(
+                std::slice::from_ref(&session),
+                remote_path,
+                downloaded.path().to_string_lossy().as_ref(),
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("download on the rekeyed session must still work");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(fold_hash(&got), expected_hash, "bytes must survive rekeys");
+        }
+
+        /// Connect to the default-key fixture with a custom russh config whose
+        /// data-rekey limit is shrunk — `SshClient::connect` hardcodes its
+        /// limits inside `connect()`, so this bypasses it and mirrors the
+        /// connect + authenticate sequence directly. `port_override` points at
+        /// a fixture variant (e.g. an sshd with a tiny server-side RekeyLimit).
+        async fn rekey_fixture_session_on(
+            port_override: Option<u16>,
+            rekey_write_limit: usize,
+            compression: bool,
+        ) -> russh::client::Handle<crate::ssh::Client> {
+            let (host, port) = super::default_key_endpoint();
+            let port = port_override.unwrap_or(port);
+            let ssh_config = russh::client::Config {
+                preferred: russh::Preferred {
+                    compression: std::borrow::Cow::Borrowed(crate::ssh::compression_preferences(
+                        compression,
+                    )),
+                    ..russh::Preferred::DEFAULT
+                },
+                limits: russh::Limits::new(
+                    rekey_write_limit,
+                    1 << 30,
+                    std::time::Duration::from_secs(7 * 24 * 60 * 60),
+                ),
+                ..russh::client::Config::default()
+            };
+            let (handler, _host_key_report) =
+                crate::ssh::Client::new(&host, port, crate::ssh::HostKeyPolicy::default());
+            let mut session =
+                russh::client::connect(Arc::new(ssh_config), (&host[..], port), handler)
+                    .await
+                    .expect("connect to default-key fixture");
+            let fixture_key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("docker/default-key-sshd/id_rsa");
+            crate::ssh::authenticate_session(
+                &mut session,
+                "testuser",
+                &AuthMethod::PublicKey {
+                    key_path: fixture_key.to_string_lossy().into_owned(),
+                    passphrase: None,
+                },
+            )
+            .await
+            .expect("authenticate to default-key fixture");
+            session
+        }
+
+        async fn rekey_fixture_session(
+            rekey_write_limit: usize,
+        ) -> russh::client::Handle<crate::ssh::Client> {
+            rekey_fixture_session_on(None, rekey_write_limit, false).await
+        }
+
+        /// Same connection as the field: the SERVER decides when to rekey.
+        /// OpenSSH's sshd rekeys after ~1 GiB of traffic by default, which a
+        /// multi-GiB upload crosses — so mid-upload the server sends KEXINIT
+        /// while the client still has queued channel writes. Run against a
+        /// fixture started with `-o RekeyLimit=32M -o LogLevel=VERBOSE`
+        /// (docker run --name rshell-sshd-rekey-test -p 2298:22
+        /// rshell-default-key-sshd /usr/sbin/sshd -D -e -o RekeyLimit=32M
+        /// -o LogLevel=VERBOSE) so a 256 MB upload crosses ~8 server-initiated
+        /// rekeys. Client limits stay at the production values.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_upload_survives_server_initiated_rekeys() {
+            let port: u16 = std::env::var("RSHELL_REKEY_SERVER_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(2298);
+            // RSHELL_REKEY_COMPRESSION=1 turns SSH compression on (a user
+            // setting), so one test binary covers the compression × rekey
+            // matrix against the default and the RekeyLimit fixtures.
+            let compression =
+                std::env::var("RSHELL_REKEY_COMPRESSION").ok().as_deref() == Some("1");
+            let size: u64 = 256 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let session =
+                Arc::new(rekey_fixture_session_on(Some(port), 1 << 30, compression).await);
+            let remote_path = "/tmp/rshell-server-rekey-upload-e2e.bin";
+            let n = crate::sftp_transfer::upload_file(
+                std::slice::from_ref(&session),
+                local_src.path().to_string_lossy().as_ref(),
+                remote_path,
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("upload must survive server-initiated rekeys");
+            assert_eq!(n, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = crate::sftp_transfer::download_file(
+                std::slice::from_ref(&session),
+                remote_path,
+                downloaded.path().to_string_lossy().as_ref(),
+                None,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .expect("download on the rekeyed session must still work");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(fold_hash(&got), expected_hash, "bytes must survive rekeys");
+        }
+
+        /// End-to-end multi-CONNECTION segmented upload through the real
+        /// `SshClient::upload_file_with_progress` path: `RSHELL_UPLOAD_
+        /// STREAMS=3` makes the wrapper dial 2 extra SSH connections (own
+        /// TCP socket, own handshake and auth), the engine segments the file
+        /// across all three, and the roundtrip must be byte-exact. This is
+        /// the bbcp/Globus path — separate connections, not just channels.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_upload_multi_connection_roundtrip() {
+            let size: u64 = 96 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let mut client = fixture_client().await;
+            let remote_path = "/tmp/rshell-multi-conn-e2e.bin";
+            let n = client
+                .upload_file_with_progress(
+                    local_src.path().to_string_lossy().as_ref(),
+                    remote_path,
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("multi-connection upload");
+            assert_eq!(n, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = client
+                .download_file_with_progress(
+                    remote_path,
+                    downloaded.path().to_string_lossy().as_ref(),
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("download back on the main connection");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(
+                fold_hash(&got),
+                expected_hash,
+                "roundtrip must be byte-exact"
+            );
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
+        }
+
+        /// Multi-CONNECTION segmented download through the real
+        /// `SshClient::download_file_with_progress` path: seed-upload once
+        /// over the main connection, then download with
+        /// `RSHELL_DOWNLOAD_STREAMS=3` — the wrapper stats the remote file,
+        /// dials 2 extra SSH connections and the engine segments the file
+        /// across all three. Byte-exact roundtrip; the caller asserts the
+        /// server-side auth delta (fixture connect + 2 extra = 3).
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_download_multi_connection_roundtrip() {
+            let size: u64 = 96 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let mut client = fixture_client().await;
+            let remote_path = "/tmp/rshell-multi-conn-download-e2e.bin";
+            let up = client
+                .upload_file_with_progress(
+                    local_src.path().to_string_lossy().as_ref(),
+                    remote_path,
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("seed upload");
+            assert_eq!(up, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let back = client
+                .download_file_with_progress(
+                    remote_path,
+                    downloaded.path().to_string_lossy().as_ref(),
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("multi-connection download");
+            assert_eq!(back, size);
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(
+                fold_hash(&got),
+                expected_hash,
+                "downloaded content must be byte-exact"
+            );
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
+        }
+
+        /// Latency-injected roundtrip through the userspace relay
+        /// (`out/latency-relay.py`), self-contained: ensures the bench
+        /// container listens on 127.0.0.1:12224, spawns the relay on
+        /// 127.0.0.1:12324, and runs the full byte-exact roundtrip through
+        /// `SshClient`. The shared :2224 fixture is never touched, so this
+        /// runs next to it.
+        ///
+        /// One-way delay comes from `RSHELL_RELAY_ONE_WAY_MS` (default 5 →
+        /// 10 ms RTT; the earlier 100 ms scenarios used 50). Throughput is
+        /// printed, not asserted — the relay adds pure latency, so it is a
+        /// latency/behaviour fixture, not a bandwidth oracle.
+        #[tokio::test]
+        #[ignore]
+        async fn docker_sftp_transfer_roundtrip_relay() {
+            const RELAY_LISTEN: u16 = 12324;
+            const BENCH_PORT: u16 = 12224;
+
+            // 1) Bench container on 12224 — reused when already running.
+            let have_bench = std::process::Command::new("docker")
+                .args(["ps", "--format", "{{.Names}}"])
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|l| l.trim() == "rshell-sshd-relay-bench")
+                })
+                .unwrap_or(false);
+            if !have_bench {
+                let _ = std::process::Command::new("docker")
+                    .args(["rm", "-f", "rshell-sshd-relay-bench"])
+                    .output();
+                let started = std::process::Command::new("docker")
+                    .args([
+                        "run",
+                        "-d",
+                        "--name",
+                        "rshell-sshd-relay-bench",
+                        "-p",
+                        "12224:22",
+                        "rshell-default-key-sshd:latest",
+                    ])
+                    .output()
+                    .expect("docker must be available to start the bench container");
+                assert!(
+                    started.status.success(),
+                    "bench container failed to start: {}",
+                    String::from_utf8_lossy(&started.stderr)
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            // 2) Relay process with the requested one-way delay.
+            let one_way_ms = std::env::var("RSHELL_RELAY_ONE_WAY_MS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(5);
+            let relay_script =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../out/latency-relay.py");
+            let mut relay = std::process::Command::new("python3")
+                .args([
+                    relay_script.to_string_lossy().as_ref(),
+                    &RELAY_LISTEN.to_string(),
+                    &BENCH_PORT.to_string(),
+                    &one_way_ms.to_string(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn latency relay (python3)");
+            struct KillGuard<'a>(&'a mut std::process::Child);
+            impl Drop for KillGuard<'_> {
+                fn drop(&mut self) {
+                    let _ = self.0.kill();
+                    let _ = self.0.wait();
+                }
+            }
+            let _relay_guard = KillGuard(&mut relay);
+            let mut relay_up = false;
+            for _ in 0..50 {
+                if tokio::net::TcpStream::connect(("127.0.0.1", RELAY_LISTEN))
+                    .await
+                    .is_ok()
+                {
+                    relay_up = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            assert!(relay_up, "relay did not start listening on {RELAY_LISTEN}");
+
+            // 3) Full roundtrip through the relay.
+            let size: u64 = 256 * 1024 * 1024;
+            let mut payload = Vec::with_capacity(size as usize);
+            let mut x: u64 = 0x9E3779B97F4A7C15;
+            while payload.len() < size as usize {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                payload.extend_from_slice(&x.to_le_bytes());
+            }
+            let payload = &payload[..size as usize];
+            let expected_hash = fold_hash(payload);
+
+            let local_src = tempfile::NamedTempFile::new().expect("temp source");
+            tokio::fs::write(local_src.path(), payload)
+                .await
+                .expect("write source file");
+
+            let mut client = fixture_client_on("127.0.0.1", RELAY_LISTEN).await;
+            let remote_path = "/tmp/rshell-relay-e2e.bin";
+
+            let started = Instant::now();
+            let n = client
+                .upload_file_with_progress(
+                    local_src.path().to_string_lossy().as_ref(),
+                    remote_path,
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("upload through relay");
+            let elapsed = started.elapsed().as_secs_f64();
+            println!(
+                "upload ({one_way_ms}ms one-way): {n} bytes in {elapsed:.2}s = {:.1} MB/s",
+                n as f64 / 1024.0 / 1024.0 / elapsed
+            );
+            assert_eq!(n, size);
+
+            let downloaded = tempfile::NamedTempFile::new().expect("temp dest");
+            let started = Instant::now();
+            let back = client
+                .download_file_with_progress(
+                    remote_path,
+                    downloaded.path().to_string_lossy().as_ref(),
+                    None,
+                    &tokio_util::sync::CancellationToken::new(),
+                )
+                .await
+                .expect("download through relay");
+            let elapsed = started.elapsed().as_secs_f64();
+            println!(
+                "download ({one_way_ms}ms one-way): {back} bytes in {elapsed:.2}s = {:.1} MB/s",
+                back as f64 / 1024.0 / 1024.0 / elapsed
+            );
+            assert_eq!(back, size);
+
+            let got = tokio::fs::read(downloaded.path()).await.expect("read back");
+            assert_eq!(
+                fold_hash(&got),
+                expected_hash,
+                "roundtrip through the relay must be byte-exact"
+            );
+
+            client
+                .execute_command(&format!("rm {remote_path}"))
+                .await
+                .ok();
+            client.disconnect().await.ok();
+        }
     }
 }
 
@@ -932,14 +1410,15 @@ mod shell_integration_tests {
 
 #[cfg(test)]
 mod key_loading_tests {
-    use russh_keys::{decode_secret_key, encode_pkcs8_pem, key::KeyPair};
+    use russh::keys::{decode_secret_key, encode_pkcs8_pem, Algorithm, PrivateKey};
     use std::io::Write;
     use tempfile::NamedTempFile;
 
     /// Generate a fresh Ed25519 key pair and return its PKCS#8 PEM encoding as a
     /// `String` with Unix (`\n`) line endings.
     fn generate_pem_lf() -> String {
-        let key = KeyPair::generate_ed25519().expect("Ed25519 generation must succeed");
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
+            .expect("Ed25519 generation must succeed");
         let mut buf = Vec::new();
         encode_pkcs8_pem(&key, &mut buf).expect("PEM encoding must succeed");
         String::from_utf8(buf).expect("PEM is valid UTF-8")
@@ -1164,5 +1643,63 @@ mod compression_pref_tests {
         let prefs = compression_preferences(false);
         assert_eq!(prefs, &[NONE]);
         assert_eq!(negotiate(prefs, "none,zlib@openssh.com"), Some("none"));
+    }
+}
+
+// ── Compression round-trip (vendored russh patch regression) ─────────────────
+
+#[cfg(test)]
+mod compression_roundtrip_tests {
+    use russh::compression::{Compress, Compression, Decompress, ZLIB};
+
+    /// russh 0.44.1's compressor broke out of its loop on `Status::Ok` even
+    /// when the output buffer was full, silently truncating packets whose
+    /// compressed size exceeded the `input_len + 10` reserve — exactly what
+    /// incompressible ~16–64 KiB payloads (bulk SFTP WRITEs) produce. With
+    /// SSH compression enabled this corrupted every bulk upload and the
+    /// server disconnected the whole session ("channel_input_data: get data:
+    /// incomplete message"). The fix landed upstream in newer russh (compress
+    /// retries while the buffer is full); this round-trip over incompressible
+    /// sizes spanning the stored-block boundary is the regression guard that
+    /// motivated the 0.63 upgrade. Sizes stay under russh 0.63's decompressed
+    /// packet limit (256 KiB); real SSH packets are chunked to ≤32 KiB
+    /// payloads anyway, so the bound never bites in production.
+    #[test]
+    fn incompressible_packets_survive_compress_roundtrip() {
+        for &len in &[1usize, 1024, 16 * 1024, 32 * 1024, 64 * 1024, 128 * 1024] {
+            // xorshift pattern: deterministic and incompressible, so deflate
+            // emits stored blocks and hits the +10 reserve boundary.
+            let input: Vec<u8> = {
+                let mut x = 0x9E3779B97F4A7C15u64;
+                (0..len)
+                    .map(|_| {
+                        x ^= x << 13;
+                        x ^= x >> 7;
+                        x ^= x << 17;
+                        x as u8
+                    })
+                    .collect()
+            };
+
+            let mut comp = Compress::None;
+            Compression::new(&ZLIB).init_compress(&mut comp);
+            let mut compressed = Vec::new();
+            let compressed = comp
+                .compress(&input, &mut compressed)
+                .expect("compress must succeed");
+
+            let mut decomp = Decompress::None;
+            Compression::new(&ZLIB).init_decompress(&mut decomp);
+            let mut out = Vec::new();
+            let roundtripped = decomp
+                .decompress(compressed, &mut out)
+                .expect("decompress must succeed");
+            assert_eq!(
+                roundtripped.len(),
+                len,
+                "packet of {len} bytes was truncated by the compressor"
+            );
+            assert_eq!(roundtripped, &input[..], "packet of {len} bytes corrupted");
+        }
     }
 }

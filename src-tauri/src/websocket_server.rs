@@ -294,7 +294,12 @@ fn decode_input_frame(data: &[u8]) -> Option<(String, &[u8])> {
 /// Control messages are best-effort — a saturated channel returns `Dropped`.
 async fn send_control(tx: &WsTx, msg: &WsMessage) -> Result<SendOutcome> {
     let frame = Message::Text(serde_json::to_string(msg)?.into());
-    match tokio::time::timeout(Duration::from_millis(CONTROL_SEND_TIMEOUT_MS), tx.send(frame)).await {
+    match tokio::time::timeout(
+        Duration::from_millis(CONTROL_SEND_TIMEOUT_MS),
+        tx.send(frame),
+    )
+    .await
+    {
         Ok(Ok(())) => Ok(SendOutcome::Sent),
         Ok(Err(_)) => Ok(SendOutcome::Closed),
         Err(_) => Ok(SendOutcome::Dropped),
@@ -483,10 +488,16 @@ impl WebSocketServer {
                         )
                         .await
                     {
-                        Ok(PtyLifecycleEvent::Started { connection_id, generation }) => {
+                        Ok(PtyLifecycleEvent::Started {
+                            connection_id,
+                            generation,
+                        }) => {
                             active_pty_generations.insert(connection_id, generation);
                         }
-                        Ok(PtyLifecycleEvent::Closed { connection_id, generation }) => {
+                        Ok(PtyLifecycleEvent::Closed {
+                            connection_id,
+                            generation,
+                        }) => {
                             if should_remove_pty_state(
                                 active_pty_generations.get(&connection_id).copied(),
                                 generation,
@@ -547,7 +558,10 @@ impl WebSocketServer {
             let id = connection_id.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(PTY_WS_DROP_GRACE).await;
-                if connection_manager.expire_detached_session(&id, PTY_WS_DROP_GRACE).await {
+                if connection_manager
+                    .expire_detached_session(&id, PTY_WS_DROP_GRACE)
+                    .await
+                {
                     tracing::info!("Grace period expired for parked PTY {}", id);
                 }
             });
@@ -615,7 +629,10 @@ impl WebSocketServer {
                 // 1 permit before each flush; the frontend grants permits via
                 // Resume messages (1 per frame processed by xterm).
                 let credits: OutputCredits = Arc::new(Semaphore::new(0));
-                output_controls.lock().await.insert(connection_id.clone(), Arc::clone(&credits));
+                output_controls
+                    .lock()
+                    .await
+                    .insert(connection_id.clone(), Arc::clone(&credits));
 
                 let response = WsMessage::Success {
                     message: format!("PTY connection started: {}", connection_id),
@@ -1065,9 +1082,9 @@ const DEV_ORIGINS: &[&str] = &[];
 /// pass it verbatim as a query parameter.
 fn generate_bridge_token() -> String {
     use base64::Engine;
-    use rand::RngCore;
+    use rand::Rng;
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
@@ -1119,11 +1136,19 @@ mod handshake_tests {
     #[test]
     fn accepts_app_origin_with_valid_token() {
         assert_eq!(
-            validate_handshake(Some("tauri://localhost"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            validate_handshake(
+                Some("tauri://localhost"),
+                Some("token=s3cr3t-t0k3n_ABC"),
+                TOKEN
+            ),
             Ok(())
         );
         assert_eq!(
-            validate_handshake(Some("http://tauri.localhost"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            validate_handshake(
+                Some("http://tauri.localhost"),
+                Some("token=s3cr3t-t0k3n_ABC"),
+                TOKEN
+            ),
             Ok(())
         );
     }
@@ -1131,13 +1156,20 @@ mod handshake_tests {
     #[test]
     fn accepts_non_browser_client_with_valid_token() {
         // No Origin header: a native client, allowed on the strength of the token.
-        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_ABC"), TOKEN), Ok(()));
+        assert_eq!(
+            validate_handshake(None, Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            Ok(())
+        );
     }
 
     #[test]
     fn rejects_foreign_origin_even_with_valid_token() {
         assert_eq!(
-            validate_handshake(Some("https://evil.example"), Some("token=s3cr3t-t0k3n_ABC"), TOKEN),
+            validate_handshake(
+                Some("https://evil.example"),
+                Some("token=s3cr3t-t0k3n_ABC"),
+                TOKEN
+            ),
             Err("origin not allowed")
         );
         assert_eq!(
@@ -1149,22 +1181,43 @@ mod handshake_tests {
     #[test]
     fn rejects_missing_wrong_or_empty_token() {
         assert_eq!(validate_handshake(None, None, TOKEN), Err("missing token"));
-        assert_eq!(validate_handshake(None, Some(""), TOKEN), Err("missing token"));
-        assert_eq!(validate_handshake(None, Some("token="), TOKEN), Err("invalid token"));
-        assert_eq!(validate_handshake(None, Some("token=nope"), TOKEN), Err("invalid token"));
+        assert_eq!(
+            validate_handshake(None, Some(""), TOKEN),
+            Err("missing token")
+        );
+        assert_eq!(
+            validate_handshake(None, Some("token="), TOKEN),
+            Err("invalid token")
+        );
+        assert_eq!(
+            validate_handshake(None, Some("token=nope"), TOKEN),
+            Err("invalid token")
+        );
         // Prefix / superstring must not pass.
-        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_AB"), TOKEN), Err("invalid token"));
-        assert_eq!(validate_handshake(None, Some("token=s3cr3t-t0k3n_ABCD"), TOKEN), Err("invalid token"));
+        assert_eq!(
+            validate_handshake(None, Some("token=s3cr3t-t0k3n_AB"), TOKEN),
+            Err("invalid token")
+        );
+        assert_eq!(
+            validate_handshake(None, Some("token=s3cr3t-t0k3n_ABCD"), TOKEN),
+            Err("invalid token")
+        );
     }
 
     #[test]
     fn finds_token_among_other_query_parameters() {
-        assert_eq!(validate_handshake(None, Some("x=1&token=s3cr3t-t0k3n_ABC&y=2"), TOKEN), Ok(()));
+        assert_eq!(
+            validate_handshake(None, Some("x=1&token=s3cr3t-t0k3n_ABC&y=2"), TOKEN),
+            Ok(())
+        );
     }
 
     #[test]
     fn rejects_everything_when_server_token_is_unset() {
-        assert_eq!(validate_handshake(None, Some("token="), ""), Err("bridge token not initialised"));
+        assert_eq!(
+            validate_handshake(None, Some("token="), ""),
+            Err("bridge token not initialised")
+        );
     }
 
     #[test]
@@ -1172,7 +1225,9 @@ mod handshake_tests {
         let a = generate_bridge_token();
         let b = generate_bridge_token();
         assert_eq!(a.len(), 43); // 32 bytes → 43 base64url chars without padding
-        assert!(a.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
         assert_ne!(a, b);
     }
 }

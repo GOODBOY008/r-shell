@@ -1,9 +1,10 @@
 use crate::proxy::ProxyConfig;
 use anyhow::Result;
+use russh::keys::*;
 use russh::*;
-use russh_keys::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
@@ -15,18 +16,40 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Preferred host-key algorithms advertised to the server, ordered from most to
-/// least preferred.  RSA variants (including the legacy `ssh-rsa` / SHA-1) are
-/// included so that older servers that only offer RSA host keys are still
-/// reachable.  The `openssl` feature on `russh` / `russh-keys` must be enabled
-/// for the RSA entries to have any effect.
-pub static PREFERRED_HOST_KEY_ALGOS: &[russh_keys::key::Name] = &[
-    russh_keys::key::ED25519,
-    russh_keys::key::ECDSA_SHA2_NISTP256,
-    russh_keys::key::ECDSA_SHA2_NISTP521,
-    russh_keys::key::RSA_SHA2_256,
-    russh_keys::key::RSA_SHA2_512,
-    russh_keys::key::SSH_RSA,
+/// least preferred.  The legacy `ssh-rsa` (SHA-1) entry is kept so that older
+/// servers that only offer bare-RSA host keys are still reachable. In russh
+/// 0.63 these are `ssh_key::Algorithm` values; all of them are implemented
+/// natively (the old `openssl` feature is gone).
+pub static PREFERRED_HOST_KEY_ALGOS: &[Algorithm] = &[
+    Algorithm::Ed25519,
+    Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP256,
+    },
+    Algorithm::Ecdsa {
+        curve: EcdsaCurve::NistP521,
+    },
+    Algorithm::Rsa {
+        hash: Some(HashAlg::Sha256),
+    },
+    Algorithm::Rsa {
+        hash: Some(HashAlg::Sha512),
+    },
+    Algorithm::Rsa { hash: None },
 ];
+
+/// SSH channel flow-control receive window for every connection we open and
+/// every channel we open on it. russh's default (2 MiB) caps download
+/// throughput at window/RTT — roughly 21 MB/s on a 100 ms path no matter how
+/// many SFTP reads are pipelined. 32 MiB covers a 100 MB/s × 0.1 s
+/// bandwidth-delay product with ~3.2× headroom and is what the SFTP read
+/// pipeline in `sftp_transfer` sizes itself against (`READ_WINDOW_BYTES`).
+/// This is receive credit per RFC 4254 §5.2 — not preallocated memory — and
+/// it only affects the download direction, so raising it unilaterally is
+/// protocol-safe. Applied to all three `client::Config` sites: the direct
+/// connection ([`SshClient::connect`]), the jump-host outer channel
+/// ([`connect_via_ssh_tunnel`]) and the standalone SFTP connection
+/// (`sftp_client::StandaloneSftpClient::connect`).
+pub(crate) const CHANNEL_WINDOW_SIZE: u32 = 32 * 1024 * 1024;
 
 const BASH_VERSION_PROBE: &str = r#"printf '__RSHELL_BASH_VERSION__%s' "${BASH_VERSION-}""#;
 const BASH_VERSION_MARKER: &str = "__RSHELL_BASH_VERSION__";
@@ -85,7 +108,7 @@ pub struct SshConfig {
     pub port: u16,
     pub username: String,
     pub auth_method: AuthMethod,
-    /// Enable zlib compression negotiation (default: true, matching the UI).
+    /// Enable zlib compression negotiation (default: false, matching the UI/OpenSSH).
     pub compression: bool,
     /// Keepalive interval in seconds. `None` disables keepalive.
     pub keepalive_interval: Option<u64>,
@@ -141,6 +164,10 @@ pub struct SshSession {
 
 pub struct SshClient {
     session: Option<Arc<client::Handle<Client>>>,
+    /// The configuration this client connected with, kept so bulk transfers
+    /// can dial additional independent SSH connections (parallel segmented
+    /// upload — bbcp/Globus style). `None` until `connect` succeeds.
+    config: Option<SshConfig>,
 }
 
 // PTY session handle for interactive shell
@@ -274,26 +301,26 @@ pub(crate) enum HostKeyVerdict {
 
 /// Verify `key` for `host:port` against the known_hosts file at `path`.
 ///
-/// A mismatch surfaces as `russh_keys::Error::KeyChanged { line }` — the
+/// A mismatch surfaces as `russh::keys::Error::KeyChanged { line }` — the
 /// caller must refuse the connection. An unknown host is recorded and
 /// accepted, which is what most GUI clients do; a confirmation prompt can be
 /// layered on top later.
 pub(crate) fn verify_host_key(
     host: &str,
     port: u16,
-    key: &key::PublicKey,
+    key: &PublicKey,
     path: &Path,
     accept_new: bool,
-) -> std::result::Result<HostKeyVerdict, russh_keys::Error> {
+) -> std::result::Result<HostKeyVerdict, russh::keys::Error> {
     match check_known_hosts_path(host, port, key, path) {
         Ok(true) => Ok(HostKeyVerdict::Known),
         Ok(false) => {
-            learn_known_hosts_path(host, port, key, path)?;
+            russh::keys::known_hosts::learn_known_hosts_path(host, port, key, path)?;
             Ok(HostKeyVerdict::Learned)
         }
-        Err(russh_keys::Error::KeyChanged { .. }) if accept_new => {
+        Err(russh::keys::Error::KeyChanged { .. }) if accept_new => {
             forget_known_host(host, port, path)?;
-            learn_known_hosts_path(host, port, key, path)?;
+            russh::keys::known_hosts::learn_known_hosts_path(host, port, key, path)?;
             Ok(HostKeyVerdict::Replaced)
         }
         Err(e) => Err(e),
@@ -339,74 +366,95 @@ impl Client {
     }
 }
 
-#[async_trait::async_trait]
 impl client::Handler for Client {
     type Error = russh::Error;
 
-    async fn check_server_key(
+    fn check_server_key(
         &mut self,
-        server_public_key: &key::PublicKey,
-    ) -> Result<bool, Self::Error> {
-        if self.policy == HostKeyPolicy::Off {
-            tracing::warn!(
-                "Host key verification is disabled in Settings; accepting {}:{} unverified",
-                self.host,
-                self.port
-            );
-            return Ok(true);
-        }
-        let Some(path) = &self.known_hosts else {
-            self.report.set(HostKeyRejection::Other(format!(
-                "Refusing to connect to {}:{}: cannot locate the home directory to read ~/.ssh/known_hosts.",
-                self.host, self.port
-            )));
-            return Ok(false);
+        server_public_key: &russh::keys::PublicKeyOrCertificate,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
+        // russh 0.63 hands us either a bare host key or a certificate. r-shell
+        // never advertises certificate algorithms, so a server should always
+        // present a bare key; a certificate is refused rather than silently
+        // trusted against known_hosts semantics it doesn't match.
+        let presented = match server_public_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => Some(key.clone()),
+            russh::keys::PublicKeyOrCertificate::Certificate(_) => None,
         };
-        let fingerprint = server_public_key.fingerprint();
-        let accept_new = self.policy == HostKeyPolicy::AcceptNew;
-        match verify_host_key(&self.host, self.port, server_public_key, path, accept_new) {
-            Ok(HostKeyVerdict::Known) => Ok(true),
-            Ok(HostKeyVerdict::Learned) => {
-                tracing::info!(
-                    "Host key for {}:{} was not in {}; recorded it (trust on first use). Fingerprint: {}",
+        async move {
+            let Some(presented) = presented else {
+                tracing::error!(
+                    "Server for {}:{} presented a certificate instead of a host key; refusing",
                     self.host,
-                    self.port,
-                    path.display(),
-                    fingerprint
+                    self.port
                 );
-                Ok(true)
-            }
-            Ok(HostKeyVerdict::Replaced) => {
-                tracing::warn!(
-                    "Host key for {}:{} replaced in {} on the user's confirmation. New fingerprint: {}",
-                    self.host,
-                    self.port,
-                    path.display(),
-                    fingerprint
-                );
-                Ok(true)
-            }
-            Err(russh_keys::Error::KeyChanged { line }) => {
-                self.report.set(HostKeyRejection::Changed(HostKeyChanged {
-                    host: self.host.clone(),
-                    port: self.port,
-                    fingerprint,
-                    line,
-                    file: path.display().to_string(),
-                }));
-                Ok(false)
-            }
-            Err(e) => {
-                // Fail closed: an unreadable or malformed known_hosts must not
-                // turn into silent trust.
                 self.report.set(HostKeyRejection::Other(format!(
-                    "Could not verify the host key for {}:{} against {}: {}. The connection was refused.",
-                    self.host,
-                    self.port,
-                    path.display(),
-                    e
+                    "Server {}:{} presented a host certificate, which r-shell does not verify against known_hosts. The connection was refused.",
+                    self.host, self.port
                 )));
-                Ok(false)
+                return Ok(false);
+            };
+            if self.policy == HostKeyPolicy::Off {
+                tracing::warn!(
+                    "Host key verification is disabled in Settings; accepting {}:{} unverified",
+                    self.host,
+                    self.port
+                );
+                return Ok(true);
+            }
+            let Some(path) = &self.known_hosts else {
+                self.report.set(HostKeyRejection::Other(format!(
+                    "Refusing to connect to {}:{}: cannot locate the home directory to read ~/.ssh/known_hosts.",
+                    self.host, self.port
+                )));
+                return Ok(false);
+            };
+            let fingerprint = presented.fingerprint(HashAlg::Sha256).to_string();
+            let accept_new = self.policy == HostKeyPolicy::AcceptNew;
+            match verify_host_key(&self.host, self.port, &presented, path, accept_new) {
+                Ok(HostKeyVerdict::Known) => Ok(true),
+                Ok(HostKeyVerdict::Learned) => {
+                    tracing::info!(
+                        "Host key for {}:{} was not in {}; recorded it (trust on first use). Fingerprint: {}",
+                        self.host,
+                        self.port,
+                        path.display(),
+                        fingerprint
+                    );
+                    Ok(true)
+                }
+                Ok(HostKeyVerdict::Replaced) => {
+                    tracing::warn!(
+                        "Host key for {}:{} replaced in {} on the user's confirmation. New fingerprint: {}",
+                        self.host,
+                        self.port,
+                        path.display(),
+                        fingerprint
+                    );
+                    Ok(true)
+                }
+                Err(russh::keys::Error::KeyChanged { line }) => {
+                    self.report.set(HostKeyRejection::Changed(HostKeyChanged {
+                        host: self.host.clone(),
+                        port: self.port,
+                        fingerprint,
+                        line,
+                        file: path.display().to_string(),
+                    }));
+                    Ok(false)
+                }
+                Err(e) => {
+                    // Fail closed: an unreadable or malformed known_hosts must not
+                    // turn into silent trust.
+                    self.report.set(HostKeyRejection::Other(format!(
+                        "Could not verify the host key for {}:{} against {}: {}. The connection was refused.",
+                        self.host,
+                        self.port,
+                        path.display(),
+                        e
+                    )));
+                    Ok(false)
+                }
             }
         }
     }
@@ -433,7 +481,7 @@ async fn authenticate_session(
                 .authenticate_password(username, password)
                 .await
                 .map_err(|e| anyhow::anyhow!("Password authentication failed: {}", e))?;
-            if !authenticated && password.is_empty() {
+            if !authenticated.success() && password.is_empty() {
                 authenticated = session
                     .authenticate_none(username)
                     .await
@@ -459,7 +507,7 @@ async fn authenticate_session(
 
             // Read the key file and normalise CRLF line endings so that keys
             // created or edited on Windows (which use \r\n) are parsed correctly
-            // by russh-keys' PEM / OpenSSH decoder.
+            // by the PEM / OpenSSH decoder.
             let key_content = std::fs::read_to_string(&expanded_path)
                 .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e))?;
             let key_content = key_content.replace("\r\n", "\n");
@@ -478,11 +526,18 @@ async fn authenticate_session(
                 }
             })?;
 
-            // russh reports a rejected key as Ok(false) — no transport error —
-            // so the "not authorized" branch must name the key itself; the
-            // map_err above only sees real transport errors.
-            let authenticated = session
-                .authenticate_publickey(username, Arc::new(key))
+            // russh reports a rejected key as AuthResult::Failure — no
+            // transport error — so the "not authorized" branch must name the
+            // key itself; the map_err above only sees real transport errors.
+            // RSA keys are offered first with rsa-sha2-256 (what russh 0.44
+            // used) and fall back to legacy `ssh-rsa` (SHA-1) for ancient
+            // servers that reject the SHA-2 signature; non-RSA keys ignore
+            // the hash entirely.
+            let mut authenticated = session
+                .authenticate_publickey(
+                    username,
+                    PrivateKeyWithHashAlg::new(Arc::new(key.clone()), Some(HashAlg::Sha256)),
+                )
                 .await
                 .map_err(|e| {
                     anyhow::anyhow!(
@@ -491,7 +546,22 @@ async fn authenticate_session(
                         e
                     )
                 })?;
-            if !authenticated {
+            if !authenticated.success() {
+                authenticated = session
+                    .authenticate_publickey(
+                        username,
+                        PrivateKeyWithHashAlg::new(Arc::new(key.clone()), None),
+                    )
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Public key authentication failed with key {}: {}.",
+                            expanded_path,
+                            e
+                        )
+                    })?;
+            }
+            if !authenticated.success() {
                 return Err(anyhow::anyhow!(
                     "Public key authentication failed with key {}. The key may not be authorized on the server.",
                     expanded_path
@@ -501,7 +571,7 @@ async fn authenticate_session(
         }
     };
 
-    if !authenticated {
+    if !authenticated.success() {
         return Err(anyhow::anyhow!(
             "Authentication failed. Please check your credentials and try again."
         ));
@@ -563,6 +633,10 @@ pub async fn connect_via_ssh_tunnel(
             key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
             ..russh::Preferred::DEFAULT
         },
+        // The direct-tcpip channel to the final target carries the whole
+        // tunnelled session; give it the same receive window as a direct
+        // connection so tunnelled SFTP downloads aren't window-capped.
+        window_size: CHANNEL_WINDOW_SIZE,
         ..client::Config::default()
     };
 
@@ -620,13 +694,18 @@ pub async fn connect_via_ssh_tunnel(
 
 impl SshClient {
     pub fn new() -> Self {
-        Self { session: None }
+        Self {
+            session: None,
+            config: None,
+        }
     }
 
-    pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+    /// The russh-level client configuration shared by every connection this
+    /// client dials (the main one in `connect` and the extra bulk-transfer
+    /// connections), so windows/keepalive/limits behave identically.
+    fn build_russh_client_config(config: &SshConfig) -> client::Config {
         let keepalive_interval = config.keepalive_interval.map(Duration::from_secs);
-
-        let ssh_config = client::Config {
+        client::Config {
             preferred: russh::Preferred {
                 key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
                 compression: std::borrow::Cow::Borrowed(compression_preferences(
@@ -634,6 +713,9 @@ impl SshClient {
                 )),
                 ..russh::Preferred::DEFAULT
             },
+            // Large receive window so SFTP downloads aren't capped at
+            // window/RTT — see CHANNEL_WINDOW_SIZE.
+            window_size: CHANNEL_WINDOW_SIZE,
             // Send a keepalive on the user-configured interval. After the
             // configured number of missed replies russh closes the connection,
             // preventing the server from silently dropping idle sessions.
@@ -649,7 +731,11 @@ impl SshClient {
             // server-initiated rekey replaces it.
             limits: Limits::new(1 << 30, 1 << 30, Duration::from_secs(7 * 24 * 60 * 60)),
             ..client::Config::default()
-        };
+        }
+    }
+
+    pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+        let ssh_config = Self::build_russh_client_config(config);
 
         // Connection timeout: configurable via the Settings "Connection
         // Timeout" slider (SshConfig::connect_timeout); floor at 1 s so a
@@ -710,7 +796,100 @@ impl SshClient {
         authenticate_session(&mut ssh_session, &config.username, &config.auth_method).await?;
 
         self.session = Some(Arc::new(ssh_session));
+        self.config = Some(config.clone());
         Ok(())
+    }
+
+    /// Dial `count` additional, fully independent SSH connections to the
+    /// same server (own TCP socket, own handshake, own authentication) for
+    /// parallel segmented upload — the bbcp/Globus multi-connection trick.
+    /// All channels of one connection share the server's per-connection TCP
+    /// receive window, so high-RTT links need separate connections, not just
+    /// separate channels, to saturate the link.
+    ///
+    /// Direct connections only: a jump-host or proxy setup is NOT replicated
+    /// (an empty result just means the transfer runs single-connection).
+    /// Failures are tolerated per connection — whatever dials and
+    /// authenticates in time is returned (possibly fewer than `count`,
+    /// possibly none); the transfer falls back to the main session.
+    ///
+    /// `window_size` is the channel window the dialed connections advertise:
+    /// uploads keep the full [`CHANNEL_WINDOW_SIZE`], parallel downloads use
+    /// the smaller [`sftp_transfer::DOWNLOAD_CONN_WINDOW_SIZE`] so the
+    /// aggregate in-flight budget stays 32 MiB while per-connection burst
+    /// grants shrink.
+    pub(crate) async fn open_extra_transfer_sessions(
+        &self,
+        count: usize,
+        window_size: u32,
+        cancel: &CancellationToken,
+    ) -> Vec<Arc<client::Handle<Client>>> {
+        let Some(config) = &self.config else {
+            return Vec::new();
+        };
+        if config.tunnel.is_some() || config.proxy.is_some() || count == 0 {
+            return Vec::new();
+        }
+        let timeout = Duration::from_secs(config.connect_timeout.max(1));
+        let dials = (0..count).map(|_| {
+            let mut ssh_config = Self::build_russh_client_config(config);
+            ssh_config.window_size = window_size;
+            let ssh_config = Arc::new(ssh_config);
+            let (handler, host_key_error) =
+                Client::new(&config.host, config.port, config.host_key_policy);
+            let host = config.host.clone();
+            async move {
+                let mut session = tokio::time::timeout(
+                    timeout,
+                    client::connect(ssh_config, (&host[..], config.port), handler),
+                )
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "extra session connect timed out after {}s",
+                        timeout.as_secs()
+                    )
+                })?
+                .map_err(|e| {
+                    host_key_error
+                        .explain_or(anyhow::anyhow!("extra session connect failed: {}", e))
+                })?;
+                authenticate_session(&mut session, &config.username, &config.auth_method).await?;
+                Ok::<_, anyhow::Error>(Arc::new(session))
+            }
+        });
+        let raced = tokio::select! {
+            results = futures::future::join_all(dials) => results,
+            _ = cancel.cancelled() => return Vec::new(),
+        };
+        let ok: Vec<_> = raced
+            .into_iter()
+            .filter_map(|r| match r {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    tracing::warn!(error = %e, "extra upload session unavailable");
+                    None
+                }
+            })
+            .collect();
+        tracing::info!(
+            requested = count,
+            opened = ok.len(),
+            "extra upload connections"
+        );
+        ok
+    }
+
+    /// Politely close extra upload connections (best effort, bounded — they
+    /// carry nothing after the transfer).
+    pub(crate) async fn close_extra_sessions(sessions: Vec<Arc<client::Handle<Client>>>) {
+        for session in sessions {
+            let _ = tokio::time::timeout(
+                Duration::from_millis(500),
+                session.disconnect(russh::Disconnect::ByApplication, "", "english"),
+            )
+            .await;
+        }
     }
 
     // Changed to &self instead of &mut self to allow concurrent access
@@ -965,6 +1144,57 @@ impl SshClient {
     /// Download via the pipelined streaming engine (`sftp_transfer`), with
     /// optional progress callbacks. Keeps whole files out of memory.
     /// Cancelling `cancel` aborts the transfer promptly.
+    /// Sessions a bulk download should run over: the main session plus
+    /// extra independently-dialed connections when the remote size warrants
+    /// parallel segments. The caller holds its client lock only for this
+    /// preparation and runs the engine afterwards without it (a long
+    /// transfer must not block disconnect()). Returns the sessions and the
+    /// remote size the decision was based on (0 when unknown).
+    pub(crate) async fn prepare_download_transfer_sessions(
+        &self,
+        remote_path: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<(Vec<Arc<client::Handle<Client>>>, u64)> {
+        let session = self.transfer_session()?;
+        // Remote size decides whether to dial extra connections for a
+        // parallel segmented download (loss smoothing on saturated links).
+        let total = crate::sftp_transfer::remote_file_size(&session, remote_path)
+            .await
+            .unwrap_or(0);
+        let wants = crate::sftp_transfer::download_stream_target(total);
+        let mut sessions = vec![session];
+        if wants > 1 {
+            sessions.extend(
+                self.open_extra_transfer_sessions(
+                    wants - 1,
+                    crate::sftp_transfer::DOWNLOAD_CONN_WINDOW_SIZE,
+                    cancel,
+                )
+                .await,
+            );
+        }
+        Ok((sessions, total))
+    }
+
+    /// Sessions a bulk upload should run over (see
+    /// [`Self::prepare_download_transfer_sessions`]).
+    pub(crate) async fn prepare_upload_transfer_sessions(
+        &self,
+        local_path: &str,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<Vec<Arc<client::Handle<Client>>>> {
+        let session = self.transfer_session()?;
+        let wants = crate::sftp_transfer::upload_stream_target(local_path);
+        let mut sessions = vec![session];
+        if wants > 1 {
+            sessions.extend(
+                self.open_extra_transfer_sessions(wants - 1, CHANNEL_WINDOW_SIZE, cancel)
+                    .await,
+            );
+        }
+        Ok(sessions)
+    }
+
     pub async fn download_file_with_progress(
         &self,
         remote_path: &str,
@@ -972,9 +1202,22 @@ impl SshClient {
         progress: crate::sftp_transfer::ProgressCallback<'_>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self.transfer_session()?;
-        crate::sftp_transfer::download_file(&session, remote_path, local_path, progress, cancel)
-            .await
+        let (mut sessions, _total) = self
+            .prepare_download_transfer_sessions(remote_path, cancel)
+            .await?;
+        let result = crate::sftp_transfer::download_file(
+            &sessions,
+            remote_path,
+            local_path,
+            progress,
+            cancel,
+        )
+        .await;
+        if sessions.len() > 1 {
+            let extras = sessions.split_off(1);
+            Self::close_extra_sessions(extras).await;
+        }
+        result
     }
 
     pub async fn download_file_to_memory(&self, remote_path: &str) -> Result<Vec<u8>> {
@@ -1013,6 +1256,12 @@ impl SshClient {
     /// Upload via the pipelined streaming engine (`sftp_transfer`), with
     /// optional progress callbacks. Streams from disk instead of loading
     /// the whole file into memory. Cancelling `cancel` aborts promptly.
+    ///
+    /// High-RTT links additionally get bbcp/Globus-style parallel
+    /// connections: for large files the engine may want more streams than
+    /// one connection's server window can feed, so we dial independent SSH
+    /// connections up front (see [`SshClient::open_extra_upload_sessions`])
+    /// and hand them to the engine.
     pub async fn upload_file_with_progress(
         &self,
         local_path: &str,
@@ -1020,8 +1269,19 @@ impl SshClient {
         progress: crate::sftp_transfer::ProgressCallback<'_>,
         cancel: &tokio_util::sync::CancellationToken,
     ) -> Result<u64> {
-        let session = self.transfer_session()?;
-        crate::sftp_transfer::upload_file(&session, local_path, remote_path, progress, cancel).await
+        let mut sessions = self
+            .prepare_upload_transfer_sessions(local_path, cancel)
+            .await?;
+        let result =
+            crate::sftp_transfer::upload_file(&sessions, local_path, remote_path, progress, cancel)
+                .await;
+        // Every handle except the first is an extra connection we dialed;
+        // drop their transports instead of leaving idle sockets behind.
+        if sessions.len() > 1 {
+            let extras = sessions.split_off(1);
+            Self::close_extra_sessions(extras).await;
+        }
+        result
     }
 
     /// Open an SFTP subsystem session for small one-shot operations (viewer
@@ -1081,11 +1341,11 @@ mod tests;
 mod host_key_tests {
     use super::*;
 
-    fn fresh_key() -> key::PublicKey {
-        key::KeyPair::generate_ed25519()
+    fn fresh_key() -> PublicKey {
+        PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
             .expect("ed25519 keygen")
-            .clone_public_key()
-            .expect("public key")
+            .public_key()
+            .clone()
     }
 
     #[test]
@@ -1136,7 +1396,7 @@ mod host_key_tests {
         verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
         let err = verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap_err();
         assert!(
-            matches!(err, russh_keys::Error::KeyChanged { .. }),
+            matches!(err, russh::keys::Error::KeyChanged { .. }),
             "expected KeyChanged, got {err:?}"
         );
         // The file is untouched: the impostor's key was not recorded.
@@ -1162,9 +1422,15 @@ mod host_key_tests {
             Some(path.clone()),
             HostKeyPolicy::Strict,
         );
-        assert!(client::Handler::check_server_key(&mut handler, &genuine)
-            .await
-            .unwrap());
+        assert!(client::Handler::check_server_key(
+            &mut handler,
+            &russh::keys::PublicKeyOrCertificate::PublicKey {
+                key: genuine.clone(),
+                hash_alg: None
+            }
+        )
+        .await
+        .unwrap());
         assert!(matches!(
             report
                 .explain_or(anyhow::anyhow!("fallback"))
@@ -1180,18 +1446,28 @@ mod host_key_tests {
             Some(path.clone()),
             HostKeyPolicy::Strict,
         );
-        assert!(client::Handler::check_server_key(&mut handler, &genuine)
-            .await
-            .unwrap());
+        assert!(client::Handler::check_server_key(
+            &mut handler,
+            &russh::keys::PublicKeyOrCertificate::PublicKey {
+                key: genuine.clone(),
+                hash_alg: None
+            }
+        )
+        .await
+        .unwrap());
 
         // A different key for the same host: refused, and connect() gets the reason.
         let (mut handler, report) =
             Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::Strict);
-        assert!(
-            !client::Handler::check_server_key(&mut handler, &fresh_key())
-                .await
-                .unwrap()
-        );
+        assert!(!client::Handler::check_server_key(
+            &mut handler,
+            &russh::keys::PublicKeyOrCertificate::PublicKey {
+                key: fresh_key(),
+                hash_alg: None
+            }
+        )
+        .await
+        .unwrap());
         let reason = report.explain_or(anyhow::anyhow!("fallback")).to_string();
         assert!(
             reason.contains("HOST KEY CHANGED for example.test:22"),
@@ -1204,11 +1480,15 @@ mod host_key_tests {
     async fn handler_refuses_everything_without_a_home_directory() {
         let (mut handler, report) =
             Client::with_known_hosts("example.test", 22, None, HostKeyPolicy::Strict);
-        assert!(
-            !client::Handler::check_server_key(&mut handler, &fresh_key())
-                .await
-                .unwrap()
-        );
+        assert!(!client::Handler::check_server_key(
+            &mut handler,
+            &russh::keys::PublicKeyOrCertificate::PublicKey {
+                key: fresh_key(),
+                hash_alg: None
+            }
+        )
+        .await
+        .unwrap());
         let reason = report.explain_or(anyhow::anyhow!("fallback")).to_string();
         assert!(
             reason.contains("cannot locate the home directory"),
@@ -1273,11 +1553,15 @@ mod host_key_tests {
         let path = dir.path().join("known_hosts");
         let (mut handler, _) =
             Client::with_known_hosts("example.test", 22, Some(path.clone()), HostKeyPolicy::Off);
-        assert!(
-            client::Handler::check_server_key(&mut handler, &fresh_key())
-                .await
-                .unwrap()
-        );
+        assert!(client::Handler::check_server_key(
+            &mut handler,
+            &russh::keys::PublicKeyOrCertificate::PublicKey {
+                key: fresh_key(),
+                hash_alg: None
+            }
+        )
+        .await
+        .unwrap());
         assert!(!path.exists());
     }
 
@@ -1288,11 +1572,15 @@ mod host_key_tests {
         verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
         let (mut handler, report) =
             Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::AcceptNew);
-        assert!(
-            client::Handler::check_server_key(&mut handler, &fresh_key())
-                .await
-                .unwrap()
-        );
+        assert!(client::Handler::check_server_key(
+            &mut handler,
+            &russh::keys::PublicKeyOrCertificate::PublicKey {
+                key: fresh_key(),
+                hash_alg: None
+            }
+        )
+        .await
+        .unwrap());
         assert_eq!(
             report.explain_or(anyhow::anyhow!("fallback")).to_string(),
             "fallback"
@@ -1310,11 +1598,15 @@ mod host_key_tests {
             Some(path.clone()),
             HostKeyPolicy::Strict,
         );
-        assert!(
-            !client::Handler::check_server_key(&mut handler, &fresh_key())
-                .await
-                .unwrap()
-        );
+        assert!(!client::Handler::check_server_key(
+            &mut handler,
+            &russh::keys::PublicKeyOrCertificate::PublicKey {
+                key: fresh_key(),
+                hash_alg: None
+            }
+        )
+        .await
+        .unwrap());
         let err = report.explain_or(anyhow::anyhow!("fallback"));
         let changed = err.downcast_ref::<HostKeyChanged>().expect("typed error");
         assert_eq!(changed.host, "example.test");

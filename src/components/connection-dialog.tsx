@@ -217,7 +217,13 @@ export function ConnectionDialog({
     tunnelPassword: '',
     tunnelKeyPath: '',
     tunnelPassphrase: '',
-    compression: true,
+    // Off by default, matching OpenSSH's client: on anything faster than a
+    // thin WAN link zlib costs more than it saves — measured on a LAN, the
+    // server-side compressor capped downloads at ~20 MB/s (uploads were fine
+    // because the server only decompresses), and it was the trigger for the
+    // russh 0.44 compressed-upload corruption. WAN users can still enable it
+    // per connection.
+    compression: false,
     keepAlive: true,
     keepAliveInterval: getDefaultKeepAliveIntervalSetting(),
     serverAliveCountMax: 3

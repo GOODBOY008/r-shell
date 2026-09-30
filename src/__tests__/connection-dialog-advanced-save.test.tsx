@@ -57,10 +57,10 @@ describe('ConnectionDialog advanced tab save', () => {
     // Switch to the Advanced tab (Radix Tabs activates on mouseDown)
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Advanced' }), { button: 0 });
 
-    // compression switch renders first, defaults to ON → click to turn OFF
+    // compression switch renders first, defaults to OFF → click to turn ON
     const switches = await screen.findAllByRole('switch');
     expect(switches.length).toBeGreaterThanOrEqual(2);
-    fireEvent.click(switches[0]); // compression → false
+    fireEvent.click(switches[0]); // compression → true
 
     // keepAlive interval input (visible because keepAlive defaults to ON)
     const intervalInput = screen.getByLabelText('Interval (seconds)');
@@ -77,7 +77,7 @@ describe('ConnectionDialog advanced tab save', () => {
     expect(ConnectionStorageManager.updateConnection).toHaveBeenCalledWith(
       'conn-1',
       expect.objectContaining({
-        compression: false,
+        compression: true,
         keepAlive: true,
         keepAliveInterval: 30,
         serverAliveCountMax: 3,
@@ -101,8 +101,9 @@ describe('ConnectionDialog advanced tab save', () => {
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Advanced' }), { button: 0 });
 
     const switches = await screen.findAllByRole('switch');
-    // compression (index 0) and keepAlive (index 1) both default to ON
-    expect(switches[0].getAttribute('data-state')).toBe('checked');
+    // compression (index 0) defaults to OFF (OpenSSH parity), keepAlive
+    // (index 1) to ON
+    expect(switches[0].getAttribute('data-state')).toBe('unchecked');
     expect(switches[1].getAttribute('data-state')).toBe('checked');
 
     // numeric inputs default to 60 / 3

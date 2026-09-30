@@ -1,5 +1,5 @@
 use anyhow::Result;
-use async_std::io::{ReadExt, WriteExt as FtpStreamWriteExt};
+use futures_lite::io::{AsyncReadExt, AsyncWriteExt as FtpStreamWriteExt};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt as TokioReadExt, AsyncWriteExt as TokioWriteExt};
@@ -24,8 +24,8 @@ pub struct FtpConfig {
 
 /// Wrapper enum to handle both plain and TLS FTP streams.
 enum FtpStreamKind {
-    Plain(suppaftp::AsyncFtpStream),
-    Secure(suppaftp::AsyncNativeTlsFtpStream),
+    Plain(suppaftp::tokio::AsyncFtpStream),
+    Secure(suppaftp::tokio::AsyncNativeTlsFtpStream),
 }
 
 /// Dispatch a method call to whichever stream variant is active.
@@ -63,13 +63,15 @@ impl FtpClient {
             config.anonymous
         );
 
-        // Use async_std timeout since suppaftp uses async_std internally
+        // The suppaftp connect futures drive their I/O through async-io's
+        // own lazy polling thread (no executor affinity), so a tokio timer
+        // wrapper is equivalent to the async_std one it replaces.
         let timeout_duration = Duration::from_secs(15);
 
         let mut stream_kind = if config.ftps_enabled {
-            let ftp_stream = async_std::future::timeout(
+            let ftp_stream = tokio::time::timeout(
                 timeout_duration,
-                suppaftp::AsyncNativeTlsFtpStream::connect(&addr),
+                suppaftp::tokio::AsyncNativeTlsFtpStream::connect(&addr),
             )
             .await
             .map_err(|_| {
@@ -83,11 +85,18 @@ impl FtpClient {
 
             tracing::info!("FTPS TCP connected, starting TLS handshake...");
 
+            // suppaftp (any version, sync or async) performs no TLS session
+            // reuse on the data channel. Servers whose default requires it
+            // (vsftpd's `require_ssl_reuse=YES`) then answer every data
+            // command with "522 SSL connection failed: session reuse
+            // required" — control-channel ops keep working, LIST/RETR/STOR
+            // do not. Nothing we can do client-side short of reimplementing
+            // the TLS layer; such servers must set require_ssl_reuse=NO.
             let tls_connector =
-                suppaftp::async_native_tls::TlsConnector::new().danger_accept_invalid_certs(true);
+                async_native_tls::TlsConnector::new().danger_accept_invalid_certs(true);
             let secure_stream = ftp_stream
                 .into_secure(
-                    suppaftp::AsyncNativeTlsConnector::from(tls_connector),
+                    suppaftp::tokio::AsyncNativeTlsConnector::from(tls_connector),
                     &config.host,
                 )
                 .await
@@ -96,9 +105,9 @@ impl FtpClient {
             tracing::info!("FTPS TLS handshake complete");
             FtpStreamKind::Secure(secure_stream)
         } else {
-            let ftp_stream = async_std::future::timeout(
+            let ftp_stream = tokio::time::timeout(
                 timeout_duration,
-                suppaftp::AsyncFtpStream::connect(&addr),
+                suppaftp::tokio::AsyncFtpStream::connect(&addr),
             )
             .await
             .map_err(|_| {
@@ -274,7 +283,7 @@ impl FtpClient {
                 transferred += n as u64;
                 emit(transferred, false);
             }
-            s.finalize_retr_stream(data_stream).await.map_err(|e| {
+            data_stream.finish().await.map_err(|e| {
                 anyhow::anyhow!("Failed to finalize download: {}", e)
             })?;
             transferred
@@ -345,7 +354,7 @@ impl FtpClient {
                 transferred += n as u64;
                 emit(transferred, false);
             }
-            s.finalize_put_stream(writer).await.map_err(|e| {
+            writer.finish().await.map_err(|e| {
                 anyhow::anyhow!("Failed to finalize upload: {}", e)
             })?;
             transferred
@@ -626,6 +635,10 @@ mod tests {
     use super::*;
 
     /// Helper – read env vars or skip the test.
+    ///
+    /// `FTP_TEST_FTPS=1` switches every test to explicit FTPS (AUTH TLS), so
+    /// the same suite validates both the plain and the TLS code path against
+    /// a real server; the client accepts self-signed certs.
     fn test_config() -> Option<FtpConfig> {
         let host = std::env::var("FTP_TEST_HOST").ok()?;
         let user = std::env::var("FTP_TEST_USER").unwrap_or_else(|_| "xxxx".into());
@@ -634,12 +647,13 @@ mod tests {
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(21);
+        let ftps_enabled = std::env::var("FTP_TEST_FTPS").ok().as_deref() == Some("1");
         Some(FtpConfig {
             host,
             port,
             username: user,
             password: pass,
-            ftps_enabled: false,
+            ftps_enabled,
             anonymous: false,
         })
     }
