@@ -7,8 +7,6 @@ import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
@@ -1381,8 +1379,8 @@ export function PtyTerminal({
       if (!active) return;
       // The payload is the connection_id the failure pertains to.
       if (event.payload === connectionId) {
-        toast.warning(t('ptyTerminal.x11LocalServerUnreachable'), {
-          description: t('ptyTerminal.x11LocalServerUnreachableDesc'),
+        toast.warning(i18n.t('ptyTerminal.x11LocalServerUnreachable'), {
+          description: i18n.t('ptyTerminal.x11LocalServerUnreachableDesc'),
           duration: 10000,
         });
       }
@@ -1399,7 +1397,7 @@ export function PtyTerminal({
       active = false;
       unlisten?.();
     };
-  }, [connectionId, t]);
+  }, [connectionId]);
 
   React.useEffect(() => {
     if (!isActive) {

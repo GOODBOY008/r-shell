@@ -56,11 +56,6 @@ export interface ConnectionData {
   tunnelPassword?: string;
   tunnelKeyPath?: string;
   tunnelPassphrase?: string;
-  // SSH-specific advanced
-  compression?: boolean;
-  keepAlive?: boolean;
-  keepAliveInterval?: number;
-  serverAliveCountMax?: number;
   // RDP-specific
   domain?: string;
   rdpResolution?: string;
