@@ -54,6 +54,13 @@ aes-gcm = "0.10"
 rand = "0.10"
 socket2 = "0.5"
 
+[features]
+default = []
+# Enables the X11-forwarding E2E integration tests in ssh/tests.rs. These
+# require the Dockerized sshd from tests/x11-e2e/ and are #[ignore]d; run with:
+#   cargo test --features x11-e2e -- --ignored --nocapture x11_e2e
+x11-e2e = []
+
 [dev-dependencies]
 tempfile = "3"
 env_logger = "0.11"

@@ -2,6 +2,7 @@ use crate::proxy::ProxyConfig;
 use anyhow::Result;
 use russh::keys::*;
 use russh::*;
+use russh::client::{ChannelOpenHandle, Msg, Session};
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -127,6 +128,10 @@ pub struct SshConfig {
     /// slider overrides it per launch.
     #[serde(default = "default_connect_timeout")]
     pub connect_timeout: u64,
+    /// Optional X11 forwarding configuration. `None`/absent = X11 disabled
+    /// (backwards compatible via serde default).
+    #[serde(default)]
+    pub x11: Option<crate::x11::X11Config>,
 }
 
 fn default_connect_timeout() -> u64 {
@@ -168,6 +173,12 @@ pub struct SshClient {
     /// can dial additional independent SSH connections (parallel segmented
     /// upload — bbcp/Globus style). `None` until `connect` succeeds.
     config: Option<SshConfig>,
+    /// X11 dispatcher registry shared with the russh Handler. Populated in
+    /// new(); read by create_pty_session to register per-session senders.
+    x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
+    /// The stored X11 config, captured at connect time so create_pty_session
+    /// can read it without the caller re-passing it.
+    x11_config: Option<crate::x11::X11Config>,
 }
 
 // PTY session handle for interactive shell
@@ -337,12 +348,35 @@ pub struct Client {
     known_hosts: Option<PathBuf>,
     policy: HostKeyPolicy,
     report: HostKeyReport,
+    /// Registry this handler routes inbound X11 channels into. Exactly ONE
+    /// handler per connection owns the live registry (the main connection's
+    /// handler, which shares `SshClient`'s registry); every other handler
+    /// (jump-host outer session, bulk-transfer dials, standalone SFTP) gets a
+    /// fresh empty one so stray inbound X11 channels can never be routed
+    /// across sessions.
+    x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
 }
 
 impl Client {
     /// Handler for `host:port` using the OpenSSH known_hosts file.
-    pub fn new(host: &str, port: u16, policy: HostKeyPolicy) -> (Self, HostKeyReport) {
-        Self::with_known_hosts(host, port, default_known_hosts_path(), policy)
+    ///
+    /// `x11_registry` decides where inbound X11 channels go: pass the shared
+    /// registry of the owning [`SshClient`] only for the main terminal
+    /// connection; pass a fresh [`X11DispatcherRegistry::new`] everywhere
+    /// else (jump host, bulk dials, standalone SFTP).
+    pub fn new(
+        host: &str,
+        port: u16,
+        policy: HostKeyPolicy,
+        x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
+    ) -> (Self, HostKeyReport) {
+        Self::with_known_hosts(
+            host,
+            port,
+            default_known_hosts_path(),
+            policy,
+            x11_registry,
+        )
     }
 
     /// Handler with an explicit known_hosts location (tests).
@@ -351,6 +385,7 @@ impl Client {
         port: u16,
         known_hosts: Option<PathBuf>,
         policy: HostKeyPolicy,
+        x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
     ) -> (Self, HostKeyReport) {
         let report = HostKeyReport::default();
         (
@@ -360,10 +395,19 @@ impl Client {
                 known_hosts,
                 policy,
                 report: report.clone(),
+                x11_registry,
             },
             report,
         )
     }
+}
+
+/// A fresh, empty X11 dispatcher registry for handlers that must never
+/// receive inbound X11 channels (jump hop, bulk dials, standalone SFTP).
+/// Inbound X11 channels arriving on such a handler are rejected with
+/// `AdministrativelyProhibited` — never routed into another session.
+pub(crate) fn fresh_x11_registry() -> Arc<crate::x11::X11DispatcherRegistry> {
+    Arc::new(crate::x11::X11DispatcherRegistry::new())
 }
 
 impl client::Handler for Client {
@@ -457,6 +501,53 @@ impl client::Handler for Client {
                 }
             }
         }
+    }
+
+    /// Inbound X11 channel (server → client, opened when a remote X client
+    /// connects to sshd's forwarded DISPLAY listener). russh 0.63 hands us a
+    /// `reply` handle: the request stays pending until we accept it, reject
+    /// it, or drop it (drop ⇒ automatic `AdministrativelyProhibited`).
+    ///
+    /// One SSH session == one R-Shell connection == one active dispatcher
+    /// sender. `values().next()` is used because the Handler has no
+    /// connection_id context; exactly one sender is live per registry
+    /// (session swaps briefly overlap, but the old sender is dropped on
+    /// insert, closing the old receiver). Handlers that must NOT receive X11
+    /// channels (jump host, bulk dials, standalone SFTP) hold an empty
+    /// registry, so this always rejects for them.
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: Channel<Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        reply: ChannelOpenHandle,
+        _session: &mut Session,
+    ) -> Result<(), Self::Error> {
+        // Take the sender out under the read lock, then drop the lock before
+        // any await — the registry may be swapped concurrently (reconnect)
+        // and no lock may be held across `.await` (PTY deadlock history).
+        let sender = {
+            let senders = self.x11_registry.senders.read().await;
+            senders.values().next().map(|e| e.tx.clone())
+        };
+        let Some(tx) = sender else {
+            tracing::warn!("[X11] inbound X11 channel but no dispatcher registered; rejecting");
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+        // Accept FIRST, then hand the channel to the dispatcher. accept() and
+        // all later channel traffic go through the same queue (FIFO), so the
+        // server sees our confirmation before any channel data we send — and
+        // before the dispatcher task starts bridging.
+        reply.accept().await;
+        let _ = tx.send(crate::x11::InboundX11Channel {
+            channel,
+            originator_address: originator_address.to_string(),
+            originator_port,
+        });
+        Ok(())
     }
 }
 
@@ -640,7 +731,11 @@ pub async fn connect_via_ssh_tunnel(
         ..client::Config::default()
     };
 
-    let (handler, host_key_error) = Client::new(&tunnel.host, tunnel.port, policy);
+    // Jump-host outer session: fresh X11 registry, never the target's —
+    // an inbound X11 channel on the tunneled hop must not be routed into
+    // the target connection's dispatcher (cross-session pollution).
+    let (handler, host_key_error) =
+        Client::new(&tunnel.host, tunnel.port, policy, fresh_x11_registry());
     let mut session = tokio::time::timeout(
         timeout,
         client::connect(
@@ -697,6 +792,8 @@ impl SshClient {
         Self {
             session: None,
             config: None,
+            x11_registry: Arc::new(crate::x11::X11DispatcherRegistry::new()),
+            x11_config: None,
         }
     }
 
@@ -735,6 +832,8 @@ impl SshClient {
     }
 
     pub async fn connect(&mut self, config: &SshConfig) -> Result<()> {
+        // X11 semantics (from PR): capture the config for create_pty_session.
+        self.x11_config = config.x11.clone();
         let ssh_config = Self::build_russh_client_config(config);
 
         // Connection timeout: configurable via the Settings "Connection
@@ -742,8 +841,12 @@ impl SshClient {
         // zero/garbage value can't time out instantly.
         let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
-        let (handler, host_key_error) =
-            Client::new(&config.host, config.port, config.host_key_policy);
+        let (handler, host_key_error) = Client::new(
+            &config.host,
+            config.port,
+            config.host_key_policy,
+            self.x11_registry.clone(),
+        );
         let mut ssh_session = if let Some(tunnel) = &config.tunnel {
             // Route the connection through an SSH jump host: connect to the
             // tunnel host, open a direct-tcpip channel to the final target,
@@ -835,8 +938,15 @@ impl SshClient {
             let mut ssh_config = Self::build_russh_client_config(config);
             ssh_config.window_size = window_size;
             let ssh_config = Arc::new(ssh_config);
-            let (handler, host_key_error) =
-                Client::new(&config.host, config.port, config.host_key_policy);
+            // Bulk-transfer dials carry no terminal session: fresh X11
+            // registry so inbound X11 channels are rejected, never routed
+            // into the interactive connection's dispatcher.
+            let (handler, host_key_error) = Client::new(
+                &config.host,
+                config.port,
+                config.host_key_policy,
+                fresh_x11_registry(),
+            );
             let host = config.host.clone();
             async move {
                 let mut session = tokio::time::timeout(
@@ -952,6 +1062,16 @@ impl SshClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
+        // End this client's X11 dispatchers FIRST: each registry entry holds
+        // the only sender its dispatcher's recv() waits on, so dropping the
+        // entries lets those tasks observe the disconnect, exit, and release
+        // their registry Arc. Without this the dispatcher task is pinned
+        // forever by its own registration and leaks per X11-enabled PTY
+        // session (PR #64 final review, medium). The tasks' own cleanup is
+        // token-checked (`remove_if_current`), so a stale task can never
+        // unregister a successor's entry even if it lingers briefly.
+        self.x11_registry.shutdown().await;
+
         if let Some(session) = self.session.take() {
             // Try to unwrap Arc, if we're the only owner
             match Arc::try_unwrap(session) {
@@ -975,7 +1095,7 @@ impl SshClient {
 
     /// Create a persistent PTY shell session (like ttyd)
     /// This enables interactive commands like vim, less, more, top, etc.
-    pub async fn create_pty_session(&self, cols: u32, rows: u32) -> Result<PtySession> {
+    pub async fn create_pty_session(&self, cols: u32, rows: u32, connection_id: &str) -> Result<PtySession> {
         if let Some(session) = &self.session {
             let bash_version = tokio::time::timeout(
                 Duration::from_secs(2),
@@ -1008,6 +1128,163 @@ impl SshClient {
                     terminal_modes,
                 )
                 .await?;
+
+            // --- X11 forwarding ---
+            if let Some(cfg) = self.x11_config.as_ref().filter(|c| c.enabled) {
+                let display_str = cfg.display.clone()
+                    .or_else(|| std::env::var("DISPLAY").ok())
+                    .unwrap_or_else(|| ":0".to_string());
+
+                match crate::x11::parse_display(&display_str) {
+                    Ok(parsed) => {
+                        // Forwarding is always trusted (-Y) with OpenSSH -Y
+                        // cookie semantics: the x11-req carries a per-session
+                        // FAKE cookie and the real xauth cookie never crosses
+                        // the wire — the local bridge swaps it back in when
+                        // the remote client connects (X11CookieSwap). With no
+                        // xauth entry for the display, `real` stays None and
+                        // the local X server rejects the fake, failing closed
+                        // exactly like `ssh -Y` without xauth. (Untrusted mode
+                        // was removed because the X11 SECURITY extension it
+                        // requires is rejected by standard local X servers.)
+                        let real_cookie = crate::x11::read_local_cookie(&parsed)
+                            .ok()
+                            .and_then(|hex| {
+                                crate::x11::cookie_hex_to_bytes(&hex)
+                            });
+                        if real_cookie.is_none() {
+                            tracing::warn!(
+                                "[X11] no local xauth cookie for this display; \
+                                 forwarded X clients will be rejected by the local X server"
+                            );
+                        }
+                        let cookie_swap = crate::x11::X11CookieSwap {
+                            fake: crate::x11::generate_fake_cookie_bytes(),
+                            real: real_cookie,
+                        };
+                        let cookie = crate::x11::cookie_bytes_to_hex(&cookie_swap.fake);
+
+                        // C1: do NOT set DISPLAY ourselves. sshd sets the remote
+                        // DISPLAY itself (per its X11DisplayOffset) when it handles
+                        // request_x11; the client overriding it with an assumed
+                        // `localhost:10.0` can break forwarding on servers that use
+                        // a different offset.
+
+                        // Capture the screen number now: it's a Copy u32 needed by
+                        // request_x11, but `parsed` itself will be moved into the
+                        // dispatcher task below (it is not Clone).
+                        let screen = parsed.screen();
+
+                        // C2: register the dispatcher sender BEFORE request_x11.
+                        // request_x11 (want_reply=true) only enqueues the request
+                        // and returns; it does NOT await the server reply. The
+                        // server can therefore open the inbound X11 channel before
+                        // we would otherwise have inserted the sender, and the
+                        // Handler would drop it. We insert first, then deregister
+                        // on request_x11 failure.
+                        let (x11_tx, mut x11_rx) = mpsc::unbounded_channel::<crate::x11::InboundX11Channel>();
+                        let dispatcher_token = crate::x11::next_dispatcher_token();
+                        {
+                            let mut senders = self.x11_registry.senders.write().await;
+                            senders.insert(
+                                connection_id.to_string(),
+                                crate::x11::X11DispatcherEntry {
+                                    tx: x11_tx,
+                                    token: dispatcher_token,
+                                },
+                            );
+                        }
+
+                        match channel.request_x11(
+                            true,                       // want_reply
+                            false,                      // single_connection
+                            "MIT-MAGIC-COOKIE-1",
+                            &cookie,
+                            screen,
+                        ).await {
+                            Ok(()) => {
+                                tracing::info!("[X11] forwarding requested (trusted)");
+
+                                // I2 / Lifetime note: this dispatcher lives until
+                                // the SSH connection's receiver is dropped (on
+                                // disconnect) or the task itself deregisters.
+                                // Replacing the PTY session (start_pty_connection)
+                                // inserts a new sender under the same key, dropping
+                                // the old one and ending this task.
+
+                                // N1: parse DISPLAY once and move ParsedDisplay
+                                // into the dispatcher task. The original `parsed`
+                                // is reused here for every inbound channel rather
+                                // than re-parsing per channel inside the loop.
+                                let registry = self.x11_registry.clone();
+                                let cid = connection_id.to_string();
+                                tokio::spawn(async move {
+                                    // Emit the macOS XQuartz hint at most once per
+                                    // session: a flapping remote X app must not
+                                    // spam toasts on every inbound channel.
+                                    let mut hinted = false;
+                                    while let Some(inbound) = x11_rx.recv().await {
+                                        let crate::x11::InboundX11Channel {
+                                            channel,
+                                            originator_address,
+                                            originator_port,
+                                        } = inbound;
+                                        let _ = (originator_address, originator_port);
+                                        // Connect to the local X server and bridge.
+                                        // A fresh per-bridge cancel token; session
+                                        // teardown (disconnect) clears this
+                                        // dispatcher's registry entry, whose
+                                        // channel closes and ends both bridge tasks.
+                                        match crate::x11::connect_local_x_server(&parsed).await {
+                                            Ok(socket) => {
+                                                let cancel = CancellationToken::new();
+                                                crate::x11::bridge_x11_channel(
+                                                    channel,
+                                                    socket,
+                                                    cancel,
+                                                    Some(cookie_swap),
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("[X11] could not connect to local X server: {}. Remote app will fail to display.", e);
+                                                // macOS UX (spec §4.5): the most
+                                                // common cause is a missing XQuartz.
+                                                // Surface a single toast guiding
+                                                // the user to install it. Other
+                                                // platforms keep the warn-only log
+                                                // (the terminal still works). The
+                                                // handle is None in unit tests.
+                                                #[cfg(target_os = "macos")]
+                                                if !hinted {
+                                                    hinted = true;
+                                                    crate::connection_manager::emit_x11_unreachable(&cid);
+                                                }
+                                                let _ = channel.close().await;
+                                            }
+                                        }
+                                    }
+                                    // Dispatcher shut down (session closing) — deregister,
+                                    // but only if no successor replaced us meanwhile.
+                                    registry.remove_if_current(&cid, dispatcher_token).await;
+                                });
+                            }
+                            Err(e) => {
+                                // C2: deregister the sender we optimistically
+                                // inserted above so the Handler stops routing
+                                // inbound channels to a session whose X11 setup
+                                // failed.
+                                self.x11_registry
+                                    .remove_if_current(connection_id, dispatcher_token)
+                                    .await;
+                                tracing::warn!("[X11] request_x11 rejected by server: {}. Terminal will work without X11.", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("[X11] could not parse DISPLAY '{}': {}. Skipping X11.", display_str, e);
+                    }
+                }
+            }
 
             // Start interactive shell
             channel.request_shell(true).await?;
@@ -1421,6 +1698,7 @@ mod host_key_tests {
             22,
             Some(path.clone()),
             HostKeyPolicy::Strict,
+            fresh_x11_registry(),
         );
         assert!(client::Handler::check_server_key(
             &mut handler,
@@ -1445,6 +1723,7 @@ mod host_key_tests {
             22,
             Some(path.clone()),
             HostKeyPolicy::Strict,
+            fresh_x11_registry(),
         );
         assert!(client::Handler::check_server_key(
             &mut handler,
@@ -1458,7 +1737,7 @@ mod host_key_tests {
 
         // A different key for the same host: refused, and connect() gets the reason.
         let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::Strict);
+            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::Strict, fresh_x11_registry());
         assert!(!client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1479,7 +1758,7 @@ mod host_key_tests {
     #[tokio::test]
     async fn handler_refuses_everything_without_a_home_directory() {
         let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, None, HostKeyPolicy::Strict);
+            Client::with_known_hosts("example.test", 22, None, HostKeyPolicy::Strict, fresh_x11_registry());
         assert!(!client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1552,7 +1831,7 @@ mod host_key_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("known_hosts");
         let (mut handler, _) =
-            Client::with_known_hosts("example.test", 22, Some(path.clone()), HostKeyPolicy::Off);
+            Client::with_known_hosts("example.test", 22, Some(path.clone()), HostKeyPolicy::Off, fresh_x11_registry());
         assert!(client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1571,7 +1850,7 @@ mod host_key_tests {
         let path = dir.path().join("known_hosts");
         verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
         let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::AcceptNew);
+            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::AcceptNew, fresh_x11_registry());
         assert!(client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -1597,6 +1876,7 @@ mod host_key_tests {
             2222,
             Some(path.clone()),
             HostKeyPolicy::Strict,
+            fresh_x11_registry(),
         );
         assert!(!client::Handler::check_server_key(
             &mut handler,

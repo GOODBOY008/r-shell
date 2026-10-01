@@ -267,7 +267,13 @@
     "hint": {
       "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it."
     },
-    "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored."
+    "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored.",
+    "x11": {
+      "enable": "Enable X11 forwarding",
+      "enableDesc": "Forward remote X11 apps to your local X server. Trusted mode (-Y): your real xauth cookie is sent to the remote host",
+      "displayOverride": "DISPLAY override",
+      "displayPlaceholder": "Auto-detected if blank"
+    }
   },
   "settings": {
     "title": "Settings & Preferences",
@@ -1188,7 +1194,9 @@
     "reconnectingAfterClose": "[Connection closed. Reconnecting in {{seconds}}s (attempt {{attempt}}/{{max}})...]",
     "sshSessionLost": "[SSH session lost. Reconnecting with full authentication...]",
     "sessionRestored": "[Session restored — reconnected to the same shell]",
-    "sshSessionDeadPermanent": "[SSH session lost and automatic recovery limit reached. Use right-click → Reconnect to retry.]"
+    "sshSessionDeadPermanent": "[SSH session lost and automatic recovery limit reached. Use right-click → Reconnect to retry.]",
+    "x11LocalServerUnreachable": "X11 forwarding enabled but no local X server was found",
+    "x11LocalServerUnreachableDesc": "Remote graphical apps won't display. Install XQuartz (https://www.xquartz.org) or set $DISPLAY."
   },
   "systemMonitor": {
     "systemOverview": "System Overview",
