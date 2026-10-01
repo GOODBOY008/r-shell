@@ -122,7 +122,7 @@ export function Toolbar({
                   onClick={() => onQuickConnect?.(connection.id)}
                   className="flex items-start gap-3 py-2.5 cursor-pointer"
                 >
-                  <Server className="w-4 h-4 mt-0.5 text-muted-foreground flex-shrink-0" />
+                  <Server className="w-4 h-4 mt-0.5 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
                     <div className="font-medium truncate">{connection.name}</div>
                     <div className="text-xs text-muted-foreground truncate">
@@ -130,7 +130,7 @@ export function Toolbar({
                     </div>
                   </div>
                   {connection.lastConnected && (
-                    <span className="text-xs text-muted-foreground flex-shrink-0">
+                    <span className="text-xs text-muted-foreground shrink-0">
                       {(() => {
                         const date = new Date(connection.lastConnected);
                         const now = new Date();

@@ -595,7 +595,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             <Search className="h-3 w-3 text-muted-foreground/60 shrink-0" />
             <input
               placeholder={t('filePanel.toolbar.filter')}
-              className="h-full w-24 text-[10px] bg-transparent outline-none placeholder:text-muted-foreground/50"
+              className="h-full w-24 text-[10px] bg-transparent outline-hidden placeholder:text-muted-foreground/50"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -829,7 +829,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* Loading overlay — at panel root to avoid ContextMenu stacking issues */}
         {showOverlay && entries.length > 0 && (
           <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
-            <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-sm border border-border">
+            <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-xs border border-border">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
               <span className="text-[10px] text-muted-foreground">{t('filePanel.loading')}</span>
             </div>
