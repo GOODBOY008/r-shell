@@ -206,7 +206,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
                 className={cn(
                   'group cursor-pointer rounded-md border bg-card/50 px-2.5 py-2 text-left transition-colors',
                   'hover:border-primary/40 hover:bg-accent/40',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
                 )}
                 onClick={() => handleRun(snippet)}
                 onKeyDown={(e) => {

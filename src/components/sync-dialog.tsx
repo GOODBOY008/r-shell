@@ -477,7 +477,7 @@ export function SyncDialog({
 
   return (
     <Dialog open={open} onOpenChange={isBusy ? undefined : onOpenChange}>
-      <DialogContent className={`!top-0 !left-0 !translate-x-0 !translate-y-0 !inset-0 !m-auto !flex !flex-col sm:!max-w-3xl !max-h-[85vh] overflow-hidden ${compared ? "!h-[85vh]" : "!h-fit"}`}>
+      <DialogContent className={`top-0! left-0! translate-x-0! translate-y-0! inset-0! m-auto! flex! flex-col! sm:max-w-3xl! max-h-[85vh]! overflow-hidden ${compared ? "h-[85vh]!" : "h-fit!"}`}>
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <ArrowRightLeft className="h-5 w-5" />
@@ -599,7 +599,7 @@ export function SyncDialog({
             <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <Label className="text-xs whitespace-nowrap">{t('syncDialog.exclude')}</Label>
             <input
-              className="flex-1 h-7 text-xs bg-muted/50 rounded px-2 outline-none placeholder:text-muted-foreground/50"
+              className="flex-1 h-7 text-xs bg-muted/50 rounded px-2 outline-hidden placeholder:text-muted-foreground/50"
               placeholder={t('syncDialog.excludePlaceholder')}
               autoComplete="off"
               autoCorrect="off"

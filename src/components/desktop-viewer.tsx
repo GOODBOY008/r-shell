@@ -331,7 +331,7 @@ export function DesktopViewer({
   return (
     <div
       ref={containerRef}
-      className="h-full w-full relative bg-black focus:outline-none"
+      className="h-full w-full relative bg-black focus:outline-hidden"
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}

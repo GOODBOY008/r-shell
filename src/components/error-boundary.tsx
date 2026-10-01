@@ -58,7 +58,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                 ? i18n.t('errorBoundary.labelError', { label: this.props.label })
                 : i18n.t('errorBoundary.somethingWentWrong')}
             </p>
-            <p className="text-xs text-muted-foreground max-w-[300px] break-words">
+            <p className="text-xs text-muted-foreground max-w-[300px] wrap-break-word">
               {this.state.error?.message || i18n.t('errorBoundary.unexpectedError')}
             </p>
           </div>

@@ -115,7 +115,7 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose,
   return (
     <div 
       data-search-bar
-      className="absolute top-2 right-2 z-50 flex items-center gap-2 bg-background/95 backdrop-blur-sm border border-border rounded-md p-2 shadow-lg"
+      className="absolute top-2 right-2 z-50 flex items-center gap-2 bg-background/95 backdrop-blur-xs border border-border rounded-md p-2 shadow-lg"
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => e.stopPropagation()}
     >

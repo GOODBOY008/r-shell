@@ -684,7 +684,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.systemOverview')}</h3>
           </div>
           <Card>
-            <CardContent className="p-2 space-y-1 [&:last-child]:pb-2">
+            <CardContent className="p-2 space-y-1 last:pb-2">
               <div className="space-y-1">
                 <div className="flex justify-between items-center gap-1">
                   <span className="text-xs font-medium">{t('systemMonitor.cpu')}</span>
@@ -761,7 +761,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
               )}
             </div>
             <Card>
-              <CardContent className="p-2 [&:last-child]:pb-2">
+              <CardContent className="p-2 last:pb-2">
                 {!gpuDetection?.available ? (
                   <div className="text-[10px] text-muted-foreground space-y-1">
                     <p>{t('systemMonitor.noGpuDetected')}</p>
@@ -865,7 +865,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                   borderRadius: '6px',
                                   fontSize: '11px'
                                 }}
-                                formatter={(value: any, name: string) => [`${Number(value).toFixed(1)}%`, name === 'utilization' ? t('systemMonitor.gpuLabel') : name]}
+                                formatter={(value: any, name: any) => [`${Number(value).toFixed(1)}%`, name === 'utilization' ? t('systemMonitor.gpuLabel') : name]}
                               />
                               {gpuStats.map((gpu, idx) => {
                                 const history = gpuHistory.get(gpu.index) || [];
@@ -1049,7 +1049,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                                         borderRadius: '6px',
                                         fontSize: '11px'
                                       }}
-                                      formatter={(value: any, name: string) => [
+                                      formatter={(value: any, name: any) => [
                                         `${Number(value).toFixed(1)}%`,
                                         name === 'utilization' ? t('systemMonitor.gpuLabel') : t('systemMonitor.vram')
                                       ]}
@@ -1155,7 +1155,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.runningProcesses')}</h3>
           </div>
           <Card className="overflow-hidden">
-            <CardContent className="p-0 [&:last-child]:pb-0">
+            <CardContent className="p-0 last:pb-0">
               <div className="max-h-40 overflow-auto">
                 <table className="w-full caption-bottom text-sm">
                   <thead className="[&_tr]:border-b [&_tr]:border-border">
@@ -1223,7 +1223,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.diskUsage')}</h3>
           </div>
           <Card className="overflow-hidden">
-            <CardContent className="p-0 [&:last-child]:pb-0">
+            <CardContent className="p-0 last:pb-0">
               {disks.length === 0 ? (
                 <div className="p-2 text-[10px] text-muted-foreground">
                   {t('systemMonitor.noDiskInfo')}
@@ -1292,7 +1292,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             )}
           </div>
           <Card>
-            <CardContent className="p-2 space-y-2 [&:last-child]:pb-2">
+            <CardContent className="p-2 space-y-2 last:pb-2">
               {/* Current Speeds */}
               <div className="grid grid-cols-2 gap-1.5">
                 <div className="flex flex-col gap-0.5">
@@ -1373,12 +1373,12 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                           borderRadius: '6px',
                           fontSize: '11px'
                         }}
-                        formatter={(value: any, name: string) => {
+                        formatter={(value: any, name: any) => {
                           const kbps = Math.abs(Number(value));
                           const formatted = kbps >= 1024 ? `${(kbps / 1024).toFixed(1)} MB/s` : `${kbps.toFixed(0)} KB/s`;
                           return [formatted, name === 'uploadPositive' ? t('systemMonitor.upload') : t('systemMonitor.download')];
                         }}
-                        labelFormatter={(label) => `${label}`}
+                        labelFormatter={(label: any) => `${label}`}
                       />
                       <Area
                         type="monotone"
@@ -1415,7 +1415,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             <h3 className="text-xs font-medium truncate">{t('systemMonitor.networkLatency')}</h3>
           </div>
           <Card>
-            <CardContent className="p-2 [&:last-child]:pb-2">
+            <CardContent className="p-2 last:pb-2">
               <div className="h-24 text-foreground">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={latencyData} margin={{ top: 5, right: 2, left: -10, bottom: 0 }}>
@@ -1447,7 +1447,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
                         fontSize: '12px'
                       }}
                       formatter={(value: any) => [`${value}ms`, t('systemMonitor.latency')]}
-                      labelFormatter={(label) => `${t('systemMonitor.time')}: ${label}`}
+                      labelFormatter={(label: any) => `${t('systemMonitor.time')}: ${label}`}
                     />
                     <Area
                       type="monotone"
