@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-10-01
+
+### 🔧 R-Shell 3.0.1 — Line-Rate SFTP Transfers, SOCKS Proxy & Windows Polish
+
+This patch release makes big files move at line rate: SFTP uploads and downloads now use multi-connection segmented transfer on russh 0.63 (with the compression-disconnect fix), so transfers saturate the link in both directions instead of crawling. SSH tunnels gain SOCKS4/5 dynamic port forwarding, the connection dialog can pick the SSH private key with the OS file dialog, and a batch of Windows fixes lands — Ctrl+V now pastes into the terminal, and the toast spam on window refocus and settings save is gone — alongside dead-settings cleanup, macOS shortcut fixes and a relative `.DirIcon` symlink for AppImage catalogs.
+
+### New Features 🎉
+
+- feat(connection): pick the SSH private key with the OS file dialog by @twkrol in #142
+- feat(tunnel): add SOCKS4/5 dynamic port forwarding (SSH tunnel proxy) by @kerneltravel in #33
+
+### Bug Fixes 🐛
+
+- fix(sftp): line-rate transfers both directions — multi-connection segmented transfer, russh 0.63, compression-disconnect fix by @GOODBOY008 in #187
+- fix(terminal): Ctrl+V pastes on Windows/Linux instead of typing ^V by @GOODBOY008 in #198
+- fix(shortcuts): serialize register/unregister to stop refocus "registration failed" toast spam by @GOODBOY008 in #199
+- fix(settings): stop the every-save autostart "os error 2" toast on Windows by @GOODBOY008 in #200
+- fix(settings): wire up or remove dead settings controls by @sunxiaobin89 in #170
+- fix(settings): macOS ⌃Tab shortcut fallback, ⌘, menu accelerator, accurate export credential note by @sunxiaobin89 in #164
+- fix(linux): bump @tauri-apps/cli to 2.12.0 so AppImages get a relative .DirIcon symlink by @GOODBOY008 in #185
+
+### Contributors
+
+Thanks to [@kerneltravel](https://github.com/kerneltravel), [@sunxiaobin89](https://github.com/sunxiaobin89), [@twkrol](https://github.com/twkrol), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.0.0...v3.0.1
+
 ## [3.0.0] - 2026-09-20
 
 ### 🚀 R-Shell 3.0 — Unified Transfer Queue, Periodic Update Checks & the Dual-Baseline Release System
