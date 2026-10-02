@@ -67,7 +67,7 @@ describe('TransferQueue', () => {
     expect(viewport).not.toBeNull();
     expect(root!.className).toContain('max-h-40');
     expect(root!.className).toContain('overflow-hidden');
-    expect(root!.className).toContain('[&>[data-slot=scroll-area-viewport]]:max-h-40');
+    expect(root!.className).toContain('*:data-[slot=scroll-area-viewport]:max-h-40');
   });
 
   it('wires completed-download buttons to open_in_os and CLEAR_COMPLETED', () => {

@@ -157,7 +157,7 @@ export function TransferQueue({
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ScrollArea className="max-h-40 overflow-hidden [&>[data-slot=scroll-area-viewport]]:max-h-40">
+        <ScrollArea className="max-h-40 overflow-hidden *:data-[slot=scroll-area-viewport]:max-h-40">
           {transfers.length === 0 ? (
             <div className="flex items-center justify-center h-12 text-xs text-muted-foreground">
               {t('transferQueue.noTransfers')}

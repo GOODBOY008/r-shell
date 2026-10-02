@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import type { Layout } from 'react-resizable-panels';
 import type { GridNode } from '../../lib/terminal-group-types';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '../ui/resizable';
@@ -45,10 +46,17 @@ function GridRendererNode({ node, path }: GridRendererProps) {
   const { dispatch } = useTerminalGroups();
 
   const handleLayout = useCallback(
-    (sizes: number[]) => {
+    (layout: Layout) => {
+      // v4's Layout maps panel id → percentage; rebuild the children's
+      // index-ordered size array the reducer expects. Leaf nodes render no
+      // group, so this never fires for them.
+      if (node.type !== 'branch') return;
+      const sizes = node.children.map(
+        (child) => layout[`grid-panel-${minLeafGroupId(child)}`] ?? 100 / node.children.length,
+      );
       dispatch({ type: 'UPDATE_GRID_SIZES', path, sizes });
     },
-    [dispatch, path],
+    [dispatch, path, node],
   );
 
   if (node.type === 'leaf') {

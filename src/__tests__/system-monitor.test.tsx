@@ -145,10 +145,10 @@ describe('SystemMonitor zero-value frames and card padding', () => {
     const contents = container.querySelectorAll('[data-slot="card-content"]');
     expect(contents.length).toBeGreaterThanOrEqual(5);
     contents.forEach((content) => {
-      // twMerge must have resolved the card default `[&:last-child]:pb-6`
+      // twMerge must have resolved the card default `last:pb-6`
       // against the local override — pb-6 must not survive in the merged class.
       expect(content.className).not.toContain('pb-6');
-      expect(content.className).toContain('[&:last-child]:pb-');
+      expect(content.className).toContain('last:pb-');
     });
   });
 });

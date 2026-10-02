@@ -3,6 +3,20 @@ import { render, fireEvent } from '@testing-library/react';
 import { GridRenderer } from '../components/terminal/grid-renderer';
 import type { GridNode } from '../lib/terminal-group-types';
 
+// jsdom has no ResizeObserver; react-resizable-panels v4 constructs it from
+// the mounted element's ownerDocument.defaultView when a Group mounts.
+if (typeof window.ResizeObserver !== 'function') {
+  Object.defineProperty(window, 'ResizeObserver', {
+    writable: true,
+    configurable: true,
+    value: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  });
+}
+
 // Mock the context
 const mockDispatch = vi.fn();
 vi.mock('../lib/terminal-group-context', () => ({

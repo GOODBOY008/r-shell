@@ -1446,7 +1446,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     <div className={`h-full flex flex-col bg-background border-t border-border ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
       {/* File Browser Toolbar */}
       <div className="relative z-10 pt-2 pb-1">
-        <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border bg-background/90 px-1.5 py-1 text-xs shadow-sm backdrop-blur-sm scrollbar-none">
+        <div className="flex items-center gap-0.5 overflow-x-auto whitespace-nowrap rounded-lg border border-border bg-background/90 px-1.5 py-1 text-xs shadow-xs backdrop-blur-xs scrollbar-none">
           {/* Back */}
           <Button
             variant="ghost"
@@ -1506,7 +1506,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               <input
                 ref={pathInputRef}
                 autoFocus
-                className="h-full w-full bg-transparent font-mono text-[11px] outline-none"
+                className="h-full w-full bg-transparent font-mono text-[11px] outline-hidden"
                 autoComplete="off"
                 autoCorrect="off"
                 autoCapitalize="off"
@@ -1574,7 +1574,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
           <div className="mx-1 h-4 w-px shrink-0 bg-border/60" />
 
-          <div className="w-32 min-w-[7rem] shrink-0 sm:w-40">
+          <div className="w-32 min-w-28 shrink-0 sm:w-40">
             <Input
               placeholder={t('fileBrowser.searchFiles')}
               value={searchTerm}
@@ -1599,7 +1599,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             </span>
           )}
         </div>
-        <div className="pointer-events-none absolute inset-x-4 top-full -mt-2 h-4 bg-gradient-to-b from-background/35 via-background/10 to-transparent blur-sm" />
+        <div className="pointer-events-none absolute inset-x-4 top-full -mt-2 h-4 bg-linear-to-b from-background/35 via-background/10 to-transparent blur-xs" />
       </div>
 
       {/* File List + Directory Tree */}
@@ -1636,7 +1636,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           <ResizablePanel id="ssh-file-list" order={2} defaultSize={78} minSize={40}>
             <div
               ref={dropZoneRef}
-              className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border bg-background shadow-sm"
+              className="relative flex flex-col h-full overflow-hidden rounded-lg border border-border bg-background shadow-xs"
               // Required on Linux/WebKit2GTK: without preventDefault the browser
               // never signals "drop accepted", so Tauri's native drop signal
               // never fires. Also suppresses the browser's default file-open
@@ -1646,7 +1646,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               {/* Loading overlay */}
               {showLoadingOverlay && files.length > 0 && (
                 <div className="absolute inset-0 z-40 flex items-center justify-center bg-background/50 pointer-events-none">
-                  <div className="flex flex-col items-center gap-1.5 bg-background/90 rounded-lg px-4 py-3 shadow-sm border border-border">
+                  <div className="flex flex-col items-center gap-1.5 bg-background/90 rounded-lg px-4 py-3 shadow-xs border border-border">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                     <span className="text-[10px] text-muted-foreground">{t('fileBrowser.loading')}</span>
                   </div>
@@ -1665,7 +1665,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               )}
 
               {/* Column Headers — outside ScrollArea so they never move */}
-              <div className="flex shrink-0 border-b border-border bg-muted/30 px-2 py-1 backdrop-blur-sm supports-[backdrop-filter]:bg-background/55">
+              <div className="flex shrink-0 border-b border-border bg-muted/30 px-2 py-1 backdrop-blur-xs supports-backdrop-filter:bg-background/55">
                 {/* Name header */}
                 <div
                   className={`flex items-center relative cursor-pointer select-none border-r border-border pr-2 ${sortField === 'name' ? 'bg-accent/20 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
@@ -1751,7 +1751,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 </div>
               </div>
 
-              <ScrollArea className={`flex-1 min-h-0 transition-opacity duration-150 [&>[data-slot=scroll-area-viewport]]:[scrollbar-gutter:stable] ${showLoadingOverlay && files.length > 0 ? 'opacity-40' : ''}`}>
+              <ScrollArea className={`flex-1 min-h-0 transition-opacity duration-150 *:data-[slot=scroll-area-viewport]:scrollbar-gutter-stable ${showLoadingOverlay && files.length > 0 ? 'opacity-40' : ''}`}>
                 <ContextMenu>
                   <ContextMenuTrigger asChild>
                     <div className="min-h-full p-1.5" data-columns-container>

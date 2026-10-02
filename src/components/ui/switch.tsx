@@ -13,7 +13,7 @@ function Switch({
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        "peer inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent transition-colors outline-none",
+        "peer inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent transition-colors outline-hidden",
         // Unchecked track: themed via --switch-background (slate-300 light / slate-600 dark)
         "data-[state=unchecked]:bg-switch-background",
         "data-[state=unchecked]:hover:bg-slate-400 dark:data-[state=unchecked]:hover:bg-slate-500",
@@ -30,7 +30,7 @@ function Switch({
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "bg-white pointer-events-none block size-4 rounded-full shadow ring-0 transition-transform",
+          "bg-white pointer-events-none block size-4 rounded-full shadow-sm ring-0 transition-transform",
           "data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0",
         )}
       />

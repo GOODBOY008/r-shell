@@ -589,7 +589,7 @@ export function GroupTabBar({
       {/* Floating drag ghost — rendered via portal-like fixed positioning */}
       {dragGhost && (
         <div
-          className="fixed z-[9999] pointer-events-none px-3 py-1.5 bg-background border border-primary rounded-md shadow-lg text-sm flex items-center gap-2"
+          className="fixed z-9999 pointer-events-none px-3 py-1.5 bg-background border border-primary rounded-md shadow-lg text-sm flex items-center gap-2"
           style={{
             left: dragGhost.x + 12,
             top: dragGhost.y - 16,
