@@ -120,6 +120,11 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          # runner.os is "Linux" for both ubuntu-22.04 and ubuntu-latest, so
+          # without this the 22.04 build could restore target/ artifacts
+          # compiled on 24.04, whose objects reference glibc-2.38+-only
+          # symbols that jammy's libc cannot resolve at link time.
+          key: ${{ matrix.platform }}
 
       - name: Install dependencies (macOS)
         if: matrix.platform == 'macos-latest'
