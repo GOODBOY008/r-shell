@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.2] - 2026-10-02
+
+### 🔧 R-Shell 3.0.2 — AppImage Compatibility Fix
+
+This patch release makes the Linux AppImage run on older distributions again: release builds now happen on Ubuntu 22.04 instead of `ubuntu-latest` (24.04), so the AppImage no longer requires glibc 2.38/2.39 and launches anywhere back to Ubuntu 22.04 / Debian 12 — including the AppImage catalog's ubuntu-22.04 test environment ([AppImage/appimage.github.io#4426](https://github.com/AppImage/appimage.github.io/pull/4426)). The Rust build cache is also keyed by runner image so a 22.04 build can never restore 24.04-compiled objects. No application code changed in this release.
+
+### Other Changes
+
+- ci(release): build Linux artifacts on ubuntu-22.04 for glibc 2.35 compat by @GOODBOY008 in #202
+- ci(release): key rust-cache by runner image by @GOODBOY008 in #203
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.0.1...v3.0.2
+
 ## [3.0.1] - 2026-10-01
 
 ### 🔧 R-Shell 3.0.1 — Line-Rate SFTP Transfers, SOCKS Proxy & Windows Polish
