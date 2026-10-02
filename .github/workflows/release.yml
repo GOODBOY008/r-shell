@@ -56,13 +56,20 @@ jobs:
           # so any prerelease tag (-current.N, -beta.N, …) cannot build the
           # msi target — restrict Windows to nsis there. The updater
           # consumes the NSIS -setup.exe (+ .sig) only.
+          #
+          # Linux builds on ubuntu-22.04, never ubuntu-latest: every ELF in
+          # the AppImage carries the build host's glibc symbol versions, and
+          # a 24.04 build needs GLIBC_2.38/2.39, so the app fails to launch
+          # on anything older — including the AppImage catalog's ubuntu-22.04
+          # test runner (AppImage/appimage.github.io#4426). jammy's glibc
+          # 2.35 keeps the AppImage runnable on distros back to 22.04.
           if [[ "$GITHUB_REF_NAME" == *-current.* ]]; then
             ENTRIES=$(jq -cn \
               --arg macArgs '--target aarch64-apple-darwin --config '\''{"bundle":{"macOS":{"minimumSystemVersion":"26.0"}}}'\''' \
               --arg winArgs '--config '\''{"bundle":{"targets":["nsis"]}}'\''' \
               '{include: [
                  {platform: "macos-latest",  args: $macArgs, baseline: "current"},
-                 {platform: "ubuntu-latest",  args: "",       baseline: "current"},
+                 {platform: "ubuntu-22.04",  args: "",       baseline: "current"},
                  {platform: "windows-latest", args: $winArgs, baseline: "current"}
                ]}')
           else
@@ -76,8 +83,8 @@ jobs:
                  # Stable / compat line (minimumSystemVersion stays at the Tauri default)
                  {platform: "macos-latest",  args: "--target aarch64-apple-darwin", baseline: "compat"},
                  {platform: "macos-latest",  args: "--target x86_64-apple-darwin",  baseline: "compat"},
-                 {platform: "ubuntu-latest",  args: "",                              baseline: "compat"},
-                 {platform: "windows-latest", args: $winArgs,                        baseline: "compat"}
+                 {platform: "ubuntu-22.04",  args: "",                              baseline: "compat"},
+                 {platform: "windows-latest", args: $winArgs,                       baseline: "compat"}
                ]}')
           fi
           echo "entries=$ENTRIES" >> "$GITHUB_OUTPUT"
@@ -120,7 +127,7 @@ jobs:
           brew install pkg-config
 
       - name: Install dependencies (Linux)
-        if: matrix.platform == 'ubuntu-latest'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev \
