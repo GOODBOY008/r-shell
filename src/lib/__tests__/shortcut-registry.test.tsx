@@ -227,13 +227,13 @@ describe('useShortcutBindings', () => {
 
     const seen: Array<Record<string, string>> = [];
     render(<BindingsProbe onUpdate={(b) => seen.push({ newSession: b.newSession })} />);
-    expect(seen.at(-1)).toEqual({ newSession: 'Alt+N' });
+    expect(seen[seen.length - 1]).toEqual({ newSession: 'Alt+N' });
 
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       shortcutBindings: { newSession: 'Alt+M' },
     }));
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
 
-    await waitFor(() => expect(seen.at(-1)).toEqual({ newSession: 'Alt+M' }));
+    await waitFor(() => expect(seen[seen.length - 1]).toEqual({ newSession: 'Alt+M' }));
   });
 });

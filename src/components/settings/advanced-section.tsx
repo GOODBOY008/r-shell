@@ -247,7 +247,7 @@ export function AdvancedSection({
 
               {/* Info: exports never carry credentials (issue #162) */}
               <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
+                <Info className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-blue-600 dark:text-blue-400">
                   {t('settings.advanced.passwordWarning')}
                 </p>
@@ -266,7 +266,7 @@ export function AdvancedSection({
                     size="sm"
                     onClick={handleExportConfig}
                     disabled={isExporting || isImporting}
-                    className="gap-1.5 flex-shrink-0"
+                    className="gap-1.5 shrink-0"
                   >
                     <Download className="h-3.5 w-3.5" />
                     {t('settings.advanced.exportConfig')}
@@ -280,7 +280,7 @@ export function AdvancedSection({
                       {t('settings.advanced.importConfigDesc')}
                     </p>
                   </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="flex items-center gap-3 shrink-0">
                     <div className="flex items-center gap-2">
                       <Checkbox
                         id="import-merge"
