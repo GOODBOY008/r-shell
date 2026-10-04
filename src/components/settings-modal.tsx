@@ -405,7 +405,13 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
+      {/* sm:max-w-[min(900px,90vw)]! beats the DialogContent base's
+          sm:max-w-lg (512px): within Tailwind's utilities layer the sm:
+          variant group sorts after unvarianted max-w-*, so w-[900px] +
+          max-w-[90vw] alone lose and the dialog renders 512px wide,
+          squeezing the navigation layout (same class of problem as
+          AGENTS.md pitfall #9 — override the base deliberately). */}
+      <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] sm:max-w-[min(900px,90vw)]! max-h-[90vh] flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
           <div className="flex items-center justify-between gap-4">
             <DialogTitle className="flex items-center gap-2">

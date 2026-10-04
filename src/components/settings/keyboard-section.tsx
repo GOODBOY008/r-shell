@@ -124,7 +124,7 @@ export function KeyboardSection({ overrides, onOverrideChange, query }: Keyboard
                 <TableRow key={`category-${category}`} className="hover:bg-transparent">
                   <TableCell
                     colSpan={3}
-                    className="bg-muted/50 font-medium text-muted-foreground py-1.5"
+                    className="bg-muted/50 font-medium text-muted-foreground py-1.5 whitespace-normal"
                   >
                     {t(`settings.shortcuts.category.${category}`)}
                   </TableCell>
@@ -138,7 +138,7 @@ export function KeyboardSection({ overrides, onOverrideChange, query }: Keyboard
                       data-command={def.id}
                       className={conflict ? 'bg-destructive/5' : undefined}
                     >
-                      <TableCell className="py-2">
+                      <TableCell className="py-2 whitespace-normal align-top">
                         <div className="font-medium">{tt(def.labelKey)}</div>
                         {def.macMenuNote && isMac && (
                           <p className="text-xs text-muted-foreground">
@@ -151,14 +151,14 @@ export function KeyboardSection({ overrides, onOverrideChange, query }: Keyboard
                           </p>
                         )}
                       </TableCell>
-                      <TableCell className="py-2">
+                      <TableCell className="py-2 align-top">
                         <ShortcutRecorderInput
                           value={overrides[def.id] ?? ''}
                           placeholder={formatKeyboardShortcut(DEFAULT_SHORTCUT_BINDINGS[def.id], isMac)}
                           onValueChange={(value) => onOverrideChange(def.id, value)}
                         />
                       </TableCell>
-                      <TableCell className="py-2">
+                      <TableCell className="py-2 align-top">
                         <div className="flex items-center gap-2">
                           {overridden && (
                             <Badge variant="secondary">{t('settings.shortcuts.customBadge')}</Badge>
