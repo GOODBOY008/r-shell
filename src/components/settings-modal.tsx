@@ -138,7 +138,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     allowPasswordSaving: true,
 
     // Interface settings
-    theme: 'dark',
+    theme: 'auto',
 
     // Keyboard shortcuts
     newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
@@ -416,7 +416,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
         restoreSessionsOnStartup: true,
         hostKeyVerification: true,
         allowPasswordSaving: true,
-        theme: 'dark',
+        theme: 'auto',
         newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
         closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
         nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
@@ -433,7 +433,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
       }
 
       // Apply default theme
-      applyTheme('dark');
+      applyTheme('auto');
     }
   };
 
