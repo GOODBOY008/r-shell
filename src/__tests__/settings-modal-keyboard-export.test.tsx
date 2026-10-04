@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 
 // ── Hoisted mocks ────────────────────────────────────────────────────────────
 
@@ -15,28 +15,10 @@ vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-// Render every tab at once — jsdom + Radix Tabs trigger activation is flaky,
-// and these tests target hint rendering, not tab behavior
-vi.mock('../components/ui/tabs', () => ({
-  Tabs: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TabsList: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TabsTrigger: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
-  TabsContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
-
 import { SettingsModal } from '../components/settings-modal';
+import { SHORTCUT_DEFINITIONS } from '../lib/shortcut-registry';
 
-// jsdom has no ResizeObserver; the modal's scrollable tab bar needs one
-class MockResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
-Object.defineProperty(Element.prototype, 'scrollIntoView', {
-  configurable: true,
-  value: () => {},
-});
+const SETTINGS_KEY = 'sshClientSettings';
 
 const originalPlatform = Object.getOwnPropertyDescriptor(Navigator.prototype, 'platform');
 
@@ -47,88 +29,182 @@ function pinPlatform(platform: string) {
   });
 }
 
-/** Get the keyboard-tab field block for a label (e.g. "Next Tab"). */
-function fieldBlock(labelText: string): HTMLElement {
-  const label = screen.getByText(labelText);
-  return label.closest('div') as HTMLElement;
+/** Click the left-nav button that switches the modal to a section. */
+function openSection(label: string) {
+  fireEvent.click(screen.getByRole('button', { name: label }));
 }
 
-describe('SettingsModal keyboard tab effective-keys hints', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
-  });
+/** The keybinding editor's recorder input for a command row. */
+function getRecorderInput(commandId: string): HTMLInputElement {
+  const row = document.querySelector(`[data-command="${commandId}"]`) as HTMLElement | null;
+  expect(row).toBeTruthy();
+  const input = row!.querySelector<HTMLInputElement>('input[data-shortcut-recorder]');
+  expect(input).toBeTruthy();
+  return input!;
+}
 
-  afterEach(() => {
-    if (originalPlatform) {
-      Object.defineProperty(Navigator.prototype, 'platform', originalPlatform);
-    }
-  });
+// jsdom has no ResizeObserver; Radix measure primitives (Selects in the
+// stacked search view) need one.
+class MockResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
 
-  it('shows an effective-keys hint for each of the four bindings', () => {
+beforeEach(() => {
+  localStorage.clear();
+  window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
+});
+
+afterEach(() => {
+  if (originalPlatform) {
+    Object.defineProperty(Navigator.prototype, 'platform', originalPlatform);
+  }
+});
+
+describe('SettingsModal keyboard section (keybinding editor)', () => {
+  it('renders every remappable command with its default chord', () => {
     // jsdom platform is empty → non-mac branch: raw Ctrl labels.
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
 
-    expect(screen.getAllByText(/Actual keys:/)).toHaveLength(4);
+    const rows = document.querySelectorAll('[data-command]');
+    expect(rows).toHaveLength(SHORTCUT_DEFINITIONS.length);
+    expect(SHORTCUT_DEFINITIONS).toHaveLength(13);
 
-    // The hint next to each input mirrors the stored binding, formatted for
-    // the platform (input values are not text nodes, so these matches hit
-    // only the hint spans).
-    expect(within(fieldBlock('New Session')).getByText('Ctrl+N')).toBeTruthy();
-    expect(within(fieldBlock('Close Session')).getByText('Ctrl+W')).toBeTruthy();
-    expect(within(fieldBlock('Next Tab')).getByText('Ctrl+Tab')).toBeTruthy();
-    expect(within(fieldBlock('Previous Tab')).getByText('Ctrl+Shift+Tab')).toBeTruthy();
+    // Defaults surface as the recorder's value; bindings the user has not
+    // touched show no Custom badge and a disabled per-row reset.
+    expect(getRecorderInput('newSession').value).toBe('Ctrl+N');
+    expect(getRecorderInput('closeSession').value).toBe('Ctrl+W');
+    expect(getRecorderInput('nextTab').value).toBe('Ctrl+Tab');
+    expect(getRecorderInput('previousTab').value).toBe('Ctrl+Shift+Tab');
+    expect(getRecorderInput('toggleLeftSidebar').value).toBe('Ctrl+B');
+    expect(getRecorderInput('splitRight').value).toBe('Ctrl+\\');
+    expect(getRecorderInput('openSettings').value).toBe('Ctrl+,');
 
-    // The menu-owned ⌘N note is macOS-specific: on other platforms the
-    // default Ctrl+N is a real OS-registered binding, so the note (which
-    // references an app menu those platforms never build) stays hidden.
-    expect(
-      within(fieldBlock('New Session')).queryByText(
-        /handled by the app menu on macOS/,
-      ),
-    ).toBeNull();
+    expect(screen.queryByText('Custom')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reset New Session to default' })).toHaveProperty('disabled', true);
+
+    // The macOS menu note stays hidden off macOS (those platforms' defaults
+    // are real OS-registered chords, no app menu involved).
+    expect(screen.queryByText(/handled by the app menu on macOS/)).toBeNull();
   });
 
-  it('shows the validated New Session binding, falling back when the saved value is unparseable', () => {
-    // Raw localStorage carries an unparseable binding: App registers the
-    // default via loadKeyboardShortcutSettings's fallback, so the hint shown
-    // here must match that registered value — not the raw saved string.
-    localStorage.setItem('sshClientSettings', JSON.stringify({ newSession: 'Ctrl+' }));
+  it('shows the validated binding, falling back when the saved value is unparseable', () => {
+    // Raw localStorage carries an unparseable override: the registry drops
+    // it at load, so the editor (and the engine) run the default — not the
+    // raw saved string.
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      shortcutBindings: { newSession: 'Ctrl+' },
+    }));
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
 
-    expect(within(fieldBlock('New Session')).getByText('Ctrl+N')).toBeTruthy();
-    expect(within(fieldBlock('New Session')).queryByText('Ctrl+')).toBeNull();
+    expect(getRecorderInput('newSession').value).toBe('Ctrl+N');
+    expect(screen.queryByDisplayValue('Ctrl+')).toBeNull();
   });
 
-  it('shows macOS chord labels on a Mac (⌘N, degraded ⌃Tab)', () => {
+  it('marks overridden commands with a Custom badge and an enabled reset', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      shortcutBindings: { newSession: 'Alt+N' },
+    }));
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
+
+    expect(getRecorderInput('newSession').value).toBe('Alt+N');
+    expect(screen.getByText('Custom')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Reset New Session to default' })).toHaveProperty('disabled', false);
+    // Only the overridden row is resettable.
+    expect(screen.getByRole('button', { name: 'Reset Close Session to default' })).toHaveProperty('disabled', true);
+
+    // Resetting the row returns the command to its default immediately.
+    fireEvent.click(screen.getByRole('button', { name: 'Reset New Session to default' }));
+    expect(getRecorderInput('newSession').value).toBe('Ctrl+N');
+    expect(screen.queryByText('Custom')).toBeNull();
+  });
+
+  it('blocks Save and summarizes conflicts live', () => {
+    // Ctrl+B is toggleLeftSidebar's default — rebinding closeSession onto it
+    // would silently shadow one of them under first-match-wins.
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      shortcutBindings: { closeSession: 'Ctrl+B' },
+    }));
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
+
+    expect(screen.getByText(/Resolve 1 shortcut conflict before saving/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save Settings' })).toHaveProperty('disabled', true);
+    // The shadowed row carries the inline conflict message.
+    expect(document.querySelector('[data-command="toggleLeftSidebar"] [data-conflict]')).toBeTruthy();
+
+    // Re-recording the conflicting chord to a free one unblocks saving.
+    const recorder = getRecorderInput('closeSession');
+    fireEvent.focus(recorder);
+    fireEvent.keyDown(recorder, { key: 'k', ctrlKey: true });
+    expect(screen.queryByText(/shortcut conflict/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save Settings' })).toHaveProperty('disabled', false);
+  });
+
+  it('persists sparse overrides only and strips legacy flat keys on save', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      theme: 'dark',
+      newSession: 'Alt+M', // legacy flat key — superseded, must be stripped
+    }));
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
+
+    const recorder = getRecorderInput('closeSession');
+    fireEvent.focus(recorder);
+    fireEvent.keyDown(recorder, { key: 'k', ctrlKey: true, altKey: true }); // → "Ctrl+Alt+K"
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Record<string, unknown>;
+    expect(saved.shortcutBindings).toEqual({ newSession: 'Alt+M', closeSession: 'Ctrl+Alt+K' });
+    expect('newSession' in saved).toBe(false);
+    expect(saved.theme).toBe('dark');
+  });
+
+  it('shows macOS chord labels and menu notes on a Mac', () => {
     pinPlatform('MacIntel');
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
 
-    // ⌘Tab is the system app switcher: the tab-switch hints must advertise
-    // the physical ⌃ chord the in-window listener matches (#161).
-    expect(within(fieldBlock('New Session')).getByText('⌘N')).toBeTruthy();
-    expect(within(fieldBlock('Close Session')).getByText('⌘W')).toBeTruthy();
-    expect(within(fieldBlock('Next Tab')).getByText('⌃Tab')).toBeTruthy();
-    expect(within(fieldBlock('Previous Tab')).getByText('⌃⇧Tab')).toBeTruthy();
+    // ⌘Tab is the system app switcher: the tab-switch recorders must
+    // advertise the physical ⌃ chord the in-window listener matches (#161).
+    expect(getRecorderInput('newSession').value).toBe('⌘N');
+    expect(getRecorderInput('closeSession').value).toBe('⌘W');
+    expect(getRecorderInput('nextTab').value).toBe('⌃Tab');
+    expect(getRecorderInput('previousTab').value).toBe('⌃⇧Tab');
 
-    // On macOS the ⌘N-default note IS shown: it describes this platform's
-    // menu-owned chord handling.
-    expect(
-      within(fieldBlock('New Session')).getByText(
-        /handled by the app menu on macOS/,
-      ),
-    ).toBeTruthy();
+    // On macOS the ⌘-default note IS shown for the menu-routed commands
+    // (new session, close session, settings).
+    expect(screen.getAllByText(/handled by the app menu on macOS/)).toHaveLength(3);
+  });
+});
+
+describe('SettingsModal global search', () => {
+  it('stacks all sections and filters rows by label and English keywords', () => {
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+
+    const search = screen.getByLabelText('Search settings');
+    fireEvent.change(search, { target: { value: 'keepalive' } });
+
+    // The connection keep-alive row is found by its English keyword while
+    // the terminal section (no match) disappears entirely.
+    expect(screen.getByText(/Keep alive interval/i)).toBeTruthy();
+    expect(screen.queryByText('Terminal Appearance')).toBeNull();
+
+    // Queries also match the localized label.
+    fireEvent.change(search, { target: { value: 'theme' } });
+    expect(screen.getByText('Terminal Appearance')).toBeTruthy();
   });
 });
 
 describe('SettingsModal config backup credential note', () => {
-  beforeEach(() => {
-    localStorage.clear();
-    window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
-  });
-
   it('states that exports contain no credentials (replacing the stale plaintext warning)', () => {
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Advanced');
 
     expect(
       screen.getByText(/No passwords or credentials are included in exports/),

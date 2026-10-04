@@ -359,11 +359,6 @@
     "keyboard": {
       "title": "键盘快捷键",
       "desc": "自定义常用操作的键盘快捷键。",
-      "newSession": "新建会话",
-      "closeSession": "关闭会话",
-      "nextTab": "下一个标签页",
-      "previousTab": "上一个标签页",
-      "effectiveKeys": "实际按键",
       "newSessionNote": "默认的 ⌘N 在 macOS 上由应用菜单处理；其他自定义快捷键按配置生效，除非该组合键已被应用的其他功能占用。",
       "note": "键盘快捷键更改将在保存后生效。",
       "registerFailed": "快捷键 {{shortcut}} 注册失败",
@@ -424,8 +419,6 @@
       "center": "居中（原始大小）",
       "tile": "平铺（重复）"
     },
-    "tabScrollLeft": "向左滚动",
-    "tabScrollRight": "向右滚动",
     "updates": {
       "channel": {
         "label": "更新通道",
@@ -440,6 +433,45 @@
         "command": "brew upgrade --cask r-shell",
         "copyCommand": "复制更新命令",
         "commandCopied": "更新命令已复制到剪贴板"
+      }
+    },
+    "search": {
+      "placeholder": "搜索设置",
+      "showingResults": "显示“{{query}}”的搜索结果"
+    },
+    "shortcuts": {
+      "customBadge": "自定义",
+      "actionColumn": "操作",
+      "shortcutColumn": "快捷键",
+      "statusColumn": "状态",
+      "category": {
+        "tabs": "标签页",
+        "layout": "布局",
+        "split": "分屏",
+        "app": "应用"
+      },
+      "resetBinding": "将{{action}}重置为默认",
+      "conflictDuplicate": "“{{chord}}”已被{{other}}占用——快捷键按先匹配先生效，其中一个会失效",
+      "conflictReserved": "“{{chord}}”保留给终端组切换（Ctrl+1–9）",
+      "conflictMenuOwned": "“{{chord}}”在 macOS 上由原生应用菜单占用，永远不会触发此命令",
+      "conflictSummary_one": "保存前请先解决 {{count}} 个快捷键冲突",
+      "conflictSummary_other": "保存前请先解决 {{count}} 个快捷键冲突",
+      "conflictSaveBlocked": "所有冲突解决后才能保存。",
+      "fixedNote": "Ctrl+1–9（切换终端组）不可重新映射。",
+      "command": {
+        "newSession": "新建会话",
+        "closeSession": "关闭会话",
+        "nextTab": "下一个标签页",
+        "previousTab": "上一个标签页",
+        "moveTabLeft": "左移标签页",
+        "moveTabRight": "右移标签页",
+        "toggleLeftSidebar": "切换左侧边栏",
+        "toggleBottomPanel": "切换底部面板",
+        "toggleRightSidebar": "切换右侧边栏",
+        "toggleZenMode": "切换禅模式",
+        "splitRight": "向右分屏",
+        "splitDown": "向下分屏",
+        "openSettings": "打开设置"
       }
     }
   },

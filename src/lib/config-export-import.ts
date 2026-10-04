@@ -32,6 +32,7 @@ import {
   APP_SETTINGS_CHANGED_EVENT,
   stripRemovedSettingsKeys,
 } from './keyboard-shortcuts';
+import { migrateLegacyShortcutBindings } from './shortcut-registry';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -227,8 +228,12 @@ export async function importAllConfig(
 
     // 3e. App settings ----------------------------------------------------------
     if (data.appSettings) {
-      // Drop keys whose controls were removed (issue #163) so importing an
-      // older config cannot resurrect dead settings that nothing consumes.
+      // Fold the pre-registry flat shortcut keys into `shortcutBindings`
+      // BEFORE stripping them, so an export from an older version keeps the
+      // user's custom bindings. Then drop keys whose controls were removed
+      // (issue #163) so importing an older config cannot resurrect dead
+      // settings that nothing consumes.
+      migrateLegacyShortcutBindings(data.appSettings);
       stripRemovedSettingsKeys(data.appSettings);
       localStorage.setItem(
         APP_SETTINGS_STORAGE_KEY,

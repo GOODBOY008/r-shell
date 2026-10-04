@@ -4,17 +4,18 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   createLayoutShortcuts,
   createSplitViewShortcuts,
-  DEFAULT_APP_KEYBOARD_SHORTCUTS,
-  DEFAULT_LAYOUT_SHORTCUTS,
-  DEFAULT_SPLIT_VIEW_SHORTCUTS,
   formatKeyboardShortcut,
   isShortcutRecording,
   KeyboardShortcut,
-  loadKeyboardShortcutSettings,
   parseKeyboardShortcut,
   toAccelerator,
   useKeyboardShortcuts,
 } from '../lib/keyboard-shortcuts';
+import {
+  DEFAULT_SHORTCUT_BINDINGS,
+  loadShortcutBindings,
+  loadShortcutOverrides,
+} from '../lib/shortcut-registry';
 
 function createMockActions() {
   return {
@@ -119,9 +120,9 @@ describe('createSplitViewShortcuts', () => {
     expect(shortcut).toBeUndefined();
   });
 
-  it('uses a custom closeTab shortcut when provided', () => {
+  it('uses a custom closeSession shortcut when provided', () => {
     const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions, { closeTab: 'Alt+W' });
+    const shortcuts = createSplitViewShortcuts(actions, { closeSession: 'Alt+W' });
     const shortcut = shortcuts.find(
       (s) => s.key === 'w' && s.altKey === true && s.ctrlKey === false && s.shiftKey === false,
     );
@@ -180,6 +181,33 @@ describe('createSplitViewShortcuts', () => {
     const shortcut = findShortcut(shortcuts, 'PageUp', { ctrlKey: true, shiftKey: true });
 
     expect(shortcut!.ignoreInTerminal).toBeFalsy();
+  });
+
+  it('uses custom move-tab and split bindings when provided', () => {
+    const actions = createMockActions();
+    const shortcuts = createSplitViewShortcuts(actions, {
+      moveTabLeft: 'Alt+PageUp',
+      moveTabRight: 'Alt+PageDown',
+      splitRight: 'Alt+R',
+      splitDown: 'Alt+S',
+    });
+
+    const moveLeft = shortcuts.find(s => s.key === 'PageUp' && s.altKey === true);
+    expect(moveLeft).toBeDefined();
+    moveLeft!.handler();
+    expect(actions.moveTabLeft).toHaveBeenCalledOnce();
+
+    const moveRight = shortcuts.find(s => s.key === 'PageDown' && s.altKey === true);
+    moveRight!.handler();
+    expect(actions.moveTabRight).toHaveBeenCalledOnce();
+
+    const splitRight = shortcuts.find(s => s.key === 'r' && s.altKey === true);
+    splitRight!.handler();
+    expect(actions.splitRight).toHaveBeenCalledOnce();
+
+    const splitDown = shortcuts.find(s => s.key === 's' && s.altKey === true);
+    splitDown!.handler();
+    expect(actions.splitDown).toHaveBeenCalledOnce();
   });
 
   // Requirement 5.6: Non-existent group index is a no-op (caller responsibility)
@@ -318,34 +346,38 @@ describe('keyboard shortcut settings', () => {
     });
   });
 
-  it('loads saved keyboard shortcuts from sshClientSettings', () => {
+  it('reads the sparse shortcutBindings map as overrides only', () => {
+    localStorage.setItem('sshClientSettings', JSON.stringify({
+      shortcutBindings: { newSession: 'Alt+N' },
+    }));
+
+    expect(loadShortcutOverrides()).toEqual({ newSession: 'Alt+N' });
+    // Everything else resolves to the registry default.
+    expect(loadShortcutBindings().closeSession).toBe(DEFAULT_SHORTCUT_BINDINGS.closeSession);
+    expect(loadShortcutBindings().newSession).toBe('Alt+N');
+  });
+
+  it('falls back to the legacy flat keys when shortcutBindings is absent', () => {
     localStorage.setItem('sshClientSettings', JSON.stringify({
       closeSession: 'Alt+W',
       nextTab: 'Ctrl+PageDown',
       previousTab: 'Ctrl+PageUp',
     }));
 
-    expect(loadKeyboardShortcutSettings()).toEqual({
-      closeTab: 'Alt+W',
+    expect(loadShortcutOverrides()).toEqual({
+      closeSession: 'Alt+W',
       nextTab: 'Ctrl+PageDown',
-      prevTab: 'Ctrl+PageUp',
-      newSession: DEFAULT_SPLIT_VIEW_SHORTCUTS.newSession,
+      previousTab: 'Ctrl+PageUp',
     });
   });
 
-  it('loads a saved newSession shortcut and falls back to the default', () => {
+  it('drops unparseable overrides and falls back to the default', () => {
     localStorage.setItem('sshClientSettings', JSON.stringify({
-      newSession: 'Alt+N',
+      shortcutBindings: { newSession: 'Ctrl+', closeSession: 42 },
     }));
 
-    const loaded = loadKeyboardShortcutSettings();
-    expect(loaded.newSession).toBe('Alt+N');
-
-    // Unparseable (no key part) / missing values fall back to the default.
-    localStorage.setItem('sshClientSettings', JSON.stringify({ newSession: 'Ctrl+' }));
-    expect(loadKeyboardShortcutSettings().newSession).toBe(DEFAULT_SPLIT_VIEW_SHORTCUTS.newSession);
-    localStorage.setItem('sshClientSettings', JSON.stringify({}));
-    expect(loadKeyboardShortcutSettings().newSession).toBe(DEFAULT_SPLIT_VIEW_SHORTCUTS.newSession);
+    expect(loadShortcutOverrides()).toEqual({});
+    expect(loadShortcutBindings().newSession).toBe(DEFAULT_SHORTCUT_BINDINGS.newSession);
   });
 
   it('migrates the former Ctrl+Shift+W close shortcut to the new default', () => {
@@ -353,7 +385,8 @@ describe('keyboard shortcut settings', () => {
       closeSession: 'Ctrl+Shift+W',
     }));
 
-    expect(loadKeyboardShortcutSettings().closeTab).toBe(DEFAULT_SPLIT_VIEW_SHORTCUTS.closeTab);
+    expect(loadShortcutOverrides().closeSession).toBeUndefined();
+    expect(loadShortcutBindings().closeSession).toBe(DEFAULT_SHORTCUT_BINDINGS.closeSession);
   });
 });
 
@@ -391,7 +424,7 @@ describe('isShortcutRecording', () => {
 
 describe('formatKeyboardShortcut', () => {
   it('uses platform-appropriate modifier labels', () => {
-    expect(formatKeyboardShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar, false)).toBe('Ctrl+B');
+    expect(formatKeyboardShortcut(DEFAULT_SHORTCUT_BINDINGS.toggleLeftSidebar, false)).toBe('Ctrl+B');
     // macOS chains modifiers without separators (⌘⇧→).
     expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘⇧→');
     expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥W');
@@ -425,14 +458,16 @@ describe('toAccelerator', () => {
   });
 
   it('converts every default shortcut to a plugin accelerator', () => {
-    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession)).toBe('CommandOrControl+N');
-    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession)).toBe('CommandOrControl+W');
-    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab)).toBe('CommandOrControl+Tab');
-    expect(toAccelerator(DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab)).toBe('CommandOrControl+Shift+Tab');
-    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar)).toBe('CommandOrControl+B');
-    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel)).toBe('CommandOrControl+J');
-    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar)).toBe('CommandOrControl+M');
-    expect(toAccelerator(DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode)).toBe('CommandOrControl+Z');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.newSession)).toBe('CommandOrControl+N');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.closeSession)).toBe('CommandOrControl+W');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.nextTab)).toBe('CommandOrControl+Tab');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.previousTab)).toBe('CommandOrControl+Shift+Tab');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleLeftSidebar)).toBe('CommandOrControl+B');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleBottomPanel)).toBe('CommandOrControl+J');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleRightSidebar)).toBe('CommandOrControl+M');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleZenMode)).toBe('CommandOrControl+Z');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.splitRight)).toBe('CommandOrControl+Backslash');
+    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.splitDown)).toBe('CommandOrControl+Shift+Backslash');
   });
 
   it('maps symbol keys to their accelerator names', () => {

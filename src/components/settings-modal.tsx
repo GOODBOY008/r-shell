@@ -1,67 +1,46 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
-import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
-import { changeLanguage, getLanguagePreference, AUTO } from '@/lib/i18n';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
-import { Switch } from './ui/switch';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
-import { Separator } from './ui/separator';
-import { Slider } from './ui/slider';
-import { 
-  Settings, 
-  Terminal as TerminalIcon, 
-  Shield, 
-  Palette, 
-  Keyboard, 
+import {
+  Settings,
+  Terminal as TerminalIcon,
+  Shield,
+  Palette,
+  Keyboard,
   Network,
   Monitor,
-  Image,
-  Upload,
-  Download,
-  X,
-  RefreshCw,
   Code2,
-  ChevronLeft,
-  ChevronRight,
-  Copy,
-  Info
+  Search,
+  X,
 } from 'lucide-react';
-import { 
-  TerminalAppearanceSettings, 
-  defaultAppearanceSettings, 
+import {
+  TerminalAppearanceSettings,
+  defaultAppearanceSettings,
   loadAppearanceSettings,
   saveAppearanceSettings,
-  terminalThemes,
-  MIN_TERMINAL_SCROLLBACK,
-  MAX_TERMINAL_SCROLLBACK,
 } from '../lib/terminal-config';
 import {
   APP_SETTINGS_CHANGED_EVENT,
   APP_SETTINGS_STORAGE_KEY,
-  DEFAULT_APP_KEYBOARD_SHORTCUTS,
-  formatKeyboardShortcut,
-  loadKeyboardShortcutSettings,
   stripRemovedSettingsKeys,
 } from '../lib/keyboard-shortcuts';
-import { applyTheme, ThemeMode } from '../lib/utils';
+import {
+  findConflicts,
+  loadShortcutOverrides,
+  type ShortcutCommandId,
+  type ShortcutOverrides,
+} from '../lib/shortcut-registry';
+import { applyTheme, type ThemeMode } from '../lib/utils';
 import {
   loadEditorConfig,
   saveEditorConfig,
   dispatchEditorConfigChanged,
   DEFAULT_EDITOR_CONFIG,
-  EDITOR_THEMES,
   type EditorConfig,
 } from '@/lib/editor-config';
-import {
-  exportAllConfig,
-  importAllConfig,
-} from '@/lib/config-export-import';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
@@ -70,32 +49,21 @@ import {
   isCurrentChannelEligible,
   type UpdateContext,
 } from '@/lib/update-channel';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import { readFile } from '@tauri-apps/plugin-fs';
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
-import { Checkbox } from './ui/checkbox';
-import { ShortcutRecorderInput } from './shortcut-recorder-input';
-
-// Background image picker: MIME type for the data URL derived from the file extension.
-const IMAGE_MIME: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  bmp: 'image/bmp',
-  svg: 'image/svg+xml',
-  ico: 'image/x-icon',
-};
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const CHUNK = 0x8000; // avoid call-stack limits on large arrays with spread
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(binary);
-}
+import {
+  DEFAULT_SETTINGS,
+  SETTINGS_SECTION_IDS,
+  type SettingsSectionId,
+  type SettingsState,
+} from './settings/shared';
+import { TerminalSection } from './settings/terminal-section';
+import { EditorSection } from './settings/editor-section';
+import { ConnectionSection } from './settings/connection-section';
+import { SecuritySection } from './settings/security-section';
+import { InterfaceSection } from './settings/interface-section';
+import { KeyboardSection } from './settings/keyboard-section';
+import { AdvancedSection } from './settings/advanced-section';
+import { getLanguagePreference, changeLanguage } from '@/lib/i18n';
 
 interface SettingsModalProps {
   open: boolean;
@@ -103,57 +71,39 @@ interface SettingsModalProps {
   onCheckForUpdates?: () => void;
 }
 
+const SECTION_ICONS: Record<SettingsSectionId, typeof TerminalIcon> = {
+  terminal: TerminalIcon,
+  editor: Code2,
+  connection: Network,
+  security: Shield,
+  interface: Palette,
+  keyboard: Keyboard,
+  advanced: Monitor,
+};
+
+/**
+ * Settings dialog (ZCode/VS Code style): a left navigation rail picks one of
+ * the seven section panes, a global search in the header stacks every section
+ * and filters rows by label/description/English keywords, and the classic
+ * Save / Reset / Cancel footer stays — nothing auto-saves. All state lives in
+ * this shell; the section components under `./settings/` are controlled
+ * views. Keyboard bindings are edited as sparse overrides (see
+ * `shortcut-registry`) and Save is blocked while any conflict exists, since
+ * the first-match-wins engine would silently shadow a command otherwise.
+ */
 export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: SettingsModalProps) {
   const { t } = useTranslation();
   // Mirrors formatKeyboardShortcut's platform check: labels must show the
   // keys this machine actually uses (⌘N vs Ctrl+N, ⌃Tab vs Ctrl+Tab).
   const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
+
   const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
   const [editorConfig, setEditorConfig] = useState<EditorConfig>(DEFAULT_EDITOR_CONFIG);
-  const [importMerge, setImportMerge] = useState(false);
-  const [isExporting, setIsExporting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-  
-  const [settings, setSettings] = useState({
-    // Terminal settings
-    fontSize: 14,
-    fontFamily: 'JetBrains Mono',
-    colorScheme: 'dark',
-    cursorStyle: 'block',
-    scrollbackLines: 10000,
-    
-    // Connection settings
-    defaultProtocol: 'SSH',
-    connectionTimeout: 30,
-    keepAliveInterval: 60,
-    autoReconnect: true,
-    restoreSessionsOnStartup: true,
-    
-    // Security settings
-    hostKeyVerification: true,
-    // Password-saving master switch (affects the connection dialog's secret
-    // persistence). Default ON = today's behavior; only an explicit `false`
-    // disables saving.
-    allowPasswordSaving: true,
-
-    // Interface settings
-    theme: 'auto',
-
-    // Keyboard shortcuts
-    newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
-    closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
-    nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
-    previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
-
-    // Advanced settings
-    checkUpdates: true,
-    updateChannel: 'stable',
-    updateProxy: '',
-
-    // System settings
-    autostart: false
-  });
+  const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
+  const [shortcutOverrides, setShortcutOverrides] = useState<ShortcutOverrides>({});
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>('terminal');
 
   // True once the user has manually changed the autostart toggle (or reset
   // settings) while the modal is open — the OS state query must not clobber it.
@@ -165,12 +115,18 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
   const [updateContext, setUpdateContext] = useState<UpdateContext | null>(null);
 
   const currentChannelEligible = isCurrentChannelEligible(updateContext ?? DEFAULT_UPDATE_CONTEXT);
-  const homebrewManaged = updateContext?.homebrewManaged ?? false;
-  const channelValue =
-    settings.updateChannel === 'current' && currentChannelEligible ? 'current' : 'stable';
 
   // Running app version for the update group; null in browser dev mode → dash.
   const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  // Live conflict analysis of the edited bindings — blocks Save while any
+  // exist (duplicate / reserved / macOS menu-owned chords).
+  const hasShortcutConflicts = useMemo(
+    () => findConflicts(shortcutOverrides, isMac).length > 0,
+    [shortcutOverrides, isMac],
+  );
+
+  const searching = searchQuery.trim().length > 0;
 
   // Load settings when modal opens
   useEffect(() => {
@@ -178,27 +134,18 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
       const appearance = loadAppearanceSettings();
       setTerminalAppearance(appearance);
       setEditorConfig(loadEditorConfig());
-      
+      setShortcutOverrides(loadShortcutOverrides());
+      setSearchQuery('');
+
       // Load other settings from localStorage
       try {
         const savedSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
         if (savedSettings) {
-          const parsed = JSON.parse(savedSettings);
+          const parsed = JSON.parse(savedSettings) as Record<string, unknown>;
           // Drop fields whose controls no longer exist so saving this session
           // writes a clean blob instead of resurrecting the removed keys.
           stripRemovedSettingsKeys(parsed);
-          const keyboardShortcuts = loadKeyboardShortcutSettings();
-          setSettings(prev => ({
-            ...prev,
-            ...parsed,
-            // Keyboard bindings come from the validated loader (with its
-            // fallback), not the raw saved JSON: what this dialog displays
-            // must match what App.tsx actually registers.
-            newSession: keyboardShortcuts.newSession,
-            closeSession: keyboardShortcuts.closeTab,
-            nextTab: keyboardShortcuts.nextTab,
-            previousTab: keyboardShortcuts.prevTab,
-          }));
+          setSettings(prev => ({ ...prev, ...parsed }));
         }
       } catch {
         // Ignore parsing errors
@@ -233,92 +180,42 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     }
   }, [open]);
 
-  const handleExportConfig = async () => {
-    setIsExporting(true);
-    try {
-      const saved = await exportAllConfig();
-      if (saved) {
-        toast.success(t('settings.advanced.exportSuccess'));
-      } else {
-        toast.info(t('settings.advanced.exportCancelled'));
-      }
-    } catch (error) {
-      console.error('[export-config]', error);
-      toast.error(t('settings.advanced.exportFailed'), {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const handleImportConfig = async () => {
-    setIsImporting(true);
-    try {
-      const result = await importAllConfig(importMerge);
-      if (result) {
-        toast.success(t('settings.advanced.importSuccess'), {
-          description: t('settings.advanced.importSuccessDesc', {
-            connections: result.connections,
-            profiles: result.profiles,
-          }),
-        });
-        // Reload settings that may have changed
-        const appearance = loadAppearanceSettings();
-        setTerminalAppearance(appearance);
-        setEditorConfig(loadEditorConfig());
-      } else {
-        toast.info(t('settings.advanced.importCancelled'));
-      }
-    } catch (error) {
-      console.error('[import-config]', error);
-      toast.error(t('settings.advanced.importFailed'), {
-        description: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      setIsImporting(false);
-    }
-  };
-
   const updateTerminalAppearance = <K extends keyof TerminalAppearanceSettings>(
-    key: K, 
+    key: K,
     value: TerminalAppearanceSettings[K]
   ) => {
     setTerminalAppearance(prev => ({ ...prev, [key]: value }));
   };
 
-  // Pick a background image via the native OS dialog (Tauri builds) or fall
-  // back to the hidden HTML input in browser dev mode. Plain function: only
-  // invoked from the button's onClick, so useCallback buys nothing.
-  const handlePickBackgroundImage = async () => {
-    if (!isTauri()) {
-      document.getElementById('background-image-upload')?.click();
-      return;
-    }
-    try {
-      const selected = await openDialog({
-        multiple: false,
-        filters: [{ name: t('settings.terminal.images'), extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] }],
-      });
-      if (!selected) return; // dialog dismissed
-      const bytes = await readFile(selected);
-      if (bytes.length > 5 * 1024 * 1024) {
-        toast.error(t('settings.terminal.imageSizeWarning'));
-        return;
-      }
-      const ext = selected.split('.').pop()?.toLowerCase() ?? '';
-      const mime = IMAGE_MIME[ext] ?? 'image/png';
-      updateTerminalAppearance('backgroundImage', `data:${mime};base64,${bytesToBase64(bytes)}`);
-    } catch (err) {
-      toast.error(t('settings.terminal.imageLoadError'), { description: String(err) });
-    }
-  };
-
-  const updateSetting = (key: keyof typeof settings, value: any) => {
+  const updateSetting = <K extends keyof SettingsState>(key: K, value: SettingsState[K]) => {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
-  const handleSave = () => {
+  /** Edit one sparse shortcut override; `null` resets the command to default. */
+  const handleOverrideChange = (id: ShortcutCommandId, chord: string | null) => {
+    setShortcutOverrides(prev => {
+      if (chord === null) {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      }
+      return { ...prev, [id]: chord };
+    });
+  };
+
+  const reloadImportedStores = () => {
+    setTerminalAppearance(loadAppearanceSettings());
+    setEditorConfig(loadEditorConfig());
+    setShortcutOverrides(loadShortcutOverrides());
+  };
+
+  const handleSave = (): boolean => {
+    // Conflicts are also surfaced by the disabled Save button; keep the
+    // guard here so programmatic callers (Check Now) can't bypass it.
+    if (hasShortcutConflicts) {
+      return false;
+    }
+
     let updateProxy: string | undefined;
     try {
       updateProxy = normalizeUpdateProxy(settings.updateProxy);
@@ -375,21 +272,23 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
 
     // Save terminal appearance settings
     saveAppearanceSettings(terminalAppearance);
-    
+
     // Save editor config and notify live editors
     saveEditorConfig(editorConfig);
     dispatchEditorConfigChanged();
-    
+
     // Apply the theme immediately
-    applyTheme(settings.theme as ThemeMode);
-    
-    // Save other settings to localStorage
+    applyTheme(settings.theme);
+
+    // Save other settings to localStorage. Shortcut bindings persist as the
+    // sparse overrides map — commands at their default are absent.
     localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
       ...settings,
       updateProxy: updateProxy ?? '',
       // A stored `current` preference that no longer qualifies (e.g. the app
       // moved to a Homebrew install or an older macOS) falls back to stable.
-      updateChannel: channelValue,
+      updateChannel: settings.updateChannel === 'current' && currentChannelEligible ? 'current' : 'stable',
+      shortcutBindings: shortcutOverrides,
     }));
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     onOpenChange(false);
@@ -398,34 +297,11 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
 
   const handleReset = () => {
     if (confirm(t('settings.resetConfirm'))) {
-      // Reset terminal appearance
+      // Reset terminal appearance, editor config, and shortcut overrides
       setTerminalAppearance(defaultAppearanceSettings);
       setEditorConfig(DEFAULT_EDITOR_CONFIG);
-      
-      // Reset other settings to default values
-      setSettings({
-        fontSize: 14,
-        fontFamily: 'JetBrains Mono',
-        colorScheme: 'dark',
-        cursorStyle: 'block',
-        scrollbackLines: 10000,
-        defaultProtocol: 'SSH',
-        connectionTimeout: 30,
-        keepAliveInterval: 60,
-        autoReconnect: true,
-        restoreSessionsOnStartup: true,
-        hostKeyVerification: true,
-        allowPasswordSaving: true,
-        theme: 'auto',
-        newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
-        closeSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
-        nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
-        previousTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
-        checkUpdates: true,
-        updateChannel: 'stable',
-        updateProxy: '',
-        autostart: false
-      });
+      setShortcutOverrides({});
+      setSettings(DEFAULT_SETTINGS);
 
       // Resetting is a deliberate change — don't let a pending OS query undo it
       if (settings.autostart) {
@@ -433,1069 +309,185 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
       }
 
       // Apply default theme
-      applyTheme('auto');
+      applyTheme(DEFAULT_SETTINGS.theme);
     }
   };
 
-  // --- Scrollable tab bar logic ---
-  const tabListRef = useRef<HTMLDivElement>(null);
-  const [canScrollLeft, setCanScrollLeft] = useState(false);
-  const [canScrollRight, setCanScrollRight] = useState(false);
-  const [activeTab, setActiveTab] = useState('terminal');
-
-  const checkScroll = useCallback(() => {
-    const el = tabListRef.current;
-    if (!el) return;
-    setCanScrollLeft(el.scrollLeft > 1);
-    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    const el = tabListRef.current;
-    if (!el) return;
-    checkScroll();
-    const observer = new ResizeObserver(checkScroll);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [open, checkScroll]);
-
-  // Auto-scroll to center the active tab
-  const scrollToActiveTab = useCallback(() => {
-    const el = tabListRef.current;
-    if (!el) return;
-    const activeTrigger = el.querySelector<HTMLElement>('[data-state="active"]');
-    if (!activeTrigger) return;
-    activeTrigger.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
-  }, []);
-
-  useEffect(() => {
-    if (!open) return;
-    // Slight delay so DOM has the active trigger rendered
-    const raf = requestAnimationFrame(scrollToActiveTab);
-    return () => cancelAnimationFrame(raf);
-  }, [activeTab, open, scrollToActiveTab]);
-
-  const scrollTabs = (dir: 'left' | 'right') => {
-    const el = tabListRef.current;
-    if (!el) return;
-    el.scrollBy({ left: dir === 'left' ? -150 : 150, behavior: 'smooth' });
+  const renderSection = (section: SettingsSectionId) => {
+    switch (section) {
+      case 'terminal':
+        return (
+          <TerminalSection
+            appearance={terminalAppearance}
+            onChange={updateTerminalAppearance}
+            query={searchQuery}
+          />
+        );
+      case 'editor':
+        return (
+          <EditorSection
+            config={editorConfig}
+            onChange={setEditorConfig}
+            query={searchQuery}
+          />
+        );
+      case 'connection':
+        return (
+          <ConnectionSection
+            defaultProtocol={settings.defaultProtocol}
+            connectionTimeout={settings.connectionTimeout}
+            keepAliveInterval={settings.keepAliveInterval}
+            autoReconnect={settings.autoReconnect}
+            restoreSessionsOnStartup={settings.restoreSessionsOnStartup}
+            onChange={(key, value) => updateSetting(key, value as SettingsState[typeof key])}
+            query={searchQuery}
+          />
+        );
+      case 'security':
+        return (
+          <SecuritySection
+            hostKeyVerification={settings.hostKeyVerification}
+            allowPasswordSaving={settings.allowPasswordSaving}
+            onChange={updateSetting}
+            query={searchQuery}
+          />
+        );
+      case 'interface':
+        return (
+          <InterfaceSection
+            theme={settings.theme}
+            languagePref={languagePref}
+            autostart={settings.autostart}
+            onThemeChange={(value) => {
+              updateSetting('theme', value as ThemeMode);
+              // Apply theme immediately for instant preview
+              applyTheme(value as ThemeMode);
+            }}
+            onLanguageChange={(value) => {
+              setLanguagePref(value);
+              void changeLanguage(value);
+            }}
+            onAutostartChange={(checked) => {
+              autostartTouchedRef.current = true;
+              updateSetting('autostart', checked);
+            }}
+            query={searchQuery}
+          />
+        );
+      case 'keyboard':
+        return (
+          <KeyboardSection
+            overrides={shortcutOverrides}
+            onOverrideChange={handleOverrideChange}
+            query={searchQuery}
+          />
+        );
+      case 'advanced':
+        return (
+          <AdvancedSection
+            appVersion={appVersion}
+            updateContext={updateContext}
+            checkUpdates={settings.checkUpdates}
+            updateChannel={settings.updateChannel}
+            updateProxy={settings.updateProxy}
+            onChange={(key, value) => updateSetting(key, value as SettingsState[typeof key])}
+            onSaveAndCheckForUpdates={() => {
+              if (handleSave()) {
+                onCheckForUpdates?.();
+              }
+            }}
+            onConfigImported={reloadImportedStores}
+            query={searchQuery}
+          />
+        );
+    }
   };
-
-  // Tab definitions
-  const tabItems = [
-    { value: 'terminal', icon: TerminalIcon, labelKey: 'settings.tab.terminal' },
-    { value: 'editor', icon: Code2, labelKey: 'settings.tab.editor' },
-    { value: 'connection', icon: Network, labelKey: 'settings.tab.connection' },
-    { value: 'security', icon: Shield, labelKey: 'settings.tab.security' },
-    { value: 'interface', icon: Palette, labelKey: 'settings.tab.interface' },
-    { value: 'keyboard', icon: Keyboard, labelKey: 'settings.tab.keyboard' },
-    { value: 'advanced', icon: Monitor, labelKey: 'settings.tab.advanced' },
-  ] as const;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
-          <DialogTitle className="flex items-center gap-2">
-            <div className="p-2 bg-primary/10 rounded-lg">
-              <Settings className="h-5 w-5 text-primary" />
+          <div className="flex items-center justify-between gap-4">
+            <DialogTitle className="flex items-center gap-2">
+              <div className="p-2 bg-primary/10 rounded-lg">
+                <Settings className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <div>{t('settings.title')}</div>
+                <DialogDescription className="mt-1">
+                  {t('settings.description')}
+                </DialogDescription>
+              </div>
+            </DialogTitle>
+            {/* Global search: filters rows across every section; a non-empty
+                query stacks all sections and hides the navigation rail. */}
+            <div className="relative w-72 shrink-0 self-center">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              <Input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder={t('settings.search.placeholder')}
+                aria-label={t('settings.search.placeholder')}
+                className="pl-8 pr-8"
+              />
+              {searching && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  aria-label={t('common.cancel')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
-            <div>
-              <div>{t('settings.title')}</div>
-              <DialogDescription className="mt-1">
-                {t('settings.description')}
-              </DialogDescription>
-            </div>
-          </DialogTitle>
+          </div>
         </DialogHeader>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-          {/* Scrollable tab bar with fade edges and scroll arrows */}
-          <div className="relative border-b border-border">
-            {/* Left scroll button */}
-            {canScrollLeft && (
-              <div className="absolute left-0 top-0 bottom-0 z-10 flex items-center pl-1 pr-6 bg-gradient-to-r from-background via-background/95 to-transparent pointer-events-none">
-                <button
-                  type="button"
-                  onClick={() => scrollTabs('left')}
-                  className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
-                  tabIndex={-1}
-                  aria-label={t('settings.tabScrollLeft')}
-                >
-                  <ChevronLeft className="h-3.5 w-3.5 text-foreground" />
-                </button>
-              </div>
-            )}
-
-            {/* Right scroll button */}
-            {canScrollRight && (
-              <div className="absolute right-0 top-0 bottom-0 z-10 flex items-center justify-end pr-1 pl-6 bg-gradient-to-l from-background via-background/95 to-transparent pointer-events-none">
-                <button
-                  type="button"
-                  onClick={() => scrollTabs('right')}
-                  className="pointer-events-auto flex items-center justify-center h-6 w-6 rounded-full bg-muted border border-border/50 shadow-sm hover:bg-muted/80 transition-colors"
-                  tabIndex={-1}
-                  aria-label={t('settings.tabScrollRight')}
-                >
-                  <ChevronRight className="h-3.5 w-3.5 text-foreground" />
-                </button>
-              </div>
-            )}
-
-            <TabsList
-              ref={tabListRef}
-              className="w-full justify-start rounded-none bg-transparent h-auto p-0 px-4 gap-1 overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden scroll-smooth"
-              onScroll={checkScroll}
+        <div className="flex-1 flex overflow-hidden">
+          {!searching && (
+            <nav
+              aria-label={t('settings.title')}
+              className="w-52 shrink-0 border-r border-border overflow-y-auto py-3 px-2 space-y-1"
             >
-              {tabItems.map(({ value, icon: Icon, labelKey }) => (
-                <TabsTrigger
-                  key={value}
-                  value={value}
-                  className="flex items-center gap-1.5 rounded-md border-0 text-muted-foreground hover:text-foreground hover:bg-muted/60 data-[state=active]:bg-primary/20 data-[state=active]:text-primary data-[state=active]:font-semibold data-[state=active]:shadow-none data-[state=active]:ring-1 data-[state=active]:ring-primary/40 px-3 py-2 my-1.5 text-sm whitespace-nowrap transition-colors duration-150"
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  <span>{t(labelKey)}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
+              {SETTINGS_SECTION_IDS.map(section => {
+                const Icon = SECTION_ICONS[section];
+                const isActive = section === activeSection;
+                return (
+                  <button
+                    key={section}
+                    type="button"
+                    onClick={() => setActiveSection(section)}
+                    aria-current={isActive ? 'true' : undefined}
+                    className={
+                      'w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left transition-colors ' +
+                      (isActive
+                        ? 'bg-primary/15 text-primary font-medium'
+                        : 'text-muted-foreground hover:text-foreground hover:bg-muted/60')
+                    }
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span className="truncate">{t(`settings.tab.${section}`)}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          )}
+
+          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            {searching
+              ? SETTINGS_SECTION_IDS.map(section => (
+                  <div key={section}>{renderSection(section)}</div>
+                ))
+              : renderSection(activeSection)}
+            {searching && (
+              <p className="text-sm text-muted-foreground text-center pt-2">
+                {t('settings.search.showingResults', { query: searchQuery.trim() })}
+              </p>
+            )}
           </div>
-
-          <TabsContent value="terminal" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <TerminalIcon className="h-4 w-4" />
-                  {t('settings.terminal.appearance')}
-                </CardTitle>
-                <CardDescription>
-                  {t('settings.terminal.appearanceDesc')}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.terminal.fontFamily')}</Label>
-                    <Select 
-                      value={terminalAppearance.fontFamily} 
-                      onValueChange={(value) => updateTerminalAppearance('fontFamily', value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="Menlo, Monaco, 'Courier New', monospace">Menlo</SelectItem>
-                        <SelectItem value="'JetBrains Mono', monospace">JetBrains Mono</SelectItem>
-                        <SelectItem value="'Fira Code', monospace">Fira Code</SelectItem>
-                        <SelectItem value="'Source Code Pro', monospace">Source Code Pro</SelectItem>
-                        <SelectItem value="Consolas, monospace">Consolas</SelectItem>
-                        <SelectItem value="Monaco, monospace">Monaco</SelectItem>
-                        <SelectItem value="'Courier New', monospace">Courier New</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.terminal.fontSize', { size: terminalAppearance.fontSize })}</Label>
-                    <Slider
-                      value={[terminalAppearance.fontSize]}
-                      onValueChange={([value]) => updateTerminalAppearance('fontSize', value)}
-                      min={8}
-                      max={32}
-                      step={1}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.terminal.lineHeight', { height: terminalAppearance.lineHeight })}</Label>
-                    <Slider
-                      value={[terminalAppearance.lineHeight]}
-                      onValueChange={([value]) => updateTerminalAppearance('lineHeight', value)}
-                      min={1.0}
-                      max={2.0}
-                      step={0.1}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.terminal.letterSpacing', { spacing: terminalAppearance.letterSpacing })}</Label>
-                    <Slider
-                      value={[terminalAppearance.letterSpacing]}
-                      onValueChange={([value]) => updateTerminalAppearance('letterSpacing', value)}
-                      min={-2}
-                      max={5}
-                      step={0.5}
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.terminal.colorTheme')}</Label>
-                    <Select 
-                      value={terminalAppearance.theme} 
-                      onValueChange={(value) => updateTerminalAppearance('theme', value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="vs-code-dark">VS Code Dark</SelectItem>
-                        <SelectItem value="monokai">Monokai</SelectItem>
-                        <SelectItem value="solarized-dark">Solarized Dark</SelectItem>
-                        <SelectItem value="solarized-light">Solarized Light</SelectItem>
-                        <SelectItem value="dracula">Dracula</SelectItem>
-                        <SelectItem value="one-dark">One Dark</SelectItem>
-                        <SelectItem value="nord">Nord</SelectItem>
-                        <SelectItem value="gruvbox-dark">Gruvbox Dark</SelectItem>
-                        <SelectItem value="tokyo-night">Tokyo Night</SelectItem>
-                        <SelectItem value="matrix">Matrix</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.terminal.cursorStyle')}</Label>
-                    <Select 
-                      value={terminalAppearance.cursorStyle} 
-                      onValueChange={(value: 'block' | 'underline' | 'bar') => updateTerminalAppearance('cursorStyle', value)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="block">{t('settings.cursor.block')}</SelectItem>
-                        <SelectItem value="underline">{t('settings.cursor.underline')}</SelectItem>
-                        <SelectItem value="bar">{t('settings.cursor.bar')}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>{t('settings.terminal.scrollbackLines', { count: terminalAppearance.scrollback.toLocaleString() })}</Label>
-                  <Slider
-                    value={[terminalAppearance.scrollback]}
-                    onValueChange={([value]) => updateTerminalAppearance('scrollback', value)}
-                    min={MIN_TERMINAL_SCROLLBACK}
-                    max={MAX_TERMINAL_SCROLLBACK}
-                    step={1000}
-                  />
-                </div>
-
-                <Separator />
-
-                  <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.terminal.cursorBlink')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.terminal.cursorBlinkDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={terminalAppearance.cursorBlink}
-                    onCheckedChange={(checked) => updateTerminalAppearance('cursorBlink', checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.terminal.allowTransparency')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.terminal.allowTransparencyDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={terminalAppearance.allowTransparency}
-                    onCheckedChange={(checked) => updateTerminalAppearance('allowTransparency', checked)}
-                  />
-                </div>
-
-                {terminalAppearance.allowTransparency && (
-                  <div className="space-y-2">
-                    <Label>{t('settings.terminal.opacity', { opacity: terminalAppearance.opacity })}</Label>
-                    <Slider
-                      value={[terminalAppearance.opacity]}
-                      onValueChange={([value]) => updateTerminalAppearance('opacity', value)}
-                      min={10}
-                      max={100}
-                      step={5}
-                    />
-                  </div>
-                )}
-
-                <Separator />
-
-                {/* Background Image Section */}
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Image className="h-4 w-4" />
-                    <Label className="text-base font-medium">{t('settings.terminal.backgroundImage')}</Label>
-                  </div>
-                  
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      id="background-image-upload"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          // Check file size (max 5MB)
-                          if (file.size > 5 * 1024 * 1024) {
-                            alert(t('settings.terminal.imageSizeWarning'));
-                            return;
-                          }
-                          const reader = new FileReader();
-                          reader.onload = (event) => {
-                            const dataUrl = event.target?.result as string;
-                            updateTerminalAppearance('backgroundImage', dataUrl);
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => { void handlePickBackgroundImage(); }}
-                      className="gap-2"
-                    >
-                      <Upload className="h-4 w-4" />
-                      {terminalAppearance.backgroundImage ? t('settings.terminal.changeImage') : t('settings.terminal.uploadImage')}
-                    </Button>
-                    {terminalAppearance.backgroundImage && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => updateTerminalAppearance('backgroundImage', '')}
-                        className="gap-2 text-destructive hover:text-destructive"
-                      >
-                        <X className="h-4 w-4" />
-                        {t('settings.terminal.remove')}
-                      </Button>
-                    )}
-                  </div>
-
-                  {terminalAppearance.backgroundImage && (
-                    <div className="space-y-4 pl-0">
-                      <div className="flex items-center gap-3">
-                        <div className="w-16 h-16 rounded border border-border overflow-hidden flex-shrink-0">
-                          <img 
-                            src={terminalAppearance.backgroundImage} 
-                            alt="Background preview" 
-                            className="w-full h-full object-cover"
-                          />
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {t('settings.terminal.imagePreviewDesc')}
-                        </p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>{t('settings.terminal.imageOpacity', { opacity: terminalAppearance.backgroundImageOpacity })}</Label>
-                        <Slider
-                          value={[terminalAppearance.backgroundImageOpacity]}
-                          onValueChange={([value]) => updateTerminalAppearance('backgroundImageOpacity', value)}
-                          min={5}
-                          max={100}
-                          step={5}
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>{t('settings.terminal.imageBlur', { blur: terminalAppearance.backgroundImageBlur })}</Label>
-                        <Slider
-                          value={[terminalAppearance.backgroundImageBlur]}
-                          onValueChange={([value]) => updateTerminalAppearance('backgroundImageBlur', value)}
-                          min={0}
-                          max={20}
-                          step={1}
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>{t('settings.terminal.imagePosition')}</Label>
-                        <Select 
-                          value={terminalAppearance.backgroundImagePosition} 
-                          onValueChange={(value: 'cover' | 'contain' | 'center' | 'tile') => updateTerminalAppearance('backgroundImagePosition', value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="cover">{t('settings.imagePosition.cover')}</SelectItem>
-                            <SelectItem value="contain">{t('settings.imagePosition.contain')}</SelectItem>
-                            <SelectItem value="center">{t('settings.imagePosition.center')}</SelectItem>
-                            <SelectItem value="tile">{t('settings.imagePosition.tile')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                <Separator />
-
-                <div className="p-4 bg-muted rounded-lg">
-                  <div 
-                    className="font-mono text-sm p-3 rounded relative overflow-hidden"
-                    style={{
-                      fontFamily: terminalAppearance.fontFamily,
-                      fontSize: `${terminalAppearance.fontSize}px`,
-                      lineHeight: terminalAppearance.lineHeight,
-                      letterSpacing: `${terminalAppearance.letterSpacing}px`,
-                      backgroundColor: terminalThemes[terminalAppearance.theme]?.background || '#1e1e1e',
-                      color: terminalThemes[terminalAppearance.theme]?.foreground || '#d4d4d4',
-                      opacity: terminalAppearance.allowTransparency ? terminalAppearance.opacity / 100 : 1,
-                    }}
-                  >
-                    {/* Background image layer */}
-                    {terminalAppearance.backgroundImage && (
-                      <div 
-                        className="absolute inset-0 pointer-events-none"
-                        style={{
-                          backgroundImage: `url(${terminalAppearance.backgroundImage})`,
-                          backgroundSize: terminalAppearance.backgroundImagePosition === 'tile' ? 'auto' : terminalAppearance.backgroundImagePosition,
-                          backgroundPosition: 'center',
-                          backgroundRepeat: terminalAppearance.backgroundImagePosition === 'tile' ? 'repeat' : 'no-repeat',
-                          opacity: terminalAppearance.backgroundImageOpacity / 100,
-                          filter: terminalAppearance.backgroundImageBlur > 0 ? `blur(${terminalAppearance.backgroundImageBlur}px)` : 'none',
-                        }}
-                      />
-                    )}
-                    <div className="relative z-10">
-                      <div style={{ color: terminalThemes[terminalAppearance.theme]?.green }}>user@host</div>
-                      <div>$ ls -la</div>
-                      <div style={{ color: terminalThemes[terminalAppearance.theme]?.blue }}>drwxr-xr-x</div>
-                      <div style={{ color: terminalThemes[terminalAppearance.theme]?.yellow }}>-rw-r--r--</div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="editor" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Code2 className="h-4 w-4" />
-                  {t('settings.editor.title')}
-                </CardTitle>
-                <CardDescription>
-                  {t('settings.editor.desc')}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {/* Theme & Font */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.editor.theme')}</Label>
-                    <Select
-                      value={editorConfig.theme}
-                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, theme: value }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {EDITOR_THEMES.map(theme => (
-                          <SelectItem key={theme.id} value={theme.id}>{theme.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.editor.fontFamily')}</Label>
-                    <Select
-                      value={editorConfig.fontFamily}
-                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, fontFamily: value }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="'JetBrains Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace">JetBrains Mono</SelectItem>
-                        <SelectItem value="'Fira Code', Menlo, Monaco, 'Courier New', monospace">Fira Code</SelectItem>
-                        <SelectItem value="'Source Code Pro', Menlo, Monaco, 'Courier New', monospace">Source Code Pro</SelectItem>
-                        <SelectItem value="Menlo, Monaco, 'Courier New', monospace">Menlo</SelectItem>
-                        <SelectItem value="Consolas, monospace">Consolas</SelectItem>
-                        <SelectItem value="Monaco, monospace">Monaco</SelectItem>
-                        <SelectItem value="'Courier New', monospace">Courier New</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.editor.fontSize', { size: editorConfig.fontSize })}</Label>
-                    <Slider
-                      value={[editorConfig.fontSize]}
-                      onValueChange={([value]) => setEditorConfig(prev => ({ ...prev, fontSize: value }))}
-                      min={10}
-                      max={28}
-                      step={1}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.editor.tabSize', { size: editorConfig.tabSize })}</Label>
-                    <Select
-                      value={String(editorConfig.tabSize)}
-                      onValueChange={(value) => setEditorConfig(prev => ({ ...prev, tabSize: Number(value) }))}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="2">{t('settings.editor.tabSize2')}</SelectItem>
-                        <SelectItem value="4">{t('settings.editor.tabSize4')}</SelectItem>
-                        <SelectItem value="8">{t('settings.editor.tabSize8')}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <Separator />
-
-                {/* Toggle options */}
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.editor.lineNumbers')}</Label>
-                    <p className="text-sm text-muted-foreground">{t('settings.editor.lineNumbersDesc')}</p>
-                  </div>
-                  <Switch
-                    checked={editorConfig.lineNumbers}
-                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, lineNumbers: checked }))}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.editor.wordWrap')}</Label>
-                    <p className="text-sm text-muted-foreground">{t('settings.editor.wordWrapDesc')}</p>
-                  </div>
-                  <Switch
-                    checked={editorConfig.wordWrap}
-                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, wordWrap: checked }))}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.editor.highlightActiveLine')}</Label>
-                    <p className="text-sm text-muted-foreground">{t('settings.editor.highlightActiveLineDesc')}</p>
-                  </div>
-                  <Switch
-                    checked={editorConfig.highlightActiveLine}
-                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, highlightActiveLine: checked }))}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.editor.foldGutter')}</Label>
-                    <p className="text-sm text-muted-foreground">{t('settings.editor.foldGutterDesc')}</p>
-                  </div>
-                  <Switch
-                    checked={editorConfig.foldGutter}
-                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, foldGutter: checked }))}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.editor.bracketMatching')}</Label>
-                    <p className="text-sm text-muted-foreground">{t('settings.editor.bracketMatchingDesc')}</p>
-                  </div>
-                  <Switch
-                    checked={editorConfig.bracketMatching}
-                    onCheckedChange={(checked) => setEditorConfig(prev => ({ ...prev, bracketMatching: checked }))}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="connection" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Network className="h-4 w-4" />
-                    {t('settings.connection.title')}
-                  </CardTitle>
-                  <CardDescription>
-                    {t('settings.connection.desc')}
-                  </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.connection.defaultProtocol')}</Label>
-                    <Select value={settings.defaultProtocol} onValueChange={(value) => updateSetting('defaultProtocol', value)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="SSH">SSH</SelectItem>
-                        <SelectItem value="Telnet">Telnet</SelectItem>
-                        <SelectItem value="Raw">Raw</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.connection.connectionTimeout', { timeout: settings.connectionTimeout })}</Label>
-                    <Slider
-                      value={[settings.connectionTimeout]}
-                      onValueChange={([value]) => updateSetting('connectionTimeout', value)}
-                      min={5}
-                      max={120}
-                      step={5}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label>{t('settings.connection.keepAliveInterval', { interval: settings.keepAliveInterval })}</Label>
-                  <Slider
-                    value={[settings.keepAliveInterval]}
-                    onValueChange={([value]) => updateSetting('keepAliveInterval', value)}
-                    min={30}
-                    max={300}
-                    step={30}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.connection.autoReconnect')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.connection.autoReconnectDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.autoReconnect}
-                    onCheckedChange={(checked) => updateSetting('autoReconnect', checked)}
-                  />
-                </div>
-
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="restore-sessions-on-startup">{t('settings.connection.restoreSessionsOnStartup')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.connection.restoreSessionsOnStartupDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    id="restore-sessions-on-startup"
-                    checked={settings.restoreSessionsOnStartup}
-                    onCheckedChange={(checked) => updateSetting('restoreSessionsOnStartup', checked)}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="security" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Shield className="h-4 w-4" />
-                    {t('settings.security.title')}
-                  </CardTitle>
-                  <CardDescription>
-                    {t('settings.security.desc')}
-                  </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.security.hostKeyVerification')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.security.hostKeyVerificationDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.hostKeyVerification}
-                    onCheckedChange={(checked) => updateSetting('hostKeyVerification', checked)}
-                  />
-                </div>
-
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.security.allowPasswordSaving')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.security.allowPasswordSavingDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.allowPasswordSaving}
-                    onCheckedChange={(checked) => updateSetting('allowPasswordSaving', checked)}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="interface" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Palette className="h-4 w-4" />
-                    {t('settings.interface.title')}
-                  </CardTitle>
-                  <CardDescription>
-                    {t('settings.interface.desc')}
-                  </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label>{t('settings.interface.appTheme')}</Label>
-                  <Select 
-                    value={settings.theme} 
-                    onValueChange={(value) => {
-                      updateSetting('theme', value);
-                      // Apply theme immediately for instant preview
-                      applyTheme(value as ThemeMode);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="dark">{t('settings.theme.dark')}</SelectItem>
-                      <SelectItem value="light">{t('settings.theme.light')}</SelectItem>
-                      <SelectItem value="auto">{t('settings.theme.auto')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <Separator />
-                <div className="space-y-2">
-                  <Label>{t('settings.language.label')}</Label>
-                  <Select
-                    value={languagePref}
-                    onValueChange={(value) => {
-                      setLanguagePref(value);
-                      void changeLanguage(value);
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={AUTO}>{t('settings.language.auto')}</SelectItem>
-                      <SelectItem value="en">{t('settings.language.en')}</SelectItem>
-                      <SelectItem value="zh-CN">{t('settings.language.zhCN')}</SelectItem>
-                      <SelectItem value="pl">{t('settings.language.pl')}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <Separator />
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.interface.autostart')}</Label>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.interface.autostartDesc')}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.autostart}
-                    onCheckedChange={(checked) => {
-                      autostartTouchedRef.current = true;
-                      updateSetting('autostart', checked);
-                    }}
-                  />
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="keyboard" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Keyboard className="h-4 w-4" />
-                    {t('settings.keyboard.title')}
-                  </CardTitle>
-                  <CardDescription>
-                    {t('settings.keyboard.desc')}
-                  </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.keyboard.newSession')}</Label>
-                    <ShortcutRecorderInput
-                      value={settings.newSession}
-                      onValueChange={(value) => updateSetting('newSession', value)}
-                      placeholder={DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.newSession, isMac)}</span>
-                    </p>
-                    {/* The note describes the macOS-only menu-owned ⌘N default —
-                        render it on macOS only so Windows/Linux users, whose
-                        default is a real OS-registered Ctrl+N, don't see a
-                        reference to a menu their platform doesn't build. */}
-                    {isMac && (
-                      <p className="text-xs text-muted-foreground">
-                        {t('settings.keyboard.newSessionNote')}
-                      </p>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.keyboard.closeSession')}</Label>
-                    <ShortcutRecorderInput
-                      value={settings.closeSession}
-                      onValueChange={(value) => updateSetting('closeSession', value)}
-                      placeholder={DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.closeSession, isMac)}</span>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t('settings.keyboard.nextTab')}</Label>
-                    <ShortcutRecorderInput
-                      value={settings.nextTab}
-                      onValueChange={(value) => updateSetting('nextTab', value)}
-                      placeholder="Ctrl+Tab"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.nextTab, isMac)}</span>
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t('settings.keyboard.previousTab')}</Label>
-                    <ShortcutRecorderInput
-                      value={settings.previousTab}
-                      onValueChange={(value) => updateSetting('previousTab', value)}
-                      placeholder="Ctrl+Shift+Tab"
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {t('settings.keyboard.effectiveKeys')}: <span className="font-mono">{formatKeyboardShortcut(settings.previousTab, isMac)}</span>
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-4 bg-muted rounded-lg">
-                  <p className="text-sm text-muted-foreground">
-                    {t('settings.keyboard.note')}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="advanced" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Monitor className="h-4 w-4" />
-                    {t('settings.advanced.title')}
-                  </CardTitle>
-                  <CardDescription>
-                    {t('settings.advanced.desc')}
-                  </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <Separator />
-
-                {/* Current app version — visible on every platform (issue #166) */}
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>{t('settings.advanced.version')}</Label>
-                    <p className="text-sm text-muted-foreground font-mono">{appVersion ?? '—'}</p>
-                  </div>
-                </div>
-
-                <Separator />
-
-                {homebrewManaged ? (
-                  <div className="space-y-2 rounded-lg border border-border bg-muted/50 p-3">
-                    <p className="text-sm font-medium">
-                      {t('settings.updates.homebrewManaged.title')}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {t('settings.updates.homebrewManaged.desc')}
-                    </p>
-                    <div className="flex items-center gap-2">
-                      <code className="flex-1 rounded border border-border bg-background px-2 py-1.5 font-mono text-xs">
-                        {t('settings.updates.homebrewManaged.command')}
-                      </code>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-7 w-7 shrink-0 p-0"
-                        aria-label={t('settings.updates.homebrewManaged.copyCommand')}
-                        onClick={() => {
-                          void writeClipboardText(t('settings.updates.homebrewManaged.command'))
-                            .then(() => toast.success(t('settings.updates.homebrewManaged.commandCopied')))
-                            .catch((err: unknown) => console.warn('clipboard write failed:', err));
-                        }}
-                      >
-                        <Copy className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <>
-                    <div className="space-y-2">
-                      <Label>{t('settings.updates.channel.label')}</Label>
-                      <Select
-                        value={channelValue}
-                        onValueChange={(value) => updateSetting('updateChannel', value)}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="stable">{t('settings.updates.channel.stable')}</SelectItem>
-                          <SelectItem value="current" disabled={!currentChannelEligible}>
-                            {t('settings.updates.channel.current')}
-                          </SelectItem>
-                        </SelectContent>
-                      </Select>
-                      <p className="text-sm text-muted-foreground">
-                        {currentChannelEligible
-                          ? t('settings.updates.channel.currentHint')
-                          : t('settings.updates.channel.currentUnavailable')}
-                      </p>
-                    </div>
-
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-0.5">
-                        <Label>{t('settings.advanced.checkUpdates')}</Label>
-                        <p className="text-sm text-muted-foreground">
-                          {t('settings.advanced.checkUpdatesDesc')}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            if (handleSave()) {
-                              onCheckForUpdates?.();
-                            }
-                          }}
-                          className="gap-1.5"
-                        >
-                          <RefreshCw className="h-3.5 w-3.5" />
-                          {t('settings.advanced.checkNow')}
-                        </Button>
-                        <Switch
-                          checked={settings.checkUpdates}
-                          onCheckedChange={(checked) => updateSetting('checkUpdates', checked)}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="update-proxy">{t('settings.advanced.updateProxy')}</Label>
-                      <Input
-                        id="update-proxy"
-                        type="url"
-                        placeholder={t('settings.advanced.updateProxyPlaceholder')}
-                        value={settings.updateProxy}
-                        onChange={(event) => updateSetting('updateProxy', event.target.value)}
-                      />
-                      <p className="text-sm text-muted-foreground">
-                        {t('settings.advanced.updateProxyDesc')}
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                <Separator />
-
-                {/* Config Backup Section */}
-                <div className="space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Monitor className="h-4 w-4" />
-                    <Label className="text-base font-medium">{t('settings.advanced.configBackup')}</Label>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {t('settings.advanced.configBackupDesc')}
-                  </p>
-
-                  {/* Info: exports never carry credentials (issue #162) */}
-                  <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20">
-                    <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
-                    <p className="text-xs text-blue-600 dark:text-blue-400">
-                      {t('settings.advanced.passwordWarning')}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-col gap-3">
-                    <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
-                      <div className="space-y-0.5">
-                        <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {t('settings.advanced.exportConfigDesc')}
-                        </p>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleExportConfig}
-                        disabled={isExporting || isImporting}
-                        className="gap-1.5 flex-shrink-0"
-                      >
-                        <Download className="h-3.5 w-3.5" />
-                        {t('settings.advanced.exportConfig')}
-                      </Button>
-                    </div>
-
-                    <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
-                      <div className="space-y-0.5">
-                        <p className="text-sm font-medium">{t('settings.advanced.importConfig')}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {t('settings.advanced.importConfigDesc')}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-3 flex-shrink-0">
-                        <div className="flex items-center gap-2">
-                          <Checkbox
-                            id="import-merge"
-                            checked={importMerge}
-                            onCheckedChange={(checked) => setImportMerge(checked === true)}
-                          />
-                          <label
-                            htmlFor="import-merge"
-                            className="text-xs text-muted-foreground cursor-pointer select-none"
-                          >
-                            {t('settings.advanced.mergeOption')}
-                          </label>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleImportConfig}
-                          disabled={isExporting || isImporting}
-                          className="gap-1.5"
-                        >
-                          <Upload className="h-3.5 w-3.5" />
-                          {t('settings.advanced.importConfig')}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+        </div>
 
         <div className="flex justify-between px-6 py-4 border-t border-border bg-muted/30">
           <Button variant="ghost" onClick={handleReset}>
@@ -1505,7 +497,12 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
             <Button variant="ghost" onClick={() => onOpenChange(false)}>
               {t('common.cancel')}
             </Button>
-            <Button onClick={handleSave} className="min-w-[120px]">
+            <Button
+              onClick={handleSave}
+              disabled={hasShortcutConflicts}
+              title={hasShortcutConflicts ? t('settings.shortcuts.conflictSaveBlocked') : undefined}
+              className="min-w-[120px]"
+            >
               {t('settings.button.save')}
             </Button>
           </div>

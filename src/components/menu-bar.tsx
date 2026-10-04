@@ -27,7 +27,8 @@ import {
 } from './ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
-import { DEFAULT_LAYOUT_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { useShortcutBindings } from '@/lib/shortcut-registry';
 import type { UpdateAnnouncement } from './update-checker';
 import { 
   Plus, 
@@ -79,9 +80,6 @@ interface MenuBarProps {
   onCloneTab?: () => void;
   onNextTab?: () => void;
   onPreviousTab?: () => void;
-  closeConnectionShortcutLabel?: string;
-  nextTabShortcutLabel?: string;
-  previousTabShortcutLabel?: string;
   onRecentConnectionSelect?: (connection: ConnectionData) => void;
   hasActiveConnection?: boolean;
   hasActiveTerminal?: boolean;
@@ -122,9 +120,6 @@ export function MenuBar({
   onCloneTab,
   onNextTab,
   onPreviousTab,
-  closeConnectionShortcutLabel,
-  nextTabShortcutLabel,
-  previousTabShortcutLabel,
   onRecentConnectionSelect,
   hasActiveConnection = false,
   hasActiveTerminal,
@@ -142,6 +137,9 @@ export function MenuBar({
   const { t } = useTranslation();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const formatShortcut = (shortcut: string) => formatKeyboardShortcut(shortcut, isMac);
+  // Menu shortcut hints follow the customizable bindings (shortcut registry)
+  // so they can never drift from what the engine registers.
+  const shortcutBindings = useShortcutBindings();
   const terminalActionsAvailable = hasActiveTerminal ?? hasActiveConnection;
 
   // Load recent connections
@@ -200,7 +198,7 @@ export function MenuBar({
           <DropdownMenuItem onClick={onNewConnection}>
             <Plus className="mr-2 h-4 w-4" />
             {t('menuBar.newConnection')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+N')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.newSession)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onOpenConnection}>
             <FolderOpen className="mr-2 h-4 w-4" />
@@ -248,7 +246,7 @@ export function MenuBar({
           <DropdownMenuItem onClick={onCloseConnection} disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
             {t('menuBar.closeConnection')}
-            <DropdownMenuShortcut>{formatShortcut(closeConnectionShortcutLabel ?? 'Ctrl+W')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.closeSession)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           {/* Route Exit through the backend quit guard so dirty file-editor
               windows are prompted before the app quits (quit_guard.rs). */}
@@ -392,7 +390,7 @@ export function MenuBar({
           <DropdownMenuItem onClick={onOpenSettings}>
             <Settings className="mr-2 h-4 w-4" />
             {t('menuBar.options')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+,')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.openSettings)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onCheckForUpdates}>
@@ -422,12 +420,12 @@ export function MenuBar({
           <DropdownMenuItem onClick={onNextTab} disabled={!hasActiveConnection}>
             <ArrowRight className="mr-2 h-4 w-4" />
             {t('menuBar.nextTab')}
-            <DropdownMenuShortcut>{formatShortcut(nextTabShortcutLabel ?? 'Ctrl+Tab')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.nextTab)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onPreviousTab} disabled={!hasActiveConnection}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             {t('menuBar.previousTab')}
-            <DropdownMenuShortcut>{formatShortcut(previousTabShortcutLabel ?? 'Ctrl+Shift+Tab')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.previousTab)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem disabled={!hasActiveConnection}>
@@ -511,7 +509,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t(leftSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleConnectionManager')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar)}
+                {formatShortcut(shortcutBindings.toggleLeftSidebar)}
               </kbd>
             </TooltipContent>
           </Tooltip>
@@ -527,7 +525,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t(bottomPanelVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleFileBrowser')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel)}
+                {formatShortcut(shortcutBindings.toggleBottomPanel)}
               </kbd>
             </TooltipContent>
           </Tooltip>
@@ -543,7 +541,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t(rightSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleMonitorPanel')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar)}
+                {formatShortcut(shortcutBindings.toggleRightSidebar)}
               </kbd>
             </TooltipContent>
           </Tooltip>
@@ -562,7 +560,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t('menuBar.toggleZenMode')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode)}
+                {formatShortcut(shortcutBindings.toggleZenMode)}
               </kbd>
             </TooltipContent>
           </Tooltip>

@@ -361,11 +361,6 @@
     "keyboard": {
       "title": "Skróty klawiszowe",
       "desc": "Dostosuj skróty klawiszowe dla najczęstszych działań.",
-      "newSession": "Nowa sesja",
-      "closeSession": "Zamknij sesję",
-      "nextTab": "Następna karta",
-      "previousTab": "Poprzednia karta",
-      "effectiveKeys": "Faktyczne klawisze",
       "newSessionNote": "Domyślne ⌘N jest obsługiwane przez menu aplikacji na macOS; pozostałe niestandardowe skróty działają zgodnie z konfiguracją, chyba że kombinacja jest już zajęta przez inną funkcję lub skrót aplikacji.",
       "note": "Zmiany skrótów klawiszowych zaczną działać po zapisaniu.",
       "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}",
@@ -426,8 +421,6 @@
       "center": "Wyśrodkuj (oryginalny rozmiar)",
       "tile": "Kafelki (powtarzaj)"
     },
-    "tabScrollLeft": "Przewiń w lewo",
-    "tabScrollRight": "Przewiń w prawo",
     "updates": {
       "channel": {
         "label": "Kanał aktualizacji",
@@ -442,6 +435,47 @@
         "command": "brew upgrade --cask r-shell",
         "copyCommand": "Kopiuj komendę aktualizacji",
         "commandCopied": "Komenda aktualizacji została skopiowana do schowka"
+      }
+    },
+    "search": {
+      "placeholder": "Szukaj w ustawieniach",
+      "showingResults": "Wyniki dla „{{query}}”"
+    },
+    "shortcuts": {
+      "customBadge": "Własny",
+      "actionColumn": "Czynność",
+      "shortcutColumn": "Skrót",
+      "statusColumn": "Status",
+      "category": {
+        "tabs": "Karty",
+        "layout": "Układ",
+        "split": "Podział",
+        "app": "Aplikacja"
+      },
+      "resetBinding": "Przywróć domyślny skrót: {{action}}",
+      "conflictDuplicate": "„{{chord}}” jest już używane przez {{other}} — pierwszy dopasowany skrót wygrywa, więc jeden z nich przestanie działać",
+      "conflictReserved": "„{{chord}}” jest zarezerwowane dla przełączania grup terminali (Ctrl+1–9)",
+      "conflictMenuOwned": "„{{chord}}” na macOS należy do natywnego menu aplikacji i nigdy nie dotrze do tego polecenia",
+      "conflictSummary_one": "Rozwiąż {{count}} konflikt skrótów przed zapisaniem",
+      "conflictSummary_few": "Rozwiąż {{count}} konflikty skrótów przed zapisaniem",
+      "conflictSummary_many": "Rozwiąż {{count}} konfliktów skrótów przed zapisaniem",
+      "conflictSummary_other": "Rozwiąż {{count}} konfliktów skrótów przed zapisaniem",
+      "conflictSaveBlocked": "Zapisanie będzie możliwe po rozwiązaniu wszystkich konfliktów.",
+      "fixedNote": "Ctrl+1–9 (przełączanie grup terminali) nie może być zmieniane.",
+      "command": {
+        "newSession": "Nowa sesja",
+        "closeSession": "Zamknij sesję",
+        "nextTab": "Następna karta",
+        "previousTab": "Poprzednia karta",
+        "moveTabLeft": "Przenieś kartę w lewo",
+        "moveTabRight": "Przenieś kartę w prawo",
+        "toggleLeftSidebar": "Przełącz lewy panel",
+        "toggleBottomPanel": "Przełącz dolny panel",
+        "toggleRightSidebar": "Przełącz prawy panel",
+        "toggleZenMode": "Przełącz tryb zen",
+        "splitRight": "Podziel w prawo",
+        "splitDown": "Podziel w dół",
+        "openSettings": "Otwórz ustawienia"
       }
     }
   },

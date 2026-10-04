@@ -20,8 +20,10 @@ keyboard tab.
     `toggleRightSidebar` (Ctrl+M), `toggleZenMode` (Ctrl+Z)
   - Splits: `splitRight`, `splitDown`
   - `openSettings` (Ctrl+,)
-- **Fixed (not remappable):** Ctrl+1..9 (focus group by index) and the alternate
-  Ctrl+\\ sidebar toggle.
+- **Fixed (not remappable):** Ctrl+1..9 (focus group by index). The former
+  alternate Ctrl+\\ sidebar toggle is removed (see
+  [Alt Ctrl+\\ toggle](#alt-ctrl-toggle)), which frees Ctrl+\\ to be the live
+  `splitRight` default.
 - **Keep the bottom Save / Reset / Cancel footer** — no auto-save.
 
 ## Shortcut registry (`src/lib/shortcut-registry.ts`)
@@ -41,7 +43,7 @@ Single source of truth for everything bindable:
   1. `duplicate` — two commands resolve to the same chord (the engine is
      first-match-wins, so a duplicate silently shadows one command).
   2. `reserved` — the chord collides with a fixed binding: Ctrl+1..9 (focus
-     groups) or the alternate Ctrl+\\ sidebar toggle.
+     groups).
   3. `menuOwned` — macOS only: the chord's ⌘ form is consumed by the native menu
      (`MACOS_MENU_OWNED_ACCELERATORS`, minus the in-window degraded chords) for a
      *different* feature than the command (e.g. remapping `newSession` to Ctrl+D

@@ -24,7 +24,8 @@ import {
 } from 'lucide-react';
 import { Badge } from './ui/badge';
 import { cn } from '@/lib/utils';
-import { formatKeyboardShortcut, DEFAULT_LAYOUT_SHORTCUTS, loadKeyboardShortcutSettings } from '@/lib/keyboard-shortcuts';
+import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { useShortcutBindings } from '@/lib/shortcut-registry';
 import { ConnectionStorageManager } from '@/lib/connection-storage';
 import { quickConnectConnection } from '@/lib/app-events';
 import { useLayout } from '@/lib/layout-context';
@@ -51,8 +52,9 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
   const { layout, toggleLeftSidebar } = useLayout();
   const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
   const formatShortcut = (shortcut: string) => formatKeyboardShortcut(shortcut, isMac);
-  // Badge follows the customizable binding, not a fixed chord.
-  const newSessionShortcut = loadKeyboardShortcutSettings().newSession;
+  // Badges follow the customizable bindings, not fixed chords.
+  const shortcutBindings = useShortcutBindings();
+  const newSessionShortcut = shortcutBindings.newSession;
 
   // The Connection Manager lives in the left sidebar; the tile reveals it
   // (idempotent — clicking when the sidebar is already open keeps it open).
@@ -87,7 +89,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       title: t('welcome.connectionManager'),
       description: t('welcome.connectionManagerDesc'),
       action: openConnectionManager,
-      shortcut: formatShortcut(DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar),
+      shortcut: formatShortcut(shortcutBindings.toggleLeftSidebar),
       highlight: t('welcome.connectionManagerHighlight')
     },
     {
@@ -95,7 +97,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       title: t('welcome.preferences'),
       description: t('welcome.preferencesDesc'),
       action: onOpenSettings,
-      shortcut: formatShortcut('Ctrl+,')
+      shortcut: formatShortcut(shortcutBindings.openSettings)
     }
   ];
 

@@ -62,6 +62,8 @@ Object.defineProperty(Element.prototype, 'scrollIntoView', {
 function renderModal() {
   const onOpenChange = vi.fn();
   render(<SettingsModal open onOpenChange={onOpenChange} />);
+  // The Interface section (autostart toggle) sits behind the left nav.
+  fireEvent.click(screen.getByRole('button', { name: 'Interface' }));
   return { onOpenChange };
 }
 
