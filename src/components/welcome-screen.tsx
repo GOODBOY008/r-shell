@@ -169,7 +169,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
       {/* Soft glow behind the hero */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-gradient-to-b from-primary/10 via-primary/5 to-transparent"
+        className="pointer-events-none absolute inset-x-0 top-0 h-72 bg-linear-to-b from-primary/10 via-primary/5 to-transparent"
       />
 
       <div className="relative mx-auto w-full max-w-4xl space-y-8 px-6 pb-8 animate-in fade-in duration-500">
@@ -177,7 +177,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
         <div className="flex flex-col items-center gap-4 pt-12 text-center">
           <div className="relative">
             <div aria-hidden className="absolute inset-0 scale-125 rounded-2xl bg-primary/25 blur-xl" />
-            <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/30 bg-gradient-to-br from-primary/20 to-primary/5 shadow-sm">
+            <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/30 bg-linear-to-br from-primary/20 to-primary/5 shadow-xs">
               <Terminal className="h-8 w-8 text-primary" />
             </div>
           </div>
@@ -240,7 +240,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
                 key={action.title}
                 type="button"
                 onClick={action.action}
-                className="group flex flex-col items-center gap-2 rounded-xl border bg-card/50 px-4 py-5 text-center transition-all hover:border-primary/50 hover:bg-accent/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                className="group flex flex-col items-center gap-2 rounded-xl border bg-card/50 px-4 py-5 text-center transition-all hover:border-primary/50 hover:bg-accent/50 hover:shadow-md focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 <div className="rounded-lg bg-primary/10 p-2.5 text-primary transition-colors group-hover:bg-primary/20">
                   <action.icon className="h-5 w-5" />
@@ -282,7 +282,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
                     aria-label={t('welcome.connectTo', { name: connection.name })}
                     className={cn(
                       'group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-accent/50',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                      'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
                       index > 0 && 'border-t border-border/60',
                     )}
                   >
@@ -349,7 +349,7 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
         {/* Getting Started Tips */}
         <section className="rounded-xl border border-dashed bg-muted/30 p-4">
           <div className="flex items-start gap-3">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background shadow-sm">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-background shadow-xs">
               <BookOpen className="h-4 w-4 text-muted-foreground" />
             </div>
             <div className="flex-1 space-y-2">

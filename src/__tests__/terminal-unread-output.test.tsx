@@ -8,6 +8,20 @@ import { STORAGE_KEY } from '../lib/terminal-group-serializer';
 import i18n from '../lib/i18n';
 import pl from '../locales/pl.json';
 
+// jsdom has no ResizeObserver; react-resizable-panels v4 constructs it from
+// the mounted element's ownerDocument.defaultView when a Group mounts.
+if (typeof window.ResizeObserver !== 'function') {
+  Object.defineProperty(window, 'ResizeObserver', {
+    writable: true,
+    configurable: true,
+    value: class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  });
+}
+
 type PtyProps = {
   connectionId: string;
   isActive: boolean;
