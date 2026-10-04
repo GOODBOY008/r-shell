@@ -2220,7 +2220,18 @@ function AppContent() {
       />
 
       <div className="flex-1 flex overflow-hidden">
-        <ResizablePanelGroup direction="horizontal" autoSaveId="r-shell-main-layout">
+        <ResizablePanelGroup
+          direction="horizontal"
+          autoSaveId="r-shell-main-layout"
+          // v4 keys saved layouts by panel combination; sidebars mount
+          // conditionally, so list exactly the panels rendered right now or
+          // hiding one overwrites the combination that includes it.
+          panelIds={[
+            ...(layout.leftSidebarVisible ? ['left-sidebar'] : []),
+            'main-content',
+            ...(layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels ? ['right-sidebar'] : []),
+          ]}
+        >
           {/* Left Sidebar - Connection Manager */}
           {layout.leftSidebarVisible && (
             <>

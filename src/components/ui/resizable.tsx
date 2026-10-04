@@ -23,7 +23,9 @@ import { cn } from "./utils";
  *   numbers are converted to unit-less percent strings here
  * - `onResize` now receives a `PanelSize` object; wrappers pass the plain
  *   percentage through
- * - `autoSaveId` → `useDefaultLayout` persistence (v3-format entries ignored)
+ * - `autoSaveId` → `useDefaultLayout` persistence (v3-format entries ignored);
+ *   pass `panelIds` when panels mount conditionally so each combination is
+ *   saved under its own key
  * - `order` no longer exists in v4; accepted and ignored
  */
 
@@ -65,18 +67,27 @@ const toPercentString = (value: number | string | undefined) =>
 type PanelGroupProps = React.ComponentProps<typeof Group> & {
   direction?: "horizontal" | "vertical";
   autoSaveId?: string;
+  /**
+   * Ids of the panels currently rendered in this group. Required when panels
+   * are conditionally mounted: v4 persists one layout per panel combination
+   * (keyed by these ids), so without them every combination shares a single
+   * saved layout and hides overwrite it.
+   */
+  panelIds?: string[];
   onLayout?: (layout: Layout) => void;
 };
 
 function ResizablePanelGroup({
   direction,
   autoSaveId,
+  panelIds,
   onLayout,
   className,
   ...props
 }: PanelGroupProps) {
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: autoSaveId ?? "__rshell-noop__",
+    panelIds,
     storage: percentLayoutStorage,
   });
 
