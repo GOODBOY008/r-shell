@@ -359,7 +359,7 @@
     "keyboard": {
       "title": "Keyboard Shortcuts",
       "desc": "Customize keyboard shortcuts for common actions.",
-      "newSessionNote": "The ⌘N default is handled by the app menu on macOS; other customized bindings apply as configured unless the chord is already used by another app feature or binding.",
+      "newSessionNote": "The default's ⌘ form is handled by the app menu on macOS; customized bindings apply as configured unless the chord is already used by another app feature or binding.",
       "note": "Changes to keyboard shortcuts take effect after saving.",
       "registerFailed": "Failed to register shortcut {{shortcut}}",
       "recorderHint": "Press a key combination (Esc to cancel)"

@@ -359,7 +359,7 @@
     "keyboard": {
       "title": "键盘快捷键",
       "desc": "自定义常用操作的键盘快捷键。",
-      "newSessionNote": "默认的 ⌘N 在 macOS 上由应用菜单处理；其他自定义快捷键按配置生效，除非该组合键已被应用的其他功能占用。",
+      "newSessionNote": "该默认键的 ⌘ 形式由 macOS 应用菜单处理；自定义绑定按配置生效，除非该组合键已被其他应用功能或绑定占用。",
       "note": "键盘快捷键更改将在保存后生效。",
       "registerFailed": "快捷键 {{shortcut}} 注册失败",
       "recorderHint": "按下组合键（Esc 取消）"

@@ -361,7 +361,7 @@
     "keyboard": {
       "title": "Skróty klawiszowe",
       "desc": "Dostosuj skróty klawiszowe dla najczęstszych działań.",
-      "newSessionNote": "Domyślne ⌘N jest obsługiwane przez menu aplikacji na macOS; pozostałe niestandardowe skróty działają zgodnie z konfiguracją, chyba że kombinacja jest już zajęta przez inną funkcję lub skrót aplikacji.",
+      "newSessionNote": "Domyślna forma ⌘ jest obsługiwana przez menu aplikacji na macOS; własne skróty działają zgodnie z konfiguracją, chyba że kombinacja jest już używana przez inną funkcję lub skrót.",
       "note": "Zmiany skrótów klawiszowych zaczną działać po zapisaniu.",
       "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}",
       "recorderHint": "Naciśnij kombinację klawiszy (Esc, aby anulować)"
