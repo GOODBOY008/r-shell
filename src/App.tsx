@@ -34,12 +34,12 @@ import {
   createConfiguredShortcut,
   createLayoutShortcuts,
   createSplitViewShortcuts,
-  DEFAULT_APP_KEYBOARD_SHORTCUTS,
   isShortcutRecording,
-  loadKeyboardShortcutSettings,
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
-import type { SplitViewShortcutBindings, KeyboardShortcut } from './lib/keyboard-shortcuts';
+import type { KeyboardShortcut } from './lib/keyboard-shortcuts';
+import { loadShortcutBindings } from './lib/shortcut-registry';
+import type { ShortcutBindings } from './lib/shortcut-registry';
 import { announce } from './lib/live-announcer';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
@@ -167,8 +167,12 @@ function AppContent() {
   const [updateAnnouncement, setUpdateAnnouncement] = useState<UpdateAnnouncement | null>(null);
   // Incremented when the MenuBar pill is clicked to open the update dialog.
   const [updateDialogSignal, setUpdateDialogSignal] = useState(0);
-  const [keyboardShortcutSettings, setKeyboardShortcutSettings] = useState<SplitViewShortcutBindings>(
-    () => loadKeyboardShortcutSettings(),
+  // Effective shortcut bindings (shortcut-registry defaults + the sparse
+  // user overrides from Settings → Keyboard). Refreshed whenever settings are
+  // saved anywhere (same event the engine's memoized accelerator key reacts
+  // to, so rebinding takes effect without an app restart).
+  const [shortcutBindings, setShortcutBindings] = useState<ShortcutBindings>(
+    () => loadShortcutBindings(),
   );
 
   // Xshell-style detached (background) sessions. Tabs that were detached via
@@ -246,15 +250,15 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    const refreshKeyboardShortcutSettings = () => {
-      setKeyboardShortcutSettings(loadKeyboardShortcutSettings());
+    const refreshShortcutBindings = () => {
+      setShortcutBindings(loadShortcutBindings());
     };
 
-    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, refreshKeyboardShortcutSettings);
-    window.addEventListener('storage', refreshKeyboardShortcutSettings);
+    window.addEventListener(APP_SETTINGS_CHANGED_EVENT, refreshShortcutBindings);
+    window.addEventListener('storage', refreshShortcutBindings);
     return () => {
-      window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, refreshKeyboardShortcutSettings);
-      window.removeEventListener('storage', refreshKeyboardShortcutSettings);
+      window.removeEventListener(APP_SETTINGS_CHANGED_EVENT, refreshShortcutBindings);
+      window.removeEventListener('storage', refreshShortcutBindings);
     };
   }, []);
 
@@ -356,16 +360,16 @@ function AppContent() {
         moveTabLeft: () => moveActiveTab(-1),
         moveTabRight: () => moveActiveTab(1),
       },
-      keyboardShortcutSettings,
+      shortcutBindings,
     );
-  }, [state.activeGroupId, state.groups, activeGroup, dispatch, handleCloseActiveTab, keyboardShortcutSettings, t]);
+  }, [state.activeGroupId, state.groups, activeGroup, dispatch, handleCloseActiveTab, shortcutBindings, t]);
 
   const layoutShortcuts = useMemo(() => createLayoutShortcuts({
     toggleLeftSidebar,
     toggleRightSidebar,
     toggleBottomPanel,
     toggleZenMode,
-  }), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode]);
+  }, shortcutBindings), [toggleLeftSidebar, toggleRightSidebar, toggleBottomPanel, toggleZenMode, shortcutBindings]);
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
@@ -952,14 +956,14 @@ function AppContent() {
   const newSessionShortcut = useMemo(
     () => ({
       ...createConfiguredShortcut(
-        keyboardShortcutSettings.newSession,
-        DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
+        shortcutBindings.newSession,
+        'Ctrl+N',
         () => handleNewTab(),
         'New session',
       ),
       ignoreInTerminal: true,
     }),
-    [keyboardShortcutSettings.newSession, handleNewTab],
+    [shortcutBindings.newSession, handleNewTab],
   );
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
@@ -1725,14 +1729,18 @@ function AppContent() {
   // MACOS_MENU_OWNED_ACCELERATORS, so those two bindings never OS-register
   // here and the menu's menu-action routing handles them. Windows/Linux have
   // no native menu, so the same bindings register as real global shortcuts.
+  // The customizable Settings binding (shortcut registry), kept in its own
+  // memo next to the single registration below.
   const settingsShortcut = useMemo<KeyboardShortcut>(
     () => ({
-      key: ',',
-      ctrlKey: true,
-      handler: handleOpenSettings,
-      description: 'Open Settings',
+      ...createConfiguredShortcut(
+        shortcutBindings.openSettings,
+        'Ctrl+,',
+        handleOpenSettings,
+        'Open Settings',
+      ),
     }),
-    [handleOpenSettings],
+    [shortcutBindings.openSettings, handleOpenSettings],
   );
   useKeyboardShortcuts(
     [...layoutShortcuts, ...splitViewShortcuts, settingsShortcut, newSessionShortcut],
@@ -2202,9 +2210,6 @@ function AppContent() {
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
         updateAnnouncement={updateAnnouncement}
         onOpenUpdateDialog={() => setUpdateDialogSignal((current) => current + 1)}
-        closeConnectionShortcutLabel={keyboardShortcutSettings.closeTab}
-        nextTabShortcutLabel={keyboardShortcutSettings.nextTab}
-        previousTabShortcutLabel={keyboardShortcutSettings.prevTab}
         hasActiveConnection={!!activeTab}
         hasActiveTerminal={activeTerminalId !== null}
         canPaste={activeTab?.connectionStatus === 'connected'}
@@ -2284,7 +2289,7 @@ function AppContent() {
                       onDuplicateTab: handleDuplicateTab,
                       onNewTab: handleNewTab,
                       onReconnectTab: handleReconnect,
-                      closeTabShortcut: keyboardShortcutSettings.closeTab,
+                      closeTabShortcut: shortcutBindings.closeSession,
                       onWorkingDirectoryChange: handleWorkingDirectoryChange,
                       onCloseTab: handleCloseTab,
                       onCloseAllTabs: handleCloseAllTabs,

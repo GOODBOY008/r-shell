@@ -85,6 +85,8 @@ describe('SettingsModal Homebrew banner copy button', () => {
 
   it('copies the brew upgrade command to the clipboard on click', async () => {
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    // The Advanced section (Homebrew update group) sits behind the left nav.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
 
     const copyButton = await screen.findByRole('button', { name: 'Copy update command' });
     fireEvent.click(copyButton);
@@ -99,6 +101,8 @@ describe('SettingsModal Homebrew banner copy button', () => {
     mockWriteText.mockRejectedValue('clipboard unavailable');
 
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    // The Advanced section (Homebrew update group) sits behind the left nav.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
 
     const copyButton = await screen.findByRole('button', { name: 'Copy update command' });
     fireEvent.click(copyButton);
@@ -116,6 +120,8 @@ describe('SettingsModal Homebrew banner copy button', () => {
     });
 
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    // The Advanced section (Homebrew update group) sits behind the left nav.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
 
     // The banner itself (and its copy button) only exists for managed installs
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith('get_update_context'));

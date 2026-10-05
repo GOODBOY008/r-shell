@@ -5,6 +5,7 @@ import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { register, unregister, unregisterAll, isRegistered } from '@tauri-apps/plugin-global-shortcut';
 import { toast } from 'sonner';
 import i18n from '@/lib/i18n';
+import type { ShortcutBindings } from './shortcut-registry';
 
 export interface KeyboardShortcut {
   key: string;
@@ -34,40 +35,8 @@ export interface ParsedKeyboardShortcut {
   metaKey: boolean;
 }
 
-export interface SplitViewShortcutBindings {
-  closeTab: string;
-  nextTab: string;
-  prevTab: string;
-  /** New-session binding; on macOS the native menu also owns ⌘N regardless. */
-  newSession: string;
-}
-
 export const APP_SETTINGS_STORAGE_KEY = 'sshClientSettings';
 export const APP_SETTINGS_CHANGED_EVENT = 'sshClientSettingsChanged';
-
-export const DEFAULT_APP_KEYBOARD_SHORTCUTS = {
-  newSession: 'Ctrl+N',
-  closeSession: 'Ctrl+W',
-  nextTab: 'Ctrl+Tab',
-  previousTab: 'Ctrl+Shift+Tab',
-  // Browser convention (Chrome/Firefox/GNOME Terminal) for reordering tabs.
-  moveTabLeft: 'Ctrl+Shift+PageUp',
-  moveTabRight: 'Ctrl+Shift+PageDown',
-} as const;
-
-export const DEFAULT_LAYOUT_SHORTCUTS = {
-  toggleLeftSidebar: 'Ctrl+B',
-  toggleBottomPanel: 'Ctrl+J',
-  toggleRightSidebar: 'Ctrl+M',
-  toggleZenMode: 'Ctrl+Z',
-} as const;
-
-export const DEFAULT_SPLIT_VIEW_SHORTCUTS: SplitViewShortcutBindings = {
-  closeTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
-  nextTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.nextTab,
-  prevTab: DEFAULT_APP_KEYBOARD_SHORTCUTS.previousTab,
-  newSession: DEFAULT_APP_KEYBOARD_SHORTCUTS.newSession,
-};
 
 const KEY_ALIASES: Record<string, string> = {
   tab: 'Tab',
@@ -188,13 +157,24 @@ export function parseKeyboardShortcut(shortcut: string): ParsedKeyboardShortcut 
   return parsed.key ? parsed : null;
 }
 
-const LEGACY_CLOSE_TAB_SHORTCUTS = new Set(['ctrl+shift+w', 'cmdorctrl+shift+w']);
+/**
+ * The former close-tab default from before the settings redesign: migrated to
+ * the current default on load (Ctrl+Shift+W now belongs to the terminal's
+ * copy-paste conventions and was never a browser-style close chord). Kept for
+ * the registry's legacy-flat-key fallback.
+ */
+export const LEGACY_CLOSE_TAB_SHORTCUTS = new Set(['ctrl+shift+w', 'cmdorctrl+shift+w']);
 
 function compactShortcut(shortcut: string): string {
   return shortcut.replace(/\s+/g, '').toLowerCase();
 }
 
-function resolveSavedShortcut(value: unknown, fallback: string, legacyShortcuts?: Set<string>): string {
+/**
+ * Validate a saved binding: non-strings and unparseable chords fall back to
+ * `fallback`; chords in `legacyShortcuts` (retired spellings) do too.
+ * Exported for the shortcut registry's legacy migration.
+ */
+export function resolveSavedShortcut(value: unknown, fallback: string, legacyShortcuts?: Set<string>): string {
   if (typeof value !== 'string') {
     return fallback;
   }
@@ -204,33 +184,6 @@ function resolveSavedShortcut(value: unknown, fallback: string, legacyShortcuts?
   }
 
   return parseKeyboardShortcut(value) ? value : fallback;
-}
-
-export function loadKeyboardShortcutSettings(): SplitViewShortcutBindings {
-  const defaults = DEFAULT_SPLIT_VIEW_SHORTCUTS;
-
-  try {
-    const savedSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
-    if (!savedSettings) {
-      return defaults;
-    }
-
-    const parsed = JSON.parse(savedSettings) as Partial<{
-      closeSession: unknown;
-      nextTab: unknown;
-      previousTab: unknown;
-      newSession: unknown;
-    }>;
-
-    return {
-      closeTab: resolveSavedShortcut(parsed.closeSession, defaults.closeTab, LEGACY_CLOSE_TAB_SHORTCUTS),
-      nextTab: resolveSavedShortcut(parsed.nextTab, defaults.nextTab),
-      prevTab: resolveSavedShortcut(parsed.previousTab, defaults.prevTab),
-      newSession: resolveSavedShortcut(parsed.newSession, defaults.newSession),
-    };
-  } catch {
-    return defaults;
-  }
 }
 
 export function createConfiguredShortcut(
@@ -448,7 +401,7 @@ function isMacDegradedShortcut(shortcut: string): boolean {
  *   would just fail with a toast (issue #161). They fire from the in-window
  *   keydown listener on the physical ⌃Tab / ⌃⇧Tab chords instead.
  */
-const MACOS_IN_WINDOW_CHORDS = new Set([
+export const MACOS_IN_WINDOW_CHORDS = new Set([
   'CommandOrControl+Z',
   'CommandOrControl+Shift+Z',
   'CommandOrControl+M',
@@ -493,7 +446,7 @@ function inWindowMatchMods(shortcut: KeyboardShortcut): {
  * Shift variants are included where the menu owns them too (Cmd+Shift+Z is
  * Redo), and F5 for the menu's Reconnect item.
  */
-const MACOS_MENU_OWNED_ACCELERATORS = new Set([
+export const MACOS_MENU_OWNED_ACCELERATORS = new Set([
   'CommandOrControl+N',
   'CommandOrControl+S',
   'CommandOrControl+W',
@@ -530,8 +483,10 @@ type FocusContext = 'app' | 'terminal' | 'editable';
  * new session instead of recording the chord.
  */
 /**
- * Fields removed by the settings cleanup (issue #163): their controls are
- * gone and nothing consumes them. Stripped wherever a legacy blob is loaded
+ * Fields removed by the settings cleanup (issue #163) and the shortcut
+ * registry migration: their controls are gone and nothing consumes them
+ * (the remappable chord data lives in `shortcutBindings`, terminal
+ * appearance in its own store). Stripped wherever a legacy blob is loaded
  * so removed keys are not re-persisted by whole-blob writes (settings save,
  * config import, autostart failure correction).
  */
@@ -545,6 +500,17 @@ export const REMOVED_SETTINGS_KEYS = new Set([
   'logLevel',
   'maxLogSize',
   'telemetry',
+  // Pre-registry flat shortcut keys (superseded by shortcutBindings)
+  'newSession',
+  'closeSession',
+  'nextTab',
+  'previousTab',
+  // Dead fields of the removed terminal-appearance controls
+  'fontSize',
+  'fontFamily',
+  'colorScheme',
+  'cursorStyle',
+  'scrollbackLines',
 ]);
 
 /** Delete every removed settings key from `blob` in place. */
@@ -1065,18 +1031,24 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[], enabled: boo
 }
 
 /**
- * VS Code-like keyboard shortcuts for layout management
+ * VS Code-like keyboard shortcuts for layout management.
+ *
+ * Chords come from the shortcut registry bindings (Settings → Keyboard);
+ * absent entries fall back to the registry defaults.
  */
-export const createLayoutShortcuts = (actions: {
-  toggleLeftSidebar: () => void;
-  toggleRightSidebar: () => void;
-  toggleBottomPanel: () => void;
-  toggleZenMode: () => void;
-}): KeyboardShortcut[] => [
+export const createLayoutShortcuts = (
+  actions: {
+    toggleLeftSidebar: () => void;
+    toggleRightSidebar: () => void;
+    toggleBottomPanel: () => void;
+    toggleZenMode: () => void;
+  },
+  bindings: Partial<ShortcutBindings> = {},
+): KeyboardShortcut[] => [
   {
     ...createConfiguredShortcut(
-      DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar,
-      DEFAULT_LAYOUT_SHORTCUTS.toggleLeftSidebar,
+      bindings.toggleLeftSidebar ?? 'Ctrl+B',
+      'Ctrl+B',
       actions.toggleLeftSidebar,
       'Toggle Connection Manager (Left Sidebar)',
     ),
@@ -1084,8 +1056,8 @@ export const createLayoutShortcuts = (actions: {
   },
   {
     ...createConfiguredShortcut(
-      DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel,
-      DEFAULT_LAYOUT_SHORTCUTS.toggleBottomPanel,
+      bindings.toggleBottomPanel ?? 'Ctrl+J',
+      'Ctrl+J',
       actions.toggleBottomPanel,
       'Toggle File Browser (Bottom Panel)',
     ),
@@ -1093,8 +1065,8 @@ export const createLayoutShortcuts = (actions: {
   },
   {
     ...createConfiguredShortcut(
-      DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar,
-      DEFAULT_LAYOUT_SHORTCUTS.toggleRightSidebar,
+      bindings.toggleRightSidebar ?? 'Ctrl+M',
+      'Ctrl+M',
       actions.toggleRightSidebar,
       'Toggle Monitor Panel (Right Sidebar)',
     ),
@@ -1102,19 +1074,12 @@ export const createLayoutShortcuts = (actions: {
   },
   {
     ...createConfiguredShortcut(
-      DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode,
-      DEFAULT_LAYOUT_SHORTCUTS.toggleZenMode,
+      bindings.toggleZenMode ?? 'Ctrl+Z',
+      'Ctrl+Z',
       actions.toggleZenMode,
       'Toggle Zen Mode',
     ),
     ignoreInTerminal: true,
-  },
-  {
-    key: '\\',
-    ctrlKey: true,
-    ignoreInTerminal: true,
-    handler: actions.toggleLeftSidebar,
-    description: 'Toggle Connection Manager (Alternative)',
   },
 ];
 
@@ -1122,8 +1087,10 @@ export const createLayoutShortcuts = (actions: {
  * Split view keyboard shortcuts for terminal group management.
  *
  * Creates shortcuts for splitting, focusing groups, and tab navigation.
- * For Ctrl+1~9, the focusGroup callback receives a 0-based index (0-8).
- * If the target group index doesn't exist, the caller should ignore the action.
+ * Remappable chords come from the shortcut registry bindings; absent entries
+ * fall back to the registry defaults. For Ctrl+1~9, the focusGroup callback
+ * receives a 0-based index (0-8). If the target group index doesn't exist,
+ * the caller should ignore the action.
  */
 export const createSplitViewShortcuts = (actions: {
   splitRight: () => void;
@@ -1134,67 +1101,58 @@ export const createSplitViewShortcuts = (actions: {
   prevTab: () => void;
   moveTabLeft: () => void;
   moveTabRight: () => void;
-}, bindings: Partial<SplitViewShortcutBindings> = {}): KeyboardShortcut[] => {
-  const resolvedBindings: SplitViewShortcutBindings = {
-    ...DEFAULT_SPLIT_VIEW_SHORTCUTS,
-    ...bindings,
-  };
-
-  return [
-    {
-      key: '\\',
-      ctrlKey: true,
-      shiftKey: false,
-      handler: actions.splitRight,
-      description: 'Split terminal right',
-    },
-    {
-      key: '\\',
-      ctrlKey: true,
-      shiftKey: true,
-      handler: actions.splitDown,
-      description: 'Split terminal down',
-    },
-    // Ctrl+1 through Ctrl+9 to focus group by index (0-based)
-    ...Array.from({ length: 9 }, (_, i) => ({
-      key: String(i + 1),
-      ctrlKey: true,
-      shiftKey: false,
-      handler: () => actions.focusGroup(i),
-      description: `Focus terminal group ${i + 1}`,
-    })),
-    createConfiguredShortcut(
-      resolvedBindings.closeTab,
-      DEFAULT_SPLIT_VIEW_SHORTCUTS.closeTab,
-      actions.closeTab,
-      'Close active tab',
-    ),
-    createConfiguredShortcut(
-      resolvedBindings.nextTab,
-      DEFAULT_SPLIT_VIEW_SHORTCUTS.nextTab,
-      actions.nextTab,
-      'Next tab in group',
-    ),
-    createConfiguredShortcut(
-      resolvedBindings.prevTab,
-      DEFAULT_SPLIT_VIEW_SHORTCUTS.prevTab,
-      actions.prevTab,
-      'Previous tab in group',
-    ),
-    // Like the split shortcuts above, these intentionally keep firing while a
-    // terminal has focus — terminal emulators reserve Ctrl+Shift+PageUp/Down
-    // for tab reordering (the remote shell does not use this chord).
-    createConfiguredShortcut(
-      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabLeft,
-      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabLeft,
-      actions.moveTabLeft,
-      'Move tab left within group',
-    ),
-    createConfiguredShortcut(
-      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabRight,
-      DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabRight,
-      actions.moveTabRight,
-      'Move tab right within group',
-    ),
-  ];
-};
+}, bindings: Partial<ShortcutBindings> = {}): KeyboardShortcut[] => [
+  createConfiguredShortcut(
+    bindings.splitRight ?? 'Ctrl+\\',
+    'Ctrl+\\',
+    actions.splitRight,
+    'Split terminal right',
+  ),
+  createConfiguredShortcut(
+    bindings.splitDown ?? 'Ctrl+Shift+\\',
+    'Ctrl+Shift+\\',
+    actions.splitDown,
+    'Split terminal down',
+  ),
+  // Ctrl+1 through Ctrl+9 to focus group by index (0-based)
+  ...Array.from({ length: 9 }, (_, i) => ({
+    key: String(i + 1),
+    ctrlKey: true,
+    shiftKey: false,
+    handler: () => actions.focusGroup(i),
+    description: `Focus terminal group ${i + 1}`,
+  })),
+  createConfiguredShortcut(
+    bindings.closeSession ?? 'Ctrl+W',
+    'Ctrl+W',
+    actions.closeTab,
+    'Close active tab',
+  ),
+  createConfiguredShortcut(
+    bindings.nextTab ?? 'Ctrl+Tab',
+    'Ctrl+Tab',
+    actions.nextTab,
+    'Next tab in group',
+  ),
+  createConfiguredShortcut(
+    bindings.previousTab ?? 'Ctrl+Shift+Tab',
+    'Ctrl+Shift+Tab',
+    actions.prevTab,
+    'Previous tab in group',
+  ),
+  // Like the split shortcuts above, these intentionally keep firing while a
+  // terminal has focus — terminal emulators reserve Ctrl+Shift+PageUp/Down
+  // for tab reordering (the remote shell does not use this chord).
+  createConfiguredShortcut(
+    bindings.moveTabLeft ?? 'Ctrl+Shift+PageUp',
+    'Ctrl+Shift+PageUp',
+    actions.moveTabLeft,
+    'Move tab left within group',
+  ),
+  createConfiguredShortcut(
+    bindings.moveTabRight ?? 'Ctrl+Shift+PageDown',
+    'Ctrl+Shift+PageDown',
+    actions.moveTabRight,
+    'Move tab right within group',
+  ),
+];

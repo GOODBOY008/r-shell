@@ -30,7 +30,9 @@ export function getSavedTheme(): ThemeMode {
   } catch {
     // Ignore invalid JSON in localStorage
   }
-  return 'dark';
+  // Fresh installs follow the OS appearance; applyTheme('auto') resolves to
+  // light when the system has no dark preference.
+  return 'auto';
 }
 
 export function initializeTheme(): void {

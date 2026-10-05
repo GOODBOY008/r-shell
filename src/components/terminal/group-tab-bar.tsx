@@ -16,7 +16,8 @@ import {
   ContextMenuSubTrigger,
   ContextMenuSubContent,
 } from '../ui/context-menu';
-import { DEFAULT_APP_KEYBOARD_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { useShortcutBindings } from '@/lib/shortcut-registry';
 import { announce } from '@/lib/live-announcer';
 
 // ── Module-level drag state (shared across all GroupTabBar instances) ──
@@ -87,21 +88,23 @@ export function GroupTabBar({
   onDetachTab,
 }: GroupTabBarProps) {
   const { t } = useTranslation();
-  const duplicateTabShortcut = formatKeyboardShortcut(
-    'Ctrl+D',
-    navigator.platform.toUpperCase().includes('MAC'),
-  );
+  // Tooltips follow the customizable bindings (shortcut registry), not
+  // fixed chords — the same source the engine registers from.
+  const shortcutBindings = useShortcutBindings();
+  const isMac = navigator.platform.toUpperCase().includes('MAC');
+  // Duplicate Tab is a menu action outside the remappable set — literal.
+  const duplicateTabShortcut = formatKeyboardShortcut('Ctrl+D', isMac);
   const formattedCloseTabShortcut = formatKeyboardShortcut(
-    closeTabShortcut ?? DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
-    navigator.platform.toUpperCase().includes('MAC'),
+    closeTabShortcut ?? shortcutBindings.closeSession,
+    isMac,
   );
   const formattedMoveTabLeftShortcut = formatKeyboardShortcut(
-    DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabLeft,
-    navigator.platform.toUpperCase().includes('MAC'),
+    shortcutBindings.moveTabLeft,
+    isMac,
   );
   const formattedMoveTabRightShortcut = formatKeyboardShortcut(
-    DEFAULT_APP_KEYBOARD_SHORTCUTS.moveTabRight,
-    navigator.platform.toUpperCase().includes('MAC'),
+    shortcutBindings.moveTabRight,
+    isMac,
   );
   const { dispatch } = useTerminalGroups();
   const [dropIndex, setDropIndex] = useState<number | null>(null);

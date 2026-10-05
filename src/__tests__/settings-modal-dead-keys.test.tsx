@@ -62,6 +62,8 @@ describe('SettingsModal removed-field migration', () => {
 
   it('strips removed dead keys from a legacy blob when saving', () => {
     // A pre-cleanup blob carrying the fields of removed controls (issue #163)
+    // plus the pre-registry flat shortcut keys and the dead terminal fields
+    // of the old keyboard/terminal tabs.
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
       theme: 'dark',
       checkUpdates: true,
@@ -75,6 +77,17 @@ describe('SettingsModal removed-field migration', () => {
       logLevel: 'debug',
       maxLogSize: 100,
       telemetry: true,
+      // pre-registry flat shortcut keys (superseded by shortcutBindings)
+      newSession: 'Alt+N',
+      closeSession: 'Alt+W',
+      nextTab: 'Ctrl+PageDown',
+      previousTab: 'Ctrl+PageUp',
+      // dead terminal-appearance fields (own store owns them now)
+      fontSize: 20,
+      fontFamily: 'Menlo',
+      colorScheme: 'light',
+      cursorStyle: 'bar',
+      scrollbackLines: 5000,
     }));
 
     render(<SettingsModal open onOpenChange={vi.fn()} />);
@@ -84,8 +97,20 @@ describe('SettingsModal removed-field migration', () => {
     // Live fields survive…
     expect(saved.theme).toBe('dark');
     expect(saved.checkUpdates).toBe(true);
-    // …and the removed fields are gone instead of being written back.
-    for (const key of ['savePasswords', 'autoLockTimeout', 'showConnectionManager', 'showSystemMonitor', 'showStatusBar', 'enableNotifications', 'logLevel', 'maxLogSize', 'telemetry']) {
+    // The legacy custom chords migrate into the sparse map…
+    expect(saved.shortcutBindings).toEqual({
+      newSession: 'Alt+N',
+      closeSession: 'Alt+W',
+      nextTab: 'Ctrl+PageDown',
+      previousTab: 'Ctrl+PageUp',
+    });
+    // …and every removed field is gone instead of being written back.
+    for (const key of [
+      'savePasswords', 'autoLockTimeout', 'showConnectionManager', 'showSystemMonitor',
+      'showStatusBar', 'enableNotifications', 'logLevel', 'maxLogSize', 'telemetry',
+      'newSession', 'closeSession', 'nextTab', 'previousTab',
+      'fontSize', 'fontFamily', 'colorScheme', 'cursorStyle', 'scrollbackLines',
+    ]) {
       expect(key in saved).toBe(false);
     }
   });

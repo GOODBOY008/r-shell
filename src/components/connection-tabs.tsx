@@ -10,7 +10,8 @@ import {
   ContextMenuShortcut,
   ContextMenuTrigger,
 } from './ui/context-menu';
-import { DEFAULT_APP_KEYBOARD_SHORTCUTS, formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { useShortcutBindings } from '@/lib/shortcut-registry';
 
 interface ConnectionTab {
   id: string;
@@ -46,13 +47,14 @@ export function ConnectionTabs({
   onCloseToLeft
 }: ConnectionTabsProps) {
   const { t } = useTranslation();
-  const duplicateTabShortcut = formatKeyboardShortcut(
-    'Ctrl+D',
-    navigator.platform.toUpperCase().includes('MAC'),
-  );
+  // Follows the customizable close binding (shortcut registry).
+  const shortcutBindings = useShortcutBindings();
+  const isMac = navigator.platform.toUpperCase().includes('MAC');
+  // Duplicate Tab is a menu action outside the remappable set — literal.
+  const duplicateTabShortcut = formatKeyboardShortcut('Ctrl+D', isMac);
   const closeTabShortcut = formatKeyboardShortcut(
-    DEFAULT_APP_KEYBOARD_SHORTCUTS.closeSession,
-    navigator.platform.toUpperCase().includes('MAC'),
+    shortcutBindings.closeSession,
+    isMac,
   );
 
   return (

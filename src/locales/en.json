@@ -359,12 +359,7 @@
     "keyboard": {
       "title": "Keyboard Shortcuts",
       "desc": "Customize keyboard shortcuts for common actions.",
-      "newSession": "New Session",
-      "closeSession": "Close Session",
-      "nextTab": "Next Tab",
-      "previousTab": "Previous Tab",
-      "effectiveKeys": "Actual keys",
-      "newSessionNote": "The ⌘N default is handled by the app menu on macOS; other customized bindings apply as configured unless the chord is already used by another app feature or binding.",
+      "newSessionNote": "The default's ⌘ form is handled by the app menu on macOS; customized bindings apply as configured unless the chord is already used by another app feature or binding.",
       "note": "Changes to keyboard shortcuts take effect after saving.",
       "registerFailed": "Failed to register shortcut {{shortcut}}",
       "recorderHint": "Press a key combination (Esc to cancel)"
@@ -424,8 +419,6 @@
       "center": "Center (original size)",
       "tile": "Tile (repeat)"
     },
-    "tabScrollLeft": "Scroll left",
-    "tabScrollRight": "Scroll right",
     "updates": {
       "channel": {
         "label": "Update Channel",
@@ -440,6 +433,45 @@
         "command": "brew upgrade --cask r-shell",
         "copyCommand": "Copy update command",
         "commandCopied": "Update command copied to clipboard"
+      }
+    },
+    "search": {
+      "placeholder": "Search settings",
+      "showingResults": "Showing results for \"{{query}}\""
+    },
+    "shortcuts": {
+      "customBadge": "Custom",
+      "actionColumn": "Action",
+      "shortcutColumn": "Shortcut",
+      "statusColumn": "Status",
+      "category": {
+        "tabs": "Tabs",
+        "layout": "Layout",
+        "split": "Split Panes",
+        "app": "Application"
+      },
+      "resetBinding": "Reset {{action}} to default",
+      "conflictDuplicate": "\"{{chord}}\" is already used by {{other}} — the first match wins, so one of them would stop working",
+      "conflictReserved": "\"{{chord}}\" is reserved for switching terminal groups (Ctrl+1–9)",
+      "conflictMenuOwned": "\"{{chord}}\" is owned by the native app menu on macOS and would never reach this command",
+      "conflictSummary_one": "Resolve {{count}} shortcut conflict before saving",
+      "conflictSummary_other": "Resolve {{count}} shortcut conflicts before saving",
+      "conflictSaveBlocked": "Saving is disabled until all conflicts are resolved.",
+      "fixedNote": "Ctrl+1–9 (switch terminal group) cannot be remapped.",
+      "command": {
+        "newSession": "New Session",
+        "closeSession": "Close Session",
+        "nextTab": "Next Tab",
+        "previousTab": "Previous Tab",
+        "moveTabLeft": "Move Tab Left",
+        "moveTabRight": "Move Tab Right",
+        "toggleLeftSidebar": "Toggle Left Sidebar",
+        "toggleBottomPanel": "Toggle Bottom Panel",
+        "toggleRightSidebar": "Toggle Right Sidebar",
+        "toggleZenMode": "Toggle Zen Mode",
+        "splitRight": "Split Right",
+        "splitDown": "Split Down",
+        "openSettings": "Open Settings"
       }
     }
   },

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 // ── Hoisted mocks (must exist before vi.mock factories run) ─────────────────
 
@@ -80,6 +80,8 @@ describe('SettingsModal version display', () => {
     mockGetVersion.mockResolvedValue('2.9.3');
 
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    // The Advanced section (update group) sits behind the left nav.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
 
     expect(screen.getByText('Version')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('2.9.3')).toBeTruthy());
@@ -89,6 +91,8 @@ describe('SettingsModal version display', () => {
     mockGetVersion.mockRejectedValue(new Error('unavailable'));
 
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    // The Advanced section (update group) sits behind the left nav.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
 
     expect(screen.getByText('Version')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('—')).toBeTruthy());
@@ -98,6 +102,8 @@ describe('SettingsModal version display', () => {
     mockIsTauri.mockReturnValue(false);
 
     render(<SettingsModal open onOpenChange={vi.fn()} />);
+    // The Advanced section (update group) sits behind the left nav.
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
 
     expect(screen.getByText('Version')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('—')).toBeTruthy());
