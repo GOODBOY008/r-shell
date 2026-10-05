@@ -395,6 +395,12 @@ done
 
     /// Network bandwidth sampling command (two reads 1s apart).
     pub fn network_bandwidth_cmd(&self) -> &'static str {
+        // An interface that appears only in the second snapshot (a VPN coming
+        // up mid-sample, a dongle plugged in) is skipped by `($2 in rx)`. Both
+        // netstat column 7 and /sys counters are cumulative since the interface
+        // came up, so subtracting an unset baseline would report its whole
+        // lifetime as one second's throughput — gigabytes per second.
+        //
         // Both variants emit two tagged snapshots ("1," then "2,") into a
         // single stream and let the final awk diff them, so the output is a
         // flat `name,rx_per_sec,tx_per_sec` list.
@@ -412,7 +418,7 @@ done
                 r#"
 ( netstat -ibn | awk 'NR>1 && $1!="lo0" && $4!="" && !seen[$1]++ {print "1,"$1","$7","$10}'
   sleep 1
-  netstat -ibn | awk 'NR>1 && $1!="lo0" && $4!="" && !seen[$1]++ {print "2,"$1","$7","$10}' ) | awk -F, '$1=="1"{rx[$2]=$3;tx[$2]=$4;next} $1=="2"{d=$3-rx[$2];u=$4-tx[$2]; if(d<0)d=0; if(u<0)u=0; printf "%s,%.0f,%.0f\n",$2,d,u}'
+  netstat -ibn | awk 'NR>1 && $1!="lo0" && $4!="" && !seen[$1]++ {print "2,"$1","$7","$10}' ) | awk -F, '$1=="1"{rx[$2]=$3;tx[$2]=$4;next} $1=="2"&&($2 in rx){d=$3-rx[$2];u=$4-tx[$2]; if(d<0)d=0; if(u<0)u=0; printf "%s,%.0f,%.0f\n",$2,d,u}'
 "#
             }
             _ => {
@@ -425,7 +431,7 @@ done
   sleep 1
   for d in /sys/class/net/*; do n=${d##*/}
     [ "$n" = lo ] || echo "2,$n,$(cat $d/statistics/rx_bytes 2>/dev/null||echo 0),$(cat $d/statistics/tx_bytes 2>/dev/null||echo 0)"
-  done ) | awk -F, '$1=="1"{rx[$2]=$3;tx[$2]=$4;next} $1=="2"{d=$3-rx[$2];u=$4-tx[$2]; if(d<0)d=0; if(u<0)u=0; printf "%s,%.0f,%.0f\n",$2,d,u}'
+  done ) | awk -F, '$1=="1"{rx[$2]=$3;tx[$2]=$4;next} $1=="2"&&($2 in rx){d=$3-rx[$2];u=$4-tx[$2]; if(d<0)d=0; if(u<0)u=0; printf "%s,%.0f,%.0f\n",$2,d,u}'
 "#
             }
         }
@@ -689,6 +695,14 @@ mod tests {
             // The pipe must close on the same line as the subshell, or the
             // shell treats `| awk` as a separate (invalid) command.
             assert!(cmd.contains(") | awk -F,"), "{family:?} pipe not attached");
+            // An interface appearing only in the second snapshot must be
+            // skipped: `rx[$2]` would be unset and the subtraction would report
+            // its since-boot total as one second's throughput. Asserted as text
+            // because the three CI platforms cannot all run awk.
+            assert!(
+                cmd.contains(r#"($2 in rx)"#),
+                "{family:?} would diff against an unset baseline"
+            );
         }
     }
 }

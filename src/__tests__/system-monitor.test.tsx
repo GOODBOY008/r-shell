@@ -219,11 +219,34 @@ describe('resolveActiveInterface', () => {
   const names = ['en0', 'en1'];
 
   it('lets a live user pick win over the busiest interface', () => {
-    expect(resolveActiveInterface('en0', names, bandwidth)).toBe('en0');
+    expect(resolveActiveInterface('en0', null, names, bandwidth)).toBe('en0');
+  });
+
+  // The flap this prevents: an idle-then-bursty host resolved to 'all' on every
+  // quiet poll and back to a NIC on every burst, and the component clears chart
+  // history on each switch — so the graph fragmented into one-point segments.
+  it('holds the previous auto pick while the host reads idle', () => {
+    const busy = [
+      { interface: 'en0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+      { interface: 'en1', rx_bytes_per_sec: 8_192, tx_bytes_per_sec: 0 },
+    ];
+    const idle = [
+      { interface: 'en0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+      { interface: 'en1', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+    ];
+    expect(resolveActiveInterface(null, null, ['en0', 'en1'], busy)).toBe('en1');
+    // The next poll is idle: hold en1 rather than dropping to the aggregate.
+    expect(resolveActiveInterface(null, 'en1', ['en0', 'en1'], idle)).toBe('en1');
+  });
+
+  it('re-picks when the previously held interface is gone', () => {
+    const busy = [{ interface: 'en1', rx_bytes_per_sec: 8_192, tx_bytes_per_sec: 0 }];
+    // utun0 was held but no longer exists; en1 carries traffic now.
+    expect(resolveActiveInterface(null, 'utun0', ['en1'], busy)).toBe('en1');
   });
 
   it('lets the user pin the aggregate, which auto would never pick', () => {
-    expect(resolveActiveInterface('all', names, bandwidth)).toBe('all');
+    expect(resolveActiveInterface('all', null, names, bandwidth)).toBe('all');
   });
 
   // The previous implementation guarded against this with
@@ -231,11 +254,11 @@ describe('resolveActiveInterface', () => {
   // interface that disappears (VPN torn down, dongle unplugged) resolves to
   // `undefined` and the card sits at a permanent 0 KB/s.
   it('falls back to auto when the pinned interface disappears', () => {
-    expect(resolveActiveInterface('utun0', names, bandwidth)).toBe('en1');
+    expect(resolveActiveInterface('utun0', null, names, bandwidth)).toBe('en1');
   });
 
   it('auto-selects while nothing has been pinned', () => {
-    expect(resolveActiveInterface(null, names, bandwidth)).toBe('en1');
+    expect(resolveActiveInterface(null, null, names, bandwidth)).toBe('en1');
   });
 });
 

@@ -495,6 +495,10 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
   // state so the polling effect can compare without subscribing to it —
   // depending on that state would make the effect re-trigger itself.
   const lastActiveInterface = useRef<string | null>(null);
+  // What auto-selection last chose. Held across idle polls so the selection —
+  // and with it the chart history — does not flap between the busiest NIC and
+  // the aggregate on a host that is quiet most of the time.
+  const previousAutoInterface = useRef<string | null>(null);
   const [_interfaceBandwidthMap, setInterfaceBandwidthMap] = useState<Map<string, InterfaceBandwidth>>(new Map());
 
   // Network usage monitoring - fetch real bandwidth data
@@ -509,6 +513,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       setSelectedInterface('all');
       setUserPickedInterface(null);
       lastActiveInterface.current = null;
+      previousAutoInterface.current = null;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setInterfaceBandwidthMap(new Map());
       return;
@@ -554,9 +559,11 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           // torn down) fall back to auto rather than reporting a dead 0 KB/s.
           const activeInterface = resolveActiveInterface(
             userPickedInterface,
+            previousAutoInterface.current,
             interfaceNames,
             result.bandwidth,
           );
+          previousAutoInterface.current = activeInterface;
           // Sync the dropdown to whatever we resolved. React bails out when
           // the value is unchanged, so this does not re-render every poll —
           // and not reading `selectedInterface` here is what keeps this effect
