@@ -73,6 +73,23 @@ interface LogMonitorProps {
   externalLogPath?: string;
   /** Increment to re-trigger loading the same externalLogPath */
   externalLogPathKey?: number;
+  /**
+   * Whether this panel's tab is the visible one. The panel stays mounted so its
+   * filters and scroll position survive a tab switch, but while it is hidden it
+   * must not run background work: switching the active connection used to
+   * re-run log discovery for a panel nobody was looking at, which raised a
+   * "no sources" toast for a tab the user had already left.
+   */
+  active?: boolean;
+  /**
+   * The owning session's status, used only as a retry signal: it re-triggers
+   * discovery when a connection comes up, since the tab can read `connected`
+   * before the backend has registered a session for it. Discovery is
+   * deliberately NOT gated on it — a status of `disconnected` can still have a
+   * live SSH session (the PTY dropped), and refusing to probe would strand the
+   * panel. Defaults to `'connected'` for callers that do not track status.
+   */
+  connectionStatus?: 'connected' | 'connecting' | 'disconnected' | 'pending';
 }
 
 interface LogSource {
@@ -147,6 +164,10 @@ const LEVEL_LABELS: Record<LogLevel, string> = {
 };
 
 const LINE_COUNT_OPTIONS = [50, 100, 200, 500, 1000];
+
+/** Not-ready discovery retries: enough to outlast a slow SSH handshake. */
+const MAX_DISCOVERY_ATTEMPTS = 4;
+const RETRY_BASE_MS = 1500;
 const REFRESH_INTERVALS = [
   { value: 1, label: "1s" },
   { value: 2, label: "2s" },
@@ -242,7 +263,7 @@ const SOURCE_TYPE_LABELS: Record<string, { icon: React.ReactNode; label: string 
 
 // ── Component ──
 
-export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }: LogMonitorProps) {
+export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, active = true, connectionStatus = 'connected' }: LogMonitorProps) {
   const { t } = useTranslation();
   // Source state
   const [sources, setSources] = useState<LogSource[]>([]);
@@ -269,21 +290,60 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
   const [scrollLocked, setScrollLocked] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastScrollTop = useRef(0);
+  // The connection whose state the panel currently holds. Async answers that
+  // outlive it — an in-flight read or discovery while the user switched hosts —
+  // must be dropped, so loadLog and discoverSources compare against this ref.
+  const currentConnectionRef = useRef(connectionId);
+  // The connection this panel has already finished discovering for. Kept in a
+  // ref so re-running the effect does not re-toast for a connection already
+  // shown, and so that a discovery deferred while hidden still happens when the
+  // tab is opened.
+  const discoveredForRef = useRef<string | null>(null);
+  // Not-ready retries: how many have been spent on the current connection, and
+  // a nonce to re-trigger the discovery effect from a timer.
+  const attemptRef = useRef(0);
+  const [retryNonce, setRetryNonce] = useState(0);
+  // File-browser sources stay per-connection: A → B → A brings back the file
+  // the user opened from A's browser without leaking it into B's list.
+  const externalSourceForRef = useRef<Map<string, LogSource>>(new Map());
 
   // ── Source discovery ──
 
-  const discoverSources = useCallback(async () => {
-    if (!connectionId) return;
+  /**
+   * Run log-source discovery. Resolves to true only when a discovery actually
+   * completed — a session that is not ready yet must stay retryable, otherwise
+   * opening the tab later would show an empty list with nothing to trigger a
+   * retry.
+   */
+  const discoverSources = useCallback(async (): Promise<boolean> => {
+    if (!connectionId) return false;
     setIsDiscovering(true);
     try {
       const result = await invoke<LogSourcesResponse>("discover_log_sources", {
         connectionId,
       });
+
+      // The user switched connections while this discovery was in flight; its
+      // answer describes a connection the panel no longer shows — same guard
+      // as in loadLog. `true` (completed) so a stale probe never schedules a
+      // retry; the effect's `cancelled` flag keeps the stale caller from
+      // marking `discoveredForRef`.
+      if (currentConnectionRef.current !== connectionId) return true;
+
       if (result.success) {
-        setSources(result.sources);
+        // Keep custom sources already in state — a file-browser entry restored
+        // by the connection switch, or one added before discovery finished.
+        // The discovered list only knows discovered sources.
+        setSources((prev) => {
+          const customs = prev.filter(
+            (s) => s.category === "custom" && !result.sources.some((r) => r.id === s.id)
+          );
+          return customs.length > 0 ? [...result.sources, ...customs] : result.sources;
+        });
         if (result.sources.length === 0) {
           toast.info(t('logMonitor.noSourcesDiscovered'));
         }
+        return true;
       } else if (result.error && (
         result.error.includes('Connection not found') ||
         result.error.includes('Session not found')
@@ -291,31 +351,100 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
         // Transient: the SSH session was just created and may not be fully
         // initialized yet. Silently skip — the user can rediscover later.
         console.debug('[LogMonitor] Session not ready yet, skipping source discovery:', result.error);
+        return false;
       } else {
         toast.error(t('logMonitor.failedToDiscoverSources'), {
           description: result.error,
         });
+        return true;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('Connection not found') || msg.includes('Session not found')) {
         console.debug('[LogMonitor] Session not ready yet, skipping source discovery:', msg);
+        return false;
       } else {
         toast.error(t('logMonitor.failedToDiscoverSources'), {
           description: msg,
         });
+        return true;
       }
     } finally {
       setIsDiscovering(false);
     }
   }, [connectionId]);
 
-  // Auto-discover on mount
+  // Discover when the panel is looked at — on first activation, and again for
+  // each new connection the user switches to *while watching*. A connection
+  // switch with the tab hidden does no work, so switching sessions never pops a
+  // "no sources" toast at a panel the user already left.
   useEffect(() => {
-    if (connectionId) {
-      discoverSources();
+    if (!connectionId || !active) return;
+    if (discoveredForRef.current === connectionId) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    void (async () => {
+      const done = await discoverSources();
+      if (cancelled) return;
+      if (done) {
+        discoveredForRef.current = connectionId;
+        attemptRef.current = 0;
+        return;
+      }
+      // No backend session for this connection yet. `connectionStatus` in the
+      // dependency list is the normal signal — it flips when the session comes
+      // up — but it can flip before the backend has actually registered, so a
+      // status-only retry would leave the panel permanently empty. Back off and
+      // try again a few times regardless.
+      if (attemptRef.current >= MAX_DISCOVERY_ATTEMPTS) return;
+      attemptRef.current += 1;
+      timer = setTimeout(
+        () => setRetryNonce((n) => n + 1),
+        attemptRef.current * RETRY_BASE_MS,
+      );
+    })();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [connectionId, active, connectionStatus, retryNonce, discoverSources]);
+
+  // The loaded lines and the selected source belong to one specific connection.
+  // Without this, switching hosts kept showing the previous connection's log
+  // content (and its source in the dropdown) until discovery caught up — the
+  // source list refreshed but the text below it did not.
+  //
+  // Only per-connection state is dropped. Filters, line count, the custom-path
+  // box and the live-tail toggle are the user's own settings and survive the
+  // switch, which is the reason this panel stays mounted at all.
+  useEffect(() => {
+    if (currentConnectionRef.current === connectionId) return;
+    currentConnectionRef.current = connectionId;
+    // The sources this connection had are being thrown away, so the
+    // "already discovered" mark has to go with them. Leaving it set strands
+    // the panel: A → B → A would come back marked as discovered with an empty
+    // list and no toast to explain it.
+    discoveredForRef.current = null;
+    attemptRef.current = 0;
+    setRetryNonce(0);
+    setSources([]);
+    setSelectedSourceId("");
+    setRawLines([]);
+    // A file the user opened from this connection's file browser comes back
+    // with the connection — it is user state, like the filters above.
+    const remembered = connectionId
+      ? externalSourceForRef.current.get(connectionId)
+      : undefined;
+    if (remembered) {
+      setSources((prev) =>
+        prev.some((s) => s.id === remembered.id) ? prev : [...prev, remembered]
+      );
+      setSelectedSourceId(remembered.id);
     }
-  }, [connectionId, discoverSources]);
+  }, [connectionId]);
 
   // ── Find selected source ──
   const selectedSource = useMemo(
@@ -343,6 +472,8 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
 
       if (!isAutoRefresh) setIsLoading(true);
 
+      const requestedFor = connectionId;
+
       try {
         const result = await invoke<{
           success: boolean;
@@ -354,6 +485,10 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
           path,
           lines: lineCount,
         });
+
+        // The user switched hosts while this read was in flight; its answer
+        // describes a connection the panel is no longer showing.
+        if (currentConnectionRef.current !== requestedFor) return;
 
         if (result.success && result.output) {
           const _prevScrollHeight = scrollRef.current?.scrollHeight ?? 0;
@@ -400,15 +535,16 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
     }
   }, [selectedSourceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-refresh timer
+  // Auto-refresh timer. Suspended while hidden so a live tail does not keep
+  // reading the remote file for a panel the user cannot see.
   useEffect(() => {
-    if (!autoRefresh || !selectedSourceId) return;
+    if (!autoRefresh || !selectedSourceId || !active) return;
     const interval = setInterval(
       () => { void loadLog(true); },
       refreshInterval * 1000
     );
     return () => clearInterval(interval);
-  }, [autoRefresh, selectedSourceId, refreshInterval, loadLog]);
+  }, [autoRefresh, selectedSourceId, refreshInterval, loadLog, active]);
 
   // Handle external log path (sent from file browser)
   useEffect(() => {
@@ -435,8 +571,21 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey }
       ];
     });
 
+    // Remember the owning connection so leaving and coming back restores it.
+    if (connectionId) {
+      externalSourceForRef.current.set(connectionId, {
+        id,
+        name,
+        source_type: "file",
+        path,
+        category: "custom",
+        size_human: undefined,
+      });
+    }
+
     // Select and load it
     setSelectedSourceId(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connectionId is deliberately not a dep: re-running on a switch would re-add the previous connection's file to the new one's list
   }, [externalLogPath, externalLogPathKey]);
 
   // ── Parse and filter lines ──

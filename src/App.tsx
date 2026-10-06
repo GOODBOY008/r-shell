@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
+import { useLazyTabs } from './lib/use-lazy-tabs';
 import { reconcileSessionHealth } from './lib/session-health';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -181,7 +182,7 @@ function AppContent() {
   const [detachedSessions, setDetachedSessions] = useState<DetachedSession[]>([]);
 
   // Right sidebar tab & log monitor integration
-  const [rightSidebarTab, setRightSidebarTab] = useState("monitor");
+  const rightSidebar = useLazyTabs("monitor");
   const [externalLogPath, setExternalLogPath] = useState<string | undefined>();
   const [externalLogPathKey, setExternalLogPathKey] = useState(0);
 
@@ -1405,13 +1406,15 @@ function AppContent() {
   const handleOpenInLogMonitor = useCallback((filePath: string) => {
     setExternalLogPath(filePath);
     setExternalLogPathKey((k) => k + 1);
-    setRightSidebarTab("logs");
+    // `select` (not just setActive) so the Logs panel is mounted before it is
+    // shown — otherwise this entry point would focus an empty panel.
+    rightSidebar.select("logs");
     // Ensure right sidebar is visible
     if (!layout.rightSidebarVisible) {
       toggleRightSidebar();
     }
     toast.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
-  }, [layout.rightSidebarVisible, toggleRightSidebar, t]);
+  }, [rightSidebar.select, layout.rightSidebarVisible, toggleRightSidebar, t]);
 
   // Opens (or focuses) the dedicated Tauri window editing a remote file.
   // One window per (connection, file) — reopening a file reuses the existing
@@ -2347,7 +2350,7 @@ function AppContent() {
                 maxSize={30}
                 onResize={(size) => setRightSidebarSize(size)}
               >
-                <Tabs value={rightSidebarTab} onValueChange={setRightSidebarTab} className="h-full flex flex-col">
+                <Tabs value={rightSidebar.active} onValueChange={rightSidebar.select} className="h-full flex flex-col">
                   <TabsList className="inline-flex w-auto mx-1 mt-2">
                     <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
@@ -2358,21 +2361,26 @@ function AppContent() {
                   <div className="flex-1 mt-0 overflow-hidden relative">
                     <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       <div className="h-full overflow-hidden px-1 py-2">
-                        {activeConnection ? (
+                        {activeConnection && rightSidebar.mounted.has('monitor') ? (
                           <ErrorBoundary label={t('app.systemMonitor')}>
-                            <SystemMonitor connectionId={activeConnection.connectionId} />
+                            <SystemMonitor
+                              connectionId={activeConnection.connectionId}
+                              active={rightSidebar.active === 'monitor'}
+                            />
                           </ErrorBoundary>
                         ) : null}
                       </div>
                     </TabsContent>
 
                     <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      {activeConnection ? (
+                      {activeConnection && rightSidebar.mounted.has('logs') ? (
                         <ErrorBoundary label={t('app.logMonitor')}>
                           <LogMonitor
                             connectionId={activeConnection.connectionId}
                             externalLogPath={externalLogPath}
                             externalLogPathKey={externalLogPathKey}
+                            active={rightSidebar.active === 'logs'}
+                            connectionStatus={activeConnection.status}
                           />
                         </ErrorBoundary>
                       ) : null}
@@ -2380,19 +2388,23 @@ function AppContent() {
 
                     <TabsContent value="commands" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       <div className="h-full overflow-hidden px-1 py-2">
-                        <ErrorBoundary label={t('app.quickCommands')}>
-                          <QuickCommandsPanel activeTerminalId={activeTerminalId} />
-                        </ErrorBoundary>
+                        {rightSidebar.mounted.has('commands') ? (
+                          <ErrorBoundary label={t('app.quickCommands')}>
+                            <QuickCommandsPanel activeTerminalId={activeTerminalId} />
+                          </ErrorBoundary>
+                        ) : null}
                       </div>
                     </TabsContent>
 
                     <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <ErrorBoundary label={t('app.portForwarding')}>
-                        <PortForwardingPanel
-                          connectionId={activeConnection?.connectionId ?? null}
-                          connectionNames={connectionNames}
-                        />
-                      </ErrorBoundary>
+                      {rightSidebar.mounted.has('port-forwarding') ? (
+                        <ErrorBoundary label={t('app.portForwarding')}>
+                          <PortForwardingPanel
+                            connectionId={activeConnection?.connectionId ?? null}
+                            connectionNames={connectionNames}
+                          />
+                        </ErrorBoundary>
+                      ) : null}
                     </TabsContent>
                   </div>
                 </Tabs>

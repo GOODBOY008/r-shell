@@ -325,3 +325,68 @@ describe('SystemMonitor network usage', () => {
     await waitFor(() => expect(selectedInterfaceName()).toBe('All'));
   });
 });
+
+/**
+ * Regression for #189: the sidebar keeps every visited panel mounted so its
+ * state survives a tab switch, which means a hidden panel would otherwise keep
+ * polling. SystemMonitor is the most expensive of them — six SSH round trips
+ * per tick, one of which is a remote `sleep 1` for the bandwidth probe.
+ */
+describe('SystemMonitor hidden panel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(cleanup);
+
+  it('issues no commands at all while its tab is hidden', async () => {
+    setupInvoke();
+    render(<SystemMonitor connectionId="conn-1" active={false} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Not one probe: no stats, no processes, no GPU, no bandwidth, no latency.
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it('probes once the tab is visible', async () => {
+    setupInvoke();
+    const { rerender } = render(<SystemMonitor connectionId="conn-1" active={false} />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mocks.invoke).not.toHaveBeenCalled();
+
+    rerender(<SystemMonitor connectionId="conn-1" active />);
+
+    await waitFor(() => {
+      expect(mocks.invoke).toHaveBeenCalledWith('get_system_stats', {
+        connectionId: 'conn-1',
+      });
+    });
+  });
+
+  // The intervals are 5 s / 10 s / 60 s, so a plain `setTimeout(50)` window can
+  // never observe a tick — this test has to advance the clock or it passes
+  // whether or not the guards exist.
+  it('stops polling when hidden and keeps the last reading on screen', async () => {
+    vi.useFakeTimers();
+    try {
+      setupInvoke();
+      const { rerender } = render(<SystemMonitor connectionId="conn-1" active />);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.invoke).toHaveBeenCalledWith('get_system_stats', { connectionId: 'conn-1' });
+      expect(screen.getByText('6547MB / 11995MB')).toBeTruthy();
+
+      rerender(<SystemMonitor connectionId="conn-1" active={false} />);
+      const callsAtSwitch = mocks.invoke.mock.calls.length;
+
+      // Well past the 5 s stats/process/GPU interval and the 10 s latency one.
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      // The reading stays put rather than blanking out, and nothing is fetched.
+      expect(screen.getByText('6547MB / 11995MB')).toBeTruthy();
+      expect(mocks.invoke.mock.calls.length).toBe(callsAtSwitch);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
