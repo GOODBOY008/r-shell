@@ -316,4 +316,80 @@ describe('LogMonitor drops content belonging to another connection', () => {
     expect(screen.queryByText('stale content from the old host')).toBeNull();
     expect(screen.getByText('fresh content from the new host')).toBeTruthy();
   });
+
+  // Same window, discovery flavor: a discovery that resolves after the user
+  // switched hosts must neither toast nor write for the old connection.
+  it('ignores a discovery that resolves after the connection changed', async () => {
+    let releaseStale: (() => void) | null = null;
+
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'discover_log_sources') {
+        if (releaseStale === null) {
+          // conn-1's discovery is held open so its answer lands after the
+          // switch. Empty sources is the macOS case that toasts.
+          await new Promise<void>((resolve) => { releaseStale = resolve; });
+          return { success: true, sources: [] };
+        }
+        // conn-2's discovery legitimately found something: no toast of its own.
+        return {
+          success: true,
+          sources: [{ id: 'fresh', name: 'fresh.log', source_type: 'file', path: '/var/log/fresh.log', category: 'system', size_human: '1 KB' }],
+        };
+      }
+      return {};
+    });
+
+    const { rerender } = render(<LogMonitor connectionId="conn-1" active />);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(releaseStale).not.toBeNull();
+
+    rerender(<LogMonitor connectionId="conn-2" active />);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    releaseStale!();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(mocks.toast.info).not.toHaveBeenCalled();
+    expect(mocks.toast.error).not.toHaveBeenCalled();
+  });
+
+  // A file the user opened from the file browser comes back when they return
+  // to the connection that opened it — it is user state, like the filters.
+  it('restores a file-browser log source when returning to its connection', async () => {
+    mocks.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'discover_log_sources') return { success: true, sources: [] };
+      if (command === 'read_log') {
+        const { path } = args as { path: string };
+        return path === '/var/log/system.log'
+          ? { success: true, output: 'content of the opened file' }
+          : { success: true, output: '' };
+      }
+      return {};
+    });
+
+    const triggerText = () =>
+      Array.from(document.querySelectorAll('[data-slot="select-trigger"]'))
+        .map((el) => el.textContent)
+        .join(' ');
+
+    const { rerender } = render(
+      <LogMonitor connectionId="conn-1" active externalLogPath="/var/log/system.log" externalLogPathKey={1} />,
+    );
+    await waitFor(() => expect(screen.getByText('content of the opened file')).toBeTruthy());
+    // The entry is in the dropdown too — discovery, which finishes after the
+    // custom source was added, must not wipe it.
+    await waitFor(() => expect(triggerText()).toContain('system.log'));
+
+    // Leave to another host — the panel resets — then come back.
+    rerender(
+      <LogMonitor connectionId="conn-2" active externalLogPath="/var/log/system.log" externalLogPathKey={1} />,
+    );
+    await waitFor(() => expect(screen.queryByText('content of the opened file')).toBeNull());
+
+    rerender(
+      <LogMonitor connectionId="conn-1" active externalLogPath="/var/log/system.log" externalLogPathKey={1} />,
+    );
+    await waitFor(() => expect(screen.getByText('content of the opened file')).toBeTruthy());
+    expect(triggerText()).toContain('system.log');
+  });
 });

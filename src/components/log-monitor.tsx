@@ -290,6 +290,10 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
   const [scrollLocked, setScrollLocked] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastScrollTop = useRef(0);
+  // The connection whose state the panel currently holds. Async answers that
+  // outlive it — an in-flight read or discovery while the user switched hosts —
+  // must be dropped, so loadLog and discoverSources compare against this ref.
+  const currentConnectionRef = useRef(connectionId);
   // The connection this panel has already finished discovering for. Kept in a
   // ref so re-running the effect does not re-toast for a connection already
   // shown, and so that a discovery deferred while hidden still happens when the
@@ -299,6 +303,9 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
   // a nonce to re-trigger the discovery effect from a timer.
   const attemptRef = useRef(0);
   const [retryNonce, setRetryNonce] = useState(0);
+  // File-browser sources stay per-connection: A → B → A brings back the file
+  // the user opened from A's browser without leaking it into B's list.
+  const externalSourceForRef = useRef<Map<string, LogSource>>(new Map());
 
   // ── Source discovery ──
 
@@ -315,8 +322,24 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
       const result = await invoke<LogSourcesResponse>("discover_log_sources", {
         connectionId,
       });
+
+      // The user switched connections while this discovery was in flight; its
+      // answer describes a connection the panel no longer shows — same guard
+      // as in loadLog. `true` (completed) so a stale probe never schedules a
+      // retry; the effect's `cancelled` flag keeps the stale caller from
+      // marking `discoveredForRef`.
+      if (currentConnectionRef.current !== connectionId) return true;
+
       if (result.success) {
-        setSources(result.sources);
+        // Keep custom sources already in state — a file-browser entry restored
+        // by the connection switch, or one added before discovery finished.
+        // The discovered list only knows discovered sources.
+        setSources((prev) => {
+          const customs = prev.filter(
+            (s) => s.category === "custom" && !result.sources.some((r) => r.id === s.id)
+          );
+          return customs.length > 0 ? [...result.sources, ...customs] : result.sources;
+        });
         if (result.sources.length === 0) {
           toast.info(t('logMonitor.noSourcesDiscovered'));
         }
@@ -397,7 +420,6 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
   // Only per-connection state is dropped. Filters, line count, the custom-path
   // box and the live-tail toggle are the user's own settings and survive the
   // switch, which is the reason this panel stays mounted at all.
-  const currentConnectionRef = useRef(connectionId);
   useEffect(() => {
     if (currentConnectionRef.current === connectionId) return;
     currentConnectionRef.current = connectionId;
@@ -411,6 +433,17 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
     setSources([]);
     setSelectedSourceId("");
     setRawLines([]);
+    // A file the user opened from this connection's file browser comes back
+    // with the connection — it is user state, like the filters above.
+    const remembered = connectionId
+      ? externalSourceForRef.current.get(connectionId)
+      : undefined;
+    if (remembered) {
+      setSources((prev) =>
+        prev.some((s) => s.id === remembered.id) ? prev : [...prev, remembered]
+      );
+      setSelectedSourceId(remembered.id);
+    }
   }, [connectionId]);
 
   // ── Find selected source ──
@@ -538,8 +571,21 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
       ];
     });
 
+    // Remember the owning connection so leaving and coming back restores it.
+    if (connectionId) {
+      externalSourceForRef.current.set(connectionId, {
+        id,
+        name,
+        source_type: "file",
+        path,
+        category: "custom",
+        size_human: undefined,
+      });
+    }
+
     // Select and load it
     setSelectedSourceId(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connectionId is deliberately not a dep: re-running on a switch would re-add the previous connection's file to the new one's list
   }, [externalLogPath, externalLogPathKey]);
 
   // ── Parse and filter lines ──

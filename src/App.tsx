@@ -1414,7 +1414,7 @@ function AppContent() {
       toggleRightSidebar();
     }
     toast.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
-  }, [rightSidebar, layout.rightSidebarVisible, toggleRightSidebar, t]);
+  }, [rightSidebar.select, layout.rightSidebarVisible, toggleRightSidebar, t]);
 
   // Opens (or focuses) the dedicated Tauri window editing a remote file.
   // One window per (connection, file) — reopening a file reuses the existing
