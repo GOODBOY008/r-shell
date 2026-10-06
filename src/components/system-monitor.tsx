@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { withRetry, CancelledError } from '@/lib/async-retry';
+import { resolveActiveInterface } from '@/lib/network-interface';
 import { Activity, Terminal, HardDrive, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
@@ -487,6 +488,17 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
   const [networkHistory, setNetworkHistory] = useState<NetworkHistoryData[]>([]);
   const [networkInterfaces, setNetworkInterfaces] = useState<string[]>([]);
   const [selectedInterface, setSelectedInterface] = useState<string>('all');
+  // null = auto-select the busiest interface; a string = the user chose it and
+  // auto-selection must stop overriding their choice (including 'all').
+  const [userPickedInterface, setUserPickedInterface] = useState<string | null>(null);
+  // Mirrors the interface the history buffer was filled with. A ref rather than
+  // state so the polling effect can compare without subscribing to it —
+  // depending on that state would make the effect re-trigger itself.
+  const lastActiveInterface = useRef<string | null>(null);
+  // What auto-selection last chose. Held across idle polls so the selection —
+  // and with it the chart history — does not flap between the busiest NIC and
+  // the aggregate on a host that is quiet most of the time.
+  const previousAutoInterface = useRef<string | null>(null);
   const [_interfaceBandwidthMap, setInterfaceBandwidthMap] = useState<Map<string, InterfaceBandwidth>>(new Map());
 
   // Network usage monitoring - fetch real bandwidth data
@@ -499,6 +511,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
       setNetworkInterfaces([]);
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSelectedInterface('all');
+      setUserPickedInterface(null);
+      lastActiveInterface.current = null;
+      previousAutoInterface.current = null;
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setInterfaceBandwidthMap(new Map());
       return;
@@ -527,18 +542,6 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           setNetworkInterfaces(prevInterfaces => {
             // Only update if interfaces changed
             if (JSON.stringify(prevInterfaces) !== JSON.stringify(interfaceNames)) {
-              // Auto-select the first outbound interface (typically eth0, ens*, enp*)
-              // if no interface selected yet or if current selection is no longer available
-              setSelectedInterface(prev => {
-                if (prev === 'all' || !interfaceNames.includes(prev)) {
-                  // Find the primary outbound interface - prefer eth0, ens*, enp*, or first available
-                  const outboundInterface = interfaceNames.find(name => 
-                    name.startsWith('eth') || name.startsWith('ens') || name.startsWith('enp')
-                  ) || interfaceNames[0];
-                  return outboundInterface || 'all';
-                }
-                return prev;
-              });
               return interfaceNames;
             }
             return prevInterfaces;
@@ -551,11 +554,37 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
           });
           setInterfaceBandwidthMap(newBandwidthMap);
 
+          // Resolve which interface to display. A user pick wins while it is
+          // still present; if that interface disappears (dongle unplugged, VPN
+          // torn down) fall back to auto rather than reporting a dead 0 KB/s.
+          const activeInterface = resolveActiveInterface(
+            userPickedInterface,
+            previousAutoInterface.current,
+            interfaceNames,
+            result.bandwidth,
+          );
+          previousAutoInterface.current = activeInterface;
+          // Sync the dropdown to whatever we resolved. React bails out when
+          // the value is unchanged, so this does not re-render every poll —
+          // and not reading `selectedInterface` here is what keeps this effect
+          // from re-triggering itself when auto-selection changes the pick.
+          setSelectedInterface(activeInterface);
+
+          // The chart is labelled with the selected interface, so an
+          // auto-switch has to drop the previous interface's history — the
+          // same thing the dropdown handler does.
+          if (lastActiveInterface.current !== activeInterface) {
+            if (lastActiveInterface.current !== null) {
+              setNetworkHistory([]);
+            }
+            lastActiveInterface.current = activeInterface;
+          }
+
           // Calculate bandwidth based on selected interface
           let totalDownload = 0;
           let totalUpload = 0;
-          
-          if (selectedInterface === 'all') {
+
+          if (activeInterface === 'all') {
             // Sum all interfaces for total bandwidth
             result.bandwidth.forEach(iface => {
               totalDownload += iface.rx_bytes_per_sec;
@@ -563,7 +592,7 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             });
           } else {
             // Use only selected interface
-            const selectedData = result.bandwidth.find(iface => iface.interface === selectedInterface);
+            const selectedData = result.bandwidth.find(iface => iface.interface === activeInterface);
             if (selectedData) {
               totalDownload = selectedData.rx_bytes_per_sec;
               totalUpload = selectedData.tx_bytes_per_sec;
@@ -619,7 +648,13 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
     }, 5000);
 
     return () => { cancelled = true; clearInterval(interval); };
-  }, [connectionId, selectedInterface]);
+    // `selectedInterface` is deliberately absent: it is the *derived* display
+    // value, and writing it from inside this effect would re-trigger the
+    // effect — a host whose busiest NIC alternates would never reach the 5s
+    // interval and would instead issue back-to-back remote samples (each one
+    // costs a 1s sleep on the host). `userPickedInterface` changes only on an
+    // explicit dropdown choice, so depending on it still refetches at once.
+  }, [connectionId, userPickedInterface]);
 
   // Network latency monitoring - fetch real ping data
   // OPTIMIZED: Longer interval, use idle callback
@@ -1272,6 +1307,9 @@ export function SystemMonitor({ connectionId }: SystemMonitorProps) {
             {networkInterfaces.length > 0 && (
               <Select value={selectedInterface} onValueChange={(value) => {
                 setSelectedInterface(value);
+                // Pin the choice so auto-selection stops overriding it, and
+                // refetch immediately instead of waiting for the next poll.
+                setUserPickedInterface(value);
                 // Clear history when switching interfaces
                 setNetworkHistory([]);
               }}>

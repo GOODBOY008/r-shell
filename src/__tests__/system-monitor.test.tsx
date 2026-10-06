@@ -2,6 +2,7 @@ import React from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SystemMonitor } from '../components/system-monitor';
+import { pickDefaultNetworkInterface, resolveActiveInterface } from '../lib/network-interface';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -49,7 +50,10 @@ function makeStats(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function setupInvoke(statsOverrides: Record<string, unknown> = {}) {
+function setupInvoke(
+  statsOverrides: Record<string, unknown> = {},
+  bandwidth: Array<{ interface: string; rx_bytes_per_sec: number; tx_bytes_per_sec: number }> = [],
+) {
   mocks.invoke.mockImplementation(async (command: string) => {
     switch (command) {
       case 'get_system_stats':
@@ -61,7 +65,7 @@ function setupInvoke(statsOverrides: Record<string, unknown> = {}) {
       case 'detect_gpu':
         return { available: false, vendor: 'unknown', gpus: [], detection_method: 'none' };
       case 'get_network_bandwidth':
-        return { success: true, bandwidth: [] };
+        return { success: true, bandwidth };
       case 'get_network_latency':
         return { success: false };
       default:
@@ -150,5 +154,174 @@ describe('SystemMonitor zero-value frames and card padding', () => {
       expect(content.className).not.toContain('pb-6');
       expect(content.className).toContain('last:pb-');
     });
+  });
+});
+
+// Regression for #188: the Network Usage card auto-selected its interface by
+// name prefix (`eth`/`ens`/`enp`). Those are Linux conventions, so on macOS the
+// lookup always missed and fell back to `interfaceNames[0]` — `anpi0`, an Apple
+// internal interface whose counters never move. The card then read 0 KB/s no
+// matter what the real NIC was doing.
+describe('pickDefaultNetworkInterface', () => {
+  it('falls back to "all" when every interface is idle', () => {
+    expect(
+      pickDefaultNetworkInterface([
+        { interface: 'anpi0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'en1', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+      ])
+    ).toBe('all');
+  });
+
+  it('skips zero-traffic interfaces that sort first', () => {
+    // `anpi0` is alphabetically first — the exact value the old name-based
+    // lookup used to land on.
+    expect(
+      pickDefaultNetworkInterface([
+        { interface: 'anpi0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'anpi1', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'en0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'en1', rx_bytes_per_sec: 210_944, tx_bytes_per_sec: 1_061 },
+      ])
+    ).toBe('en1');
+  });
+
+  it('ranks by combined rx+tx, so a download-only NIC still wins', () => {
+    expect(
+      pickDefaultNetworkInterface([
+        { interface: 'en0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'en1', rx_bytes_per_sec: 0, tx_bytes_per_sec: 900_000 },
+      ])
+    ).toBe('en1');
+  });
+
+  it('still picks the busiest interface on Linux naming', () => {
+    expect(
+      pickDefaultNetworkInterface([
+        { interface: 'eth0', rx_bytes_per_sec: 1_000, tx_bytes_per_sec: 1_000 },
+        { interface: 'ens3', rx_bytes_per_sec: 5_000, tx_bytes_per_sec: 0 },
+      ])
+    ).toBe('ens3');
+  });
+
+  it('returns "all" for an empty interface list', () => {
+    expect(pickDefaultNetworkInterface([])).toBe('all');
+  });
+});
+
+// The user picking an interface from the dropdown has to outrank auto-selection,
+// including when they pick the aggregate — otherwise the next poll yanks the
+// card back to a specific NIC.
+describe('resolveActiveInterface', () => {
+  const bandwidth = [
+    { interface: 'en0', rx_bytes_per_sec: 512, tx_bytes_per_sec: 0 },
+    { interface: 'en1', rx_bytes_per_sec: 8192, tx_bytes_per_sec: 0 },
+  ];
+  const names = ['en0', 'en1'];
+
+  it('lets a live user pick win over the busiest interface', () => {
+    expect(resolveActiveInterface('en0', null, names, bandwidth)).toBe('en0');
+  });
+
+  // The flap this prevents: an idle-then-bursty host resolved to 'all' on every
+  // quiet poll and back to a NIC on every burst, and the component clears chart
+  // history on each switch — so the graph fragmented into one-point segments.
+  it('holds the previous auto pick while the host reads idle', () => {
+    const busy = [
+      { interface: 'en0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+      { interface: 'en1', rx_bytes_per_sec: 8_192, tx_bytes_per_sec: 0 },
+    ];
+    const idle = [
+      { interface: 'en0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+      { interface: 'en1', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+    ];
+    expect(resolveActiveInterface(null, null, ['en0', 'en1'], busy)).toBe('en1');
+    // The next poll is idle: hold en1 rather than dropping to the aggregate.
+    expect(resolveActiveInterface(null, 'en1', ['en0', 'en1'], idle)).toBe('en1');
+  });
+
+  it('re-picks when the previously held interface is gone', () => {
+    const busy = [{ interface: 'en1', rx_bytes_per_sec: 8_192, tx_bytes_per_sec: 0 }];
+    // utun0 was held but no longer exists; en1 carries traffic now.
+    expect(resolveActiveInterface(null, 'utun0', ['en1'], busy)).toBe('en1');
+  });
+
+  it('lets the user pin the aggregate, which auto would never pick', () => {
+    expect(resolveActiveInterface('all', null, names, bandwidth)).toBe('all');
+  });
+
+  // The previous implementation guarded against this with
+  // `!interfaceNames.includes(prev)`. Without an equivalent guard, a pinned
+  // interface that disappears (VPN torn down, dongle unplugged) resolves to
+  // `undefined` and the card sits at a permanent 0 KB/s.
+  it('falls back to auto when the pinned interface disappears', () => {
+    expect(resolveActiveInterface('utun0', null, names, bandwidth)).toBe('en1');
+  });
+
+  it('auto-selects while nothing has been pinned', () => {
+    expect(resolveActiveInterface(null, null, names, bandwidth)).toBe('en1');
+  });
+});
+
+describe('SystemMonitor network usage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(cleanup);
+
+  // The interface Select's trigger renders the name of whatever is selected.
+  // Asserting on that is deterministic: a speed assertion would also match the
+  // old code, whose pre-update `selectedInterface === 'all'` happened to sum to
+  // the same number on the first tick.
+  const selectedInterfaceName = () =>
+    document.querySelector('[data-slot="select-trigger"]')?.textContent ?? '';
+
+  it('selects the busiest interface, not the alphabetically first one', async () => {
+    setupInvoke(
+      {},
+      [
+        { interface: 'anpi0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'en1', rx_bytes_per_sec: 210_944, tx_bytes_per_sec: 1_061 },
+      ]
+    );
+    render(<SystemMonitor connectionId="conn-1" />);
+
+    await waitFor(() => expect(selectedInterfaceName()).toContain('en1'));
+    // The old lookup fell through to interfaceNames[0].
+    expect(selectedInterfaceName()).not.toContain('anpi0');
+  });
+
+  it('reads the speed of the interface it selected', async () => {
+    setupInvoke(
+      {},
+      [
+        { interface: 'anpi0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'en1', rx_bytes_per_sec: 210_944, tx_bytes_per_sec: 1_061 },
+      ]
+    );
+    render(<SystemMonitor connectionId="conn-1" />);
+
+    // 210944 B/s = 206 KB/s, 1061 B/s = 1 KB/s
+    await waitFor(() => {
+      expect(screen.getByText('206 KB/s')).toBeTruthy();
+    });
+    expect(screen.getByText('1 KB/s')).toBeTruthy();
+  });
+
+  it('shows the aggregate for an entirely idle host', async () => {
+    setupInvoke(
+      {},
+      [
+        { interface: 'anpi0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+        { interface: 'en1', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 },
+      ]
+    );
+    render(<SystemMonitor connectionId="conn-1" />);
+
+    // With every counter at zero the aggregate is the truthful view; pinning
+    // a dead NIC would claim "this is your bandwidth" on an idle machine.
+    // The trigger renders systemMonitor.allInterfaces ("All" in the test
+    // locale), which is distinct from every interface name.
+    await waitFor(() => expect(selectedInterfaceName()).toBe('All'));
   });
 });

@@ -232,11 +232,18 @@ impl OsInfo {
     ///
     /// procps `top` (Debian/RHEL/Arch/SUSE) outputs `%Cpu(s): … id …`
     /// BusyBox `top` (Alpine) outputs `CPU:  X% usr  Y% sys … Z% idle`
-    /// macOS uses `top -l1` with a different format.
+    /// macOS uses `top -l2` with a different format.
     /// Fallback: read /proc/stat twice (works everywhere with /proc).
     pub fn cpu_cmd(&self) -> &'static str {
         match self.family {
-            OsFamily::MacOS => "top -l1 -n0 | awk '/CPU usage/{gsub(/%/,\"\"); print 100-$7}'",
+            // `top -l1`'s only sample is an average since the previous
+            // snapshot rather than an instantaneous reading, so idle sits at
+            // ~0% and the result pins to 100%. `-l2 -s1` yields a second sample
+            // measured over a real one-second window; the awk rule overwrites
+            // `c` per line so the last one survives into END.
+            OsFamily::MacOS => {
+                "top -l2 -s1 -n0 | awk '/CPU usage/{gsub(/%/,\"\"); c=$7} END{print 100-c}'"
+            }
             OsFamily::Alpine if !self.has_procps_top => {
                 // BusyBox top: "CPU:   5% usr   2% sys   0% nic  92% idle ..."
                 // Run one iteration in batch mode, extract idle%, compute 100-idle
@@ -253,8 +260,13 @@ impl OsInfo {
     /// macOS needs vm_stat + sysctl.
     pub fn memory_cmd(&self) -> &'static str {
         match self.family {
+            // Activity Monitor's "Memory Used" is active + wired + compressor,
+            // which is also what leaves total - used = cached files. Summing the
+            // wrong buckets makes a busy Mac look idle, so the page size is
+            // read from vm_stat's own header (4096 on Intel, 16384 on Apple
+            // Silicon) rather than assumed, and the compressor is included.
             OsFamily::MacOS => {
-                "vm_stat | awk '/Pages (free|active|inactive|speculative|wired)/{gsub(/\\./,\"\"); sum+=$NF} END{used=sum*4096/1048576; total='\"$(sysctl -n hw.memsize)\"'/1048576; free=total-used; printf \"%d %d %d %d\", total, used, free, free}'"
+                "vm_stat | awk 'NR==1{gsub(/[^0-9]/,\"\");p=$0} /^Pages free/{gsub(/\\./,\"\");fr=$NF} /^Pages (active|wired down|occupied by compressor)/{gsub(/\\./,\"\");u+=$NF} END{t='\"$(sysctl -n hw.memsize)\"'/1048576; used=u*p/1048576; free=fr*p/1048576; printf \"%d %d %d %d\", t, used, free, free}'"
             }
             _ => {
                 "free -m 2>/dev/null | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$7}' || awk '/MemTotal/{t=$2} /MemFree/{f=$2} /MemAvailable/{a=$2} /Buffers/{b=$2} /^Cached:/{c=$2} END{u=t-f-b-c; printf \"%d %d %d %d\", t/1024, u/1024, f/1024, a/1024}' /proc/meminfo"
@@ -383,44 +395,43 @@ done
 
     /// Network bandwidth sampling command (two reads 1s apart).
     pub fn network_bandwidth_cmd(&self) -> &'static str {
+        // An interface that appears only in the second snapshot (a VPN coming
+        // up mid-sample, a dongle plugged in) is skipped by `($2 in rx)`. Both
+        // netstat column 7 and /sys counters are cumulative since the interface
+        // came up, so subtracting an unset baseline would report its whole
+        // lifetime as one second's throughput — gigabytes per second.
+        //
+        // Both variants emit two tagged snapshots ("1," then "2,") into a
+        // single stream and let the final awk diff them, so the output is a
+        // flat `name,rx_per_sec,tx_per_sec` list.
+        //
+        // The previous shape built a newline-separated interface list and then
+        // looped over it with `for iface in $iface_list`. That relies on the
+        // shell splitting an unquoted expansion on IFS, which zsh does not do
+        // — and zsh is the default login shell for macOS SSH sessions. The
+        // whole list was passed to `awk -v i=` as one multi-line string, awk
+        // died with "newline in string", and macOS bandwidth silently read
+        // 0 KB/s forever. Tagging inside awk keeps this independent of the
+        // shell's word-splitting rules.
         match self.family {
             OsFamily::MacOS => {
-                // macOS: use netstat -ibn twice
                 r#"
-iface_list=$(netstat -ibn | awk 'NR>1 && $1!="lo0" && $4!="" {print $1}' | sort -u)
-for iface in $iface_list; do
-    vals=$(netstat -ibn | awk -v i="$iface" '$1==i && $4!="" {print $7","$10; exit}')
-    echo "$iface,$vals"
-done
-sleep 1
-for iface in $iface_list; do
-    vals=$(netstat -ibn | awk -v i="$iface" '$1==i && $4!="" {print $7","$10; exit}')
-    echo "$iface,$vals"
-done
+( netstat -ibn | awk 'NR>1 && $1!="lo0" && $4!="" && !seen[$1]++ {print "1,"$1","$7","$10}'
+  sleep 1
+  netstat -ibn | awk 'NR>1 && $1!="lo0" && $4!="" && !seen[$1]++ {print "2,"$1","$7","$10}' ) | awk -F, '$1=="1"{rx[$2]=$3;tx[$2]=$4;next} $1=="2"&&($2 in rx){d=$3-rx[$2];u=$4-tx[$2]; if(d<0)d=0; if(u<0)u=0; printf "%s,%.0f,%.0f\n",$2,d,u}'
 "#
             }
             _ => {
-                // /sys/class/net works on all Linux distros
+                // /sys/class/net works on all Linux distros. ${d##*/} strips
+                // the directory without needing `basename` or word splitting.
                 r#"
-iface_list=""
-for iface in /sys/class/net/*; do
-    name=$(basename $iface)
-    if [ "$name" != "lo" ]; then
-        iface_list="$iface_list $name"
-    fi
-done
-
-for iface in $iface_list; do
-    rx1=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
-    tx1=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
-    echo "$iface,$rx1,$tx1"
-done
-sleep 1
-for iface in $iface_list; do
-    rx2=$(cat /sys/class/net/$iface/statistics/rx_bytes 2>/dev/null || echo 0)
-    tx2=$(cat /sys/class/net/$iface/statistics/tx_bytes 2>/dev/null || echo 0)
-    echo "$iface,$rx2,$tx2"
-done
+( for d in /sys/class/net/*; do n=${d##*/}
+    [ "$n" = lo ] || echo "1,$n,$(cat $d/statistics/rx_bytes 2>/dev/null||echo 0),$(cat $d/statistics/tx_bytes 2>/dev/null||echo 0)"
+  done
+  sleep 1
+  for d in /sys/class/net/*; do n=${d##*/}
+    [ "$n" = lo ] || echo "2,$n,$(cat $d/statistics/rx_bytes 2>/dev/null||echo 0),$(cat $d/statistics/tx_bytes 2>/dev/null||echo 0)"
+  done ) | awk -F, '$1=="1"{rx[$2]=$3;tx[$2]=$4;next} $1=="2"&&($2 in rx){d=$3-rx[$2];u=$4-tx[$2]; if(d<0)d=0; if(u<0)u=0; printf "%s,%.0f,%.0f\n",$2,d,u}'
 "#
             }
         }
@@ -586,5 +597,112 @@ mod tests {
             info.list_files_cmd("/tmp/dir's folder"),
             "ls -la --time-style=long-iso '/tmp/dir'\"'\"'s folder'"
         );
+    }
+
+    // Regression for #188: the macOS memory command parsed vm_stat with the
+    // page size hardcoded to 4096 (Apple Silicon uses 16384), counted the
+    // `Pages free` bucket as used, and ignored the compressor. It now reads
+    // the page size from vm_stat's header and sums the same three buckets
+    // Activity Monitor does.
+    #[test]
+    fn test_memory_cmd_macos_sums_the_activity_monitor_buckets() {
+        let info = OsInfo {
+            family: OsFamily::MacOS,
+            ..Default::default()
+        };
+        let cmd = info.memory_cmd();
+        assert!(cmd.contains("vm_stat"));
+        // The compressor is most of the footprint on a memory-pressured Mac.
+        assert!(cmd.contains("occupied by compressor"));
+        // The page size must come from vm_stat, never be hardcoded.
+        assert!(cmd.contains("NR==1"));
+        assert!(!cmd.contains("4096"));
+        // Free pages belong in their own accumulator, never in the `used` sum
+        // — the old regex alternation included `free` in the used buckets.
+        assert!(cmd.contains("/^Pages free/"));
+        let used_buckets = cmd
+            .split("^Pages (")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .unwrap_or_default();
+        assert!(
+            !used_buckets.contains("free"),
+            "free pages must not feed the used total: {used_buckets}"
+        );
+    }
+
+    // Regression for #188: `top -l1`'s first sample is an average since the
+    // previous snapshot, so idle sat at ~0% and the reading pinned to 100%.
+    #[test]
+    fn test_cpu_cmd_macos_takes_the_second_sample() {
+        let info = OsInfo {
+            family: OsFamily::MacOS,
+            ..Default::default()
+        };
+        let cmd = info.cpu_cmd();
+        assert!(cmd.contains("-l2"));
+        assert!(!cmd.contains("-l1"));
+    }
+
+    #[test]
+    fn test_memory_cmd_linux_uses_free() {
+        let info = OsInfo {
+            family: OsFamily::Debian,
+            ..Default::default()
+        };
+        assert!(info.memory_cmd().starts_with("free -m"));
+    }
+
+    // Regression for #188: the bandwidth command iterated a newline-separated
+    // interface list with `for iface in $iface_list`, which relies on the shell
+    // splitting an unquoted expansion. zsh — the default login shell for macOS
+    // SSH sessions — does not, so the entire list reached `awk -v i=` as one
+    // multi-line string, awk aborted with "newline in string", and the card
+    // read 0 KB/s on every macOS host.
+    #[test]
+    fn test_network_bandwidth_cmd_avoids_shell_word_splitting() {
+        let macos = OsInfo {
+            family: OsFamily::MacOS,
+            ..Default::default()
+        };
+        let linux = OsInfo {
+            family: OsFamily::Debian,
+            ..Default::default()
+        };
+
+        for cmd in [macos.network_bandwidth_cmd(), linux.network_bandwidth_cmd()] {
+            // No `for x in $var` — that is the construct zsh silently refuses
+            // to split.
+            assert!(!cmd.contains("for iface in $"));
+            // The interface name is stripped with parameter expansion, which is
+            // POSIX and behaves the same in every shell.
+            assert!(!cmd.contains("iface_list"));
+        }
+    }
+
+    // Both snapshots are tagged and diffed by the trailing awk, so the backend
+    // receives a flat `interface,rx_per_sec,tx_per_sec` list.
+    #[test]
+    fn test_network_bandwidth_cmd_emits_tagged_snapshots() {
+        for family in [OsFamily::MacOS, OsFamily::Debian] {
+            let cmd = OsInfo {
+                family: family.clone(),
+                ..Default::default()
+            }
+            .network_bandwidth_cmd();
+            assert!(cmd.contains(r#""1,"#), "{family:?} missing first tag");
+            assert!(cmd.contains(r#""2,"#), "{family:?} missing second tag");
+            // The pipe must close on the same line as the subshell, or the
+            // shell treats `| awk` as a separate (invalid) command.
+            assert!(cmd.contains(") | awk -F,"), "{family:?} pipe not attached");
+            // An interface appearing only in the second snapshot must be
+            // skipped: `rx[$2]` would be unset and the subtraction would report
+            // its since-boot total as one second's throughput. Asserted as text
+            // because the three CI platforms cannot all run awk.
+            assert!(
+                cmd.contains(r#"($2 in rx)"#),
+                "{family:?} would diff against an unset baseline"
+            );
+        }
     }
 }
