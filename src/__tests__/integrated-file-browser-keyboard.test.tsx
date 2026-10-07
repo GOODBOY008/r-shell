@@ -1,7 +1,18 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IntegratedFileBrowser } from '../components/integrated-file-browser';
+
+// File-wide async-wait budget: 5 s instead of the 1 s default. This file takes
+// 6.6 s+ on a CI runner, and different tests have missed the 1 s window on
+// different runs: Shift+Click range selection failed at 1224 ms (ubuntu) and
+// 1276 ms (macOS) in PR #197, then Ctrl+A select-all failed at 1103 ms on
+// upstream main after #192 merged. Fixing waits one at a time chases the last
+// flake; the whole file runs near the edge, so the budget is set once here.
+// A genuinely broken behavior still fails — a deleted branch makes the
+// assertion exhaust even 5 s — while a slow-render regression is the accepted
+// trade-off of any raised budget.
+configure({ asyncUtilTimeout: 5000 });
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -343,6 +354,9 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     expect(await screen.findByText('1 selected')).toBeTruthy();
 
     fireEvent.click(screen.getByText('c.txt'), { shiftKey: true });
+    // Covered by the file-wide asyncUtilTimeout configured at the top of this
+    // file: this assertion failed at 1224 ms (ubuntu) and 1276 ms (macOS) in
+    // PR #197's own CI.
     expect(await screen.findByText('3 selected')).toBeTruthy();
   });
 
