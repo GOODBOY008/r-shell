@@ -4365,7 +4365,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "r-shell"
-version = "3.0.2"
+version = "3.0.3"
 dependencies = [
  "aes-gcm 0.10.3",
  "anyhow",

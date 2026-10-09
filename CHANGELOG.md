@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.3] - 2026-10-09
+
+### 🔧 R-Shell 3.0.3 — Settings Refresh & macOS Monitor Fixes
+
+This patch release ships a completely redesigned Settings experience with a self-service keyboard-shortcut editor, fixes macOS system-monitor readings (memory, CPU, and network bandwidth), and stops hidden sidebar panels from doing background work. Dependency maintenance is also included: all 12 outdated major-dependency versions were refreshed or migrated.
+
+### New Features 🎉
+
+- feat(settings): ZCode-style settings + self-service keybinding editor by @GOODBOY008 in #204
+
+### Bug Fixes 🐛
+
+- fix(sidebar): mount sidebar tab panels lazily and stop work while hidden by @sunxiaobin89 in #193
+- fix(monitor): correct macOS memory/CPU readings and network bandwidth by @sunxiaobin89 in #192
+
+### Other Changes
+
+- chore(deps): refresh compatible deps and migrate all 12 outdated major versions by @GOODBOY008 in #201
+- test: give the file-browser keyboard file a real async-wait budget by @sunxiaobin89 in #197
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) and [@sunxiaobin89](https://github.com/sunxiaobin89) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.0.2...v3.0.3
+
 ## [3.0.2] - 2026-10-02
 
 ### 🔧 R-Shell 3.0.2 — AppImage Compatibility Fix
