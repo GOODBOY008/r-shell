@@ -1,4 +1,5 @@
 import { getHostKeyPolicy, type HostKeyPolicy } from './host-key';
+import type { X11Config } from './connection-storage';
 import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcuts';
 /**
  * Builds the `ssh_connect` and `sftp_connect` invoke request payloads.
@@ -62,6 +63,8 @@ export interface SshConnectRequestSource {
   tunnelPassword?: string;
   tunnelKeyPath?: string;
   tunnelPassphrase?: string;
+  // X11 forwarding (always trusted, -Y); absent/undefined => disabled
+  x11?: X11Config;
 }
 
 export interface SshConnectRequest {
@@ -94,6 +97,8 @@ export interface SshConnectRequest {
   tunnel_password: string | null;
   tunnel_key_path: string | null;
   tunnel_passphrase: string | null;
+  /** X11 forwarding config; `null` keeps X11 disabled. Always trusted (-Y). */
+  x11: X11Config | null;
 }
 
 /**
@@ -143,6 +148,7 @@ export function buildSshConnectRequest(
     tunnel_password: tunnelEnabled ? (source.tunnelPassword || null) : null,
     tunnel_key_path: tunnelEnabled ? (source.tunnelKeyPath || null) : null,
     tunnel_passphrase: tunnelEnabled ? (source.tunnelPassphrase || null) : null,
+    x11: source.x11 ?? null,
   };
 }
 
