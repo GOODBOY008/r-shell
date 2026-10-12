@@ -1,0 +1,34 @@
+# Dependabot version updates. Minor/patch bumps are grouped per ecosystem
+# to keep the PR stream manageable; major bumps stay as individual PRs.
+version: 2
+updates:
+  # Frontend (root package.json; lockfile is pnpm-lock.yaml)
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+  # Rust backend
+  - package-ecosystem: cargo
+    directory: "/src-tauri"
+    schedule:
+      interval: weekly
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+  # GitHub Actions (test.yml, release.yml)
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
