@@ -39,7 +39,7 @@ anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 futures = "0.3"
 tokio-util = "0.7"
 suppaftp = { version = "12.1", features = ["tokio-async-native-tls"] }
