@@ -162,6 +162,12 @@ export function PtyTerminal({
   
   // Search bar state
   const [searchVisible, setSearchVisible] = React.useState(false);
+  // Mirror for the xterm key handler, which is attached once and must not
+  // close over a stale `searchVisible`.
+  const searchVisibleRef = React.useRef(false);
+  React.useEffect(() => {
+    searchVisibleRef.current = searchVisible;
+  }, [searchVisible]);
   const [searchFocusTrigger, setSearchFocusTrigger] = React.useState(0);
   const searchStateRef = React.useRef<TerminalSearchState>({ query: '', caseSensitive: false, regex: false });
   const [hasSelection, setHasSelection] = React.useState(false);
@@ -538,8 +544,14 @@ export function PtyTerminal({
         return false;
       }
 
-      // Handle F3 for search navigation
+      // F3 / Shift+F3 step through search matches, but only while the search
+      // bar is open. Otherwise the key belongs to the remote application
+      // (mc, htop, vim bindings...) and must reach the PTY untouched; the
+      // search bar itself opens with Ctrl/Cmd+F.
       if (event.key === 'F3') {
+        if (!searchVisibleRef.current) {
+          return true;
+        }
         event.preventDefault();
         const search = searchRef.current;
         const { query, caseSensitive, regex } = searchStateRef.current;
@@ -550,7 +562,6 @@ export function PtyTerminal({
             search.findNext(query, { caseSensitive, regex });
           }
         } else {
-          setSearchVisible(true);
           setSearchFocusTrigger(prev => prev + 1);
         }
         return false;
