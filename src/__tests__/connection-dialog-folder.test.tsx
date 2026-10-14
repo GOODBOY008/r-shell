@@ -101,6 +101,16 @@ describe('ConnectionDialog folder pre-selection', () => {
     expect(combos[0].textContent).toContain('SSH');
   });
 
+  it('ignores a click event leaked into initialFolder by onClick={onNewConnection} (#218)', () => {
+    // App.tsx's handleNewTab(folderPath?) is used directly as a button onClick,
+    // so React passes the MouseEvent; it must never become the folder.
+    const leakedEvent = new MouseEvent('click') as unknown as string;
+    renderDialog({ initialFolder: leakedEvent });
+
+    const folderSelect = getFolderSelect();
+    expect(folderSelect.textContent).toContain('All Connections');
+  });
+
   it('uses folder from initialFolder over default "All Connections"', () => {
     renderDialog({ initialFolder: 'Work/ProjectA' });
 
