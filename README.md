@@ -24,7 +24,7 @@ A modern SSH/SFTP/FTP/RDP/VNC client built with Rust and Tauri 2. **~98% less me
 
 <div align="center">
   <img src="screenshots/app-screenshot.png" alt="R-Shell Application Screenshot" width="100%">
-  <p><i>R-Shell — split terminals, file manager, and system monitor in a single window</i></p>
+  <p><i>R-Shell — split terminals, SFTP file manager, and system monitor in a single window</i></p>
 </div>
 
 ---
@@ -185,6 +185,12 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 | `F3` / `Shift+F3` | Find next / previous |
 
 > Layout shortcuts are registered at the OS level but ignored while terminal input is focused, so terminal-native bindings (e.g. tmux `Ctrl+B`) still reach the shell.
+
+Every shortcut can be remapped in **Settings → Keyboard**:
+
+<div align="center">
+  <img src="screenshots/settings-shortcuts.png" alt="R-Shell settings with the keyboard shortcut editor" width="100%">
+</div>
 
 ### 🔧 Additional Features
 
