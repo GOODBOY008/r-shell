@@ -14,6 +14,7 @@ mod socks_proxy;
 mod ssh;
 mod vnc_client;
 mod websocket_server;
+mod x11;
 
 use connection_manager::ConnectionManager;
 use std::sync::atomic::AtomicU16;

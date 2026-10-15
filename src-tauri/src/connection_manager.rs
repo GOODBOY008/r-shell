@@ -52,6 +52,25 @@ pub const SOCKS_PROXIES_CHANGED_EVENT: &str = "socks-proxies-changed";
 /// struct field so the manager's type stays tauri-free.
 static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
+/// The process-global app handle, if it was injected (lib.rs setup). Single
+/// injection point for every backend → frontend event, including the X11
+/// dispatcher's `x11-local-server-unreachable`; `None` in unit tests, where
+/// emits are skipped.
+fn app_handle() -> Option<tauri::AppHandle> {
+    APP_HANDLE.get().cloned()
+}
+
+/// Emit `x11-local-server-unreachable` for a connection. Lives here rather
+/// than in the ssh layer so `ssh/mod.rs` instantiates no tauri types — a
+/// Windows-only loader failure (0xc0000139, see PR #33) follows tauri type
+/// use around, and the connection manager's unit is proven safe.
+pub(crate) fn emit_x11_unreachable(connection_id: &str) {
+    if let Some(handle) = app_handle() {
+        use tauri::Emitter;
+        let _ = handle.emit("x11-local-server-unreachable", connection_id);
+    }
+}
+
 /// Error from starting a PTY session, distinguishing a dead/unusable SSH
 /// session (the frontend must re-authenticate — a WebSocket retry cannot
 /// recover) from other failures that leave the session intact.
@@ -200,10 +219,58 @@ impl ConnectionManager {
 
         connect_result?;
 
+        // Teardown any pre-existing connection under the same id BEFORE
+        // installing the new one. When a user edits an already-open connection
+        // and reconnects, the same connection_id is reused; without this the
+        // old SshClient would be silently overwritten (leaked, never
+        // disconnected) while the frontend's PTY/WebSocket is still bound to
+        // the old session — manifesting as the tab going dead. Cancel the PTY
+        // first (signals the WS reader to stop), then disconnect the client.
+        self.teardown_existing_connection(&connection_id).await;
+
         let mut connections = self.connections.write().await;
         connections.insert(connection_id, Arc::new(RwLock::new(client)));
 
         Ok(())
+    }
+
+    /// Remove and clean up any connection + PTY state held under `connection_id`.
+    /// Safe to call when nothing exists for the id. Acquires locks one at a time
+    /// (no nested writes) to avoid deadlock.
+    async fn teardown_existing_connection(&self, connection_id: &str) {
+        // 1. Cancel + drop the PTY session so the WebSocket reader task exits.
+        {
+            let mut pty_sessions = self.pty_sessions.write().await;
+            if let Some(session) = pty_sessions.remove(connection_id) {
+                session.cancel.cancel();
+                tracing::info!(
+                    "[reconnect] cancelled existing PTY session for {}",
+                    connection_id
+                );
+            }
+        }
+        // 2. Drop the generation counter so a fresh StartPty starts at gen 1.
+        {
+            let mut generations = self.pty_generations.write().await;
+            generations.remove(connection_id);
+        }
+        // 3. Disconnect + drop the old SSH client. Errors here are non-fatal:
+        //    we're tearing down a connection we're about to replace anyway.
+        {
+            let mut connections = self.connections.write().await;
+            if let Some(old) = connections.remove(connection_id) {
+                let mut old = old.write().await;
+                if let Err(e) = old.disconnect().await {
+                    tracing::warn!(
+                        "[reconnect] error disconnecting old client for {}: {}",
+                        connection_id,
+                        e
+                    );
+                }
+            }
+        }
+        // 4. Drop cached OS info so the new connection re-detects.
+        self.os_info_cache.remove(connection_id).await;
     }
 
     async fn register_pending_connection(&self, connection_id: &str) -> CancellationToken {
@@ -410,7 +477,7 @@ impl ConnectionManager {
 
         // Create PTY session. The map lock is released first so a slow or
         // failing handshake can't block unrelated connections.
-        let pty = match client.read().await.create_pty_session(cols, rows).await {
+        let pty = match client.read().await.create_pty_session(cols, rows, connection_id).await {
             Ok(pty) => pty,
             Err(e) => {
                 if is_session_dead_error(&e) {
@@ -1986,6 +2053,7 @@ mod tests {
                 proxy: None,
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
+                x11: None,
             })
             .await
             .expect("SSH connect to fixture");

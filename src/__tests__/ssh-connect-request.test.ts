@@ -279,3 +279,34 @@ describe('connect_timeout setting wiring', () => {
     localStorage.removeItem(SETTINGS_KEY);
   });
 });
+
+describe('buildSshConnectRequest x11 fields', () => {
+  it('sends null x11 when the source has none (X11 disabled by default)', () => {
+    const req = buildSshConnectRequest('conn-1', baseSource);
+    expect(req.x11).toBeNull();
+  });
+
+  it('sends null x11 when forwarding is disabled in the source config', () => {
+    const req = buildSshConnectRequest('conn-1', {
+      ...baseSource,
+      x11: { enabled: false },
+    });
+    expect(req.x11).toEqual({ enabled: false, display: undefined });
+  });
+
+  it('threads an enabled X11 config (always trusted, -Y) through to the backend', () => {
+    const req = buildSshConnectRequest('conn-1', {
+      ...baseSource,
+      x11: { enabled: true, display: ':1' },
+    });
+    expect(req.x11).toEqual({ enabled: true, display: ':1' });
+  });
+
+  it('threads an enabled X11 config without a DISPLAY override', () => {
+    const req = buildSshConnectRequest('conn-1', {
+      ...baseSource,
+      x11: { enabled: true },
+    });
+    expect(req.x11).toEqual({ enabled: true, display: undefined });
+  });
+});

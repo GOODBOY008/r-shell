@@ -51,6 +51,9 @@ pub struct ConnectRequest {
     pub tunnel_password: Option<String>,
     pub tunnel_key_path: Option<String>,
     pub tunnel_passphrase: Option<String>,
+    /// Optional X11 forwarding config. Omitted by older frontends (serde default).
+    #[serde(default)]
+    pub x11: Option<crate::x11::X11Config>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -149,6 +152,7 @@ pub async fn ssh_connect(
         tunnel,
         host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
         connect_timeout: request.connect_timeout.unwrap_or(3),
+        x11: request.x11,
     };
 
     match state
@@ -4795,6 +4799,7 @@ mod proxy_config_tests {
 
     pub(super) fn request(proxy_type: Option<&str>) -> ConnectRequest {
         ConnectRequest {
+            x11: None,
             connection_id: "c1".to_string(),
             host: "example.com".to_string(),
             port: 22,

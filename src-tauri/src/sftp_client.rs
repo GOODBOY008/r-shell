@@ -236,7 +236,12 @@ impl StandaloneSftpClient {
         let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
         let (handler, host_key_error) =
-            Client::new(&config.host, config.port, config.host_key_policy);
+            Client::new(
+                &config.host,
+                config.port,
+                config.host_key_policy,
+                crate::ssh::fresh_x11_registry(),
+            );
         let mut ssh_session = if let Some(tunnel) = &config.tunnel {
             // Route through an SSH jump host, then run the target handshake
             // over the tunneled channel.
@@ -382,7 +387,12 @@ impl StandaloneSftpClient {
                 ..client::Config::default()
             });
             let (handler, host_key_error) =
-                Client::new(&config.host, config.port, config.host_key_policy);
+                Client::new(
+                &config.host,
+                config.port,
+                config.host_key_policy,
+                crate::ssh::fresh_x11_registry(),
+            );
             let host = config.host.clone();
             async move {
                 let mut session = tokio::time::timeout(

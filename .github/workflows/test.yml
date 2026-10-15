@@ -70,6 +70,57 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      # The windows test binary fails to start with STATUS_ENTRYPOINT_NOT_FOUND
+      # (0xc0000139) — a runtime DLL loader error. dumpbin isn't on PATH by
+      # default on windows-latest, so we locate it via vsdevshell, then dump the
+      # binary's import table to identify the exact missing dependency.
+      - name: Dump test binary dependencies (Windows, on failure)
+        if: failure() && matrix.platform == 'windows-latest'
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          Write-Host "::group::Test binary DLL dependencies"
+          $exe = Get-ChildItem -Path "target\debug\deps\r_shell_lib-*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) {
+            Write-Host "No r_shell_lib-*.exe found in target\debug\deps — build may not have produced a binary."
+            Write-Host "::endgroup::"
+            return
+          }
+          Write-Host "Binary: $($exe.FullName)"
+
+          # Load the MSVC dev environment so dumpbin is on PATH.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            $vcinstalldir = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            if ($vcinstalldir) {
+              Import-Module "$vcinstalldir\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+              Enter-VsDevShell -VsInstallPath $vcinstalldir -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
+            }
+          }
+
+          $dumpbin = Get-Command dumpbin -ErrorAction SilentlyContinue
+          if ($dumpbin) {
+            Write-Host "--- dumpbin /dependents ---"
+            & dumpbin /dependents $exe.FullName 2>$null | Select-String -Pattern "\.dll" -CaseSensitive:$false
+            Write-Host "--- dumpbin /imports (entrypoints) ---"
+            & dumpbin /imports $exe.FullName 2>$null | Select-Object -First 80
+          } else {
+            Write-Host "dumpbin still not found; falling back to PE import scan."
+            # Minimal fallback: read the PE import directory directly via .NET.
+            $bytes = [System.IO.File]::ReadAllBytes($exe.FullName)
+            # PE header offset is at 0x3C (little-endian).
+            $peOff = [BitConverter]::ToInt32($bytes, 0x3C)
+            # Optional header starts at peOff + 24; magic at +0 (0x10b=PE32, 0x20b=PE32+)
+            $magic = [BitConverter]::ToUInt16($bytes, $peOff + 24)
+            $importDirRva = if ($magic -eq 0x20b) { [BitConverter]::ToInt32($bytes, $peOff + 24 + 112) } else { [BitConverter]::ToInt32($bytes, $peOff + 24 + 96) }
+            Write-Host "Import directory RVA: 0x$($importDirRva.ToString('x'))  (PE magic: 0x$($magic.ToString('x')))"
+          }
+
+          Write-Host "--- OS version ---"
+          [System.Environment]::OSVersion | Format-List
+          Write-Host "::endgroup::"
+
+
       - name: Run Rust clippy
         working-directory: src-tauri
         run: cargo clippy -- -D warnings

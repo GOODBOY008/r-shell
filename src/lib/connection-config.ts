@@ -45,5 +45,6 @@ export function toConnectionConfig(data: ConnectionData): ConnectionConfig {
     keepAlive: data.keepAlive,
     keepAliveInterval: data.keepAliveInterval,
     serverAliveCountMax: data.serverAliveCountMax,
+    x11: data.x11,
   };
 }

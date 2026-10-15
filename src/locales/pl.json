@@ -269,7 +269,13 @@
     "hint": {
       "savedPasswordKept": "Dla tego połączenia zapisano hasło. Pozostaw pole puste, aby je zachować, albo wpisz nowe, aby je zastąpić."
     },
-    "passwordSavingDisabledHint": "Zapisywanie haseł jest wyłączone w ustawieniach — połączenie zadziała, ale dane logowania nie zostaną zapisane."
+    "passwordSavingDisabledHint": "Zapisywanie haseł jest wyłączone w ustawieniach — połączenie zadziała, ale dane logowania nie zostaną zapisane.",
+    "x11": {
+      "enable": "Przekierowanie X11",
+      "enableDesc": "Przekieruj zdalne aplikacje X11 do lokalnego serwera X. Tryb zaufany (-Y): prawdziwe ciasteczko xauth zostanie wysłane do zdalnego hosta",
+      "displayOverride": "Nadpisanie DISPLAY",
+      "displayPlaceholder": "Automatycznie wykrywane, jeśli puste"
+    }
   },
   "settings": {
     "title": "Ustawienia i preferencje",
@@ -1270,7 +1276,9 @@
     "reconnectingAfterClose": "[Połączenie zamknięte. Ponowna próba za {{seconds}} s (próba {{attempt}}/{{max}})...]",
     "sshSessionLost": "[Utracono sesję SSH. Ponowne łączenie z pełnym uwierzytelnianiem...]",
     "sessionRestored": "[Sesja przywrócona — połączono z tą samą powłoką]",
-    "sshSessionDeadPermanent": "[Utracono sesję SSH i wyczerpano limit automatycznych prób. Kliknij prawym przyciskiem → Połącz ponownie.]"
+    "sshSessionDeadPermanent": "[Utracono sesję SSH i wyczerpano limit automatycznych prób. Kliknij prawym przyciskiem → Połącz ponownie.]",
+    "x11LocalServerUnreachable": "Włączono przekierowanie X11, ale nie znaleziono lokalnego serwera X",
+    "x11LocalServerUnreachableDesc": "Zdalne aplikacje graficzne nie będą wyświetlane. Zainstaluj XQuartz (https://www.xquartz.org) lub ustaw $DISPLAY."
   },
   "systemMonitor": {
     "systemOverview": "Przegląd systemu",
