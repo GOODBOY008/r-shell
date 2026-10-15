@@ -18,6 +18,7 @@ import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connect
 import { ConnectionStorageManager } from '../lib/connection-storage';
 import { SECRET_FIELDS, sealSecret, openSecret } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
+import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import { sshConnect } from '@/lib/ssh-connect';
 import { toast } from 'sonner';
@@ -294,9 +295,12 @@ export function ConnectionDialog({
       const folderPaths = folders.map(f => f.path).sort();
       setAvailableFolders(folderPaths);
 
-      // Pre-select folder when initialFolder is provided (new connection from folder context menu)
-      if (initialFolder && !editingConnection) {
-        setConnectionFolder(initialFolder);
+      // Pre-select folder when initialFolder is provided (new connection from
+      // folder context menu). Guarded: a caller wired into onClick can hand
+      // us a click event instead of a path (#218).
+      const presetFolder = folderPathFromArg(initialFolder);
+      if (presetFolder && !editingConnection) {
+        setConnectionFolder(presetFolder);
       }
 
       // Load editing connection data into config when dialog opens.

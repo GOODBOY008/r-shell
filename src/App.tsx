@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
+import { folderPathFromArg } from './lib/connection-folder';
 import { useLazyTabs } from './lib/use-lazy-tabs';
 import { reconcileSessionHealth } from './lib/session-health';
 import { invoke } from '@tauri-apps/api/core';
@@ -941,8 +942,10 @@ function AppContent() {
     dispatch({ type: 'CLOSE_ALL_TABS', groupId });
   }, [state.groups, dispatch]);
 
-  const handleNewTab = useCallback((folderPath?: string) => {
-    setConnectionInitialFolder(folderPath);
+  // Wired straight into onClick in several places, so `folderPath` may be a
+  // MouseEvent rather than a path; only a real folder string is used (#218).
+  const handleNewTab = useCallback((folderPath?: unknown) => {
+    setConnectionInitialFolder(folderPathFromArg(folderPath));
     setConnectionDialogOpen(true);
     setEditingConnection(null);
     setPendingConnectionId(null);
