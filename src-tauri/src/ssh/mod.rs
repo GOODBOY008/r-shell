@@ -133,6 +133,20 @@ fn default_connect_timeout() -> u64 {
     3
 }
 
+/// Minimum budget for the authentication phase. The connect timeout covers
+/// DNS + TCP + key exchange, which the client controls end to end;
+/// authentication additionally pays for server-side work r-shell cannot see
+/// (PAM modules, reverse-DNS when sshd has `UseDNS yes`, OpenSSH's constant
+/// rejection delays), so it gets at least this many seconds even when the
+/// connect timeout is left at its 3 s default.
+pub(crate) const MIN_AUTH_TIMEOUT_SECS: u64 = 10;
+
+/// The authentication deadline for a connection: the user's connect-timeout
+/// setting, never below [`MIN_AUTH_TIMEOUT_SECS`].
+pub(crate) fn auth_timeout_for(connect_timeout_secs: u64) -> Duration {
+    Duration::from_secs(connect_timeout_secs.max(MIN_AUTH_TIMEOUT_SECS))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AuthMethod {
@@ -462,7 +476,31 @@ impl client::Handler for Client {
 
 /// Authenticate a connected SSH session with the given credentials, returning
 /// an error when the server rejects them.
+///
+/// The deadline is not optional. Everything else in [`SshClient::connect`] is
+/// bounded by the connect timeout, but russh's authenticate calls have no
+/// internal deadline: a server that completes the handshake and then stays
+/// silent on the first userauth request (observed on Windows in issue #220)
+/// parks `wait_recv_reply` forever, so `ssh_connect` never returns and the UI
+/// stays "connecting" until the user clicks Stop. Bounding it turns that into
+/// a normal connect error.
 async fn authenticate_session(
+    session: &mut client::Handle<Client>,
+    username: &str,
+    method: &AuthMethod,
+    timeout: Duration,
+) -> Result<()> {
+    tokio::time::timeout(timeout, authenticate(session, username, method))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Authentication timed out after {} seconds. The server accepted the connection but never answered the login request. If this host is slow to log in (reverse-DNS or PAM delays), raise the Connection Timeout in Settings.",
+                timeout.as_secs()
+            )
+        })?
+}
+
+async fn authenticate(
     session: &mut client::Handle<Client>,
     username: &str,
     method: &AuthMethod,
@@ -667,7 +705,13 @@ pub async fn connect_via_ssh_tunnel(
         ))
     })?;
 
-    authenticate_session(&mut session, &tunnel.username, &tunnel.auth_method).await?;
+    authenticate_session(
+        &mut session,
+        &tunnel.username,
+        &tunnel.auth_method,
+        auth_timeout_for(timeout.as_secs()),
+    )
+    .await?;
 
     // Open a direct-tcpip channel through the jump host to the final target.
     // The originator is our local end and only reported to the server; the
@@ -793,7 +837,13 @@ impl SshClient {
             .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
         };
 
-        authenticate_session(&mut ssh_session, &config.username, &config.auth_method).await?;
+        authenticate_session(
+            &mut ssh_session,
+            &config.username,
+            &config.auth_method,
+            auth_timeout_for(config.connect_timeout),
+        )
+        .await?;
 
         self.session = Some(Arc::new(ssh_session));
         self.config = Some(config.clone());
@@ -854,7 +904,13 @@ impl SshClient {
                     host_key_error
                         .explain_or(anyhow::anyhow!("extra session connect failed: {}", e))
                 })?;
-                authenticate_session(&mut session, &config.username, &config.auth_method).await?;
+                authenticate_session(
+                    &mut session,
+                    &config.username,
+                    &config.auth_method,
+                    auth_timeout_for(timeout.as_secs()),
+                )
+                .await?;
                 Ok::<_, anyhow::Error>(Arc::new(session))
             }
         });
