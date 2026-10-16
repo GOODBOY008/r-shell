@@ -1036,6 +1036,7 @@ mod shell_integration_tests {
                     key_path: fixture_key.to_string_lossy().into_owned(),
                     passphrase: None,
                 },
+                crate::ssh::auth_timeout_for(3),
             )
             .await
             .expect("authenticate to default-key fixture");
@@ -1701,5 +1702,112 @@ mod compression_roundtrip_tests {
             );
             assert_eq!(roundtripped, &input[..], "packet of {len} bytes corrupted");
         }
+    }
+}
+
+#[cfg(test)]
+mod auth_timeout_tests {
+    use crate::ssh::{auth_timeout_for, authenticate_session, AuthMethod, Client, HostKeyPolicy};
+    use russh::keys::{Algorithm, PrivateKey};
+    use russh::server::Server;
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    /// The authentication deadline keeps the Settings slider value but never
+    /// drops below the floor (the 3 s connect default must not become a 3 s
+    /// auth budget — server-side PAM / reverse-DNS work is invisible to the
+    /// client and legitimately slower than the transport phases).
+    #[test]
+    fn auth_timeout_has_a_floor_and_passes_larger_settings_through() {
+        assert_eq!(auth_timeout_for(3), Duration::from_secs(10));
+        assert_eq!(auth_timeout_for(10), Duration::from_secs(10));
+        assert_eq!(auth_timeout_for(45), Duration::from_secs(45));
+    }
+
+    /// A server that completes the SSH handshake but never answers any
+    /// authentication request — the "silent after key exchange" failure of
+    /// issue #220. Without the deadline inside `authenticate_session` the
+    /// client parks in russh's `wait_recv_reply` forever and the UI stays
+    /// "connecting" until the user clicks Stop.
+    struct SilentAuth;
+
+    impl russh::server::Handler for SilentAuth {
+        type Error = russh::Error;
+
+        fn auth_none(
+            &mut self,
+            _user: &str,
+        ) -> impl std::future::Future<Output = Result<russh::server::Auth, Self::Error>> + Send
+        {
+            std::future::pending()
+        }
+
+        fn auth_password(
+            &mut self,
+            _user: &str,
+            _password: &str,
+        ) -> impl std::future::Future<Output = Result<russh::server::Auth, Self::Error>> + Send
+        {
+            std::future::pending()
+        }
+    }
+
+    struct SilentAuthServer;
+
+    impl russh::server::Server for SilentAuthServer {
+        type Handler = SilentAuth;
+
+        fn new_client(&mut self, _peer_addr: Option<std::net::SocketAddr>) -> Self::Handler {
+            SilentAuth
+        }
+    }
+
+    #[tokio::test]
+    async fn authentication_errors_promptly_when_the_server_stays_silent() {
+        // In-process SSH server on an ephemeral port whose auth callbacks
+        // never resolve.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        let server_config = Arc::new(russh::server::Config {
+            keys: vec![key],
+            ..russh::server::Config::default()
+        });
+        tokio::spawn(async move {
+            let mut server = SilentAuthServer;
+            let running = server.run_on_socket(server_config, &listener);
+            let _ = running.await;
+        });
+
+        // The handshake completes; the first userauth request then hangs.
+        let (handler, _report) =
+            Client::with_known_hosts("127.0.0.1", port, None, HostKeyPolicy::Off);
+        let mut session = russh::client::connect(
+            Arc::new(russh::client::Config::default()),
+            ("127.0.0.1", port),
+            handler,
+        )
+        .await
+        .expect("handshake against the in-process server");
+
+        let start = Instant::now();
+        let err = authenticate_session(
+            &mut session,
+            "user",
+            &AuthMethod::Password {
+                password: "secret".to_string(),
+            },
+            Duration::from_millis(300),
+        )
+        .await
+        .expect_err("silent server must surface a timeout, not hang");
+
+        let message = err.to_string();
+        assert!(message.contains("Authentication timed out"), "{message}");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "timeout must fire near its deadline, took {:?}",
+            start.elapsed()
+        );
     }
 }
