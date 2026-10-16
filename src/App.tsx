@@ -200,6 +200,18 @@ function AppContent() {
   // misses primary tabs (no originalConnectionId) and is ambiguous for
   // duplicates.
   const [pendingReconnectTabId, setPendingReconnectTabId] = useState<string | null>(null);
+  // Live tab ids, mirrored for async handlers: after `await sshConnect(...)`
+  // the running handler still sees its render-time state snapshot, so a
+  // connect that settles after its tab was closed would otherwise resurface
+  // as an error toast plus a reopened connection dialog for a connection the
+  // user already abandoned (e.g. closing the tab while connecting to a down
+  // host).
+  const liveTabIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    liveTabIdsRef.current = new Set(
+      Object.values(state.groups).flatMap(group => group.tabs.map(tab => tab.id)),
+    );
+  }, [state.groups]);
 
   // Layout management
   const {
@@ -852,6 +864,13 @@ function AppContent() {
           const result = await sshConnect(buildSshConnectRequest(sessionId, connectionData));
 
           if (result.success) {
+            if (!liveTabIdsRef.current.has(sessionId)) {
+              // The tab was closed while the connect was in flight and this
+              // attempt raced the cancel to success — tear the orphaned
+              // backend session back down instead of leaking it.
+              void invoke('ssh_disconnect', { connection_id: sessionId }).catch(() => {});
+              return;
+            }
             ConnectionStorageManager.updateLastConnected(connection.id);
             // Switch to 'connecting' — this mounts PtyTerminal which opens WebSocket
             // and sends StartPty. The backend SSH session is ready by now.
@@ -859,6 +878,13 @@ function AppContent() {
           } else {
             console.error('SSH connection failed:', result.error);
             dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+            if (!liveTabIdsRef.current.has(sessionId)) {
+              // The user closed the tab while the attempt was in flight (the
+              // typical case: a down host, the connect failing on timeout).
+              // The failure is stale — don't resurface an abandoned
+              // connection as a toast plus a reopened connection dialog.
+              return;
+            }
             toast.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
@@ -869,6 +895,9 @@ function AppContent() {
         } catch (error) {
           console.error('Error connecting to SSH:', error);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          if (!liveTabIdsRef.current.has(sessionId)) {
+            return;
+          }
           toast.error(t('app.connectionError'), {
             description: typeof error === 'string'
               ? error
@@ -895,6 +924,23 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
+  // Cancel the backend connect attempt behind a pending terminal tab that is
+  // being removed. A pending tab has an in-flight ssh_connect (sidebar
+  // connect or lazy restore); without the cancel the attempt lingers until
+  // its own timeout (30 s against a down host) and its eventual failure
+  // resurfaces for a tab the user already abandoned.
+  const cancelPendingTerminalConnect = useCallback((tab: TerminalTab) => {
+    if (
+      tab.connectionStatus === 'pending' &&
+      tab.tabType !== 'file-browser' &&
+      tab.tabType !== 'desktop'
+    ) {
+      void invoke('ssh_cancel_connect', { connection_id: tab.id }).catch(() => {
+        // No pending connection (already settled) — nothing to cancel.
+      });
+    }
+  }, []);
+
   const handleCloseTab = useCallback(async (tabId: string) => {
     // Find which group contains this tab and remove it
     for (const group of Object.values(state.groups)) {
@@ -912,11 +958,12 @@ function AppContent() {
             // Ignore disconnect errors on tab close
           }
         }
+        cancelPendingTerminalConnect(tab);
         dispatch({ type: 'REMOVE_TAB', groupId: group.id, tabId });
         break;
       }
     }
-  }, [state.groups, dispatch]);
+  }, [state.groups, dispatch, cancelPendingTerminalConnect]);
 
   // Close every tab in a group. Runs backend cleanup for file-browser
   // sessions first (CLOSE_ALL_TABS is reducer-only and would otherwise
@@ -937,9 +984,10 @@ function AppContent() {
           // Ignore disconnect errors on tab close
         }
       }
+      cancelPendingTerminalConnect(tab);
     }
     dispatch({ type: 'CLOSE_ALL_TABS', groupId });
-  }, [state.groups, dispatch]);
+  }, [state.groups, dispatch, cancelPendingTerminalConnect]);
 
   const handleNewTab = useCallback((folderPath?: string) => {
     setConnectionInitialFolder(folderPath);
