@@ -148,6 +148,25 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      - name: Extract release notes from CHANGELOG
+        run: |
+          # tauri-action v1 rewrites the name and body of an existing release
+          # from its releaseName/releaseBody inputs on every matrix job (v0
+          # only used them when creating a release). Feed it the version's
+          # real section from CHANGELOG.md so the update is idempotent and
+          # the published notes survive; fall back to the stub when the
+          # section is missing (non-tag runs, unmapped versions).
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk "/^## \\[${VERSION}\\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "See the assets to download this version and install." > /tmp/release-notes.md
+          fi
+          {
+            echo 'RELEASE_NOTES<<RELEASE_NOTES_EOF'
+            cat /tmp/release-notes.md
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_ENV"
+
       - name: Build the app
         uses: tauri-apps/tauri-action@v1
         env:
@@ -156,8 +175,11 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'r-shell ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download this version and install.'
+          # v1 also sets this name on the existing release; keep the repo's
+          # plain vX.Y.Z title convention (the gh CLI release flow titles
+          # releases without the "r-shell " prefix).
+          releaseName: '${{ github.ref_name }}'
+          releaseBody: ${{ env.RELEASE_NOTES }}
           releaseDraft: false
           # Tagged prereleases (vX.Y.Z-<id>.<n>) must be GitHub *prereleases*:
           # a release created with prerelease: false would be auto-marked
