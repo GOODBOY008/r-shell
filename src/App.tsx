@@ -227,6 +227,21 @@ function AppContent() {
     applyPreset,
   } = useLayout();
 
+  // For drag-driven changes react-resizable-panels v4 defers `onLayout` until
+  // the pointer is released (it also fires on mount and on constraint changes,
+  // both without user interaction). Writing panel sizes on every move instead
+  // (v3's `onResize`) fed a changed `defaultSize` back into the group mid-drag,
+  // which made v4 re-derive the layout from constraints and froze the
+  // separator after the first pixel of travel.
+  const handleHorizontalLayout = useCallback((next: Record<string, number>) => {
+    if (next['left-sidebar'] !== undefined) setLeftSidebarSize(next['left-sidebar']);
+    if (next['right-sidebar'] !== undefined) setRightSidebarSize(next['right-sidebar']);
+  }, [setLeftSidebarSize, setRightSidebarSize]);
+
+  const handleVerticalLayout = useCallback((next: Record<string, number>) => {
+    if (next['file-browser'] !== undefined) setBottomPanelSize(next['file-browser']);
+  }, [setBottomPanelSize]);
+
   // Collect all tabs across all groups for compatibility with existing features
   const allTabs = useMemo(() => {
     return Object.values(state.groups).flatMap(g => g.tabs);
@@ -2282,6 +2297,7 @@ function AppContent() {
         <ResizablePanelGroup
           direction="horizontal"
           autoSaveId="r-shell-main-layout"
+          onLayout={handleHorizontalLayout}
           // v4 keys saved layouts by panel combination; sidebars mount
           // conditionally, so list exactly the panels rendered right now or
           // hiding one overwrites the combination that includes it.
@@ -2300,7 +2316,6 @@ function AppContent() {
                 defaultSize={layout.leftSidebarSize}
                 minSize={12}
                 maxSize={30}
-                onResize={(size) => setLeftSidebarSize(size)}
               >
                 <ConnectionManager
                   onConnectionSelect={handleConnectionSelect}
@@ -2336,7 +2351,7 @@ function AppContent() {
                   onOpenSettings={handleOpenSettings}
                 />
               ) : (
-                <ResizablePanelGroup direction="vertical" className="flex-1">
+                <ResizablePanelGroup direction="vertical" className="flex-1" onLayout={handleVerticalLayout}>
                   {/* Terminal Grid Panel */}
                   <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
                     <TerminalCallbacksProvider value={{
@@ -2367,7 +2382,6 @@ function AppContent() {
                         defaultSize={layout.bottomPanelSize}
                         minSize={20}
                         maxSize={50}
-                        onResize={(size) => setBottomPanelSize(size)}
                       >
                         <ErrorBoundary label={t('app.fileBrowser')}>
                           <IntegratedFileBrowser
@@ -2399,7 +2413,6 @@ function AppContent() {
                 defaultSize={layout.rightSidebarSize}
                 minSize={15}
                 maxSize={30}
-                onResize={(size) => setRightSidebarSize(size)}
               >
                 <Tabs value={rightSidebar.active} onValueChange={rightSidebar.select} className="h-full flex flex-col">
                   <TabsList className="inline-flex w-auto mx-1 mt-2">
