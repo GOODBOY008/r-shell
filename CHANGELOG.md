@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.4] - 2026-10-17
+
+### 🔧 R-Shell 3.0.4 — Connection Reliability & Panel Drag Fix
+
+This patch release hardens the connection pipeline: the SSH authentication phase is now bounded by a timeout so a silent server can never leave the UI stuck on "connecting" forever, and closing a pending tab cancels its in-flight connect instead of resurfacing an error toast and the connection dialog long after the tab was abandoned. Layout separators track the pointer for the whole drag again, F3 reaches the remote application when the search bar is closed, and the new-connection folder no longer swallows the first click. The first Dependabot batch keeps dependencies fresh (russh 0.64.1, russh-sftp 3, tauri-action v1 and more).
+
+### Bug Fixes 🐛
+
+- fix(ssh): bound the authentication phase so a silent server can't hang "connecting" forever by @GOODBOY008 in #221
+- fix(app): don't resurface an abandoned connection after its tab is closed by @GOODBOY008 in #222
+- fix(layout): report panel sizes on pointer release so separators keep dragging by @sunxiaobin89 in #214
+- fix(terminal): pass F3 to the remote application unless the search bar is open by @twkrol in #216
+- fix(connection): ignore the click event leaked into the new-connection folder by @twkrol in #219
+- fix(ci): rename includeUpdaterJson to uploadUpdaterJson for tauri-action v1 by @GOODBOY008
+
+### Documentation 📚
+
+- docs(readme): replace the app screenshot and add a shortcut-editor screenshot by @twkrol in #217
+
+### Other Changes
+
+- chore(deps): bump tauri-apps/tauri-action from 0 to 1 by @dependabot[bot] in #212
+- chore(deps): bump actions/setup-node from 6 to 7 by @dependabot[bot] in #211
+- chore(deps): bump russh from 0.63.3 to 0.64.1 in /src-tauri by @dependabot[bot] in #207
+- chore(deps): bump the cargo-minor-patch group in /src-tauri with 4 updates by @dependabot[bot] in #206
+- chore(deps): bump russh-sftp from 2.4.0 to 3.0.1 in /src-tauri by @dependabot[bot] in #210
+- chore(deps): bump tokio-tungstenite from 0.29.0 to 0.30.0 in /src-tauri by @dependabot[bot] in #209
+- chore(deps): bump socket2 from 0.5.10 to 0.6.5 in /src-tauri by @dependabot[bot] in #208
+- chore(deps): bump the npm-minor-patch group with 40 updates by @dependabot[bot] in #205
+- chore: add dependabot for npm, cargo and github-actions by @GOODBOY008
+- chore: add CODEOWNERS defaulting to repo owner by @GOODBOY008
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008), [@sunxiaobin89](https://github.com/sunxiaobin89) and [@twkrol](https://github.com/twkrol) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.0.3...v3.0.4
+
 ## [3.0.3] - 2026-10-09
 
 ### 🔧 R-Shell 3.0.3 — Settings Refresh & macOS Monitor Fixes
