@@ -131,10 +131,15 @@ fn is_perms_token(s: &str) -> bool {
     if !matches!(bytes[0], b'd' | b'l' | b'-') {
         return false;
     }
-    // Positions 1..=9 (9 chars) must all be r/w/x/-.
-    bytes[1..10]
-        .iter()
-        .all(|&b| matches!(b, b'r' | b'w' | b'x' | b'-'))
+    // Positions 1..=9 (9 chars): owner/group/other rwx. The execute slots
+    // (3rd, 6th, 9th) may instead carry s/S (setuid/setgid) or t/T (sticky,
+    // e.g. /tmp is `drwxrwxrwt`); rejecting them dropped every such entry
+    // from the listing.
+    bytes[1..10].iter().enumerate().all(|(i, &b)| match i {
+        2 | 5 => matches!(b, b'x' | b's' | b'S' | b'-'),
+        8 => matches!(b, b'x' | b't' | b'T' | b'-'),
+        _ => matches!(b, b'r' | b'w' | b'-'),
+    })
 }
 
 /// Locate the date columns inside `tokens` and return
@@ -322,6 +327,39 @@ mod tests {
         assert_eq!(entry.permissions.as_deref(), Some("drwxr-xr-x"));
         assert_eq!(entry.owner.as_deref(), Some("root"));
         assert_eq!(entry.group.as_deref(), Some("root"));
+    }
+
+    #[test]
+    fn test_gnu_long_iso_sticky_directory() {
+        // /tmp is world-writable with the sticky bit: drwxrwxrwt. The parser
+        // used to reject any perms token containing s/S/t/T, which silently
+        // removed sticky directories (and setuid/setgid entries) from every
+        // listing.
+        let line = "drwxrwxrwt  15 root root  4096 2026-10-20 11:58 tmp";
+        let entry = parse_ls_long_line(line).expect("sticky directory should parse");
+        assert_eq!(entry.name, "tmp");
+        assert!(matches!(entry.file_type, FileEntryType::Directory));
+        assert_eq!(entry.permissions.as_deref(), Some("drwxrwxrwt"));
+    }
+
+    #[test]
+    fn test_gnu_long_iso_setuid_and_setgid_modes() {
+        let setuid = parse_ls_long_line("-rwsr-xr-x  1 root root 232416 2026-01-15 12:32 sudo")
+            .expect("setuid file should parse");
+        assert_eq!(setuid.name, "sudo");
+
+        let setgid = parse_ls_long_line("drwxr-sr-x  2 root staff 4096 2026-01-15 12:32 share")
+            .expect("setgid directory should parse");
+        assert_eq!(setgid.name, "share");
+
+        // Uppercase markers mean the special bit is set without execute.
+        let setuid_no_exec = parse_ls_long_line("-rwSr--r--  1 root root 10 2026-01-15 12:32 u")
+            .expect("setuid-without-execute should parse");
+        assert_eq!(setuid_no_exec.name, "u");
+
+        let sticky_no_exec = parse_ls_long_line("drwxrwxrwT  2 root root 4096 2026-01-15 12:32 t")
+            .expect("sticky-without-execute should parse");
+        assert_eq!(sticky_no_exec.name, "t");
     }
 
     #[test]
