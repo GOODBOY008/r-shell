@@ -202,7 +202,9 @@
     },
     "ftp": {
       "enableFtps": "Włącz FTPS (FTP przez TLS)",
-      "enableFtpsDesc": "Szyfruj połączenie FTP za pomocą TLS dla większego bezpieczeństwa"
+      "enableFtpsDesc": "Szyfruj połączenie FTP za pomocą TLS dla większego bezpieczeństwa",
+      "verifyCert": "Weryfikuj certyfikat FTPS",
+      "verifyCertDesc": "Odrzucaj niezaufane lub samopodpisane certyfikaty. Wyłącz tylko dla serwerów z zaufanym certyfikatem samopodpisanym."
     },
     "advanced": {
       "enableCompression": "Włącz kompresję",

@@ -25,6 +25,7 @@ export function toConnectionConfig(data: ConnectionData): ConnectionConfig {
     privateKeyPath: data.privateKeyPath,
     passphrase: data.passphrase,
     ftpsEnabled: data.ftpsEnabled,
+    ftpsVerifyCert: data.ftpsVerifyCert,
     domain: data.domain,
     rdpResolution: data.rdpResolution as ConnectionConfig['rdpResolution'],
     vncColorDepth: data.vncColorDepth as ConnectionConfig['vncColorDepth'],

@@ -691,6 +691,29 @@ fn shell_escape_single_quoted(path: &str) -> String {
     path.replace('\'', "'\\''")
 }
 
+/// Validate the arguments of `kill_process` before they reach the shell.
+/// Only a numeric pid and a small whitelist of signals are accepted; both
+/// values are interpolated into `kill -SIG PID` and were previously passed
+/// through unvalidated.
+fn validate_kill_args(pid: &str, signal: Option<&str>) -> Result<(u32, &'static str), String> {
+    let pid: u32 = pid
+        .trim()
+        .parse()
+        .map_err(|_| format!("Invalid process id '{}'", pid))?;
+    let sig = match signal.unwrap_or("15") {
+        "2" => "2",
+        "9" => "9",
+        "15" => "15",
+        other => {
+            return Err(format!(
+                "Unsupported signal '{}'. Use 2 (INT), 9 (KILL) or 15 (TERM).",
+                other
+            ))
+        }
+    };
+    Ok((pid, sig))
+}
+
 #[tauri::command]
 pub async fn create_directory(
     connection_id: String,
@@ -797,7 +820,7 @@ pub async fn read_file_content(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("cat '{}'", path);
+    let command = format!("cat '{}'", shell_escape_single_quoted(&path));
 
     match client.execute_command(&command).await {
         Ok(output) => Ok(output),
@@ -831,7 +854,8 @@ pub async fn read_remote_file_base64(
     // Refuse very large files to avoid memory / performance issues
     let size_cmd = format!(
         "stat -c '%s' '{}' 2>/dev/null || stat -f '%z' '{}'",
-        path, path
+        shell_escape_single_quoted(&path),
+        shell_escape_single_quoted(&path)
     );
     let size_str = client
         .execute_command(&size_cmd)
@@ -852,7 +876,8 @@ pub async fn read_remote_file_base64(
     // so we pipe through `tr -d '\n'` as a portable fallback.
     let b64_cmd = format!(
         "base64 -w0 '{}' 2>/dev/null || base64 '{}' | tr -d '\\n'",
-        path, path
+        shell_escape_single_quoted(&path),
+        shell_escape_single_quoted(&path)
     );
     let b64_data = client
         .execute_command(&b64_cmd)
@@ -894,7 +919,11 @@ pub async fn copy_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("cp -r '{}' '{}'", source_path, dest_path);
+    let command = format!(
+        "cp -r '{}' '{}'",
+        shell_escape_single_quoted(&source_path),
+        shell_escape_single_quoted(&dest_path)
+    );
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -985,8 +1014,8 @@ pub async fn kill_process(
 
     let client = connection.read().await;
 
-    // Default to SIGTERM (15), can also use SIGKILL (9)
-    let sig = signal.unwrap_or_else(|| "15".to_string());
+    // Default to SIGTERM (15), can also use SIGINT (2) or SIGKILL (9).
+    let (pid, sig) = validate_kill_args(&pid, signal.as_deref())?;
     let command = format!("kill -{} {}", sig, pid);
 
     match client.execute_command(&command).await {
@@ -1032,7 +1061,11 @@ pub async fn tail_log(
     let client = connection.read().await;
 
     let line_count = lines.unwrap_or(50);
-    let command = format!("tail -n {} '{}'", line_count, log_path);
+    let command = format!(
+        "tail -n {} '{}'",
+        line_count,
+        shell_escape_single_quoted(&log_path)
+    );
 
     match client.execute_command(&command).await {
         Ok(output) => Ok(CommandResponse {
@@ -1170,7 +1203,7 @@ pub async fn discover_log_sources(
         let file_paths: Vec<String> = sources
             .iter()
             .filter(|s| s.source_type == "file")
-            .map(|s| format!("'{}'", s.path))
+            .map(|s| format!("'{}'", shell_escape_single_quoted(&s.path)))
             .collect();
 
         if !file_paths.is_empty() {
@@ -1273,10 +1306,19 @@ pub async fn read_log(
     let cmd = match source_type.as_str() {
         "journal" => format!(
             "journalctl -u '{}' -n {} --no-pager 2>/dev/null",
-            path, line_count
+            shell_escape_single_quoted(&path),
+            line_count
         ),
-        "docker" => format!("docker logs --tail {} '{}' 2>&1", line_count, path),
-        _ => format!("tail -n {} '{}' 2>/dev/null", line_count, path),
+        "docker" => format!(
+            "docker logs --tail {} '{}' 2>&1",
+            line_count,
+            shell_escape_single_quoted(&path)
+        ),
+        _ => format!(
+            "tail -n {} '{}' 2>/dev/null",
+            line_count,
+            shell_escape_single_quoted(&path)
+        ),
     };
 
     match client.execute_command(&cmd).await {
@@ -1310,7 +1352,8 @@ pub async fn search_log(
     let client = connection.read().await;
 
     let limit = max_results.unwrap_or(500);
-    let escaped = pattern.replace('\'', "'\\''");
+    let escaped = shell_escape_single_quoted(&pattern);
+    let escaped_path = shell_escape_single_quoted(&path);
     let grep_flag = if is_regex.unwrap_or(false) {
         "-nE"
     } else {
@@ -1320,15 +1363,15 @@ pub async fn search_log(
     let cmd = match source_type.as_str() {
         "journal" => format!(
             "journalctl -u '{}' --no-pager 2>/dev/null | grep {} -i '{}' | tail -n {}",
-            path, grep_flag, escaped, limit
+            escaped_path, grep_flag, escaped, limit
         ),
         "docker" => format!(
             "docker logs '{}' 2>&1 | grep {} -i '{}' | tail -n {}",
-            path, grep_flag, escaped, limit
+            escaped_path, grep_flag, escaped, limit
         ),
         _ => format!(
             "grep {} -i '{}' '{}' 2>/dev/null | tail -n {}",
-            grep_flag, escaped, path, limit
+            grep_flag, escaped, escaped_path, limit
         ),
     };
 
@@ -1738,21 +1781,23 @@ pub async fn ssh_tab_complete(
     // Determine completion type
     let is_first_word = words.len() <= 1;
 
-    // Build completion command based on context
+    // Build completion command based on context. The word comes from the
+    // user's own shell input, but it still crosses into a shell command, so
+    // it gets the same quoting treatment as remote paths.
+    let escaped_word = shell_escape_single_quoted(word_to_complete);
     let completion_cmd = if is_first_word {
         // Command completion: use compgen -c for commands
-        format!("compgen -c {} 2>/dev/null || echo", word_to_complete)
+        format!("compgen -c '{}' 2>/dev/null || echo", escaped_word)
     } else {
         // File/directory completion: use compgen -f for files
+        let escaped_prefix = if word_to_complete.is_empty() {
+            ".".to_string()
+        } else {
+            escaped_word.clone()
+        };
         format!(
-            "compgen -f {} 2>/dev/null || ls -1ap {} 2>/dev/null | grep '^{}' || echo",
-            word_to_complete,
-            if word_to_complete.is_empty() {
-                "."
-            } else {
-                word_to_complete
-            },
-            word_to_complete
+            "compgen -f '{}' 2>/dev/null || ls -1ap '{}' 2>/dev/null | grep '^{}' || echo",
+            escaped_word, escaped_prefix, escaped_word
         )
     };
 
@@ -2443,7 +2488,15 @@ pub struct FtpConnectRequest {
     pub username: String,
     pub password: Option<String>,
     pub ftps_enabled: bool,
+    /// Verify the FTPS certificate; defaults to `true` for older clients
+    /// that predate the explicit opt-out.
+    #[serde(default = "default_ftps_verify_cert")]
+    pub ftps_verify_cert: bool,
     pub anonymous: bool,
+}
+
+fn default_ftps_verify_cert() -> bool {
+    true
 }
 
 #[tauri::command]
@@ -2475,6 +2528,7 @@ pub async fn ftp_connect(
             request.password.unwrap_or_default()
         },
         ftps_enabled: request.ftps_enabled,
+        ftps_verify_cert: request.ftps_verify_cert,
         anonymous: request.anonymous,
     };
 
@@ -4956,5 +5010,32 @@ mod tunnel_config_tests {
         req.tunnel_password = Some("jumppass".to_string());
         let tunnel = build_tunnel(&req).unwrap().unwrap();
         assert_eq!(tunnel.port, 22);
+    }
+}
+
+#[cfg(test)]
+mod shell_escape_tests {
+    use super::{shell_escape_single_quoted, validate_kill_args};
+
+    #[test]
+    fn single_quotes_are_escaped_for_posix_shell() {
+        assert_eq!(shell_escape_single_quoted("plain"), "plain");
+        // The quote is closed, escaped, and reopened: ' -> '\''
+        assert_eq!(shell_escape_single_quoted("it's.txt"), "it'\\''s.txt");
+        assert_eq!(
+            shell_escape_single_quoted("x'; touch /tmp/pwned; #"),
+            "x'\\''; touch /tmp/pwned; #"
+        );
+    }
+
+    #[test]
+    fn kill_arguments_accept_only_numeric_pids_and_known_signals() {
+        assert_eq!(validate_kill_args("42", None).unwrap(), (42, "15"));
+        assert_eq!(validate_kill_args("42", Some("9")).unwrap(), (42, "9"));
+        assert_eq!(validate_kill_args(" 42 ", Some("2")).unwrap(), (42, "2"));
+        assert!(validate_kill_args("not-a-pid", None).is_err());
+        assert!(validate_kill_args("42", Some("SIGTERM")).is_err());
+        assert!(validate_kill_args("42; rm -rf /", None).is_err());
+        assert!(validate_kill_args("42", Some("15; rm -rf /")).is_err());
     }
 }

@@ -200,7 +200,9 @@
     },
     "ftp": {
       "enableFtps": "启用 FTPS（基于 TLS 的 FTP）",
-      "enableFtpsDesc": "使用 TLS 加密 FTP 连接以提高安全性"
+      "enableFtpsDesc": "使用 TLS 加密 FTP 连接以提高安全性",
+      "verifyCert": "验证 FTPS 证书",
+      "verifyCertDesc": "拒绝不受信任或自签名证书。仅在你信任服务器的自签名证书时关闭。"
     },
     "advanced": {
       "enableCompression": "启用压缩",

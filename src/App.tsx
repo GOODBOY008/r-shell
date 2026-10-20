@@ -21,6 +21,7 @@ import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker, type UpdateAnnouncement } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
+import { buildFtpConnectRequest } from './lib/ftp-connect-request';
 import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, markSealFailed, clearSealFailed } from './lib/connection-storage';
 import { ConnectionProfileManager } from './lib/connection-profiles';
 import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
@@ -562,15 +563,7 @@ function AppContent() {
         } else {
           await withTimeout(
             invoke('ftp_connect', {
-              request: {
-                connection_id: tab.id,
-                host: connectionData.host,
-                port: connectionData.port || 21,
-                username: connectionData.username || '',
-                password: connectionData.password || '',
-                ftps_enabled: connectionData.ftpsEnabled ?? false,
-                anonymous: connectionData.authMethod === 'anonymous',
-              }
+              request: buildFtpConnectRequest(tab.id, connectionData),
             }),
             connectTimeout,
             `ftp_connect ${connectionData.name}`,
@@ -836,15 +829,7 @@ function AppContent() {
             });
           } else {
             await invoke('ftp_connect', {
-              request: {
-                connection_id: sessionId,
-                host: connectionData.host,
-                port: connectionData.port || 21,
-                username: connectionData.username || '',
-                password: connectionData.password || '',
-                ftps_enabled: connectionData.ftpsEnabled ?? false,
-                anonymous: connectionData.authMethod === 'anonymous',
-              }
+              request: buildFtpConnectRequest(sessionId, connectionData),
             });
           }
           ConnectionStorageManager.updateLastConnected(connection.id);
@@ -1088,15 +1073,7 @@ function AppContent() {
             });
           } else {
             await invoke('ftp_connect', {
-              request: {
-                connection_id: duplicateId,
-                host: connectionData.host,
-                port: connectionData.port || 21,
-                username: connectionData.username || '',
-                password: connectionData.password || '',
-                ftps_enabled: connectionData.ftpsEnabled ?? false,
-                anonymous: connectionData.authMethod === 'anonymous',
-              }
+              request: buildFtpConnectRequest(duplicateId, connectionData),
             });
           }
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'connected' });
@@ -1294,15 +1271,7 @@ function AppContent() {
           });
         } else {
           await invoke('ftp_connect', {
-            request: {
-              connection_id: tabId,
-              host: connectionData.host,
-              port: connectionData.port || 21,
-              username: connectionData.username || '',
-              password: connectionData.password || '',
-              ftps_enabled: connectionData.ftpsEnabled ?? false,
-              anonymous: connectionData.authMethod === 'anonymous',
-            }
+            request: buildFtpConnectRequest(tabId, connectionData),
           });
         }
 
@@ -1638,15 +1607,7 @@ function AppContent() {
             });
           } else {
             await invoke('ftp_connect', {
-              request: {
-                connection_id: tabId,
-                host: config.host,
-                port: config.port || 21,
-                username: config.username || '',
-                password: config.password || '',
-                ftps_enabled: config.ftpsEnabled ?? false,
-                anonymous: config.authMethod === 'anonymous',
-              }
+              request: buildFtpConnectRequest(tabId, config),
             });
           }
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
@@ -1746,15 +1707,7 @@ function AppContent() {
             });
           } else {
             await invoke('ftp_connect', {
-              request: {
-                connection_id: tabId,
-                host: config.host,
-                port: config.port || 21,
-                username: config.username || '',
-                password: config.password || '',
-                ftps_enabled: config.ftpsEnabled ?? false,
-                anonymous: config.authMethod === 'anonymous',
-              }
+              request: buildFtpConnectRequest(tabId, config),
             });
           }
           ConnectionStorageManager.updateLastConnected(config.id || tabId);
@@ -2040,15 +1993,7 @@ function AppContent() {
             });
           } else {
             await invoke('ftp_connect', {
-              request: {
-                connection_id: sessionId,
-                host: config.host,
-                port: config.port || 21,
-                username: config.username || '',
-                password: config.password || '',
-                ftps_enabled: config.ftpsEnabled ?? false,
-                anonymous: config.authMethod === 'anonymous',
-              }
+              request: buildFtpConnectRequest(sessionId, config),
             });
           }
           ConnectionStorageManager.updateLastConnected(config.id);

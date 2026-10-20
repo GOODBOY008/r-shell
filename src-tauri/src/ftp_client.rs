@@ -19,7 +19,24 @@ pub struct FtpConfig {
     pub username: String,
     pub password: String,
     pub ftps_enabled: bool,
+    /// Verify the FTPS server certificate and hostname. Defaults to `true`;
+    /// the connection dialog exposes an explicit opt-out for self-signed
+    /// certificates. Without this the TLS layer accepted any certificate,
+    /// which silently removed the protection FTPS is supposed to provide.
+    #[serde(default = "default_ftps_verify_cert")]
+    pub ftps_verify_cert: bool,
     pub anonymous: bool,
+}
+
+fn default_ftps_verify_cert() -> bool {
+    true
+}
+
+/// Map the "verify certificate" flag onto native-tls's inverse
+/// "accept invalid certs" option. Keeping it a named function makes the
+/// on/off branches unit-testable without a TLS server.
+fn accepts_invalid_certs(verify_cert: bool) -> bool {
+    !verify_cert
 }
 
 /// Wrapper enum to handle both plain and TLS FTP streams.
@@ -92,8 +109,11 @@ impl FtpClient {
             // required" — control-channel ops keep working, LIST/RETR/STOR
             // do not. Nothing we can do client-side short of reimplementing
             // the TLS layer; such servers must set require_ssl_reuse=NO.
-            let tls_connector =
-                async_native_tls::TlsConnector::new().danger_accept_invalid_certs(true);
+            //
+            // Certificates are verified by default. The opt-out exists only
+            // for self-signed deployments and is explicit per connection.
+            let tls_connector = async_native_tls::TlsConnector::new()
+                .danger_accept_invalid_certs(accepts_invalid_certs(config.ftps_verify_cert));
             let secure_stream = ftp_stream
                 .into_secure(
                     suppaftp::tokio::AsyncNativeTlsConnector::from(tls_connector),
@@ -654,6 +674,7 @@ mod tests {
             username: user,
             password: pass,
             ftps_enabled,
+            ftps_verify_cert: true,
             anonymous: false,
         })
     }
@@ -1065,6 +1086,8 @@ mod tests {
         assert_eq!(config.password, "pass");
         assert!(!config.ftps_enabled);
         assert!(!config.anonymous);
+        // Absent in the payload: verification must default to enabled.
+        assert!(config.ftps_verify_cert);
     }
 
     #[test]
@@ -1076,10 +1099,19 @@ mod tests {
 
     #[test]
     fn test_ftp_config_ftps_enabled() {
-        let json = r#"{"host":"secure.example.com","port":990,"username":"admin","password":"secret","ftps_enabled":true,"anonymous":false}"#;
+        let json = r#"{"host":"secure.example.com","port":990,"username":"admin","password":"secret","ftps_enabled":true,"ftps_verify_cert":false,"anonymous":false}"#;
         let config: FtpConfig = serde_json::from_str(json).unwrap();
         assert!(config.ftps_enabled);
+        assert!(!config.ftps_verify_cert);
         assert_eq!(config.port, 990);
+    }
+
+    #[test]
+    fn ftps_verification_flag_controls_tls_validation() {
+        // The flag is inverted for native-tls: verification on means invalid
+        // certificates are NOT accepted.
+        assert!(!accepts_invalid_certs(true));
+        assert!(accepts_invalid_certs(false));
     }
 
     #[test]
