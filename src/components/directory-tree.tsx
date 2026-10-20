@@ -92,6 +92,10 @@ export function DirectoryTree({
   const [focusPath, setFocusPath] = useState<string>(normalizePath(currentPath));
   const rowRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  // Path the tree last auto-scrolled to. Expanding or collapsing a directory
+  // rebuilds `visibleRows`, and re-centering on the active row every time
+  // yanked the tree away from the folder the user had just expanded.
+  const lastAutoScrolledPathRef = useRef<string | null>(null);
 
   const nodesRef = useRef(nodes);
   const loadingRef = useRef(loading);
@@ -175,6 +179,9 @@ export function DirectoryTree({
     if (typeof initialScrollTop === "number" && scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = initialScrollTop;
     }
+    // A connection switch resets the tree, so the active path may need to be
+    // brought into view again even if it did not change.
+    lastAutoScrolledPathRef.current = null;
   }, [loadDirectory, initialExpanded, initialNodes, initialScrollTop]);
 
   useEffect(() => {
@@ -221,9 +228,15 @@ export function DirectoryTree({
   }, [expanded, nodes]);
 
   useEffect(() => {
-    const activeRow = rowRefs.current.get(normalizePath(currentPath));
+    const normalized = normalizePath(currentPath);
+    // Only auto-scroll when the active path changes. `visibleRows` also
+    // changes on every expand/collapse; re-running the centering then moved
+    // the viewport away from the row the user had just clicked.
+    if (lastAutoScrolledPathRef.current === normalized) return;
+    const activeRow = rowRefs.current.get(normalized);
     if (activeRow && typeof activeRow.scrollIntoView === "function") {
       activeRow.scrollIntoView({ block: "center", inline: "nearest" });
+      lastAutoScrolledPathRef.current = normalized;
     }
   }, [currentPath, visibleRows]);
 
