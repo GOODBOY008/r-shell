@@ -62,6 +62,47 @@ describe('GroupTabBar context menu', () => {
     expect(dispatch).not.toHaveBeenCalledWith({ type: 'REMOVE_TAB', groupId: '1', tabId: 'a' });
   });
 
+  it('routes Close Other Tabs through onCloseTab for every closed tab', async () => {
+    const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
+    const onCloseTab = vi.fn();
+    render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" onCloseTab={onCloseTab} />);
+
+    fireEvent.contextMenu(screen.getByText('b'));
+    fireEvent.click(await screen.findByText('Close Other Tabs'));
+
+    expect(onCloseTab).toHaveBeenCalledTimes(2);
+    expect(onCloseTab).toHaveBeenCalledWith('a');
+    expect(onCloseTab).toHaveBeenCalledWith('c');
+    // The reducer-only bulk action would skip backend cleanup.
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'CLOSE_OTHER_TABS', groupId: '1', tabId: 'b' });
+  });
+
+  it('routes Close Tabs to Right through onCloseTab', async () => {
+    const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
+    const onCloseTab = vi.fn();
+    render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" onCloseTab={onCloseTab} />);
+
+    fireEvent.contextMenu(screen.getByText('b'));
+    fireEvent.click(await screen.findByText('Close Tabs to Right'));
+
+    expect(onCloseTab).toHaveBeenCalledTimes(1);
+    expect(onCloseTab).toHaveBeenCalledWith('c');
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'CLOSE_TABS_TO_RIGHT', groupId: '1', tabId: 'b' });
+  });
+
+  it('routes Close Tabs to Left through onCloseTab', async () => {
+    const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
+    const onCloseTab = vi.fn();
+    render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" onCloseTab={onCloseTab} />);
+
+    fireEvent.contextMenu(screen.getByText('b'));
+    fireEvent.click(await screen.findByText('Close Tabs to Left'));
+
+    expect(onCloseTab).toHaveBeenCalledTimes(1);
+    expect(onCloseTab).toHaveBeenCalledWith('a');
+    expect(dispatch).not.toHaveBeenCalledWith({ type: 'CLOSE_TABS_TO_LEFT', groupId: '1', tabId: 'b' });
+  });
+
   it('moves a tab left/right from the context menu', async () => {
     const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
     render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" />);

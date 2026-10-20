@@ -314,8 +314,84 @@ function AppContent() {
     return () => window.clearInterval(interval);
   }, [dispatch]);
 
+  // Cancel the backend connect attempt behind a terminal tab that is being
+  // removed. A `pending` tab has an in-flight ssh_connect (sidebar connect or
+  // lazy restore); a `connecting` tab may be in the middle of a reconnect.
+  // Without the cancel the attempt lingers until its own timeout (30 s
+  // against a down host) and can settle after the tab is gone.
+  const cancelPendingTerminalConnect = useCallback((tab: TerminalTab) => {
+    if (
+      (tab.connectionStatus === 'pending' || tab.connectionStatus === 'connecting') &&
+      tab.tabType !== 'file-browser' &&
+      tab.tabType !== 'desktop'
+    ) {
+      void invoke('ssh_cancel_connect', { connection_id: tab.id }).catch(() => {
+        // No pending connection (already settled) — nothing to cancel.
+      });
+    }
+  }, []);
+
+  // Tear down whatever the backend holds for a tab that is being removed.
+  // Tabs created from the connection dialog use `config.id`; sidebar and
+  // duplicate tabs use `${connectionId}-dup-…` — either way every tab owns
+  // its own session, so disconnecting here never takes down another tab's
+  // connection.
+  const disconnectTabBackend = useCallback((tab: TerminalTab) => {
+    if (tab.tabType === 'file-browser') {
+      const command = tab.protocol === 'SFTP'
+        ? 'sftp_standalone_disconnect'
+        : tab.protocol === 'FTP'
+          ? 'ftp_disconnect'
+          : null;
+      if (command) {
+        void invoke(command, { connection_id: tab.id }).catch(() => {
+          // Ignore disconnect errors on tab close
+        });
+      }
+      return;
+    }
+
+    if (tab.tabType === 'desktop') {
+      // Desktop sessions are established by desktop_connect and live in their
+      // own backend map, not with the PTY/SSH connections.
+      void invoke('desktop_disconnect', { connectionId: tab.id }).catch(() => {
+        // No session (connect failed or still in flight).
+      });
+      return;
+    }
+
+    // Editor tabs do not own a backend session — they borrow another tab's
+    // connection through `editorConnectionId`.
+    if (tab.tabType === 'editor') return;
+
+    // Cancel an in-flight connect before it can settle behind a removed tab.
+    cancelPendingTerminalConnect(tab);
+
+    // A standalone file-editor window may still be reading and writing
+    // through this SSH session. Keep the connection alive while that window
+    // is open; the editor-closed handler disconnects it once neither the
+    // window nor a tab uses it. Without this the editor's next save fails
+    // with "Connection not found".
+    if (loadOpenEditors().some(editor => editor.connectionId === tab.id)) {
+      return;
+    }
+
+    void invoke('ssh_disconnect', { connection_id: tab.id }).catch(() => {
+      // The session may already be gone (failed or cancelled connect).
+    });
+  }, [cancelPendingTerminalConnect]);
+
   const handleCloseActiveTab = useCallback(() => {
-    if (!activeGroup?.activeTabId) {
+    if (!activeGroup) return;
+
+    if (!activeGroup.activeTabId) {
+      if (allTabs.length > 0) {
+        // A split creates and activates an empty group. Ctrl+W on that split
+        // should discard the split, not take the whole window down while
+        // other splits still hold sessions.
+        dispatch({ type: 'REMOVE_GROUP', groupId: activeGroup.id });
+        return;
+      }
       // No terminal tabs left: close the main window itself (Terminal.app /
       // VS Code close their window when Cmd+W hits an empty session list).
       // On macOS the CloseRequested handler in lib.rs turns this into a
@@ -329,13 +405,16 @@ function AppContent() {
       return;
     }
 
+    const tabId = activeGroup.activeTabId;
+    const tab = activeGroup.tabs.find(t => t.id === tabId);
     const isLastTab = allTabs.length === 1;
-    dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId: activeGroup.activeTabId });
+    dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId });
+    if (tab) disconnectTabBackend(tab);
 
     if (isLastTab) {
       ActiveConnectionsManager.clearActiveConnections();
     }
-  }, [activeGroup, allTabs.length, dispatch]);
+  }, [activeGroup, allTabs.length, dispatch, disconnectTabBackend]);
 
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
@@ -940,70 +1019,29 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
-  // Cancel the backend connect attempt behind a pending terminal tab that is
-  // being removed. A pending tab has an in-flight ssh_connect (sidebar
-  // connect or lazy restore); without the cancel the attempt lingers until
-  // its own timeout (30 s against a down host) and its eventual failure
-  // resurfaces for a tab the user already abandoned.
-  const cancelPendingTerminalConnect = useCallback((tab: TerminalTab) => {
-    if (
-      tab.connectionStatus === 'pending' &&
-      tab.tabType !== 'file-browser' &&
-      tab.tabType !== 'desktop'
-    ) {
-      void invoke('ssh_cancel_connect', { connection_id: tab.id }).catch(() => {
-        // No pending connection (already settled) — nothing to cancel.
-      });
-    }
-  }, []);
-
-  const handleCloseTab = useCallback(async (tabId: string) => {
-    // Find which group contains this tab and remove it
+  const handleCloseTab = useCallback((tabId: string) => {
     for (const group of Object.values(state.groups)) {
       const tab = group.tabs.find(t => t.id === tabId);
       if (tab) {
-        // Disconnect SFTP/FTP sessions when closing file-browser tabs
-        if (tab.tabType === 'file-browser') {
-          try {
-            if (tab.protocol === 'SFTP') {
-              await invoke('sftp_standalone_disconnect', { connection_id: tabId });
-            } else if (tab.protocol === 'FTP') {
-              await invoke('ftp_disconnect', { connection_id: tabId });
-            }
-          } catch {
-            // Ignore disconnect errors on tab close
-          }
-        }
-        cancelPendingTerminalConnect(tab);
+        // Remove first: a slow backend disconnect must not leave the tab in a
+        // group that has since moved. The teardown runs in the background.
         dispatch({ type: 'REMOVE_TAB', groupId: group.id, tabId });
+        disconnectTabBackend(tab);
         break;
       }
     }
-  }, [state.groups, dispatch, cancelPendingTerminalConnect]);
+  }, [state.groups, dispatch, disconnectTabBackend]);
 
-  // Close every tab in a group. Runs backend cleanup for file-browser
-  // sessions first (CLOSE_ALL_TABS is reducer-only and would otherwise
-  // leave SFTP/FTP connections alive), then empties the group.
-  const handleCloseAllTabs = useCallback(async (groupId: string) => {
+  // Close every tab in a group, tearing down each backend session first
+  // (CLOSE_ALL_TABS is reducer-only and would otherwise leave sessions alive).
+  const handleCloseAllTabs = useCallback((groupId: string) => {
     const group = state.groups[groupId];
     if (!group) return;
     for (const tab of group.tabs) {
-      // Disconnect SFTP/FTP sessions when closing file-browser tabs
-      if (tab.tabType === 'file-browser') {
-        try {
-          if (tab.protocol === 'SFTP') {
-            await invoke('sftp_standalone_disconnect', { connection_id: tab.id });
-          } else if (tab.protocol === 'FTP') {
-            await invoke('ftp_disconnect', { connection_id: tab.id });
-          }
-        } catch {
-          // Ignore disconnect errors on tab close
-        }
-      }
-      cancelPendingTerminalConnect(tab);
+      disconnectTabBackend(tab);
     }
     dispatch({ type: 'CLOSE_ALL_TABS', groupId });
-  }, [state.groups, dispatch, cancelPendingTerminalConnect]);
+  }, [state.groups, dispatch, disconnectTabBackend]);
 
   // Wired straight into onClick in several places, so `folderPath` may be a
   // MouseEvent rather than a path; only a real folder string is used (#218).
@@ -1586,6 +1624,19 @@ function AppContent() {
         addOpenEditor(entry);
       } else {
         removeOpenEditor(entry);
+        // A tab close keeps the SSH session alive while an editor window
+        // borrows it. When the last such window closes and no tab uses the
+        // connection either, tear the session down instead of leaving it
+        // orphaned until the app exits.
+        const stillOpen = loadOpenEditors().some(
+          editor => editor.connectionId === connectionId,
+        );
+        const hasTab = allTabsRef.current.some(tab => tab.id === connectionId);
+        if (!stillOpen && !hasTab) {
+          void invoke('ssh_disconnect', { connection_id: connectionId }).catch(() => {
+            // The session may already be gone.
+          });
+        }
       }
     });
     return () => { unlistenPromise.then(fn => fn()); };

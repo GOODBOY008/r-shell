@@ -20,6 +20,7 @@ const lifecycle = vi.hoisted(() => ({
   closeMainWindow: vi.fn(async () => {}),
   eventHandlers: new Map<string, (payload?: unknown) => void>(),
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
+  stateHistory: [] as TerminalGroupState[],
 }));
 
 let mockState: TerminalGroupState;
@@ -34,6 +35,39 @@ function makeEmptyState(): TerminalGroupState {
   };
 }
 
+/** A split whose active group is the empty one SPLIT_GROUP just created. */
+function makeSplitState(): TerminalGroupState {
+  return {
+    groups: {
+      'group-1': {
+        id: 'group-1',
+        tabs: [{
+          id: 'tab-1',
+          name: 'Shell',
+          protocol: 'SSH',
+          connectionStatus: 'connected',
+          reconnectCount: 0,
+          tabType: 'terminal',
+        }],
+        activeTabId: 'tab-1',
+      },
+      'group-2': { id: 'group-2', tabs: [], activeTabId: null },
+    },
+    activeGroupId: 'group-2',
+    gridLayout: {
+      type: 'branch',
+      direction: 'horizontal',
+      children: [
+        { type: 'leaf', groupId: 'group-1' },
+        { type: 'leaf', groupId: 'group-2' },
+      ],
+      sizes: [50, 50],
+    },
+    nextGroupId: 3,
+    tabToGroupMap: { 'tab-1': 'group-1' },
+  };
+}
+
 vi.mock('@/lib/terminal-group-context', async () => {
   const ReactModule = await import('react');
   const { terminalGroupReducer } = await import('@/lib/terminal-group-reducer');
@@ -41,6 +75,7 @@ vi.mock('@/lib/terminal-group-context', async () => {
   return {
     TerminalGroupProvider: ({ children }: { children: React.ReactNode }) => {
       const [state, dispatch] = ReactModule.useReducer(terminalGroupReducer, mockState);
+      lifecycle.stateHistory.push(state);
       const activeGroup = state.groups[state.activeGroupId] ?? null;
       const activeTab =
         activeGroup?.tabs.find((t) => t.id === activeGroup.activeTabId) ?? null;
@@ -176,6 +211,7 @@ describe('Ctrl+W with no terminal tabs closes the main window', () => {
     localStorage.removeItem('r-shell-open-editors');
 
     lifecycle.eventHandlers.clear();
+    lifecycle.stateHistory.length = 0;
     lifecycle.closeMainWindow.mockClear();
     lifecycle.invoke.mockReset();
     lifecycle.invoke.mockImplementation(async (command: string) => {
@@ -200,6 +236,26 @@ describe('Ctrl+W with no terminal tabs closes the main window', () => {
     await vi.waitFor(() => {
       expect(lifecycle.closeMainWindow).toHaveBeenCalledOnce();
     });
+    hasFocus.mockRestore();
+  });
+
+  it('discards the empty split instead of closing the window', async () => {
+    mockState = makeSplitState();
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    render(<App />);
+
+    // Ctrl+W lands on the empty group SPLIT_GROUP activated; the other split
+    // still holds a live session, so the window must stay open.
+    lifecycle.eventHandlers.get('menu-action')!('close_connection');
+
+    await vi.waitFor(() => {
+      const latest = lifecycle.stateHistory[lifecycle.stateHistory.length - 1];
+      expect(latest.groups['group-2']).toBeUndefined();
+    });
+    expect(lifecycle.closeMainWindow).not.toHaveBeenCalled();
+    const latest = lifecycle.stateHistory[lifecycle.stateHistory.length - 1];
+    expect(latest.groups['group-1'].tabs).toHaveLength(1);
+    expect(latest.activeGroupId).toBe('group-1');
     hasFocus.mockRestore();
   });
 
