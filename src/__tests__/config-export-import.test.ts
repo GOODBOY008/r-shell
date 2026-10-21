@@ -29,6 +29,11 @@ const mockSave = vi.fn();
 const mockOpen = vi.fn();
 const mockWriteTextFile = vi.fn();
 const mockReadTextFile = vi.fn();
+const mockInvoke = vi.fn(async () => {});
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: unknown[]) => mockInvoke(...args),
+}));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: (...args: unknown[]) => mockSave(...args),
@@ -139,6 +144,12 @@ describe('exportAllConfig', () => {
     expect(mockWriteTextFile).toHaveBeenCalledTimes(1);
     const [path, content] = mockWriteTextFile.mock.calls[0];
     expect(path).toBe('/tmp/r-shell-config-2026-06-28.json');
+
+    // The fs plugin may only touch files the user picked, so the picked file
+    // is granted before it is written.
+    expect(mockInvoke).toHaveBeenCalledWith('authorize_local_file', {
+      path: '/tmp/r-shell-config-2026-06-28.json',
+    });
 
     // Parse the written JSON and verify structure
     const bundle = JSON.parse(content as string);
@@ -334,6 +345,23 @@ describe('importAllConfig', () => {
     const result = await importAllConfig();
 
     expect(result).toBeNull();
+  });
+
+  it('grants the fs plugin access to the imported file before reading it', async () => {
+    mockOpen.mockResolvedValue('/tmp/config.json');
+    mockReadTextFile.mockResolvedValue(buildBundleJSON());
+
+    const { importAllConfig } = await import('../lib/config-export-import');
+    await importAllConfig(false);
+
+    expect(mockInvoke).toHaveBeenCalledWith('authorize_local_file', {
+      path: '/tmp/config.json',
+    });
+    // The grant has to reach the fs plugin before the read, otherwise the
+    // import fails at runtime with "forbidden path".
+    expect(mockInvoke.mock.invocationCallOrder[0]).toBeLessThan(
+      mockReadTextFile.mock.invocationCallOrder[0],
+    );
   });
 
   it('imports all categories in replace mode', async () => {

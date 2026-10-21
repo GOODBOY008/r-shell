@@ -8,7 +8,7 @@
  */
 
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
-import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs';
+import { readLocalTextFile, writeLocalTextFile } from './local-file-access';
 import {
   ConnectionStorageManager,
   type ConnectionData,
@@ -148,7 +148,8 @@ export async function exportAllConfig(): Promise<boolean> {
     if (!filePath) return false; // cancelled
 
     // 3. Write ------------------------------------------------------------------
-    await writeTextFile(filePath, JSON.stringify(bundle, null, 2));
+    // The fs plugin may only touch files the user picked, so grant this one.
+    await writeLocalTextFile(filePath, JSON.stringify(bundle, null, 2));
     return true;
   } catch (error) {
     console.error('[config-export] Failed:', error);
@@ -177,7 +178,8 @@ export async function importAllConfig(
     if (!filePath) return null; // cancelled
 
     // 2. Read & parse -----------------------------------------------------------
-    const raw = await readTextFile(filePath);
+    // The fs plugin may only touch files the user picked, so grant this one.
+    const raw = await readLocalTextFile(filePath);
     const bundle = JSON.parse(raw) as ConfigBundle;
 
     if (typeof bundle.version !== 'number' || !bundle.data) {

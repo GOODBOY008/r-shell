@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
-import { readFile } from '@tauri-apps/plugin-fs';
+import { readLocalBinaryFile } from '../../lib/local-file-access';
 import { Button } from '../ui/button';
 import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
@@ -102,7 +102,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         filters: [{ name: t('settings.terminal.images'), extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'] }],
       });
       if (!selected) return; // dialog dismissed
-      const bytes = await readFile(selected);
+      const bytes = await readLocalBinaryFile(selected);
       if (bytes.length > 5 * 1024 * 1024) {
         toast.error(t('settings.terminal.imageSizeWarning'));
         return;

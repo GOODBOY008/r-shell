@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod acl_tests;
 mod commands;
 mod connection_manager;
 mod desktop_protocol;
@@ -433,6 +435,7 @@ pub fn run() {
         .manage(quit_guard::QuitGuard::default())
         .manage(commands::PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
+            commands::authorize_local_file,
             commands::ssh_connect,
             commands::ssh_cancel_connect,
             commands::ssh_disconnect,

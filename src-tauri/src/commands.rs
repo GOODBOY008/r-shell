@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{Emitter, Manager, State};
+use tauri_plugin_fs::FsExt;
 use tauri_plugin_updater::UpdaterExt;
 use tokio_util::sync::CancellationToken;
 
@@ -683,6 +684,47 @@ pub async fn sftp_upload_file(
 }
 
 // File operation commands
+
+/// Grant the fs plugin access to one local file.
+///
+/// The app's capability no longer allows the whole disk to the webview, so
+/// every local file the frontend touches has to be granted explicitly. The
+/// frontend calls this right after the user picked a file in a native
+/// dialog.
+///
+/// This is defence in depth, not a trust boundary: the path arrives from the
+/// webview, so a script running in the main window could ask for any path it
+/// likes. Opening the dialog from Rust and returning the picked path is the
+/// follow-up that would bind the grant to a real user gesture.
+#[tauri::command]
+pub async fn authorize_local_file(path: String, app: tauri::AppHandle) -> Result<(), String> {
+    let path = std::path::PathBuf::from(path);
+    // The fs plugin resolves symlinks before it checks the scope, so the
+    // granted path has to be canonical as well: a literal pattern for
+    // `/tmp/report.json` never matches the resolved `/private/tmp/...` on
+    // macOS, and the grant would silently do nothing.
+    let resolved = canonicalize_for_scope(&path);
+    app.fs_scope()
+        .allow_file(&resolved)
+        .map_err(|e| format!("Failed to authorize '{}': {}", resolved.display(), e))
+}
+
+/// Canonicalize a path the way the fs plugin compares it.
+///
+/// An existing file is resolved directly. A path that does not exist yet (an
+/// export target) is resolved through its parent directory so the file name
+/// is preserved.
+fn canonicalize_for_scope(path: &std::path::Path) -> std::path::PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+        if let Ok(canonical_parent) = parent.canonicalize() {
+            return canonical_parent.join(name);
+        }
+    }
+    path.to_path_buf()
+}
 
 /// Escape a path for use inside a POSIX single-quoted shell argument.
 /// Single quotes cannot appear inside a single-quoted string, so we end the
