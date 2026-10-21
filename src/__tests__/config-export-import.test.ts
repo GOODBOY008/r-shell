@@ -6,6 +6,7 @@
  * files, merge mode, selective data).
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { version as packageVersion } from '../../package.json';
 import {
   ConnectionStorageManager,
   type ConnectionData,
@@ -124,6 +125,20 @@ afterEach(() => {
 // ── exportAllConfig ──────────────────────────────────────────────────────────
 
 describe('exportAllConfig', () => {
+  it('records the real app version in the exported bundle', async () => {
+    mockSave.mockResolvedValue('/tmp/r-shell-config.json');
+    mockWriteTextFile.mockResolvedValue(undefined);
+
+    const { exportAllConfig } = await import('../lib/config-export-import');
+    await exportAllConfig();
+
+    const bundle = JSON.parse(mockWriteTextFile.mock.calls[0][1] as string);
+    // The bundle used to say "unknown": the version came from an
+    // import.meta.env entry that nothing ever defined.
+    expect(bundle.appVersion).toBe(packageVersion);
+    expect(bundle.appVersion).not.toBe('unknown');
+  });
+
   it('collects all config data and writes a JSON bundle', async () => {
     mockSave.mockResolvedValue('/tmp/r-shell-config-2026-06-28.json');
     mockWriteTextFile.mockResolvedValue(undefined);
