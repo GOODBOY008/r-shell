@@ -39,6 +39,7 @@ const lifecycle = vi.hoisted(() => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
   stateHistory: [] as TerminalGroupState[],
   dialogOpenLog: [] as boolean[],
+  eventHandlers: new Map<string, (event: { payload?: unknown }) => void>(),
   callbacks: {} as TerminalCallbacks,
 }));
 
@@ -179,7 +180,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(async () => vi.fn()),
+  listen: vi.fn(async (event: string, handler: (e: { payload?: unknown }) => void) => {
+    lifecycle.eventHandlers.set(event, handler);
+    return vi.fn();
+  }),
 }));
 
 vi.mock('sonner', () => ({
@@ -291,6 +295,7 @@ describe('closing a pending tab while its connect is in flight', () => {
 
     lifecycle.stateHistory.length = 0;
     lifecycle.dialogOpenLog.length = 0;
+    lifecycle.eventHandlers.clear();
     lifecycle.invoke.mockReset();
     lifecycle.toast.error.mockReset();
     lifecycle.toast.success.mockReset();
@@ -361,5 +366,301 @@ describe('closing a pending tab while its connect is in flight', () => {
     expect(handle.disconnects).toContainEqual({ connection_id: handle.sessionId });
     // And no 'connecting' transition for the removed tab (no terminal mount).
     expect(lifecycle.toast.success).not.toHaveBeenCalled();
+  });
+
+  it('disconnects the backend SSH session once ssh_connect has succeeded', async () => {
+    const handle = await startSidebarConnect();
+
+    // Let the connect settle: the tab now owns a live backend SSH session.
+    await act(async () => {
+      handle.settle.resolve({ success: true });
+    });
+
+    await act(async () => {
+      await lifecycle.callbacks.onCloseTab?.(handle.sessionId);
+    });
+
+    // Closing the tab used to remove only the PTY; the authenticated SSH
+    // connection stayed in the backend until the app exited.
+    expect(handle.disconnects).toContainEqual({ connection_id: handle.sessionId });
+    // The post-connect tab is 'connecting', not 'pending' — the close must
+    // still cancel any in-flight work on it.
+    expect(handle.cancels).toContainEqual({ connection_id: handle.sessionId });
+  });
+
+  it('disconnects an SFTP session when its file-browser tab is closed', async () => {
+    mockState = {
+      groups: {
+        'group-1': {
+          id: 'group-1',
+          tabs: [{
+            id: 'sftp-1',
+            name: 'Files',
+            tabType: 'file-browser',
+            protocol: 'SFTP',
+            connectionStatus: 'connected',
+            reconnectCount: 0,
+          }],
+          activeTabId: 'sftp-1',
+        },
+      },
+      activeGroupId: 'group-1',
+      gridLayout: { type: 'leaf', groupId: 'group-1' },
+      nextGroupId: 2,
+      tabToGroupMap: { 'sftp-1': 'group-1' },
+    };
+    const sftpDisconnects: Record<string, unknown>[] = [];
+    lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'sftp_standalone_disconnect') {
+        sftpDisconnects.push((args ?? {}) as Record<string, unknown>);
+      }
+      if (command === 'get_system_locale') return 'en-US';
+      return {};
+    });
+
+    render(<App />);
+    await act(async () => {
+      await lifecycle.callbacks.onCloseTab?.('sftp-1');
+    });
+
+    expect(sftpDisconnects).toContainEqual({ connection_id: 'sftp-1' });
+  });
+
+  it('disconnects every terminal session when a group is closed at once', async () => {
+    const terminalTab = (id: string) => ({
+      id,
+      name: id,
+      protocol: 'SSH',
+      connectionStatus: 'connected' as const,
+      reconnectCount: 0,
+      tabType: 'terminal' as const,
+    });
+    mockState = {
+      groups: {
+        'group-1': {
+          id: 'group-1',
+          tabs: [terminalTab('ssh-a'), terminalTab('ssh-b')],
+          activeTabId: 'ssh-a',
+        },
+      },
+      activeGroupId: 'group-1',
+      gridLayout: { type: 'leaf', groupId: 'group-1' },
+      nextGroupId: 2,
+      tabToGroupMap: { 'ssh-a': 'group-1', 'ssh-b': 'group-1' },
+    };
+    const disconnects: Record<string, unknown>[] = [];
+    lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'ssh_disconnect') {
+        disconnects.push((args ?? {}) as Record<string, unknown>);
+      }
+      if (command === 'get_system_locale') return 'en-US';
+      return {};
+    });
+
+    render(<App />);
+    await act(async () => {
+      await lifecycle.callbacks.onCloseAllTabs?.('group-1');
+    });
+
+    expect(disconnects).toEqual([
+      { connection_id: 'ssh-a' },
+      { connection_id: 'ssh-b' },
+    ]);
+  });
+
+  it('disconnects desktop sessions on close instead of leaking them', async () => {
+    mockState = {
+      groups: {
+        'group-1': {
+          id: 'group-1',
+          tabs: [{
+            id: 'rdp-1',
+            name: 'Desktop',
+            tabType: 'desktop',
+            protocol: 'RDP',
+            connectionStatus: 'connected',
+            reconnectCount: 0,
+          }],
+          activeTabId: 'rdp-1',
+        },
+      },
+      activeGroupId: 'group-1',
+      gridLayout: { type: 'leaf', groupId: 'group-1' },
+      nextGroupId: 2,
+      tabToGroupMap: { 'rdp-1': 'group-1' },
+    };
+    const desktopDisconnects: Record<string, unknown>[] = [];
+    lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'desktop_disconnect') {
+        desktopDisconnects.push((args ?? {}) as Record<string, unknown>);
+      }
+      if (command === 'get_system_locale') return 'en-US';
+      return {};
+    });
+
+    render(<App />);
+    await act(async () => {
+      await lifecycle.callbacks.onCloseTab?.('rdp-1');
+    });
+
+    expect(desktopDisconnects).toContainEqual({ connectionId: 'rdp-1' });
+  });
+
+  it('does not disconnect the borrowed connection when an editor tab closes', async () => {
+    mockState = {
+      groups: {
+        'group-1': {
+          id: 'group-1',
+          tabs: [{
+            id: 'editor-1',
+            name: 'hosts',
+            tabType: 'editor',
+            connectionStatus: 'connected',
+            reconnectCount: 0,
+            editorConnectionId: 'ssh-owner',
+            editorFilePath: '/etc/hosts',
+          }],
+          activeTabId: 'editor-1',
+        },
+      },
+      activeGroupId: 'group-1',
+      gridLayout: { type: 'leaf', groupId: 'group-1' },
+      nextGroupId: 2,
+      tabToGroupMap: { 'editor-1': 'group-1' },
+    };
+    const disconnects: Record<string, unknown>[] = [];
+    lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'ssh_disconnect') {
+        disconnects.push((args ?? {}) as Record<string, unknown>);
+      }
+      if (command === 'get_system_locale') return 'en-US';
+      return {};
+    });
+
+    render(<App />);
+    await act(async () => {
+      await lifecycle.callbacks.onCloseTab?.('editor-1');
+    });
+
+    expect(disconnects).toHaveLength(0);
+  });
+
+  it('keeps the SSH session alive while a file-editor window depends on it', async () => {
+    localStorage.setItem(
+      'r-shell-open-editors',
+      JSON.stringify([
+        { connectionId: 'ssh-1', filePath: '/etc/hosts', fileName: 'hosts' },
+      ]),
+    );
+    mockState = {
+      groups: {
+        'group-1': {
+          id: 'group-1',
+          tabs: [{
+            id: 'ssh-1',
+            name: 'Shell',
+            tabType: 'terminal',
+            protocol: 'SSH',
+            connectionStatus: 'connected',
+            reconnectCount: 0,
+          }],
+          activeTabId: 'ssh-1',
+        },
+      },
+      activeGroupId: 'group-1',
+      gridLayout: { type: 'leaf', groupId: 'group-1' },
+      nextGroupId: 2,
+      tabToGroupMap: { 'ssh-1': 'group-1' },
+    };
+    const disconnects: Record<string, unknown>[] = [];
+    lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'ssh_disconnect') {
+        disconnects.push((args ?? {}) as Record<string, unknown>);
+      }
+      if (command === 'get_system_locale') return 'en-US';
+      return {};
+    });
+
+    render(<App />);
+    await act(async () => {
+      await lifecycle.callbacks.onCloseTab?.('ssh-1');
+    });
+
+    expect(disconnects).toHaveLength(0);
+  });
+
+  it('disconnects an FTP session when its file-browser tab is closed', async () => {
+    mockState = {
+      groups: {
+        'group-1': {
+          id: 'group-1',
+          tabs: [{
+            id: 'ftp-1',
+            name: 'Files',
+            tabType: 'file-browser',
+            protocol: 'FTP',
+            connectionStatus: 'connected',
+            reconnectCount: 0,
+          }],
+          activeTabId: 'ftp-1',
+        },
+      },
+      activeGroupId: 'group-1',
+      gridLayout: { type: 'leaf', groupId: 'group-1' },
+      nextGroupId: 2,
+      tabToGroupMap: { 'ftp-1': 'group-1' },
+    };
+    const ftpDisconnects: Record<string, unknown>[] = [];
+    lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'ftp_disconnect') {
+        ftpDisconnects.push((args ?? {}) as Record<string, unknown>);
+      }
+      if (command === 'get_system_locale') return 'en-US';
+      return {};
+    });
+
+    render(<App />);
+    await act(async () => {
+      await lifecycle.callbacks.onCloseTab?.('ftp-1');
+    });
+
+    expect(ftpDisconnects).toContainEqual({ connection_id: 'ftp-1' });
+  });
+
+  it('disconnects the SSH session when the last editor window using it closes', async () => {
+    localStorage.setItem(
+      'r-shell-open-editors',
+      JSON.stringify([
+        { connectionId: 'ssh-1', filePath: '/etc/hosts', fileName: 'hosts' },
+      ]),
+    );
+    const disconnects: Record<string, unknown>[] = [];
+    lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+      if (command === 'ssh_disconnect') {
+        disconnects.push((args ?? {}) as Record<string, unknown>);
+      }
+      if (command === 'get_system_locale') return 'en-US';
+      return {};
+    });
+
+    render(<App />);
+    await vi.waitFor(() => {
+      expect(lifecycle.eventHandlers.has('editor-window-changed')).toBe(true);
+    });
+
+    // The tab is already gone; closing the viewer window releases the session
+    // it borrowed instead of leaving it orphaned until the app exits.
+    await act(async () => {
+      lifecycle.eventHandlers.get('editor-window-changed')!({
+        payload: {
+          event: 'closed',
+          connectionId: 'ssh-1',
+          filePath: '/etc/hosts',
+          fileName: 'hosts',
+        },
+      });
+    });
+
+    expect(disconnects).toContainEqual({ connection_id: 'ssh-1' });
   });
 });

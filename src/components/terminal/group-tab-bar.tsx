@@ -67,9 +67,9 @@ interface GroupTabBarProps {
   onNewTab?: () => void;
   onDuplicateTab?: (tabId: string) => void;
   onReconnect?: (tabId: string) => void;
-  /** Backend-aware close: disconnects SFTP/FTP sessions before removing the tab. */
+  /** Backend-aware close: tears down the tab's SSH/SFTP/FTP/desktop session. */
   onCloseTab?: (tabId: string) => void | Promise<void>;
-  /** Backend-aware close-all: disconnects SFTP/FTP sessions before emptying the group. */
+  /** Backend-aware close-all: tears down each tab's session when the group is emptied. */
   onCloseAllTabs?: (groupId: string) => void | Promise<void>;
   closeTabShortcut?: string;
   onDetachTab?: (tabId: string) => void;
@@ -353,6 +353,16 @@ export function GroupTabBar({
     [onCloseTab, dispatch, groupId],
   );
 
+  // Batch closes must go through the same backend-aware handler as a single
+  // close. Dispatching CLOSE_OTHER_TABS / CLOSE_TABS_TO_* directly would skip
+  // the SFTP/FTP disconnect and the pending-connect cancellation.
+  const closeTabs = useCallback(
+    (tabIds: string[]) => {
+      for (const tabId of tabIds) handleTabClose(tabId);
+    },
+    [handleTabClose],
+  );
+
   const handleCloseAllTabs = useCallback(() => {
     if (onCloseAllTabs) {
       void onCloseAllTabs(groupId);
@@ -504,21 +514,21 @@ export function GroupTabBar({
                   </ContextMenuItem>
                   {/* Close Others */}
                   {tabs.length > 1 && (
-                    <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_OTHER_TABS', groupId, tabId: tab.id })}>
+                    <ContextMenuItem onClick={() => closeTabs(tabs.filter(other => other.id !== tab.id).map(other => other.id))}>
                       <XCircle className="mr-2 h-4 w-4" />
                       {t('contextMenu.closeOtherTabs')}
                     </ContextMenuItem>
                   )}
                   {/* Close to Right */}
                   {index < tabs.length - 1 && (
-                    <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_TABS_TO_RIGHT', groupId, tabId: tab.id })}>
+                    <ContextMenuItem onClick={() => closeTabs(tabs.slice(index + 1).map(other => other.id))}>
                       <ArrowRight className="mr-2 h-4 w-4" />
                       {t('contextMenu.closeTabsToRight')}
                     </ContextMenuItem>
                   )}
                   {/* Close to Left */}
                   {index > 0 && (
-                    <ContextMenuItem onClick={() => dispatch({ type: 'CLOSE_TABS_TO_LEFT', groupId, tabId: tab.id })}>
+                    <ContextMenuItem onClick={() => closeTabs(tabs.slice(0, index).map(other => other.id))}>
                       <ArrowLeft className="mr-2 h-4 w-4" />
                       {t('contextMenu.closeTabsToLeft')}
                     </ContextMenuItem>

@@ -176,6 +176,40 @@ pub struct SshSession {
     pub connected: bool,
 }
 
+/// Hard ceiling for a single non-interactive command. Monitoring polls and
+/// file reads share this path; a command that never exits must not block the
+/// caller (and, through the read guard, every later disconnect) forever.
+///
+/// Kept well above the 20 MB image-preview transfer time on slow links
+/// (a 20 MB base64 payload takes ~45 s on a 5 Mbps path), so the deadline
+/// only catches commands that truly never finish.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Hard ceiling on collected stdout for a single command. A `cat` of a huge
+/// file used to grow this buffer without limit.
+///
+/// This sits above the 20 MB image-preview contract in
+/// `read_remote_file_base64`: a 20 MB file is transferred as base64
+/// (~26.7 MiB), and a smaller cap would turn a supported preview into a
+/// "command output exceeded" error.
+const MAX_COMMAND_OUTPUT_BYTES: usize = 32 * 1024 * 1024;
+
+/// Would appending `incoming_len` bytes to `current_len` exceed the cap?
+/// Saturating arithmetic keeps the check safe for absurd lengths.
+fn output_exceeds_cap(current_len: usize, incoming_len: usize) -> bool {
+    current_len.saturating_add(incoming_len) > MAX_COMMAND_OUTPUT_BYTES
+}
+
+/// Keep error messages readable without echoing a whole command line.
+fn summarize_command(command: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let mut summary: String = command.chars().take(MAX_CHARS).collect();
+    if command.chars().count() > MAX_CHARS {
+        summary.push('…');
+    }
+    summary
+}
+
 pub struct SshClient {
     session: Option<Arc<client::Handle<Client>>>,
     /// The configuration this client connected with, kept so bulk transfers
@@ -958,35 +992,70 @@ impl SshClient {
             let mut code = None;
             let mut eof_received = false;
             let mut server_closed = false;
+            let mut output_overflow = false;
 
-            loop {
-                let msg = channel.wait().await;
-                match msg {
-                    Some(ChannelMsg::Data { ref data }) => {
-                        output.push_str(&String::from_utf8_lossy(data));
-                    }
-                    Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        code = Some(exit_status);
-                        if eof_received {
+            // A command whose channel never reaches EOF (a non-POSIX `top`, a
+            // blocking script, an idle shell wrapper) must not park this call
+            // forever: monitoring polls run on this path while holding the
+            // connection's read guard, and `disconnect` needs the write lock,
+            // so an unbounded wait also makes the connection impossible to
+            // close. The same applies to the output buffer: an unbounded
+            // `cat` of a huge file used to grow it without limit.
+            let exchange = async {
+                loop {
+                    let msg = channel.wait().await;
+                    match msg {
+                        Some(ChannelMsg::Data { ref data }) => {
+                            if output_exceeds_cap(output.len(), data.len()) {
+                                output_overflow = true;
+                                break;
+                            }
+                            output.push_str(&String::from_utf8_lossy(data));
+                        }
+                        Some(ChannelMsg::ExitStatus { exit_status }) => {
+                            code = Some(exit_status);
+                            if eof_received {
+                                break;
+                            }
+                        }
+                        Some(ChannelMsg::Eof) => {
+                            eof_received = true;
+                            if code.is_some() {
+                                break;
+                            }
+                        }
+                        Some(ChannelMsg::Close) => {
+                            server_closed = true;
                             break;
                         }
-                    }
-                    Some(ChannelMsg::Eof) => {
-                        eof_received = true;
-                        if code.is_some() {
+                        None => {
+                            server_closed = true;
                             break;
                         }
+                        _ => {}
                     }
-                    Some(ChannelMsg::Close) => {
-                        server_closed = true;
-                        break;
-                    }
-                    None => {
-                        server_closed = true;
-                        break;
-                    }
-                    _ => {}
                 }
+            };
+
+            if tokio::time::timeout(COMMAND_TIMEOUT, exchange)
+                .await
+                .is_err()
+            {
+                let _ = channel.close().await;
+                return Err(anyhow::anyhow!(
+                    "Command timed out after {}s: {}",
+                    COMMAND_TIMEOUT.as_secs(),
+                    summarize_command(command)
+                ));
+            }
+
+            if output_overflow {
+                let _ = channel.close().await;
+                return Err(anyhow::anyhow!(
+                    "Command output exceeded {} MiB; refusing to buffer more: {}",
+                    MAX_COMMAND_OUTPUT_BYTES / (1024 * 1024),
+                    summarize_command(command)
+                ));
             }
 
             // Send SSH_MSG_CHANNEL_CLOSE if the server hasn't already closed the channel.
@@ -1086,22 +1155,36 @@ impl SshClient {
             // Create a channel for resize requests
             let (resize_tx, mut resize_rx) = mpsc::channel::<(u32, u32)>(16);
 
+            // One token shared by both tasks: cancelling the session must stop
+            // the SSH reader/writer immediately instead of waiting for the
+            // remote shell to produce output. Without this the remote shell,
+            // the SSH channel and the tokio tasks survived a tab close until
+            // the whole SSH connection dropped.
+            let cancel = CancellationToken::new();
+
             // Spawn task to handle input (frontend → SSH)
             // This is similar to ttyd's pty_write and INPUT command handling
             // Key: immediate write + flush for responsiveness
+            let input_cancel = cancel.clone();
             tokio::spawn(async move {
                 let mut writer = input_channel;
-                while let Some(data) = input_rx.recv().await {
-                    // Write data immediately
-                    if let Err(e) = writer.write_all(&data).await {
-                        eprintln!("[PTY] Failed to send data to SSH: {}", e);
-                        break;
-                    }
-                    // Critical: flush immediately after write (like ttyd)
-                    // This ensures data is sent to PTY without buffering delay
-                    if let Err(e) = writer.flush().await {
-                        eprintln!("[PTY] Failed to flush data to SSH: {}", e);
-                        break;
+                loop {
+                    tokio::select! {
+                        _ = input_cancel.cancelled() => break,
+                        data = input_rx.recv() => {
+                            let Some(data) = data else { break };
+                            // Write data immediately
+                            if let Err(e) = writer.write_all(&data).await {
+                                eprintln!("[PTY] Failed to send data to SSH: {}", e);
+                                break;
+                            }
+                            // Critical: flush immediately after write (like ttyd)
+                            // This ensures data is sent to PTY without buffering delay
+                            if let Err(e) = writer.flush().await {
+                                eprintln!("[PTY] Failed to flush data to SSH: {}", e);
+                                break;
+                            }
+                        }
                     }
                 }
             });
@@ -1109,10 +1192,16 @@ impl SshClient {
             // Spawn task to handle output (SSH → frontend) AND resize requests.
             // The channel must stay in this task because `wait()` requires `&mut self`,
             // but we also need `window_change()` which only requires `&self`.
-            // We use `tokio::select!` to multiplex between output reading and resize.
+            // We use `tokio::select!` to multiplex between output reading, resize,
+            // and session cancellation.
+            let output_cancel = cancel.clone();
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
+                        _ = output_cancel.cancelled() => {
+                            eprintln!("[PTY] Session cancelled");
+                            break;
+                        }
                         msg = channel.wait() => {
                             match msg {
                                 Some(ChannelMsg::Data { data }) => {
@@ -1153,6 +1242,11 @@ impl SshClient {
                         }
                     }
                 }
+
+                // Close the SSH channel on every exit path. Dropping the
+                // handle does not close a russh channel, so without this the
+                // remote shell kept running after the tab was closed.
+                let _ = channel.close().await;
             });
 
             Ok(PtySession {
@@ -1160,7 +1254,7 @@ impl SshClient {
                 output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
                 channel_id,
                 resize_tx,
-                cancel: CancellationToken::new(),
+                cancel,
                 dead: Arc::new(AtomicBool::new(false)),
             })
         } else {

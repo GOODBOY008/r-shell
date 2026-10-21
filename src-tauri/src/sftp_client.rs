@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
-use crate::ssh::{Client, HostKeyPolicy, TunnelConfig};
+use crate::ssh::{auth_timeout_for, Client, HostKeyPolicy, TunnelConfig};
 
 /// Configuration for a standalone SFTP connection (SSH transport, no PTY).
 #[derive(Debug, Clone, Deserialize)]
@@ -127,7 +127,29 @@ pub struct StandaloneSftpClient {
 
 /// Authenticate a freshly connected session per `config` — shared by
 /// [`StandaloneSftpClient::connect`] and the extra bulk-transfer dials.
+///
+/// The handshake (DNS + TCP + key exchange) is bounded by `connect_timeout`,
+/// but russh's authenticate calls have no internal deadline. A server that
+/// completes the key exchange and then stays silent on the first userauth
+/// request would leave `sftp_connect` pending forever — the same class of
+/// failure PR #221 fixed for the terminal SSH path, so it gets the same
+/// deadline here.
 async fn authenticate_sftp_session(
+    session: &mut client::Handle<Client>,
+    config: &SftpConfig,
+) -> Result<()> {
+    let timeout = auth_timeout_for(config.connect_timeout);
+    tokio::time::timeout(timeout, authenticate_sftp_session_inner(session, config))
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "SFTP authentication timed out after {} seconds. The server accepted the connection but never answered the login request. If this host is slow to log in (reverse-DNS or PAM delays), raise the Connection Timeout in Settings.",
+                timeout.as_secs()
+            )
+        })?
+}
+
+async fn authenticate_sftp_session_inner(
     session: &mut client::Handle<Client>,
     config: &SftpConfig,
 ) -> Result<()> {

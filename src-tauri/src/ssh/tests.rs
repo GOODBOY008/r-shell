@@ -1810,4 +1810,37 @@ mod auth_timeout_tests {
             start.elapsed()
         );
     }
+
+    #[test]
+    fn output_cap_accepts_the_20mb_base64_preview() {
+        // `read_remote_file_base64` supports files up to 20 MB, which travel
+        // as base64 (~26.7 MiB). A smaller cap would turn a supported image
+        // preview into a "command output exceeded" error.
+        let twenty_mb_as_base64 = 20 * 1024 * 1024 * 4 / 3;
+        assert!(!crate::ssh::output_exceeds_cap(0, twenty_mb_as_base64));
+    }
+
+    #[test]
+    fn output_cap_rejects_growth_past_the_limit() {
+        assert!(!crate::ssh::output_exceeds_cap(
+            crate::ssh::MAX_COMMAND_OUTPUT_BYTES,
+            0
+        ));
+        assert!(crate::ssh::output_exceeds_cap(
+            crate::ssh::MAX_COMMAND_OUTPUT_BYTES,
+            1
+        ));
+        // Saturating arithmetic: an absurd incoming length still reports
+        // "over the cap" instead of wrapping to a small number or panicking.
+        assert!(crate::ssh::output_exceeds_cap(usize::MAX, usize::MAX));
+    }
+
+    #[test]
+    fn summarize_command_truncates_only_long_commands() {
+        let long = "x".repeat(200);
+        let summary = crate::ssh::summarize_command(&long);
+        assert_eq!(summary.chars().count(), 121);
+        assert!(summary.ends_with('…'));
+        assert_eq!(crate::ssh::summarize_command("echo hi"), "echo hi");
+    }
 }

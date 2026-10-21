@@ -13,14 +13,14 @@ export interface TerminalCallbacks {
   /** Reports a terminal's remote working directory without coupling it to the file browser. */
   onWorkingDirectoryChange?: (connectionId: string, path: string) => void;
   /**
-   * Closes a single tab. Runs backend cleanup for SFTP/FTP file-browser
-   * sessions, then removes the tab. Falls back to the reducer-only
-   * REMOVE_TAB when not provided.
+   * Closes a single tab and tears down its SSH/SFTP/FTP/desktop session in
+   * the background. Falls back to the reducer-only REMOVE_TAB when not
+   * provided.
    */
   onCloseTab?: (tabId: string) => void | Promise<void>;
   /**
-   * Closes every tab in a group. Runs backend cleanup for SFTP/FTP
-   * file-browser sessions first, then empties the group via CLOSE_ALL_TABS.
+   * Empties a group, tearing down each tab's SSH/SFTP/FTP/desktop session in
+   * the background.
    */
   onCloseAllTabs?: (groupId: string) => void | Promise<void>;
   /** Xshell-style detach (Ctrl+A+D): keep the session alive in the background. */
