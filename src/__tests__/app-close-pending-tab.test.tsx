@@ -259,7 +259,9 @@ async function startSidebarConnect() {
 
   await vi.waitFor(() => expect(requests.length).toBe(1));
   const sessionId = requests[0].connection_id;
-  expect(sessionId).toMatch(/^conn-x-dup-\d+$/);
+  // nextDuplicateId() appends a monotonic counter so same-millisecond
+  // duplicate tabs cannot collide on id.
+  expect(sessionId).toMatch(/^conn-x-dup-\d+-\d+$/);
 
   return { sessionId, settle, cancels, disconnects };
 }

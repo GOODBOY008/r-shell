@@ -34,10 +34,53 @@ export function deserialize(json: string): TerminalGroupState | null {
     if (!isSerializedState(parsed)) return null;
     if (parsed.version !== STATE_VERSION) return null;
     if (!isValidState(parsed.data)) return null;
-    return resetUnreadOutput(parsed.data);
+    return dedupeDuplicateTabs(resetUnreadOutput(parsed.data));
   } catch {
     return null;
   }
+}
+
+/**
+ * Drop tabs whose id already appeared earlier in the layout.
+ *
+ * A layout saved while two tabs shared an id (possible before connect
+ * triggers gained an in-flight guard) restores with the same corruption:
+ * closing either tab removes both and switching between them does nothing.
+ * Keeping the first occurrence heals such states on the next startup.
+ *
+ * `tabToGroupMap` is optional in a restored state (callers rebuild it when
+ * absent); it is only rewritten here — dropping stale duplicate entries —
+ * when the incoming state carried one.
+ */
+function dedupeDuplicateTabs(state: TerminalGroupState): TerminalGroupState {
+  const seen = new Set<string>();
+  const groups = Object.fromEntries(
+    Object.entries(state.groups).map(([id, group]) => {
+      const tabs = group.tabs.filter(tab => {
+        if (seen.has(tab.id)) return false;
+        seen.add(tab.id);
+        return true;
+      });
+      return [id, {
+        ...group,
+        tabs,
+        activeTabId: tabs.some(t => t.id === group.activeTabId)
+          ? group.activeTabId
+          : (tabs[0]?.id ?? null),
+      }];
+    }),
+  );
+  const next: TerminalGroupState = { ...state, groups };
+  if (state.tabToGroupMap !== undefined) {
+    const tabToGroupMap: Record<string, string> = {};
+    for (const [groupId, group] of Object.entries(groups)) {
+      for (const tab of group.tabs) {
+        tabToGroupMap[tab.id] = groupId;
+      }
+    }
+    next.tabToGroupMap = tabToGroupMap;
+  }
+  return next;
 }
 
 /**
