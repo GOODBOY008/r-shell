@@ -189,7 +189,20 @@ impl ConnectionManager {
 
     pub async fn create_connection(&self, connection_id: String, config: SshConfig) -> Result<()> {
         let mut client = SshClient::new();
-        let cancel_token = self.register_pending_connection(&connection_id).await;
+        // Two concurrent connects for one id race at the insert below: the
+        // second silently replaces the first client, tearing down the live
+        // PTY riding on it. No legitimate flow starts two connects for the
+        // same id at once (reconnects disconnect first, retries wait for the
+        // cancelled attempt to clear), so the overlap is refused outright.
+        let cancel_token = self
+            .register_pending_connection(&connection_id)
+            .await
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "A connection attempt for '{}' is already in progress",
+                    connection_id
+                )
+            })?;
 
         let connect_result = tokio::select! {
             res = client.connect(&config) => res,
@@ -206,11 +219,19 @@ impl ConnectionManager {
         Ok(())
     }
 
-    async fn register_pending_connection(&self, connection_id: &str) -> CancellationToken {
+    /// Mark `connection_id` as connecting and return its cancellation token.
+    /// Returns `None` when an attempt is already in flight: the check and the
+    /// insert share one write guard, so two concurrent callers cannot both
+    /// register (the old overwrite also leaked the loser's token, making it
+    /// uncancellable).
+    async fn register_pending_connection(&self, connection_id: &str) -> Option<CancellationToken> {
         let token = CancellationToken::new();
         let mut pending = self.pending_connections.write().await;
+        if pending.contains_key(connection_id) {
+            return None;
+        }
         pending.insert(connection_id.to_string(), token.clone());
-        token
+        Some(token)
     }
 
     async fn clear_pending_connection(&self, connection_id: &str) {
@@ -1180,6 +1201,28 @@ mod tests {
         let mgr = ConnectionManager::new();
         let connections = mgr.list_connections().await;
         assert!(connections.is_empty());
+    }
+
+    #[tokio::test]
+    async fn concurrent_connects_for_one_id_are_refused() {
+        let mgr = ConnectionManager::new();
+
+        // The first registration owns the in-flight slot …
+        assert!(mgr.register_pending_connection("conn-1").await.is_some());
+
+        // … and a second concurrent attempt is refused instead of
+        // overwriting the first token (the overwrite used to leave the
+        // first attempt uncancellable and let two connects race at the
+        // connections-map insert).
+        assert!(mgr.register_pending_connection("conn-1").await.is_none());
+
+        // Once the attempt settles, the id is connectable again …
+        mgr.clear_pending_connection("conn-1").await;
+        assert!(mgr.register_pending_connection("conn-1").await.is_some());
+
+        // … and a cancel (user-initiated retry) frees the slot the same way.
+        assert!(mgr.cancel_pending_connection("conn-1").await);
+        assert!(mgr.register_pending_connection("conn-1").await.is_some());
     }
 
     #[tokio::test]

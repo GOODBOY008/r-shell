@@ -256,6 +256,15 @@ export function terminalGroupReducer(
       const { groupId, tab } = action;
       const group = state.groups[groupId];
       if (!group) return state;
+      // Tab ids must stay unique across all groups: every id-keyed action
+      // assumes one tab per id (REMOVE_TAB filters by id, ACTIVATE_TAB and
+      // UPDATE_TAB_STATUS resolve through tabToGroupMap). A duplicate id —
+      // two connect triggers racing past their "already connected?" check —
+      // breaks close and switch semantics for both tabs. Ignore the second
+      // add; the caller's existing-tab branch takes over on its next pass.
+      if (Object.values(state.groups).some(g => g.tabs.some(t => t.id === tab.id))) {
+        return state;
+      }
       return {
         ...state,
         groups: {

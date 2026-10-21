@@ -72,9 +72,13 @@ const arbitraryTerminalGroupState: fc.Arbitrary<TerminalGroupState> = fc
     const groups: Record<string, TerminalGroup> = {};
     const groupIds: string[] = [];
 
+    // Slot-unique tab ids: uuid collisions across groups would generate a
+    // corrupted layout (two tabs sharing one id), which deserialize now
+    // heals instead of round-tripping — the properties below model valid
+    // states, so every tab gets a distinct id.
     for (let i = 0; i < count; i++) {
       const id = String(i + 1);
-      const tabs = allTabs[i];
+      const tabs = allTabs[i].map((tab, ti) => ({ ...tab, id: `tab-${i}-${ti}` }));
       groups[id] = { id, tabs, activeTabId: tabs[0].id };
       groupIds.push(id);
     }

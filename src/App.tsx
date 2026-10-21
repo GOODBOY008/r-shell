@@ -23,6 +23,7 @@ import { UpdateChecker, type UpdateAnnouncement } from './components/update-chec
 import { toConnectionConfig } from './lib/connection-config';
 import { buildFtpConnectRequest } from './lib/ftp-connect-request';
 import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, markSealFailed, clearSealFailed } from './lib/connection-storage';
+import { beginConnect, endConnect, nextDuplicateId } from './lib/connect-guard';
 import { ConnectionProfileManager } from './lib/connection-profiles';
 import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
 import type { DetachedSession } from './components/connection-manager';
@@ -884,7 +885,7 @@ function AppContent() {
       // Always use a unique session ID — the backend may still hold a stale
       // session from a previously closed tab that was never disconnected.
       // A fresh session ID guarantees a new TCP connection with the latest config.
-      const sessionId = `${connection.id}-dup-${Date.now()}`;
+      const sessionId = nextDuplicateId(connection.id);
 
       if (isFileBrowser) {
         // SFTP/FTP connect flow
@@ -1087,7 +1088,7 @@ function AppContent() {
     }
 
     try {
-      const duplicateId = `${originalConnectionId}-dup-${Date.now()}`;
+      const duplicateId = nextDuplicateId(originalConnectionId);
 
       if (isFileBrowser) {
         // SFTP/FTP duplicate flow
@@ -1180,7 +1181,7 @@ function AppContent() {
     reconnectRetryState.current = next;
   }, []);
 
-  const handleReconnect = useCallback(async (tabId: string) => {
+  const runReconnect = useCallback(async (tabId: string) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
     if (!tabToReconnect) {
       clearReconnectRetry(tabId);
@@ -1384,6 +1385,19 @@ function AppContent() {
     }
   }, [allTabs, dispatch, t, clearReconnectRetry]);
 
+  // A double-click on a placeholder's Connect button (or a retry timer
+  // firing while a manual reconnect is still running) would start two
+  // backend connects for the same tab id; the second replaces the first
+  // connection, killing the session the first reconnect just established.
+  const handleReconnect = useCallback(async (tabId: string) => {
+    if (!beginConnect(tabId)) return;
+    try {
+      await runReconnect(tabId);
+    } finally {
+      endConnect(tabId);
+    }
+  }, [runReconnect]);
+
   useEffect(() => {
     handleReconnectRef.current = handleReconnect;
   }, [handleReconnect]);
@@ -1428,7 +1442,11 @@ function AppContent() {
 
   // Handler: re-attach a detached background session by opening a new tab that
   // reuses the same connection ID (the backend re-attaches to the live PTY).
-  const handleReattachSession = useCallback(async (session: DetachedSession) => {
+  // The tab id is the fixed session.connectionId, so two rapid clicks on the
+  // detached row must not both pass the alive-check and add two tabs with
+  // one id — the in-flight guard keeps the second click out until the first
+  // reattach finished.
+  const runReattachSession = useCallback(async (session: DetachedSession) => {
     // Verify the backend still has the session alive.
     try {
       const alive = await invoke<boolean>('has_detached_session', {
@@ -1461,6 +1479,15 @@ function AppContent() {
       description: t('app.sessionReattachedDesc', { name: session.name }),
     });
   }, [state.activeGroupId, dispatch, t]);
+
+  const handleReattachSession = useCallback(async (session: DetachedSession) => {
+    if (!beginConnect(session.connectionId)) return;
+    try {
+      await runReattachSession(session);
+    } finally {
+      endConnect(session.connectionId);
+    }
+  }, [runReattachSession]);
 
   // Handler: terminate a detached background session (PTY + SSH connection).
   const handleCloseDetachedSession = useCallback(async (connectionId: string) => {
@@ -1970,7 +1997,7 @@ function AppContent() {
           tab.originalConnectionId === config.id &&
           (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
         );
-      const sessionId = pendingTab ? pendingTab.id : `${config.id}-dup-${Date.now()}`;
+      const sessionId = pendingTab ? pendingTab.id : nextDuplicateId(config.id);
 
       const isSftp = config.protocol === 'SFTP';
       const isFtp = config.protocol === 'FTP';
@@ -2120,8 +2147,12 @@ function AppContent() {
     }));
   }, [allTabs]); // Refresh when tabs change (new connection made)
 
-  // Quick connect handler
-  const handleQuickConnect = useCallback(async (connectionId: string) => {
+  // Quick connect handler. Guarded against double triggers (double-click on
+  // a Recent Connections row): the existing-tab check below cannot see a
+  // connect that is still in flight — the tab only appears after the SSH
+  // handshake — so without the guard two clicks race into two backend
+  // connects for one id and two tabs sharing it.
+  const runQuickConnect = useCallback(async (connectionId: string) => {
     const existingTab = allTabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
     if (existingTab) {
       handleTabSelect(existingTab.id);
@@ -2199,6 +2230,15 @@ function AppContent() {
       }
     }
   }, [allTabs, handleTabSelect, handleConnectionDialogConnect, t]);
+
+  const handleQuickConnect = useCallback(async (connectionId: string) => {
+    if (!beginConnect(connectionId)) return;
+    try {
+      await runQuickConnect(connectionId);
+    } finally {
+      endConnect(connectionId);
+    }
+  }, [runQuickConnect]);
 
   // Quick-connect requested from below App-level callbacks (welcome screen recents)
   useEffect(() => {
