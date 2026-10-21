@@ -200,7 +200,9 @@
     },
     "ftp": {
       "enableFtps": "Enable FTPS (FTP over TLS)",
-      "enableFtpsDesc": "Encrypt the FTP connection using TLS for improved security"
+      "enableFtpsDesc": "Encrypt the FTP connection using TLS for improved security",
+      "verifyCert": "Verify FTPS certificate",
+      "verifyCertDesc": "Reject untrusted or self-signed certificates. Disable only for servers whose self-signed certificate you trust."
     },
     "advanced": {
       "enableCompression": "Enable Compression",

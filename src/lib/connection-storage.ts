@@ -26,6 +26,8 @@ export interface ConnectionData {
   passphrase?: string;
   // FTP-specific
   ftpsEnabled?: boolean;
+  /** Verify the FTPS certificate; treated as true when absent. */
+  ftpsVerifyCert?: boolean;
   // Proxy
   proxyType?: 'none' | 'http' | 'socks4' | 'socks5';
   proxyHost?: string;

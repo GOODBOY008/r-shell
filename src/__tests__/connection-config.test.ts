@@ -37,6 +37,25 @@ describe('toConnectionConfig', () => {
     expect(config.proxyPassword).toBe('proxypass');
   });
 
+  it('carries the FTPS settings including certificate verification', () => {
+    const config = toConnectionConfig({
+      ...base,
+      protocol: 'FTP',
+      ftpsEnabled: true,
+      ftpsVerifyCert: false,
+    });
+
+    expect(config.ftpsEnabled).toBe(true);
+    expect(config.ftpsVerifyCert).toBe(false);
+  });
+
+  it('leaves certificate verification undefined when storage omits it', () => {
+    const config = toConnectionConfig({ ...base, protocol: 'FTP', ftpsEnabled: true });
+
+    // Consumers fall back to `?? true`, so an old record keeps verification on.
+    expect(config.ftpsVerifyCert).toBeUndefined();
+  });
+
   it('defaults proxyType to none when storage has no proxy', () => {
     const config = toConnectionConfig(base);
 

@@ -73,6 +73,8 @@ export interface ConnectionConfig {
 
   // FTP specific
   ftpsEnabled?: boolean;
+  /** Verify the FTPS certificate; treated as true when absent. */
+  ftpsVerifyCert?: boolean;
 
   // SSH specific
   compression?: boolean;
@@ -538,6 +540,7 @@ export function ConnectionDialog({
             privateKeyPath: config.privateKeyPath,
             passphrase: sealedSecrets.passphrase,
             ftpsEnabled: config.ftpsEnabled,
+            ftpsVerifyCert: config.ftpsVerifyCert,
             proxyType: config.proxyType,
             proxyHost: config.proxyHost,
             proxyPort: config.proxyPort,
@@ -573,6 +576,7 @@ export function ConnectionDialog({
             privateKeyPath: config.privateKeyPath,
             passphrase: sealedSecrets.passphrase,
             ftpsEnabled: config.ftpsEnabled,
+            ftpsVerifyCert: config.ftpsVerifyCert,
             proxyType: config.proxyType,
             proxyHost: config.proxyHost,
             proxyPort: config.proxyPort,
@@ -783,6 +787,7 @@ const handleCancelConnectionAttempt = async () => {
       privateKeyPath: config.privateKeyPath,
       passphrase: sealed.passphrase,
       ftpsEnabled: config.ftpsEnabled,
+      ftpsVerifyCert: config.ftpsVerifyCert,
       proxyType: config.proxyType,
       proxyHost: config.proxyHost,
       proxyPort: config.proxyPort,
@@ -923,7 +928,10 @@ const handleCancelConnectionAttempt = async () => {
                           protocol: value,
                           port: defaultPort,
                           ...(!currentAuthValid && { authMethod: validAuthMethods[0] }),
-                          ...(value !== 'FTP' && { ftpsEnabled: undefined }),
+                          ...(value !== 'FTP' && {
+                            ftpsEnabled: undefined,
+                            ftpsVerifyCert: undefined,
+                          }),
                         });
                         setDisplayValues(prev => ({ ...prev, port: defaultPort }));
                       }}
@@ -1153,6 +1161,23 @@ const handleCancelConnectionAttempt = async () => {
                         onCheckedChange={(checked) => updateConfig({ ftpsEnabled: checked })}
                       />
                     </div>
+                    {config.ftpsEnabled && (
+                      <>
+                        <Separator />
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-0.5">
+                            <Label>{t('connectionDialog.ftp.verifyCert')}</Label>
+                            <p className="text-sm text-muted-foreground">
+                              {t('connectionDialog.ftp.verifyCertDesc')}
+                            </p>
+                          </div>
+                          <Switch
+                            checked={config.ftpsVerifyCert ?? true}
+                            onCheckedChange={(checked) => updateConfig({ ftpsVerifyCert: checked })}
+                          />
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
 
