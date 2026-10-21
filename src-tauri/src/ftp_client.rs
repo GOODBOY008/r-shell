@@ -537,10 +537,15 @@ fn is_perms_token(s: &str) -> bool {
     if !matches!(bytes[0], b'd' | b'l' | b'-') {
         return false;
     }
-    // Positions 1..=9 (9 chars) must all be r/w/x/-.
-    bytes[1..10]
-        .iter()
-        .all(|&b| matches!(b, b'r' | b'w' | b'x' | b'-'))
+    // Positions 1..=9 (9 chars): owner/group/other rwx. The execute slots
+    // (3rd, 6th, 9th) may instead carry s/S (setuid/setgid) or t/T (sticky,
+    // e.g. /tmp is `drwxrwxrwt`); rejecting them dropped every such entry
+    // from FTP listings as well as SSH ones.
+    bytes[1..10].iter().enumerate().all(|(i, &b)| match i {
+        2 | 5 => matches!(b, b'x' | b's' | b'S' | b'-'),
+        8 => matches!(b, b'x' | b't' | b'T' | b'-'),
+        _ => matches!(b, b'r' | b'w' | b'-'),
+    })
 }
 
 fn is_month_abbr(s: &str) -> bool {
@@ -874,6 +879,23 @@ mod tests {
         assert_eq!(entry.permissions.as_deref(), Some("drwxr-xr-x"));
         assert_eq!(entry.owner.as_deref(), Some("user"));
         assert_eq!(entry.group.as_deref(), Some("group"));
+    }
+
+    #[test]
+    fn test_parse_ftp_list_line_sticky_directory() {
+        let line = "drwxrwxrwt   5 user group  4096 Oct 20 11:58 tmp";
+        let entry = parse_ftp_list_line(line).expect("sticky directory should parse");
+        assert_eq!(entry.name, "tmp");
+        assert!(matches!(entry.file_type, FileEntryType::Directory));
+        assert_eq!(entry.permissions.as_deref(), Some("drwxrwxrwt"));
+    }
+
+    #[test]
+    fn test_parse_ftp_list_line_setuid_mode() {
+        let line = "-rwsr-xr-x   1 user group  232416 Oct 20 11:58 sudo";
+        let entry = parse_ftp_list_line(line).expect("setuid file should parse");
+        assert_eq!(entry.name, "sudo");
+        assert!(matches!(entry.file_type, FileEntryType::File));
     }
 
     #[test]
