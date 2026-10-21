@@ -19,6 +19,58 @@ describe("DirectoryTree", () => {
     "/tmp": [],
   });
 
+  it("does not re-center the tree when a directory is expanded", async () => {
+    const scrollSpy = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollSpy;
+    try {
+      render(
+        <DirectoryTree
+          loadDirectory={defaultLoader}
+          currentPath="/"
+          onNavigate={() => {}}
+        />,
+      );
+
+      const expand = await screen.findByLabelText("Expand home");
+      // The active row is centered once when it first appears.
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
+
+      fireEvent.click(expand);
+      await screen.findByLabelText("Collapse home");
+
+      // Expanding rebuilds the visible rows; re-centering on the active row
+      // here used to yank the tree away from the folder just expanded.
+      expect(scrollSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
+  it("re-centers the active row after a connection switch", async () => {
+    const scrollSpy = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollSpy;
+    try {
+      const loaderA = makeLoader({ "/": ["home"], "/home": [] });
+      const loaderB = makeLoader({ "/": ["home", "tmp"], "/home": [], "/tmp": [] });
+      const { rerender } = render(
+        <DirectoryTree loadDirectory={loaderA} currentPath="/" onNavigate={() => {}} />,
+      );
+      await screen.findByLabelText("Expand home");
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
+
+      // A new connection resets the tree; the active row must be brought
+      // into view again even though currentPath did not change.
+      rerender(
+        <DirectoryTree loadDirectory={loaderB} currentPath="/" onNavigate={() => {}} />,
+      );
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(2));
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
   it("lazy-loads and caches directory children on expand", async () => {
     const loader = vi.fn().mockImplementation(defaultLoader);
 
