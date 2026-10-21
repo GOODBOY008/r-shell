@@ -2,10 +2,22 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "file-viewer",
   "description": "Capability for file viewer popup windows",
-  "windows": ["file-viewer-*"],
+  "windows": [
+    "file-viewer-*"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-close",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "allow-cancel-app-quit",
+    "allow-cancel-transfer",
+    "allow-create-file",
+    "allow-download-remote-file",
+    "allow-editor-dirty-changed",
+    "allow-get-home-directory",
+    "allow-get-session-health",
+    "allow-open-in-os",
+    "allow-read-file-content",
+    "allow-read-remote-file-base64"
   ]
 }
