@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.5] - 2026-10-21
+
+### 🔧 R-Shell 3.0.5 — Session Lifecycle & Webview Hardening
+
+This patch release closes the loop on session lifecycle: closing a tab now tears down its backend SSH/SFTP/FTP/desktop session and stops the remote shell, a double-clicked connect can no longer create duplicate tabs that break closing and switching, and exported config bundles finally record the real app version. The webview attack surface shrinks (per-window command allowlist, CSP, no whole-disk fs scope), FTPS certificates are verified by default, remote listings keep setuid/sticky entries, and the directory tree stops jumping when a folder expands.
+
+### Bug Fixes 🐛
+
+- fix(terminal): tear down backend sessions when tabs close by @sunxiaobin89 in #229
+- fix(ftp): verify FTPS certificates and escape remote shell arguments by @sunxiaobin89 in #232
+- fix(listing): accept setuid/setgid/sticky permission bits by @sunxiaobin89 in #233
+- fix(file-browser): keep the directory tree in place when expanding by @sunxiaobin89 in #234
+- fix(security): restrict the webview to the commands it needs by @sunxiaobin89 in #236
+- fix(config): record the real app version in exported bundles by @sunxiaobin89 in #238
+- fix(app): make duplicate connects structurally impossible by @GOODBOY008 in #240
+- fix(ci): feed real changelog notes to tauri-action v1 so it can't strip the release body by @GOODBOY008 in #223
+
+### Other Changes
+
+- chore(deps): bump the npm-minor-patch group with 46 updates by @dependabot[bot] in #226
+- chore(deps): bump aes-gcm from 0.10.3 to 0.11.1 in /src-tauri by @dependabot[bot] in #225
+- chore(deps): bump the cargo-minor-patch group across 1 directory with 7 updates by @dependabot[bot] in #239
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) and [@sunxiaobin89](https://github.com/sunxiaobin89) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.0.4...v3.0.5
+
 ## [3.0.4] - 2026-10-17
 
 ### 🔧 R-Shell 3.0.4 — Connection Reliability & Panel Drag Fix
