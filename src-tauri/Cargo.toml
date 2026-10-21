@@ -50,7 +50,7 @@ open = "5"
 base64 = "0.23"
 sys-locale = "0.3"
 keyring = "4"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 rand = "0.10"
 socket2 = "0.6"
 
