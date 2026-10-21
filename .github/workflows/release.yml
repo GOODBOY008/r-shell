@@ -149,6 +149,10 @@ jobs:
         run: pnpm install
 
       - name: Extract release notes from CHANGELOG
+        # The script is POSIX (awk + heredoc into GITHUB_ENV); without this
+        # the windows runner executes it under PowerShell and dies with a
+        # ParserError before the build starts.
+        shell: bash
         run: |
           # tauri-action v1 rewrites the name and body of an existing release
           # from its releaseName/releaseBody inputs on every matrix job (v0
