@@ -1228,6 +1228,7 @@
     "systemOverview": "System Overview",
     "cpu": "CPU",
     "memory": "Memory",
+    "disk": "Disk",
     "swap": "Swap",
     "gpuMonitor": "GPU Monitor",
     "selectGpu": "GPU",

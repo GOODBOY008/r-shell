@@ -1228,6 +1228,7 @@
     "systemOverview": "系统概览",
     "cpu": "CPU",
     "memory": "内存",
+    "disk": "磁盘",
     "swap": "交换空间",
     "gpuMonitor": "GPU 监视器",
     "selectGpu": "GPU",

@@ -302,10 +302,23 @@ impl OsInfo {
         }
     }
 
-    /// Disk stats for root filesystem — `df -h` is universal.
+    /// Disk stats for the volume users actually fill — `df -h` is universal.
     pub fn disk_cmd(&self) -> &'static str {
-        // df -h / works on all POSIX systems. Column layout is consistent.
-        "df -h / | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$5}'"
+        match self.family {
+            // Since Catalina, `/` on macOS is the sealed read-only system
+            // volume: signed, fixed-size, and pinned at a few percent no
+            // matter how full the disk is. User data lives on the Data volume
+            // mounted at /System/Volumes/Data, so the card must query that
+            // instead (#191). Pre-Catalina hosts have no such mount and df
+            // exits non-zero, so the `|| df -h /` fallback keeps them working.
+            OsFamily::MacOS => {
+                "{ df -h /System/Volumes/Data 2>/dev/null || df -h /; } | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$5}'"
+            }
+            _ => {
+                // df -h / works on all POSIX systems. Column layout is consistent.
+                "df -h / | awk 'NR==2{printf \"%s %s %s %s\", $2,$3,$4,$5}'"
+            }
+        }
     }
 
     /// Uptime command.
@@ -571,6 +584,60 @@ mod tests {
         };
         let cmd = info.disk_usage_cmd();
         assert!(cmd.contains("df -hT"));
+    }
+
+    // Regression for #191: `df -h /` on macOS queries the sealed read-only
+    // system volume, which sits at a few percent forever — the card looked
+    // broken while the disk actually filled. The Data volume is the one that
+    // holds user data, with `df -h /` kept as the pre-Catalina fallback.
+    #[test]
+    fn test_disk_cmd_macos_targets_the_data_volume() {
+        let macos = OsInfo {
+            family: OsFamily::MacOS,
+            ..Default::default()
+        };
+        let cmd = macos.disk_cmd();
+        assert!(
+            cmd.contains("df -h /System/Volumes/Data"),
+            "macOS must query the data volume, not the sealed system volume"
+        );
+        // Pre-Catalina hosts have no Data mount; df exits non-zero and the
+        // fallback must take over inside the same awk pipeline.
+        assert!(
+            cmd.contains("|| df -h /"),
+            "the sealed-volume query needs a df -h / fallback"
+        );
+        // Column extraction is unchanged — macOS df prints the same
+        // Size/Used/Avail/Capacity columns in the same positions.
+        assert!(cmd.contains("$2,$3,$4,$5"));
+    }
+
+    #[test]
+    fn test_disk_cmd_linux_keeps_root_filesystem() {
+        for family in [
+            OsFamily::Debian,
+            OsFamily::RedHat,
+            OsFamily::Suse,
+            OsFamily::Arch,
+            OsFamily::Alpine,
+            OsFamily::GenericLinux,
+            OsFamily::Bsd,
+            OsFamily::Unknown,
+        ] {
+            let info = OsInfo {
+                family: family.clone(),
+                ..Default::default()
+            };
+            let cmd = info.disk_cmd();
+            assert!(
+                cmd.starts_with("df -h / "),
+                "{family:?} must keep querying the root filesystem"
+            );
+            assert!(
+                !cmd.contains("/System/Volumes/Data"),
+                "{family:?} has no sealed system volume"
+            );
+        }
     }
 
     #[test]
