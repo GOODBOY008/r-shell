@@ -749,10 +749,32 @@ mod shell_integration_tests {
         // The real detection path — the fixture is Alpine with BusyBox userland.
         let os_info = crate::os_detect::detect_os(&client).await;
         assert_eq!(os_info.family, crate::os_detect::OsFamily::Alpine);
-        // NOTE: has_procps_top MISDETECTS as true on modern BusyBox (its
-        // `top -v` prints the option-error line before the BusyBox banner), a
-        // pre-existing probe quirk deliberately not asserted here — one more
-        // reason the new cpu_cmd/swap_cmd must not branch on that flag.
+        // The probe must recognise BusyBox top through the option-error line
+        // its `top -v` prints before the banner (#244): a misdetection here
+        // routed process_cmd down the procps branch, whose `ps aux --sort`
+        // outputs nothing on BusyBox and empties the process panel.
+        assert!(
+            !os_info.has_procps_top,
+            "fixture runs BusyBox top; probe must not read it as procps"
+        );
+
+        // The damage the misdetection caused, verified healed: the BusyBox
+        // process command must return a non-empty list with a recognisable
+        // header (the procps branch returned 0 bytes on this fixture).
+        let ps_out = client
+            .execute_command(&os_info.process_cmd("cpu"))
+            .await
+            .expect("process_cmd executes");
+        assert!(
+            ps_out.contains("PID"),
+            "process list must have a header with PID, got: {:?}",
+            ps_out.lines().next().unwrap_or("")
+        );
+        assert!(
+            ps_out.lines().count() >= 2,
+            "process list must list processes, got {} lines",
+            ps_out.lines().count()
+        );
 
         // CPU: the two-read /proc/stat delta must produce a plain bounded
         // number on BusyBox (the old top-based command smeared since-boot).

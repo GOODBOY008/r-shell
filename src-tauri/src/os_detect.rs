@@ -37,7 +37,9 @@ pub struct OsInfo {
     pub pretty_name: String,
     /// Whether the `ss` command is available (vs only `netstat`)
     pub has_ss: bool,
-    /// Whether `top` supports `-bn1` batch mode (BusyBox top uses `-bn1` too but output differs)
+    /// Whether `top` is procps-ng rather than BusyBox (probed via `top -v`'s
+    /// output). Gates the Alpine process-list branch of `process_cmd` — the
+    /// only consumer; CPU/swap/disk commands branch on the OS family instead.
     pub has_procps_top: bool,
     /// Whether GNU coreutils are available (vs BusyBox)
     pub has_gnu_coreutils: bool,
@@ -95,18 +97,9 @@ impl OsInfoCache {
     }
 }
 
-/// Detect the remote OS by running a lightweight probe command over SSH.
-///
-/// The detection runs a single compound command that reads /etc/os-release,
-/// falls back to uname, and probes for tool availability — all in one
-/// round-trip to minimise latency.
-pub async fn detect_os(client: &crate::ssh::SshClient) -> OsInfo {
-    // Single compound command — works on virtually every POSIX system.
-    // We collect:
-    //   1. ID and PRETTY_NAME from /etc/os-release
-    //   2. uname -s as fallback kernel name
-    //   3. Probe for ss, procps top, and GNU coreutils
-    let probe = r#"
+/// The single round-trip OS/tool probe run by [`detect_os`]. A const (not a
+/// local) so tests can pin its shape — see `test_os_probe_scans_all_top_output`.
+const OS_PROBE_COMMAND: &str = r#"
 (
   # 1. /etc/os-release (present on all modern distros)
   if [ -f /etc/os-release ]; then
@@ -126,14 +119,23 @@ pub async fn detect_os(client: &crate::ssh::SshClient) -> OsInfo {
   # 3. Tool probes
   command -v ss >/dev/null 2>&1 && echo "HAS_SS=1" || echo "HAS_SS=0"
 
-  # procps-ng top prints "top -" in its version line; BusyBox prints "BusyBox"
-  if top -v 2>&1 | head -1 | grep -qi busybox; then
+  # procps-ng top prints "top -"/"procps-ng" in its version line; BusyBox
+  # prints "BusyBox" — but since BusyBox ~1.31 `top -v` prints its
+  # option-error line FIRST and the banner second, so the whole output is
+  # scanned, never just the first line (#244: head -1 made every modern
+  # Alpine host read as procps, emptying the process panel). Scanning to
+  # EOF is deliberate: every real top (procps, BusyBox, toybox, macOS/BSD)
+  # exits on -v, and a hypothetical non-terminating one is bounded by the
+  # command timeout anyway.
+  if top -v 2>&1 | grep -qi busybox; then
     echo "HAS_PROCPS_TOP=0"
   else
     echo "HAS_PROCPS_TOP=1"
   fi
 
-  # GNU ls supports --version; BusyBox does not
+  # GNU ls supports --version; BusyBox does not. (GNU's banner IS the first
+  # line, so head -1 is fine here — and a BusyBox miss lands on the correct
+  # side of the default either way.)
   if ls --version 2>&1 | head -1 | grep -qi 'GNU\|coreutils'; then
     echo "HAS_GNU_COREUTILS=1"
   else
@@ -142,7 +144,13 @@ pub async fn detect_os(client: &crate::ssh::SshClient) -> OsInfo {
 )
 "#;
 
-    let output = match client.execute_command(probe).await {
+/// Detect the remote OS by running a lightweight probe command over SSH.
+///
+/// The detection runs a single compound command that reads /etc/os-release,
+/// falls back to uname, and probes for tool availability — all in one
+/// round-trip to minimise latency.
+pub async fn detect_os(client: &crate::ssh::SshClient) -> OsInfo {
+    let output = match client.execute_command(OS_PROBE_COMMAND).await {
         Ok(o) => o,
         Err(_) => return OsInfo::default(),
     };
@@ -496,6 +504,24 @@ done
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression for #244: the BusyBox probe must scan ALL of `top -v`'s
+    // output. Since BusyBox ~1.31 the option-error line comes first and the
+    // "BusyBox" banner second, so a `head -1` made every modern Alpine host
+    // read as procps — and the procps-branch process command then yields an
+    // empty list (BusyBox ps has no --sort; head exits 0 on the empty pipe,
+    // so the `||` fallback never fired).
+    #[test]
+    fn test_os_probe_scans_all_top_output() {
+        assert!(
+            OS_PROBE_COMMAND.contains("top -v 2>&1 | grep -qi busybox"),
+            "the busybox probe must scan the whole top -v output"
+        );
+        assert!(
+            !OS_PROBE_COMMAND.contains("head -1 | grep -qi busybox"),
+            "head -1 misses the banner on BusyBox >= 1.31 (option-error line first)"
+        );
+    }
 
     #[test]
     fn test_classify_debian() {
