@@ -230,10 +230,16 @@ fn classify_family(id: &str, id_like: &str, uname: &str) -> OsFamily {
 impl OsInfo {
     /// CPU usage percentage command.
     ///
-    /// procps `top` (Debian/RHEL/Arch/SUSE) outputs `%Cpu(s): … id …`
-    /// BusyBox `top` (Alpine) outputs `CPU:  X% usr  Y% sys … Z% idle`
+    /// Linux: two `/proc/stat` reads with a short gap between them; usage is
+    /// computed from the delta, so the reading tracks the current load. The
+    /// former BusyBox `top -bn1` command sampled only once and reported the
+    /// average since boot — on a host up for weeks the card kept showing load
+    /// that had ended seconds ago (#190; measured: 56-61% three seconds after
+    /// a burst, true usage <1%). Modern procps `top -bn1` happens to take an
+    /// internal second sample, but the command still depended on top's
+    /// output wording, and its `|| cat /proc/stat` fallback was a single
+    /// read — a since-boot average by construction on every host that hit it.
     /// macOS uses `top -l2` with a different format.
-    /// Fallback: read /proc/stat twice (works everywhere with /proc).
     pub fn cpu_cmd(&self) -> &'static str {
         match self.family {
             // `top -l1`'s only sample is an average since the previous
@@ -244,14 +250,15 @@ impl OsInfo {
             OsFamily::MacOS => {
                 "top -l2 -s1 -n0 | awk '/CPU usage/{gsub(/%/,\"\"); c=$7} END{print 100-c}'"
             }
-            OsFamily::Alpine if !self.has_procps_top => {
-                // BusyBox top: "CPU:   5% usr   2% sys   0% nic  92% idle ..."
-                // Run one iteration in batch mode, extract idle%, compute 100-idle
-                "top -bn1 2>/dev/null | awk '/^CPU:/{gsub(/%/,\"\"); for(i=1;i<=NF;i++) if($(i+1)==\"idle\") {print 100-$i; exit}}' || cat /proc/stat | awk '/^cpu /{u=$2+$4; t=$2+$3+$4+$5+$6+$7+$8; printf \"%.1f\\n\", u*100/t}'"
-            }
             _ => {
-                // procps top or /proc/stat fallback
-                "top -bn1 2>/dev/null | grep 'Cpu(s)' | sed 's/.*, *\\([0-9.]*\\)%* id.*/\\1/' | awk '{print 100 - $1}' || cat /proc/stat | awk '/^cpu /{u=$2+$4; t=$2+$3+$4+$5+$6+$7+$8; printf \"%.1f\\n\", u*100/t}'"
+                // The trailing space in `/^cpu /` matches only the aggregate
+                // line, never the per-core `cpu0`… entries. t sums the same
+                // tick columns procps top counts (user..softirq + steal;
+                // missing trailing columns read as 0 on old kernels), i is
+                // idle, and usage is 1 - idle% — the same definition as the
+                // macOS branch. If the second read failed or no ticks elapsed
+                // between the samples, emit 0.0 instead of dividing by zero.
+                "( cat /proc/stat; sleep 0.5; cat /proc/stat ) | awk '/^cpu /{t=$2+$3+$4+$5+$6+$7+$8+$9; i=$5; if(!s){t1=t;i1=i;s=1} else {t2=t;i2=i}} END{if(t2>t1) printf \"%.1f\\n\", (t2-t1-i2+i1)*100/(t2-t1); else print \"0.0\"}'"
             }
         }
     }
@@ -281,7 +288,16 @@ impl OsInfo {
                 "sysctl vm.swapusage 2>/dev/null | awk '{gsub(/M/,\"\"); printf \"%d %d %d\", $4, $7, $10}' || echo '0 0 0'"
             }
             _ => {
-                "free -m 2>/dev/null | awk 'NR==3{printf \"%s %s %s\", $2,$3,$4}' || awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END{printf \"%d %d %d\", t/1024, (t-f)/1024, f/1024}' /proc/meminfo"
+                // Select the swap row by its leading `Swap:` token. Old
+                // BusyBox free (≤1.30 — OpenWrt, older Alpine, NAS firmware)
+                // prints an extra `-/+ buffers/cache:` row between Mem: and
+                // Swap:, so `NR==3` grabbed that line instead and the swap
+                // card showed garbage; procps 3.x and modern BusyBox both put
+                // Swap: on row 3, and token matching covers all three layouts
+                // (#190). On hosts with no swap configured, BusyBox free omits
+                // the row entirely — awk then prints nothing, which parses to
+                // 0 0 0, the correct reading.
+                "free -m 2>/dev/null | awk '$1==\"Swap:\"{printf \"%s %s %s\", $2,$3,$4}' || awk '/SwapTotal/{t=$2} /SwapFree/{f=$2} END{printf \"%d %d %d\", t/1024, (t-f)/1024, f/1024}' /proc/meminfo"
             }
         }
     }
@@ -642,6 +658,64 @@ mod tests {
         let cmd = info.cpu_cmd();
         assert!(cmd.contains("-l2"));
         assert!(!cmd.contains("-l1"));
+    }
+
+    // Regression for #190: both `top -bn1` variants sampled only once, so the
+    // %CPU line was the since-boot average — on a long-lived host the reading
+    // barely moved regardless of load. Every Linux family now reads
+    // /proc/stat twice and diffs the ticks.
+    #[test]
+    fn test_cpu_cmd_linux_diffs_two_proc_stat_reads() {
+        for family in [
+            OsFamily::Debian,
+            OsFamily::RedHat,
+            OsFamily::Suse,
+            OsFamily::Arch,
+            OsFamily::Alpine,
+            OsFamily::GenericLinux,
+        ] {
+            let info = OsInfo {
+                family: family.clone(),
+                ..Default::default()
+            };
+            let cmd = info.cpu_cmd();
+            // Two reads with a gap, diffed by awk — the shape of a correct
+            // instantaneous reading.
+            let read_count = cmd.matches("cat /proc/stat").count();
+            assert_eq!(read_count, 2, "{family:?} must read /proc/stat twice");
+            assert!(
+                cmd.contains("sleep"),
+                "{family:?} needs a gap between reads"
+            );
+            assert!(
+                cmd.contains("t2>t1"),
+                "{family:?} must guard against a zero-tick delta"
+            );
+            // No dependency on top's wording — the reason the old command
+            // broke between procps and BusyBox phrasings in the first place.
+            assert!(!cmd.contains("top"), "{family:?} must not rely on top");
+        }
+    }
+
+    // Regression for #190: `free -m | awk 'NR==3'` assumed the swap row is the
+    // third line, but old BusyBox free (≤1.30) prints an extra
+    // `-/+ buffers/cache:` row there, so the swap card reported garbage on
+    // OpenWrt / older Alpine hosts.
+    #[test]
+    fn test_swap_cmd_selects_row_by_leading_token() {
+        let info = OsInfo {
+            family: OsFamily::Debian,
+            ..Default::default()
+        };
+        let cmd = info.swap_cmd();
+        assert!(
+            cmd.contains("$1==\"Swap:\""),
+            "swap row must be selected by its leading token, not row number"
+        );
+        assert!(
+            !cmd.contains("NR==3"),
+            "row-number matching breaks on BusyBox"
+        );
     }
 
     #[test]

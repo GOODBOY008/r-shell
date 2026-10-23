@@ -706,6 +706,96 @@ mod shell_integration_tests {
         client.disconnect().await.ok();
     }
 
+    // ── System Monitor commands on the BusyBox fixture (issue #190) ──────────
+    // Same fixture as the default-key tests above (Alpine ⇒ BusyBox userland).
+    // Exercises the exact production path get_system_stats uses every poll:
+    // detect_os → OsInfo::cpu_cmd()/swap_cmd() → execute_command → the
+    // frontend-facing parse. The CPU command must return a bounded number
+    // (the old `top -bn1` reported the since-boot average on BusyBox), and
+    // the swap command must select the `Swap:` row by its leading token —
+    // old BusyBox free (≤1.30) prints an extra `-/+ buffers/cache:` row where
+    // row-number matching grabbed garbage.
+    #[tokio::test]
+    #[ignore]
+    async fn docker_alpine_monitor_commands_parse() {
+        let (host, port) = default_key_endpoint();
+        let fixture_key =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docker/default-key-sshd/id_rsa");
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host,
+                port,
+                username: "testuser".to_string(),
+                auth_method: AuthMethod::PublicKey {
+                    key_path: fixture_key.to_string_lossy().to_string(),
+                    passphrase: None,
+                },
+                compression: true,
+                keepalive_interval: Some(60),
+                keepalive_max: Some(3),
+                proxy: None,
+                host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                connect_timeout: 3,
+                tunnel: None,
+            })
+            .await
+            .expect("connect to the alpine fixture");
+
+        // The real detection path — the fixture is Alpine with BusyBox userland.
+        let os_info = crate::os_detect::detect_os(&client).await;
+        assert_eq!(os_info.family, crate::os_detect::OsFamily::Alpine);
+        // NOTE: has_procps_top MISDETECTS as true on modern BusyBox (its
+        // `top -v` prints the option-error line before the BusyBox banner), a
+        // pre-existing probe quirk deliberately not asserted here — one more
+        // reason the new cpu_cmd/swap_cmd must not branch on that flag.
+
+        // CPU: the two-read /proc/stat delta must produce a plain bounded
+        // number on BusyBox (the old top-based command smeared since-boot).
+        let cpu_out = client
+            .execute_command(os_info.cpu_cmd())
+            .await
+            .expect("cpu_cmd executes");
+        let cpu: f64 = cpu_out
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("cpu_cmd output must be a number: {cpu_out:?}"));
+        assert!(
+            (0.0..=100.0).contains(&cpu),
+            "cpu reading out of range: {cpu}"
+        );
+
+        // Swap: `Swap:`-token selection must yield `total used free` numbers.
+        // Empty output is ALSO valid: BusyBox free omits the Swap: row on
+        // hosts with no swap configured, and get_system_stats leniently
+        // parses that to 0-0-0 — the correct reading for a swap-less host
+        // (e.g. docker VMs with swap disabled). Only demand the 3-number
+        // shape when the row is present.
+        let swap_out = client
+            .execute_command(os_info.swap_cmd())
+            .await
+            .expect("swap_cmd executes");
+        if !swap_out.trim().is_empty() {
+            let parts: Vec<u64> = swap_out
+                .split_whitespace()
+                .map(|p| p.parse().expect("swap values must be numeric"))
+                .collect();
+            assert_eq!(
+                parts.len(),
+                3,
+                "swap_cmd must print exactly 'total used free': {swap_out:?}"
+            );
+            assert!(
+                parts[0] >= parts[1],
+                "swap total ({}) below used ({}): {swap_out:?}",
+                parts[0],
+                parts[1]
+            );
+        }
+
+        client.disconnect().await.ok();
+    }
+
     // Regression for the review comment on the default-key fallback: when a
     // real key is rejected by the server, the error must name the key file
     // that was attempted — otherwise a user whose default key is not
