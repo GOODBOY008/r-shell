@@ -61,9 +61,12 @@ mod tests {
         assert_eq!(tunnel.username, "jumpuser");
     }
 
-    // Note: The following tests are integration tests that require a running SSH server.
-    // They are marked as ignored to prevent CI failures.
-    // To run these tests locally, start an SSH server and run: cargo test -- --ignored --nocapture
+    // Note: The following tests are integration tests that require running SSH
+    // fixture containers. They are marked as ignored to prevent CI failures.
+    // To run the whole suite: pnpm test:e2e (scripts/e2e-docker.sh — builds
+    // and starts the fixtures, wires the RSHELL_TEST_* endpoints, cleans stale
+    // known_hosts entries) — or start a server manually and run
+    // cargo test -- --ignored --nocapture.
 
     #[tokio::test]
     #[ignore]
@@ -208,6 +211,7 @@ mod tests {
     // users report. Build & run:
     //   docker build -t rshell-empty-pass-sshd src-tauri/docker/empty-password-sshd
     //   docker run -d --name rshell-sshd-empty -p 2222:22 rshell-empty-pass-sshd
+    // (scripts/e2e-docker.sh publishes it on 2223 and overrides via RSHELL_EMPTY_PASS_PORT)
     // The endpoint is overridable via RSHELL_EMPTY_PASS_HOST /
     // RSHELL_EMPTY_PASS_PORT (mirrors the RSHELL_TEST_SSH_* pattern).
     //
@@ -480,12 +484,12 @@ mod shell_integration_tests {
     #[tokio::test]
     #[ignore]
     async fn docker_ssh_reports_cwd_and_lists_sftp_directories() {
+        let (host, port) = test_server_endpoint();
         let mut client = SshClient::new();
         client
             .connect(&SshConfig {
-                host: std::env::var("RSHELL_TEST_SSH_HOST")
-                    .unwrap_or_else(|_| "rshell-test-ssh".to_string()),
-                port: 22,
+                host,
+                port,
                 username: "testuser".to_string(),
                 auth_method: AuthMethod::Password {
                     password: "testpass".to_string(),
@@ -1336,7 +1340,7 @@ mod shell_integration_tests {
         }
 
         /// Latency-injected roundtrip through the userspace relay
-        /// (`out/latency-relay.py`), self-contained: ensures the bench
+        /// (`docker/latency-relay.py`), self-contained: ensures the bench
         /// container listens on 127.0.0.1:12224, spawns the relay on
         /// 127.0.0.1:12324, and runs the full byte-exact roundtrip through
         /// `SshClient`. The shared :2224 fixture is never touched, so this
@@ -1373,7 +1377,9 @@ mod shell_integration_tests {
                         "--name",
                         "rshell-sshd-relay-bench",
                         "-p",
-                        "12224:22",
+                        // Loopback only: well-known test credentials must
+                        // not be reachable from the LAN.
+                        "127.0.0.1:12224:22",
                         "rshell-default-key-sshd:latest",
                     ])
                     .output()
@@ -1392,7 +1398,7 @@ mod shell_integration_tests {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(5);
             let relay_script =
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../out/latency-relay.py");
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docker/latency-relay.py");
             let mut relay = std::process::Command::new("python3")
                 .args([
                     relay_script.to_string_lossy().as_ref(),

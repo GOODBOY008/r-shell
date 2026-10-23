@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest --run",
+    "test:e2e": "bash scripts/e2e-docker.sh",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "i18n:check": "node scripts/check-i18n-parity.mjs",
