@@ -6,6 +6,7 @@
 # Build & run:
 #   docker build -t rshell-empty-pass-sshd src-tauri/docker/empty-password-sshd
 #   docker run -d --name rshell-sshd-empty -p 2222:22 rshell-empty-pass-sshd
+# (scripts/e2e-docker.sh publishes it on 2223 and sets RSHELL_EMPTY_PASS_PORT)
 FROM alpine:3.19
 
 RUN apk add --no-cache openssh shadow
