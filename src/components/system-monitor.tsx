@@ -32,6 +32,8 @@ interface SystemStats {
   swapTotal?: number;
   swapUsed?: number;
   diskUsage: number;
+  diskTotal?: string;
+  diskUsed?: string;
   uptime: string;
 }
 
@@ -218,6 +220,8 @@ export function SystemMonitor({ connectionId, active = true }: SystemMonitorProp
       swapTotal: stats.swap.total,
       swapUsed: stats.swap.used,
       diskUsage: stats.disk.use_percent,
+      diskTotal: stats.disk.total,
+      diskUsed: stats.disk.used,
       uptime: stats.uptime,
     });
   };
@@ -766,6 +770,26 @@ export function SystemMonitor({ connectionId, active = true }: SystemMonitorProp
                   </div>
                 )}
               </div>
+
+              {/* Disk — the volume the backend's disk_cmd targets (the data
+                  volume on macOS, / elsewhere). Hidden until the first poll
+                  delivers a reading. */}
+              {stats.diskTotal !== undefined && (
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center gap-1">
+                    <span className="text-xs font-medium">{t('systemMonitor.disk')}</span>
+                    <span className={`text-xs font-semibold ${getUsageColor(stats.diskUsage)} truncate`} title={stats.diskUsed !== undefined && stats.diskTotal ? `${stats.diskUsed} / ${stats.diskTotal}` : ''}>
+                      {stats.diskUsage.toFixed(1)}%
+                    </span>
+                  </div>
+                  <Progress value={stats.diskUsage} className={`h-1.5 ${getProgressColor(stats.diskUsage)}`} />
+                  {stats.diskUsed !== undefined && stats.diskTotal && (
+                    <div className="text-[9px] text-muted-foreground text-right leading-tight">
+                      {stats.diskUsed} / {stats.diskTotal}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Swap Space - Only show if swap exists */}
               {stats.swapTotal !== undefined && stats.swapTotal > 0 && (

@@ -1278,6 +1278,7 @@
     "systemOverview": "Przegląd systemu",
     "cpu": "CPU",
     "memory": "Pamięć",
+    "disk": "Dysk",
     "swap": "Pamięć wymiany",
     "gpuMonitor": "Monitor GPU",
     "selectGpu": "GPU",
