@@ -274,7 +274,7 @@
     "passwordSavingDisabledHint": "Zapisywanie haseł jest wyłączone w ustawieniach — połączenie zadziała, ale dane logowania nie zostaną zapisane.",
     "x11": {
       "enable": "Przekierowanie X11",
-      "enableDesc": "Przekieruj zdalne aplikacje X11 do lokalnego serwera X. Tryb zaufany (-Y): prawdziwe ciasteczko xauth zostanie wysłane do zdalnego hosta",
+      "enableDesc": "Przekieruj zdalne aplikacje X11 do lokalnego serwera X. Tryb zaufany (-Y): zdalny host widzi wyłącznie jednorazowe fałszywe ciasteczko sesji — prawdziwe ciasteczko xauth pozostaje lokalnie",
       "displayOverride": "Nadpisanie DISPLAY",
       "displayPlaceholder": "Automatycznie wykrywane, jeśli puste"
     }
