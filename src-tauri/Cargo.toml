@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.1", features = [] }
 
 [dependencies]
-tauri = { version = "2.1", features = [] }
+tauri = { version = "2.1", features = ["unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
@@ -53,6 +53,32 @@ keyring = "4"
 aes-gcm = "0.11"
 rand = "0.10"
 socket2 = "0.6"
+# Direct subcrate deps: the `ironrdp` meta crate (0.17.0) still re-exports the
+# previous generation (^0.10 connector / ^0.9 pdu), so using the new generation
+# means depending on the subcrates directly.
+ironrdp-core = "0.3"
+ironrdp-pdu = "0.10"
+ironrdp-connector = "0.11"
+ironrdp-session = "0.12"
+ironrdp-graphics = "0.10"
+ironrdp-input = "0.8"
+ironrdp-displaycontrol = "0.9"
+ironrdp-dvc = "0.9"
+ironrdp-tokio = { version = "0.11", features = ["reqwest"] }
+tokio-native-tls = "0.3"
+native-tls = "0.2"
+x509-cert = "0.2"
+openssl = { version = "0.10", features = ["vendored"] }
+tokio-openssl = "0.6"
+smallvec = "1"
+softbuffer = "0.4"
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSEvent"] }
+objc2-foundation = "0.3"
+block2 = "0.6"
 
 [features]
 default = []
@@ -64,7 +90,9 @@ x11-e2e = []
 [dev-dependencies]
 tempfile = "3"
 env_logger = "0.11"
+png = "0.17"
 rand = "0.10"
+
 
 # Performance optimization profiles
 [profile.release]

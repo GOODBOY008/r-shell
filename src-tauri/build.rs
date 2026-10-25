@@ -61,6 +61,8 @@ fn main() {
             "list_remote_files_recursive",
             "list_socks_proxies",
             "open_in_os",
+            "rdp_close_native_window",
+            "rdp_open_native_window",
             "read_file_content",
             "read_log",
             "read_remote_file_base64",
