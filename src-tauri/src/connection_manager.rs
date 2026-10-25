@@ -52,6 +52,25 @@ pub const SOCKS_PROXIES_CHANGED_EVENT: &str = "socks-proxies-changed";
 /// struct field so the manager's type stays tauri-free.
 static APP_HANDLE: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 
+/// The process-global app handle, if it was injected (lib.rs setup). Single
+/// injection point for every backend → frontend event, including the X11
+/// dispatcher's `x11-local-server-unreachable`; `None` in unit tests, where
+/// emits are skipped.
+fn app_handle() -> Option<tauri::AppHandle> {
+    APP_HANDLE.get().cloned()
+}
+
+/// Emit `x11-local-server-unreachable` for a connection. Lives here rather
+/// than in the ssh layer so `ssh/mod.rs` instantiates no tauri types — a
+/// Windows-only loader failure (0xc0000139, see PR #33) follows tauri type
+/// use around, and the connection manager's unit is proven safe.
+pub(crate) fn emit_x11_unreachable(connection_id: &str) {
+    if let Some(handle) = app_handle() {
+        use tauri::Emitter;
+        let _ = handle.emit("x11-local-server-unreachable", connection_id);
+    }
+}
+
 /// Error from starting a PTY session, distinguishing a dead/unusable SSH
 /// session (the frontend must re-authenticate — a WebSocket retry cannot
 /// recover) from other failures that leave the session intact.
@@ -431,7 +450,7 @@ impl ConnectionManager {
 
         // Create PTY session. The map lock is released first so a slow or
         // failing handshake can't block unrelated connections.
-        let pty = match client.read().await.create_pty_session(cols, rows).await {
+        let pty = match client.read().await.create_pty_session(cols, rows, connection_id).await {
             Ok(pty) => pty,
             Err(e) => {
                 if is_session_dead_error(&e) {
@@ -2029,6 +2048,7 @@ mod tests {
                 proxy: None,
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 tunnel: None,
+                x11: None,
             })
             .await
             .expect("SSH connect to fixture");
