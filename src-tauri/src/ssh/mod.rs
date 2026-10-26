@@ -1,8 +1,8 @@
 use crate::proxy::ProxyConfig;
 use anyhow::Result;
+use russh::client::{ChannelOpenHandle, Msg, Session};
 use russh::keys::*;
 use russh::*;
-use russh::client::{ChannelOpenHandle, Msg, Session};
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -181,14 +181,40 @@ pub struct SshSession {
     pub connected: bool,
 }
 
-/// Hard ceiling for a single non-interactive command. Monitoring polls and
-/// file reads share this path; a command that never exits must not block the
-/// caller (and, through the read guard, every later disconnect) forever.
+/// Default hard ceiling for a single non-interactive command. Monitoring
+/// polls and other short probes share this path via
+/// [`SshClient::execute_command`]; a command that never exits must not block
+/// the caller (and, through the read guard, every later disconnect) forever.
 ///
-/// Kept well above the 20 MB image-preview transfer time on slow links
-/// (a 20 MB base64 payload takes ~45 s on a 5 Mbps path), so the deadline
-/// only catches commands that truly never finish.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+/// Long-running, user-initiated reads (large file previews, log searches)
+/// call [`SshClient::execute_command_with_timeout`] with their own budget —
+/// a fixed 60 s cap turned a supported 20 MB preview into a timeout error on
+/// slow links.
+pub(crate) const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 60;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS);
+
+/// Grace period for sending SSH_MSG_CHANNEL_CLOSE on teardown paths.
+const CHANNEL_CLOSE_GRACE: Duration = Duration::from_secs(5);
+
+/// Close a channel with a bounded wait.
+///
+/// `Channel::close()` delivers the close message through the session's send
+/// channel; a session task wedged on a stalled transport can block that send
+/// forever — the very hang the surrounding deadlines exist to prevent. Every
+/// teardown-path close goes through this so a dying session cannot take the
+/// calling task with it.
+///
+/// The stall branch (session task wedged, mpsc buffer full) needs a hung
+/// transport to reproduce and has no unit test; the test suite covers the
+/// normal-return path only through Docker-gated live-server tests.
+pub(crate) async fn bounded_channel_close(channel: &Channel<Msg>) {
+    if tokio::time::timeout(CHANNEL_CLOSE_GRACE, channel.close())
+        .await
+        .is_err()
+    {
+        tracing::debug!("channel close timed out; dropping the handle instead");
+    }
+}
 
 /// Hard ceiling on collected stdout for a single command. A `cat` of a huge
 /// file used to grow this buffer without limit.
@@ -1094,6 +1120,20 @@ impl SshClient {
 
     // Changed to &self instead of &mut self to allow concurrent access
     pub async fn execute_command(&self, command: &str) -> Result<String> {
+        self.execute_command_with_timeout(command, COMMAND_TIMEOUT)
+            .await
+    }
+
+    /// [`SshClient::execute_command`] with a caller-chosen deadline.
+    ///
+    /// The default deadline exists to protect the monitoring polls; long but
+    /// legitimate reads (a 20 MB image preview on a slow link, a grep over a
+    /// big log tree) size their own budget instead of failing at 60 s.
+    pub async fn execute_command_with_timeout(
+        &self,
+        command: &str,
+        deadline: Duration,
+    ) -> Result<String> {
         if let Some(session) = &self.session {
             let mut channel = session.channel_open_session().await?;
             channel.exec(true, command).await?;
@@ -1147,20 +1187,17 @@ impl SshClient {
                 }
             };
 
-            if tokio::time::timeout(COMMAND_TIMEOUT, exchange)
-                .await
-                .is_err()
-            {
-                let _ = channel.close().await;
+            if tokio::time::timeout(deadline, exchange).await.is_err() {
+                bounded_channel_close(&channel).await;
                 return Err(anyhow::anyhow!(
                     "Command timed out after {}s: {}",
-                    COMMAND_TIMEOUT.as_secs(),
+                    deadline.as_secs(),
                     summarize_command(command)
                 ));
             }
 
             if output_overflow {
-                let _ = channel.close().await;
+                bounded_channel_close(&channel).await;
                 return Err(anyhow::anyhow!(
                     "Command output exceeded {} MiB; refusing to buffer more: {}",
                     MAX_COMMAND_OUTPUT_BYTES / (1024 * 1024),
@@ -1172,7 +1209,7 @@ impl SshClient {
             // Without this, russh's session keeps the channel in its internal map until
             // the session is torn down, causing per-poll memory growth.
             if !server_closed {
-                let _ = channel.close().await;
+                bounded_channel_close(&channel).await;
             }
 
             // Consider success if we got output and no explicit error code, or code 0
@@ -1384,7 +1421,7 @@ impl SshClient {
                                                     hinted = true;
                                                     crate::connection_manager::emit_x11_unreachable(&cid);
                                                 }
-                                                let _ = channel.close().await;
+                                                bounded_channel_close(&channel).await;
                                             }
                                         }
                                     }
@@ -1523,7 +1560,7 @@ impl SshClient {
                 // Close the SSH channel on every exit path. Dropping the
                 // handle does not close a russh channel, so without this the
                 // remote shell kept running after the tab was closed.
-                let _ = channel.close().await;
+                bounded_channel_close(&channel).await;
             });
 
             Ok(PtySession {

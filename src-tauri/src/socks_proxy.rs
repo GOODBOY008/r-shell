@@ -8,7 +8,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_util::sync::CancellationToken;
 
-use crate::ssh::Client;
+use crate::ssh::{bounded_channel_close, Client};
 
 /// Read bytes from `stream` until a null byte (0x00) is encountered.
 /// Returns everything up to **and including** the null byte.
@@ -354,7 +354,7 @@ async fn relay_with_cancel(
 
     if !server_closed {
         tracing::debug!("relay sending SSH channel close");
-        let _ = channel.close().await;
+        bounded_channel_close(&channel).await;
     }
 
     tracing::debug!("relay finished");
