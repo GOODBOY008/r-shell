@@ -95,6 +95,11 @@ export function DesktopViewer({
 
   useEffect(() => {
     const container = containerRef.current;
+    // The container div only exists in the connected render — while the tab
+    // is still 'connecting'/'disconnected' the early-return panel above has
+    // no ref. Re-run when that flips so the observer (and with it fit
+    // scaling AND the desktop_resize effect, which both key off
+    // containerSize) actually attaches instead of staying {0,0} forever.
     if (!container) return;
 
     const observer = new ResizeObserver((entries) => {
@@ -107,7 +112,7 @@ export function DesktopViewer({
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, []);
+  }, [isConnected, sessionMissing]);
 
   // WebSocket connection for receiving frame updates and clipboard data from remote
   useEffect(() => {
@@ -323,10 +328,14 @@ export function DesktopViewer({
     if (containerSize.width === 0 || containerSize.height === 0) return;
 
     const timer = setTimeout(() => {
+      // Request PHYSICAL pixels (CSS size × devicePixelRatio): on a 2×
+      // display a session sized in CSS pixels is upscaled and blurry. At
+      // dpr=1 this is the plain container size.
+      const dpr = window.devicePixelRatio || 1;
       invoke('desktop_resize', {
         connectionId,
-        width: Math.round(containerSize.width),
-        height: Math.round(containerSize.height),
+        width: Math.round(containerSize.width * dpr),
+        height: Math.round(containerSize.height * dpr),
       }).catch(() => {
         // Server rejected resize — keep current resolution and scale client-side
       });

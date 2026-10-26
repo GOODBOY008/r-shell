@@ -55,10 +55,15 @@ enum SessionSignal {
 /// `connect_begin`) and stores the upgraded framed stream.  `start_frame_loop`
 /// takes that state and runs a `tokio::select!` loop that reads server PDUs
 /// and forwards decoded graphics updates to the frontend via `frame_tx`.
+/// Shared handle to the current remote resolution. Only the session thread
+/// writes it (handshake, Deactivate-All reactivation); command/WS readers
+/// (`DesktopStarted`, `desktop_size`) must never guess — a size the
+/// framebuffer doesn't actually have clips every later frame blit.
+pub(super) type SizeHandle = std::sync::Arc<std::sync::Mutex<(u16, u16)>>;
+
 pub struct RdpClient {
     config: RdpConfig,
-    desktop_width: u16,
-    desktop_height: u16,
+    size: SizeHandle,
     input_tx: mpsc::UnboundedSender<InputCommand>,
     /// Channel to signal the dedicated thread to start the session loop.
     frame_loop_tx: Mutex<Option<mpsc::UnboundedSender<SessionSignal>>>,
@@ -83,6 +88,7 @@ impl RdpClient {
         }
 
         let cfg = config.clone();
+        let size: SizeHandle = std::sync::Arc::new(std::sync::Mutex::new((0, 0)));
         let (input_tx, input_rx) = mpsc::unbounded_channel();
 
         // Channel to signal the thread to start the session loop
@@ -95,6 +101,7 @@ impl RdpClient {
         // Spawn a dedicated thread that owns the tokio runtime for ALL RDP IO.
         // This avoids the "tokio context being shutdown" error that occurs when
         // a TcpStream created on one runtime is used on another.
+        let size_thread = size.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -107,8 +114,9 @@ impl RdpClient {
                     Ok((framed, connection_result, new_input_rx)) => {
                         let enable_server_pointer =
                             connection_result.enable_server_pointer;
-                        let size = connection_result.desktop_size;
-                        let _ = result_tx.send(Ok((size.width, size.height)));
+                        let desktop_size = connection_result.desktop_size;
+                        *size_thread.lock().unwrap() = (desktop_size.width, desktop_size.height);
+                        let _ = result_tx.send(Ok((desktop_size.width, desktop_size.height)));
                         SessionState {
                             framed,
                             connection_result,
@@ -167,7 +175,7 @@ impl RdpClient {
                         }
                     }
                 };
-                let _ = rdp_session_loop(state, mode, frame_loop_rx, cancel).await;
+                let _ = rdp_session_loop(state, mode, frame_loop_rx, cancel, size_thread).await;
                 tracing::info!("RDP session loop ended");
             });
         });
@@ -181,8 +189,7 @@ impl RdpClient {
 
         Ok(Self {
             config: config.clone(),
-            desktop_width: w,
-            desktop_height: h,
+            size,
             input_tx,
             frame_loop_tx: Mutex::new(Some(frame_loop_tx)),
             cancel: CancellationToken::new(),
@@ -347,13 +354,17 @@ impl DesktopProtocol for RdpClient {
     }
 
     fn desktop_size(&self) -> (u16, u16) {
-        (self.desktop_width, self.desktop_height)
+        *self.size.lock().unwrap()
     }
 
+    /// Ask the remote server to resize via the Display Control channel.
+    /// Fire-and-forget by design: whether the server honors the request is
+    /// only known when it reactivates the session, at which point the session
+    /// thread updates the shared size and a `DesktopResized` event reaches
+    /// the viewer. Reporting the requested size here would lie to
+    /// `DesktopStarted` whenever the server ignores the request.
     async fn resize(&mut self, width: u16, height: u16) -> Result<()> {
         let _ = self.input_tx.send(InputCommand::Resize { width, height });
-        self.desktop_width = width;
-        self.desktop_height = height;
         Ok(())
     }
 

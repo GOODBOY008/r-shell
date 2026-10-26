@@ -50,6 +50,7 @@ pub(super) async fn rdp_session_loop(
     mut mode: RenderMode,
     mut signal_rx: mpsc::UnboundedReceiver<SessionSignal>,
     cancel: CancellationToken,
+    size: super::SizeHandle,
 ) -> Result<()> {
     let SessionState {
         mut framed,
@@ -448,6 +449,10 @@ pub(super) async fn rdp_session_loop(
                             tracing::info!("RDP reactivation done: {}x{} share_id={}", w, h, share_id);
                             route.share_id = share_id;
                             image = DecodedImage::new(PixelFormat::RgbA32, w, h);
+                            // The framebuffer now truly has this size — publish
+                            // it so DesktopStarted (WS reconnects) stops
+                            // reporting the pre-resize resolution.
+                            *size.lock().unwrap() = (w, h);
                             active_stage.set_share_id(share_id);
                             match mode {
                                 RenderMode::Channel(ref tx) => {
