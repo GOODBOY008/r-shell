@@ -690,6 +690,11 @@ function AppContent() {
     void connectRestoredTab(activeTab);
   }, [activeTab, connectRestoredTab]);
 
+  // Restore outcomes are informational and every toast is dismissible now
+  // (#246) — a beat shorter than sonner's 4 s default keeps the corner clear.
+  // Errors keep the default: they deserve the reading time.
+  const RESTORE_TOAST_DURATION_MS = 3000;
+
   // Restore connections on mount
   useEffect(() => {
     // Soft-cancel flag: once the overall timeout fires, the restore loop stops
@@ -798,6 +803,7 @@ function AppContent() {
         // "all failed" toast here.
       } else if (restoredCount > 0) {
         toast.success(t('app.connectionsRestored'), {
+          duration: RESTORE_TOAST_DURATION_MS,
           description: lazyCount > 0
             ? t('app.restoreLazyDesc', { restoredCount, lazyCount })
             : failedCount > 0
@@ -820,6 +826,7 @@ function AppContent() {
       } else if (lazyCount > 0) {
         // Only lazy tabs were restored (no tab was active at quit time).
         toast.info(t('app.restoreLazyTitle'), {
+          duration: RESTORE_TOAST_DURATION_MS,
           description: t('app.restoreLazyOnlyDesc', { lazyCount }),
         });
       }
@@ -2579,7 +2586,19 @@ function AppContent() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Toaster richColors position="top-right" />
+      {/* VS Code-style notifications (#246): anchored bottom-right above the
+          status bar (top-right covered the right sidebar during session
+          restore), stacked with hover-to-expand, and every toast carries a
+          close button. Styling lives in ui/sonner.tsx + the .toaster skin in
+          index.css. */}
+      <Toaster
+        closeButton
+        position="bottom-right"
+        visibleToasts={3}
+        expand={false}
+        gap={8}
+        offset={{ bottom: 40, right: 16 }}
+      />
     </div>
   );
 }

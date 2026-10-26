@@ -29,6 +29,7 @@ const lifecycle = vi.hoisted(() => ({
   invoke: vi.fn(),
   activeConnections: [] as Array<{ tabId: string; connectionId: string; order: number; tabType: string; protocol: string }>,
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
+  toasterProps: {} as Record<string, unknown>,
   clearActiveConnectionsCalls: 0,
 }));
 
@@ -137,7 +138,14 @@ vi.mock('@/components/welcome-screen', async () => {
 });
 vi.mock('@/components/ui/sonner', async () => {
   const ReactModule = await import('react');
-  return { Toaster: () => ReactModule.createElement('div') };
+  // Capture the Toaster's mount props so the toast anchor corner and close
+  // button can be asserted (#246).
+  return {
+    Toaster: (props: Record<string, unknown>) => {
+      Object.assign(lifecycle.toasterProps, props);
+      return ReactModule.createElement('div');
+    },
+  };
 });
 vi.mock('@/components/desktop-viewer', async () => {
   const ReactModule = await import('react');
@@ -273,5 +281,28 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       : [];
     expect(storedTabs).toHaveLength(0);
     expect(lifecycle.clearActiveConnectionsCalls).toBeGreaterThan(0);
+  });
+
+  it('mounts toasts bottom-right, dismissible, with a short restore toast (#246)', async () => {
+    seedLayout();
+    render(<App />);
+
+    // Top-right toasts covered the right sidebar's quick-command toolbar
+    // during restore; the anchor moved to the VS Code / Windows toast corner
+    // and every toast now carries a close button.
+    expect(lifecycle.toasterProps.position).toBe('bottom-right');
+    expect(lifecycle.toasterProps.closeButton).toBe(true);
+
+    // The restore summary toast is informational: a beat shorter than
+    // sonner's 4 s default so the corner clears quickly.
+    await vi.waitFor(
+      () => {
+        expect(lifecycle.toast.success).toHaveBeenCalledWith(
+          'Connections Restored',
+          expect.objectContaining({ duration: 3000 }),
+        );
+      },
+      { timeout: 5000, interval: 50 },
+    );
   });
 });

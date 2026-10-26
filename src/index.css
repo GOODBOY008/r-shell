@@ -140,3 +140,84 @@
     border-color: var(--color-gray-200, currentcolor);
   }
 }
+
+/*
+  Toast notifications — VS Code-style skin (#246).
+
+  Sonner injects its stylesheet at runtime as an UNLAYERED <style> tag, which
+  outranks every Tailwind utility (v4 keeps utilities in @layer), so utility
+  classes cannot restyle toasts. The skin therefore lives here as plain
+  unlayered CSS, scoped with the `.toaster` class the Toaster wrapper sets and
+  carrying one attribute selector more than sonner's own rules so it wins the
+  cascade on both dev (injected style order) and builds.
+
+  Visual language mirrors VS Code notifications: neutral popover surface,
+  6px radius, 13px message, 12px muted details, severity conveyed by the
+  colored icon only (no tinted fills), ghost close button top-right.
+*/
+.toaster [data-sonner-toast][data-styled='true'] {
+  padding: 10px 30px 12px 14px;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.toaster [data-sonner-toast][data-styled='true'] [data-title] {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.toaster [data-sonner-toast][data-styled='true'] [data-description] {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted-foreground);
+}
+
+/* Severity colors the icon glyphs (lucide icons use currentColor). */
+.toaster [data-sonner-toast][data-styled='true'] [data-icon] {
+  color: var(--primary);
+}
+
+.toaster [data-sonner-toast][data-styled='true'][data-type='success'] [data-icon] {
+  color: var(--success);
+}
+
+.toaster [data-sonner-toast][data-styled='true'][data-type='error'] [data-icon] {
+  color: var(--destructive);
+}
+
+.toaster [data-sonner-toast][data-styled='true'][data-type='warning'] [data-icon] {
+  color: var(--warning);
+}
+
+/* Ghost close button, always visible, top-right inside the toast — VS Code
+   shows its ✕ on every notification, not on hover. */
+.toaster [data-sonner-toast][data-styled='true'] [data-close-button] {
+  left: auto;
+  right: 4px;
+  top: 4px;
+  height: 22px;
+  width: 22px;
+  transform: none;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.toaster [data-sonner-toast][data-styled='true'] [data-close-button]:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+/* Action/cancel buttons as VS Code secondary buttons. */
+.toaster [data-sonner-toast][data-styled='true'] [data-button] {
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--popover-foreground);
+}
+
+.toaster [data-sonner-toast][data-styled='true'] [data-button]:hover {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
