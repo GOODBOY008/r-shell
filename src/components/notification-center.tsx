@@ -1,10 +1,8 @@
 import { useCallback, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bell, BellOff, Check, Info, AlertTriangle, X } from 'lucide-react';
+import { Bell, BellOff, Check, Info, AlertTriangle, ListX, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { ScrollArea } from './ui/scroll-area';
-import { Switch } from './ui/switch';
-import { Button } from './ui/button';
 import { cn } from '@/lib/utils';
 import {
   clearNotifications,
@@ -32,6 +30,41 @@ const SEVERITY_COLOR: Record<NotificationType, string> = {
   info: 'text-primary',
 };
 
+/** VS Code-style ghost icon button for the center's header toolbar. */
+function HeaderIconButton({
+  label,
+  active,
+  disabled,
+  testId,
+  onClick,
+  children,
+}: {
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  testId: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      aria-pressed={active}
+      disabled={disabled}
+      title={label}
+      data-testid={testId}
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40',
+        active && 'bg-accent text-foreground hover:bg-accent hover:text-foreground',
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 /** Relative time, reusing the welcome screen's timeAgo vocabulary. */
 function useRelativeTime() {
   const { t } = useTranslation();
@@ -57,10 +90,10 @@ function NotificationRow({
   const relativeTime = useRelativeTime();
   const Icon = SEVERITY_ICON[record.type];
   return (
-    <div className="group flex items-start gap-2.5 px-3 py-2.5 hover:bg-accent/50">
+    <div className="group flex items-start gap-2.5 px-3 py-2 hover:bg-accent/50">
       <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', SEVERITY_COLOR[record.type])} />
       <div className="min-w-0 flex-1 space-y-0.5">
-        <p className="truncate text-sm font-medium">{record.title}</p>
+        <p className="text-sm">{record.title}</p>
         {record.description && (
           <p className="line-clamp-2 text-xs text-muted-foreground">{record.description}</p>
         )}
@@ -79,9 +112,11 @@ function NotificationRow({
 }
 
 /**
- * VS Code-style notification center: status-bar bell with an unread badge,
- * opening a session-scoped history panel (clear-all + do-not-disturb).
- * Reads the module-level notifications store — no props or context needed.
+ * VS Code-style notification center: the status-bar bell (bell / bell-off for
+ * do-not-disturb, with a dot when notifications are unseen) opening a history
+ * panel whose header toolbar is icon-only — Clear All + the DND toggle — with
+ * the VS Code "No New Notifications" empty line. Reads the module-level
+ * notifications store; no props or context needed.
  */
 export function NotificationCenter() {
   const { t } = useTranslation();
@@ -105,20 +140,16 @@ export function NotificationCenter() {
           aria-label={unreadCount > 0
             ? `${t('notifications.bell')}, ${t('notifications.unread', { count: unreadCount })}`
             : t('notifications.bell')}
-          className={cn(
-            'relative rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground',
-            dnd && 'text-foreground/60',
-          )}
+          className="relative rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           data-testid="notification-bell"
         >
           <BellIcon className="h-4 w-4" />
           {unreadCount > 0 && (
             <span
               data-testid="notification-badge"
-              className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground"
-            >
-              {unreadCount > 99 ? '99+' : unreadCount}
-            </span>
+              aria-hidden="true"
+              className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
+            />
           )}
         </button>
       </PopoverTrigger>
@@ -128,36 +159,37 @@ export function NotificationCenter() {
         // The bell sits inside the ~33px status bar; offset from the bell's
         // top must clear the bar's own top edge, not just the bell.
         sideOffset={16}
-        className="w-[360px] p-0"
+        className="w-[420px] p-0"
         data-testid="notification-panel"
       >
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <span className="text-sm font-semibold">{t('notifications.center')}</span>
-          <div className="flex items-center gap-2">
-            <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
-              <Switch checked={dnd} onCheckedChange={toggleDnd} data-testid="dnd-switch" />
-              {t('notifications.doNotDisturb')}
-            </label>
-            {records.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 px-2 text-xs"
-                onClick={clearNotifications}
-                data-testid="clear-all"
-              >
-                {t('notifications.clearAll')}
-              </Button>
-            )}
+        <div className="flex items-center justify-between gap-2 border-b border-border px-2 py-1.5">
+          {records.length > 0 ? (
+            <span className="px-1 text-xs text-muted-foreground">{t('notifications.center')}</span>
+          ) : (
+            <span className="px-1 text-xs text-muted-foreground">{t('notifications.empty')}</span>
+          )}
+          <div className="flex items-center gap-0.5">
+            <HeaderIconButton
+              label={t('notifications.clearAll')}
+              disabled={records.length === 0}
+              testId="clear-all"
+              onClick={clearNotifications}
+            >
+              <ListX className="h-4 w-4" />
+            </HeaderIconButton>
+            <HeaderIconButton
+              label={t('notifications.doNotDisturb')}
+              active={dnd}
+              testId="dnd-toggle"
+              onClick={toggleDnd}
+            >
+              <BellOff className="h-4 w-4" />
+            </HeaderIconButton>
           </div>
         </div>
-        {records.length === 0 ? (
-          <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
-            {t('notifications.empty')}
-          </div>
-        ) : (
+        {records.length > 0 && (
           <ScrollArea className="h-auto max-h-[400px]">
-            <div className="divide-y divide-border/50">
+            <div>
               {records.map((record) => (
                 <NotificationRow
                   key={record.id}

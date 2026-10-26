@@ -1166,10 +1166,10 @@
     "center": "Powiadomienia",
     "bell": "Powiadomienia",
     "unread": "Nieprzeczytane: {{count}}",
-    "clearAll": "Wyczyść wszystkie",
+    "clearAll": "Wyczyść wszystkie powiadomienia",
     "dismiss": "Zamknij powiadomienie",
-    "empty": "Brak powiadomień",
-    "doNotDisturb": "Nie przeszkadzać"
+    "empty": "Brak nowych powiadomień",
+    "doNotDisturb": "Tryb nie przeszkadzania"
   },
   "transferQueue": {
     "title": "Kolejka transferu",

@@ -1118,9 +1118,9 @@
     "unread": "{{count}} unread",
     "unread_one": "{{count}} unread",
     "unread_other": "{{count}} unread",
-    "clearAll": "Clear All",
+    "clearAll": "Clear All Notifications",
     "dismiss": "Dismiss notification",
-    "empty": "No notifications",
+    "empty": "No New Notifications",
     "doNotDisturb": "Do Not Disturb"
   },
   "transferQueue": {

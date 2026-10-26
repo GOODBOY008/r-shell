@@ -1116,10 +1116,10 @@
     "center": "通知中心",
     "bell": "通知",
     "unread": "{{count}} 条未读",
-    "clearAll": "清除全部",
+    "clearAll": "清除所有通知",
     "dismiss": "关闭通知",
-    "empty": "暂无通知",
-    "doNotDisturb": "勿扰模式"
+    "empty": "无新通知",
+    "doNotDisturb": "请勿打扰模式"
   },
   "transferQueue": {
     "title": "传输队列",

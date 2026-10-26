@@ -51,7 +51,7 @@ describe('NotificationCenter', () => {
     expect(screen.queryByTestId('notification-badge')).toBeNull();
   });
 
-  it('shows the unread count on the badge as notifications arrive', () => {
+  it('shows the unread dot on the bell as notifications arrive', () => {
     render(<NotificationCenter />);
 
     act(() => {
@@ -59,7 +59,10 @@ describe('NotificationCenter', () => {
       notify.warning('Retry scheduled');
     });
 
-    expect(screen.getByTestId('notification-badge').textContent).toBe('2');
+    // VS Code shows a dot (bell-dot), not a count; the count stays in the
+    // accessible name for screen readers.
+    expect(screen.getByTestId('notification-badge')).toBeTruthy();
+    expect(screen.getByTestId('notification-bell').getAttribute('aria-label')).toContain('2');
   });
 
   it('opens the panel, lists history, and clears the badge (mark-all-read)', async () => {
@@ -89,7 +92,7 @@ describe('NotificationCenter', () => {
     await waitFor(() => expect(screen.getByTestId('clear-all')).toBeTruthy());
     fireEvent.click(screen.getByTestId('clear-all'));
 
-    await waitFor(() => expect(screen.getByText('No notifications')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('No New Notifications')).toBeTruthy());
     expect(screen.queryByText('one')).toBeNull();
   });
 
@@ -114,8 +117,8 @@ describe('NotificationCenter', () => {
     render(<NotificationCenter />);
     openPanel();
 
-    await waitFor(() => expect(screen.getByTestId('dnd-switch')).toBeTruthy());
-    fireEvent.click(screen.getByTestId('dnd-switch'));
+    await waitFor(() => expect(screen.getByTestId('dnd-toggle')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('dnd-toggle'));
 
     // DND on: notify still records but sonner sees nothing.
     act(() => {
@@ -123,8 +126,9 @@ describe('NotificationCenter', () => {
     });
     expect(mocks.toast.error).not.toHaveBeenCalled();
 
-    // The record exists and the badge counts it, even though nothing toasted.
-    await waitFor(() => expect(screen.getByTestId('notification-badge').textContent).toBe('1'));
+    // The record exists and the unread dot is up, even though nothing toasted.
+    await waitFor(() => expect(screen.getByTestId('notification-badge')).toBeTruthy());
+    expect(screen.getByTestId('dnd-toggle').getAttribute('aria-pressed')).toBe('true');
 
     // The panel never closed (the switch click is an inside click), so the
     // recorded entry is already listed.
