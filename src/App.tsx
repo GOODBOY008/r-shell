@@ -616,8 +616,8 @@ function AppContent() {
         const proto = connectionData.protocol;
         await withTimeout(
           invoke('desktop_connect', {
+            connectionId: tab.id,
             request: {
-              connection_id: tab.id,
               host: connectionData.host,
               port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
               protocol: proto.toLowerCase(),
@@ -2070,8 +2070,8 @@ function AppContent() {
 
         try {
           await invoke('desktop_connect', {
+            connectionId: sessionId,
             request: {
-              connection_id: sessionId,
               host: config.host,
               port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
               protocol: config.protocol.toLowerCase(),
