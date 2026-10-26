@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import { Globe, Plus, X } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -34,29 +34,29 @@ export function PortForwardingPanel({ connectionId, connectionNames }: PortForwa
 
   const handleStart = async () => {
     if (!connectionId) {
-      toast.error(t("portForwarding.noConnection"));
+      notify.error(t("portForwarding.noConnection"));
       return;
     }
     if (!portValid) {
-      toast.error(t("portForwarding.invalidPort"));
+      notify.error(t("portForwarding.invalidPort"));
       return;
     }
     if (duplicate) {
-      toast.error(t("portForwarding.alreadyRunning"));
+      notify.error(t("portForwarding.alreadyRunning"));
       return;
     }
     setLoading(true);
     try {
       const res = await startSocksProxy(connectionId, bindAddress, port);
       if (res.ok) {
-        toast.success(
+        notify.success(
           t("portForwarding.started", {
             address: bindAddress,
             port: res.actualPort ?? port,
           }),
         );
       } else {
-        toast.error(t("portForwarding.startFailed"), { description: res.error });
+        notify.error(t("portForwarding.startFailed"), { description: res.error });
       }
     } finally {
       setLoading(false);
@@ -66,9 +66,9 @@ export function PortForwardingPanel({ connectionId, connectionNames }: PortForwa
   const handleStop = async (proxyId: string) => {
     const res = await stopSocksProxy(proxyId);
     if (res.ok) {
-      toast.success(t("portForwarding.stopped"));
+      notify.success(t("portForwarding.stopped"));
     } else {
-      toast.error(t("portForwarding.stopFailed"), { description: res.error });
+      notify.error(t("portForwarding.stopFailed"), { description: res.error });
     }
   };
 

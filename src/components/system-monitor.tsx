@@ -21,7 +21,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 
 interface SystemStats {
   cpu: number;
@@ -274,15 +274,15 @@ export function SystemMonitor({ connectionId, active = true }: SystemMonitorProp
       });
       
       if (result.success) {
-        toast.success(t('systemMonitor.processTerminated', { pid: process.pid }));
+        notify.success(t('systemMonitor.processTerminated', { pid: process.pid }));
         // Fire-and-forget refresh — failure here is non-critical
         void fetchProcesses().catch(e => console.error('Failed to refresh processes:', e));
       } else {
-        toast.error(t('systemMonitor.failedToKillProcessWithError', { error: result.error || t('systemMonitor.unknownError') }));
+        notify.error(t('systemMonitor.failedToKillProcessWithError', { error: result.error || t('systemMonitor.unknownError') }));
       }
     } catch (error) {
       console.error('Failed to kill process:', error);
-      toast.error(t('systemMonitor.failedToKillProcess', { error: String(error) }));
+      notify.error(t('systemMonitor.failedToKillProcess', { error: String(error) }));
     }
     
     setProcessToKill(null);

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import { Save, RefreshCw, FileWarning, ExternalLink, Image as ImageIcon, FileArchive, Download } from "lucide-react";
 import { Button, buttonVariants } from "./ui/button";
 import { CodeEditor } from "./code-editor";
@@ -105,7 +105,7 @@ export function FileEditorView({
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
-        toast.error(t('fileEditorView.failedToLoad'), { description: msg });
+        notify.error(t('fileEditorView.failedToLoad'), { description: msg });
       } finally {
         setLoading(false);
       }
@@ -143,11 +143,11 @@ export function FileEditorView({
         content: contentRef.current,
       });
       setSavedContent(contentRef.current);
-      toast.success(t('fileEditorView.fileSaved', { fileName }));
+      notify.success(t('fileEditorView.fileSaved', { fileName }));
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error(t('fileEditorView.failedToSave'), { description: msg });
+      notify.error(t('fileEditorView.failedToSave'), { description: msg });
       return false;
     } finally {
       setSaving(false);
@@ -178,10 +178,10 @@ export function FileEditorView({
           : getTransferById(transfer.id)?.error ?? "Download failed");
       }
       await invoke<void>("open_in_os", { path: localPath });
-      toast.success(t('fileEditorView.openedWithOs', { fileName }));
+      notify.success(t('fileEditorView.openedWithOs', { fileName }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      toast.error(t('fileEditorView.failedToOpenWithOs'), { description: msg });
+      notify.error(t('fileEditorView.failedToOpenWithOs'), { description: msg });
     } finally {
       setDownloading(false);
     }

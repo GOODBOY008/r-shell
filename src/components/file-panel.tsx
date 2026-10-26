@@ -7,7 +7,7 @@ import React, {
   forwardRef,
 } from "react";
 import { useTranslation } from 'react-i18next';
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -197,7 +197,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           setSelectedNames(new Set());
           setLastSelectedIndex(null);
         } catch (err) {
-          toast.error(t('filePanel.toast.loadFailed'), {
+          notify.error(t('filePanel.toast.loadFailed'), {
             description: err instanceof Error ? err.message : String(err),
           });
         } finally {
@@ -352,10 +352,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       const fullPath = pathJoin(currentPath, name);
       try {
         await onDelete(fullPath, isDirectory);
-        toast.success(t('filePanel.toast.deleted'), { description: name });
+        notify.success(t('filePanel.toast.deleted'), { description: name });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error(t('filePanel.toast.deleteFailed'), {
+        notify.error(t('filePanel.toast.deleteFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -370,10 +370,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           pathJoin(currentPath, oldName),
           pathJoin(currentPath, newName),
         );
-        toast.success(t('filePanel.toast.renamed'), { description: `${oldName} → ${newName}` });
+        notify.success(t('filePanel.toast.renamed'), { description: `${oldName} → ${newName}` });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error(t('filePanel.toast.renameFailed'), {
+        notify.error(t('filePanel.toast.renameFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -385,10 +385,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       if (!name) return;
       try {
         await onCreateDirectory(pathJoin(currentPath, name));
-        toast.success(t('filePanel.toast.directoryCreated'), { description: name });
+        notify.success(t('filePanel.toast.directoryCreated'), { description: name });
         loadDirectory(currentPath);
       } catch (err) {
-        toast.error(t('filePanel.toast.createDirectoryFailed'), {
+        notify.error(t('filePanel.toast.createDirectoryFailed'), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -396,7 +396,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     const handleCopyPath = (name: string) => {
       writeClipboardText(pathJoin(currentPath, name));
-      toast.success(t('filePanel.toast.pathCopied'));
+      notify.success(t('filePanel.toast.pathCopied'));
     };
 
     const handleTransfer = () => {

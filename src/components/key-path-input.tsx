@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FolderOpen } from 'lucide-react';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { pickPrivateKeyFile } from '@/lib/key-file-picker';
@@ -28,7 +28,7 @@ export function KeyPathInput({ id, value, placeholder, onChange }: KeyPathInputP
       if (picked) onChange(picked);
     } catch (error) {
       console.error('Key file picker failed:', error);
-      toast.error(t('connectionDialog.toast.keyPickerFailed'), { description: String(error) });
+      notify.error(t('connectionDialog.toast.keyPickerFailed'), { description: String(error) });
     } finally {
       setPicking(false);
     }

@@ -2,6 +2,7 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
+import { NotificationCenter } from './notification-center';
 
 interface StatusBarProps {
   activeConnection?: {
@@ -50,10 +51,11 @@ export function StatusBar({ activeConnection }: StatusBarProps) {
         )}
       </div>
       
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <div className="text-muted-foreground">
           {t('statusBar.ready')}
         </div>
+        <NotificationCenter />
       </div>
     </div>
   );

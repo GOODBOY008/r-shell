@@ -1162,6 +1162,15 @@
     "memory": "Pamięć: {{used}}/{{total}}",
     "ready": "Gotowe"
   },
+  "notifications": {
+    "center": "Powiadomienia",
+    "bell": "Powiadomienia",
+    "unread": "Nieprzeczytane: {{count}}",
+    "clearAll": "Wyczyść wszystkie",
+    "dismiss": "Zamknij powiadomienie",
+    "empty": "Brak powiadomień",
+    "doNotDisturb": "Nie przeszkadzać"
+  },
   "transferQueue": {
     "title": "Kolejka transferu",
     "empty": "Brak aktywnych transferów",

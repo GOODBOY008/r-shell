@@ -20,7 +20,7 @@ import React, {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import {
   Search,
   RefreshCw,
@@ -341,7 +341,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
           return customs.length > 0 ? [...result.sources, ...customs] : result.sources;
         });
         if (result.sources.length === 0) {
-          toast.info(t('logMonitor.noSourcesDiscovered'));
+          notify.info(t('logMonitor.noSourcesDiscovered'));
         }
         return true;
       } else if (result.error && (
@@ -353,7 +353,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
         console.debug('[LogMonitor] Session not ready yet, skipping source discovery:', result.error);
         return false;
       } else {
-        toast.error(t('logMonitor.failedToDiscoverSources'), {
+        notify.error(t('logMonitor.failedToDiscoverSources'), {
           description: result.error,
         });
         return true;
@@ -364,7 +364,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
         console.debug('[LogMonitor] Session not ready yet, skipping source discovery:', msg);
         return false;
       } else {
-        toast.error(t('logMonitor.failedToDiscoverSources'), {
+        notify.error(t('logMonitor.failedToDiscoverSources'), {
           description: msg,
         });
         return true;
@@ -510,13 +510,13 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
             });
           }
         } else if (!isAutoRefresh) {
-          toast.error(t('logMonitor.failedToLoadLog'), {
+          notify.error(t('logMonitor.failedToLoadLog'), {
             description: result.error ?? t('logMonitor.unknownError'),
           });
         }
       } catch (err) {
         if (!isAutoRefresh) {
-          toast.error(t('logMonitor.failedToLoadLog'), {
+          notify.error(t('logMonitor.failedToLoadLog'), {
             description: err instanceof Error ? err.message : String(err),
           });
         }

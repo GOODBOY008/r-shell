@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import { ChevronRight, Folder, Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { parentPath } from "@/lib/file-entry-types";
@@ -139,7 +139,7 @@ export function DirectoryTree({
           return next;
         });
       } catch (err) {
-        toast.error(t('directoryTree.loadFailed'), {
+        notify.error(t('directoryTree.loadFailed'), {
           description: `${normalizedPath}: ${err instanceof Error ? err.message : String(err)}`,
         });
       } finally {

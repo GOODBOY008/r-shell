@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -59,13 +59,13 @@ export function AdvancedSection({
     try {
       const saved = await exportAllConfig();
       if (saved) {
-        toast.success(t('settings.advanced.exportSuccess'));
+        notify.success(t('settings.advanced.exportSuccess'));
       } else {
-        toast.info(t('settings.advanced.exportCancelled'));
+        notify.info(t('settings.advanced.exportCancelled'));
       }
     } catch (error) {
       console.error('[export-config]', error);
-      toast.error(t('settings.advanced.exportFailed'), {
+      notify.error(t('settings.advanced.exportFailed'), {
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -78,7 +78,7 @@ export function AdvancedSection({
     try {
       const result = await importAllConfig(importMerge);
       if (result) {
-        toast.success(t('settings.advanced.importSuccess'), {
+        notify.success(t('settings.advanced.importSuccess'), {
           description: t('settings.advanced.importSuccessDesc', {
             connections: result.connections,
             profiles: result.profiles,
@@ -86,11 +86,11 @@ export function AdvancedSection({
         });
         onConfigImported();
       } else {
-        toast.info(t('settings.advanced.importCancelled'));
+        notify.info(t('settings.advanced.importCancelled'));
       }
     } catch (error) {
       console.error('[import-config]', error);
-      toast.error(t('settings.advanced.importFailed'), {
+      notify.error(t('settings.advanced.importFailed'), {
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -156,7 +156,7 @@ export function AdvancedSection({
                     aria-label={t('settings.updates.homebrewManaged.copyCommand')}
                     onClick={() => {
                       void writeClipboardText(t('settings.updates.homebrewManaged.command'))
-                        .then(() => toast.success(t('settings.updates.homebrewManaged.commandCopied')))
+                        .then(() => notify.success(t('settings.updates.homebrewManaged.commandCopied')))
                         .catch((err: unknown) => console.warn('clipboard write failed:', err));
                     }}
                   >

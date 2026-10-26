@@ -68,7 +68,7 @@ import {
 } from 'lucide-react';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from './ui/context-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { isEditableTarget } from '@/lib/keyboard-shortcuts';
 
 interface FileItem {
@@ -410,12 +410,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       if (item.connectionId !== connectionId) return;
       if (item.status === 'completed') {
         if (item.direction === 'upload') {
-          toast.success(t('fileBrowser.toast.uploaded', { name: item.fileName }));
+          notify.success(t('fileBrowser.toast.uploaded', { name: item.fileName }));
           void loadFiles();
         } else {
           const destPath = item.destinationPath;
           const destDir = destPath.substring(0, destPath.lastIndexOf('/')) || '/';
-          toast.success(t('fileBrowser.toast.downloaded', { name: item.fileName }), {
+          notify.success(t('fileBrowser.toast.downloaded', { name: item.fileName }), {
             duration: 5000,
             action: {
               label: t('fileBrowser.transfer.openFile'),
@@ -431,7 +431,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         const toastKey = item.direction === 'upload'
           ? t('fileBrowser.toast.uploadFailed', { name: item.fileName })
           : t('fileBrowser.toast.downloadFailed', { name: item.fileName });
-        toast.error(toastKey, {
+        notify.error(toastKey, {
           description: item.error ?? 'Unknown error',
         });
       }
@@ -620,7 +620,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         const failedPath = `${connectionId}:${targetPath}`;
         if (lastFailedFollowPathRef.current !== failedPath) {
           lastFailedFollowPathRef.current = failedPath;
-          toast.warning(t('fileBrowser.toast.followDirectoryFailed', { path: targetPath }), {
+          notify.warning(t('fileBrowser.toast.followDirectoryFailed', { path: targetPath }), {
             description: error instanceof Error ? error.message : t('fileBrowser.toast.loadFailedDesc'),
           });
         }
@@ -638,7 +638,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       }
 
       console.error('Failed to load files:', error);
-      toast.error(t('fileBrowser.toast.loadFailed'), {
+      notify.error(t('fileBrowser.toast.loadFailed'), {
         description: error instanceof Error ? error.message : t('fileBrowser.toast.loadFailedDesc'),
       });
       setFiles([]);
@@ -780,7 +780,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       if (onOpenInEditor) {
         onOpenInEditor(file.path, file.name);
       } else {
-        toast.info(t('app.noEditorHandler', { name: file.name }));
+        notify.info(t('app.noEditorHandler', { name: file.name }));
       }
     }
   };
@@ -869,7 +869,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           connectionId,
         })),
       });
-      toast.info(t('fileBrowser.toast.queuedUpload', { count: paths.length }));
+      notify.info(t('fileBrowser.toast.queuedUpload', { count: paths.length }));
     } catch (error) {
       console.error('Upload dialog error:', error);
     }
@@ -924,7 +924,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       }
 
       if (dirErrors.length > 0) {
-        toast.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
+        notify.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
           description: dirErrors.slice(0, 3).join("\n"),
         });
       }
@@ -937,17 +937,17 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             connectionId,
           })),
         });
-        toast.info(
+        notify.info(
           t('fileBrowser.toast.queuedFolderUpload', { count: queuedItems.length, folderCount: directoryPaths.length, createdCount: createdDirectoryCount }),
         );
       } else if (dirErrors.length === 0) {
         // Folder(s) were empty — just refresh
         void loadFiles();
-        toast.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
+        notify.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
       }
     } catch (error) {
       console.error('Upload folder dialog error:', error);
-      toast.error(t('fileBrowser.toast.uploadFolderFailed'), {
+      notify.error(t('fileBrowser.toast.uploadFolderFailed'), {
         description:
           error instanceof Error ? error.message : t('fileBrowser.toast.uploadFolderFailedDesc'),
       });
@@ -982,7 +982,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     const skippedDirs = selectedFileItems.filter(f => f.type === 'directory').length;
     if (filesToDownload.length === 0) {
       if (skippedDirs > 0) {
-        toast.info(t('fileBrowser.toast.downloadFoldersNotSupported'));
+        notify.info(t('fileBrowser.toast.downloadFoldersNotSupported'));
       }
       return;
     }
@@ -1002,14 +1002,14 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         })),
       });
       if (skippedDirs > 0) {
-        toast.info(
+        notify.info(
           t('fileBrowser.toast.downloadedFilesSkippedFolders', {
             count: filesToDownload.length,
             folders: skippedDirs,
           }),
         );
       } else {
-        toast.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
+        notify.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
       }
     } catch (error) {
       console.error('Download dialog error:', error);
@@ -1040,11 +1040,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           connectionId,
           path: folderPath
         });
-        toast.success(t('fileBrowser.toast.folderCreated', { name: folderName }));
+        notify.success(t('fileBrowser.toast.folderCreated', { name: folderName }));
         void loadFiles();
       } catch (error) {
         console.error('Failed to create folder:', error);
-        toast.error(t('fileBrowser.toast.folderCreateFailed'), {
+        notify.error(t('fileBrowser.toast.folderCreateFailed'), {
           description: error instanceof Error ? error.message : t('fileBrowser.toast.folderCreateFailedDesc'),
         });
       }
@@ -1088,15 +1088,15 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
 
     if (deletingFiles.length === 1 && failed.length === 0) {
-      toast.success(t('fileBrowser.toast.deleted', { name: deletingFiles[0].name }));
+      notify.success(t('fileBrowser.toast.deleted', { name: deletingFiles[0].name }));
     } else if (failed.length === 0) {
-      toast.success(t('fileBrowser.toast.deletedMultiple', { count: deletingFiles.length }));
+      notify.success(t('fileBrowser.toast.deletedMultiple', { count: deletingFiles.length }));
     } else if (failed.length === deletingFiles.length) {
-      toast.error(t('fileBrowser.toast.deleteFailed'), {
+      notify.error(t('fileBrowser.toast.deleteFailed'), {
         description: t('fileBrowser.toast.deleteFailedDesc'),
       });
     } else {
-      toast.error(t('fileBrowser.toast.deleteSomeFailed', { failed: failed.length, total: deletingFiles.length }));
+      notify.error(t('fileBrowser.toast.deleteSomeFailed', { failed: failed.length, total: deletingFiles.length }));
     }
 
     setDeletingFiles(null);
@@ -1111,12 +1111,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   function handleCopyFiles(files: FileItem[]) {
     setClipboard({ files, operation: 'copy' });
-    toast.success(t('fileBrowser.toast.copiedToClipboard', { count: files.length }));
+    notify.success(t('fileBrowser.toast.copiedToClipboard', { count: files.length }));
   };
 
   function handleCutFiles(files: FileItem[]) {
     setClipboard({ files, operation: 'cut' });
-    toast.success(t('fileBrowser.toast.cutToClipboard', { count: files.length }));
+    notify.success(t('fileBrowser.toast.cutToClipboard', { count: files.length }));
   };
 
   async function handlePasteFiles() {
@@ -1141,12 +1141,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         }
         
         const operation = clipboard.operation === 'copy' ? 'copied' : 'moved';
-        toast.success(t('fileBrowser.toast.pasted', { count: clipboard.files.length, operation }));
+        notify.success(t('fileBrowser.toast.pasted', { count: clipboard.files.length, operation }));
         setClipboard(null);
         void loadFiles();
       } catch (error) {
         console.error('Failed to paste files:', error);
-        toast.error(t('fileBrowser.toast.pasteFailed'), {
+        notify.error(t('fileBrowser.toast.pasteFailed'), {
           description: error instanceof Error ? error.message : t('fileBrowser.toast.pasteFailedDesc'),
         });
       }
@@ -1170,13 +1170,13 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           newPath: newPath
         });
         
-        toast.success(t('fileBrowser.toast.renamed', { oldName: renamingFile.name, newName: newFileName }));
+        notify.success(t('fileBrowser.toast.renamed', { oldName: renamingFile.name, newName: newFileName }));
         setRenamingFile(null);
         setNewFileName('');
         void loadFiles();
       } catch (error) {
         console.error('Failed to rename file:', error);
-        toast.error(t('fileBrowser.toast.renameFailed'), {
+        notify.error(t('fileBrowser.toast.renameFailed'), {
           description: error instanceof Error ? error.message : t('fileBrowser.toast.renameFailedDesc'),
         });
       }
@@ -1191,11 +1191,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const handleCopyPath = (file: FileItem) => {
     const fullPath = `${currentPath}/${file.name}`;
     void writeClipboardText(fullPath);
-    toast.success(t('fileBrowser.toast.pathCopied'));
+    notify.success(t('fileBrowser.toast.pathCopied'));
   };
 
   const handleFileInfo = (file: FileItem) => {
-    toast.info(t('fileBrowser.toast.fileInfo', {
+    notify.info(t('fileBrowser.toast.fileInfo', {
       name: file.name,
       size: formatFileSize(file.size),
       modified: formatDate(file.modified),
@@ -1213,11 +1213,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           path: filePath,
           content: ''
         });
-        toast.success(t('fileBrowser.toast.fileCreated', { name: fileName }));
+        notify.success(t('fileBrowser.toast.fileCreated', { name: fileName }));
         void loadFiles();
       } catch (error) {
         console.error('Failed to create file:', error);
-        toast.error(t('fileBrowser.toast.fileCreateFailed'), {
+        notify.error(t('fileBrowser.toast.fileCreateFailed'), {
           description: error instanceof Error ? error.message : t('fileBrowser.toast.fileCreateFailedDesc'),
         });
       }
@@ -1236,11 +1236,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         destPath: destPath
       });
       
-      toast.success(t('fileBrowser.toast.duplicated', { name: file.name, newName }));
+      notify.success(t('fileBrowser.toast.duplicated', { name: file.name, newName }));
       void loadFiles();
     } catch (error) {
       console.error('Failed to duplicate file:', error);
-      toast.error(t('fileBrowser.toast.duplicateFailed'), {
+      notify.error(t('fileBrowser.toast.duplicateFailed'), {
         description: error instanceof Error ? error.message : t('fileBrowser.toast.duplicateFailedDesc'),
       });
     }
@@ -1316,7 +1316,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       }
 
       if (dirErrors.length > 0) {
-        toast.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
+        notify.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
           description: dirErrors.slice(0, 3).join("\n"),
         });
       }
@@ -1326,7 +1326,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           type: "ENQUEUE",
           items: plan.items.map((item) => ({ ...item, connectionId })),
         });
-        toast.info(
+        notify.info(
           t('fileBrowser.toast.queuedUploadToPath', { count: plan.items.length, path: currentPath }) +
             (createdDirectoryCount > 0
               ? "; " + t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount })
@@ -1336,19 +1336,19 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         // Nothing to upload — refresh the listing in case folders were created.
         void loadFiles();
         if (createdDirectoryCount > 0) {
-          toast.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
+          notify.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
         }
       }
 
       if (plan.skipped.length > 0) {
-        toast.warning(
+        notify.warning(
           t('fileBrowser.toast.droppedPathsSkipped', { count: plan.skipped.length }),
           { description: plan.skipped.slice(0, 3).map((s) => s.path).join("\n") },
         );
       }
     } catch (error) {
       console.error("OS drop handler error:", error);
-      toast.error(t('fileBrowser.toast.dropUploadFailed'), {
+      notify.error(t('fileBrowser.toast.dropUploadFailed'), {
         description:
           error instanceof Error ? error.message : t('fileBrowser.toast.dropUploadFailedDesc'),
       });

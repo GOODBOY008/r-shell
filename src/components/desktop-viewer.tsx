@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { DesktopToolbar } from './desktop-toolbar';
 import { computeFitScale, translateCoordinates } from '@/lib/desktop-utils';
 import { Monitor, RefreshCw } from 'lucide-react';
@@ -159,7 +159,7 @@ export function DesktopViewer({
           invoke('desktop_set_clipboard', { connectionId, text }).catch(() => {});
         }
       }).catch(() => {
-        toast.info(t('desktopViewer.clipboardAccessDenied'), {
+        notify.info(t('desktopViewer.clipboardAccessDenied'), {
           description: t('desktopViewer.clipboardAccessDeniedDesc'),
         });
       });
@@ -280,7 +280,7 @@ export function DesktopViewer({
 
     if (!isFullScreen) {
       container.requestFullscreen?.().catch(() => {
-        toast.error(t('desktopViewer.failedToEnterFullScreen'));
+        notify.error(t('desktopViewer.failedToEnterFullScreen'));
       });
     } else {
       document.exitFullscreen?.().catch(() => {});
@@ -297,7 +297,7 @@ export function DesktopViewer({
 
   const handleDisconnect = useCallback(() => {
     invoke('desktop_disconnect', { connectionId }).catch((err) => {
-      toast.error(t('desktopViewer.failedToDisconnect'), {
+      notify.error(t('desktopViewer.failedToDisconnect'), {
         description: String(err),
       });
     });

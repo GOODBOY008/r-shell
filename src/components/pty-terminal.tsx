@@ -11,7 +11,7 @@ import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar, type TerminalSearchState } from './terminal/terminal-search-bar';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { signalReady } from '../lib/restoration-manager';
 import i18n from '../lib/i18n';
 import { useTerminalCallbacks } from '../lib/terminal-callbacks-context';
@@ -305,14 +305,14 @@ export function PtyTerminal({
       if (!text) return;
       const term = xtermRef.current;
       if (!term) {
-        toast.error(i18n.t('ptyTerminal.terminalNotConnected'));
+        notify.error(i18n.t('ptyTerminal.terminalNotConnected'));
         return;
       }
       // term.paste() routes through xterm's onData handler,
       // which calls sendInputToPty with proper bracketed paste wrapping
       term.paste(text);
     } catch (_error) {
-      toast.error(i18n.t('ptyTerminal.failedToReadClipboard'));
+      notify.error(i18n.t('ptyTerminal.failedToReadClipboard'));
     }
   }, []);
 
@@ -1389,7 +1389,7 @@ export function PtyTerminal({
       if (!active) return;
       // The payload is the connection_id the failure pertains to.
       if (event.payload === connectionId) {
-        toast.warning(i18n.t('ptyTerminal.x11LocalServerUnreachable'), {
+        notify.warning(i18n.t('ptyTerminal.x11LocalServerUnreachable'), {
           description: i18n.t('ptyTerminal.x11LocalServerUnreachableDesc'),
           duration: 10000,
         });
@@ -1486,9 +1486,9 @@ export function PtyTerminal({
     if (term?.hasSelection()) {
       const selection = term.getSelection();
       writeClipboardText(selection).then(() => {
-        toast.success(i18n.t('ptyTerminal.copiedToClipboard'));
+        notify.success(i18n.t('ptyTerminal.copiedToClipboard'));
       }).catch(() => {
-        toast.error(i18n.t('ptyTerminal.failedToCopyClipboard'));
+        notify.error(i18n.t('ptyTerminal.failedToCopyClipboard'));
       });
     }
   }, []);
@@ -1554,7 +1554,7 @@ export function PtyTerminal({
     const term = xtermRef.current;
     const ws = wsRef.current;
     if (!term || !ws || ws.readyState !== WebSocket.OPEN) {
-      toast.error(i18n.t('ptyTerminal.terminalNotConnected'));
+      notify.error(i18n.t('ptyTerminal.terminalNotConnected'));
       return;
     }
     // Flush a pending Xshell-style Ctrl+A prefix so the buffered \x01 reaches
@@ -1594,7 +1594,7 @@ export function PtyTerminal({
       void onReconnectTab(connectionId);
     } else {
       // Fallback: reconnect only the WebSocket/PTY loop (no SSH re-auth).
-      toast.info(i18n.t('ptyTerminal.reconnectingTerminal'));
+      notify.info(i18n.t('ptyTerminal.reconnectingTerminal'));
       reconnectAttemptsRef.current = 0;
       connectionStatusRef.current = 'connecting';
       onConnectionStatusChange?.(connectionId, 'connecting');
@@ -1629,9 +1629,9 @@ export function PtyTerminal({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       
-      toast.success(i18n.t('ptyTerminal.outputSaved'));
+      notify.success(i18n.t('ptyTerminal.outputSaved'));
     } catch (error) {
-      toast.error(i18n.t('ptyTerminal.failedToSaveOutput'));
+      notify.error(i18n.t('ptyTerminal.failedToSaveOutput'));
       console.error('Save error:', error);
     }
   }, []);

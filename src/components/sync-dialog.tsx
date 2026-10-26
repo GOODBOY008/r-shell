@@ -10,7 +10,7 @@ import React, { useState, useCallback, useRef } from "react";
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import { submit, getTransferById, type SubmittedTransfer } from "@/lib/transfer-queue-service";
 import {
   Dialog,
@@ -234,7 +234,7 @@ export function SyncDialog({
       setCompared(true);
       setProgress((p) => ({ ...p, phase: "completed" }));
     } catch (err) {
-      toast.error(t('syncDialog.comparisonFailed'), {
+      notify.error(t('syncDialog.comparisonFailed'), {
         description: err instanceof Error ? err.message : String(err),
       });
       setProgress((p) => ({
@@ -258,7 +258,7 @@ export function SyncDialog({
   const handleSync = useCallback(async () => {
     const checkedEntries = entries.filter((e) => e.checked);
     if (checkedEntries.length === 0) {
-      toast.info(t('syncDialog.noItemsSelected'));
+      notify.info(t('syncDialog.noItemsSelected'));
       return;
     }
 
@@ -294,7 +294,7 @@ export function SyncDialog({
     for (const entry of sorted) {
       if (cancelRef.current) {
         setProgress((p) => ({ ...p, phase: "cancelled" }));
-        toast.info(t('syncDialog.syncCancelled'));
+        notify.info(t('syncDialog.syncCancelled'));
         return;
       }
 
@@ -343,7 +343,7 @@ export function SyncDialog({
             }
             if (outcome === "cancelled") {
               setProgress((p) => ({ ...p, phase: "cancelled" }));
-              toast.info(t('syncDialog.syncCancelled'));
+              notify.info(t('syncDialog.syncCancelled'));
               return;
             }
             if (outcome === "failed") {
@@ -394,7 +394,7 @@ export function SyncDialog({
             }
             if (outcome === "cancelled") {
               setProgress((p) => ({ ...p, phase: "cancelled" }));
-              toast.info(t('syncDialog.syncCancelled'));
+              notify.info(t('syncDialog.syncCancelled'));
               return;
             }
             if (outcome === "failed") {
@@ -408,7 +408,7 @@ export function SyncDialog({
         }
       } catch (err) {
         errorCount++;
-        toast.error(t('syncDialog.toastFailed', { path: entry.relativePath }), {
+        notify.error(t('syncDialog.toastFailed', { path: entry.relativePath }), {
           description: err instanceof Error ? err.message : String(err),
         });
       }
@@ -424,11 +424,11 @@ export function SyncDialog({
     }));
 
     if (errorCount === 0) {
-      toast.success(
+      notify.success(
         t('syncDialog.toastComplete', { count: processedItems }),
       );
     } else {
-      toast.warning(
+      notify.warning(
         t('syncDialog.toastFinishedWithErrors', { errorCount, processedItems }),
       );
     }

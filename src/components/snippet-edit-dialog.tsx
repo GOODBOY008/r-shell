@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import {
   Dialog,
   DialogContent,
@@ -92,11 +92,11 @@ export function SnippetEditDialog({ open, onOpenChange, snippet }: SnippetEditDi
 
     if (!saved) {
       // Defensive: storage-level validation failed despite the form checks.
-      toast.error(t('quickCommands.dialog.saveFailed'));
+      notify.error(t('quickCommands.dialog.saveFailed'));
       return;
     }
 
-    toast.success(snippet ? t('quickCommands.toast.updated') : t('quickCommands.toast.created'));
+    notify.success(snippet ? t('quickCommands.toast.updated') : t('quickCommands.toast.created'));
     onOpenChange(false);
   };
 

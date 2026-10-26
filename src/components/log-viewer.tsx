@@ -8,7 +8,7 @@ import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { ScrollArea } from './ui/scroll-area';
 import { Badge } from './ui/badge';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 
 interface LogViewerProps {
   connectionId?: string;
@@ -55,7 +55,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
       }
     } catch (error) {
       console.error('Failed to fetch log files:', error);
-      toast.error(t('logViewer.failedToLoadLogFiles'), {
+      notify.error(t('logViewer.failedToLoadLogFiles'), {
         description: error instanceof Error ? error.message : t('logViewer.unableToFetchList'),
       });
     }
@@ -99,7 +99,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
       } else {
         setLogContent(`${t('logViewer.error')}: ${result.error || t('logViewer.failedToFetchLog')}`);
         if (!isAutoRefresh) {
-          toast.error(t('logViewer.failedToLoadLogContent'), {
+          notify.error(t('logViewer.failedToLoadLogContent'), {
             description: result.error || t('logViewer.unableToFetchContent'),
           });
         }
@@ -107,7 +107,7 @@ export function LogViewer({ connectionId }: LogViewerProps) {
     } catch (error) {
       setLogContent(`${t('logViewer.error')}: ${error}`);
       if (!isAutoRefresh) {
-        toast.error(t('logViewer.failedToLoadLogContent'), {
+        notify.error(t('logViewer.failedToLoadLogContent'), {
           description: error instanceof Error ? error.message : t('logViewer.unexpectedError'),
         });
       }

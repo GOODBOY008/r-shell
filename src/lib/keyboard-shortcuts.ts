@@ -3,7 +3,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
 import { register, unregister, unregisterAll, isRegistered } from '@tauri-apps/plugin-global-shortcut';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import i18n from '@/lib/i18n';
 import type { ShortcutBindings } from './shortcut-registry';
 
@@ -757,7 +757,7 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
           return;
         }
         failed.add(accel);
-        toast.error(i18n.t('settings.keyboard.registerFailed', { shortcut: accel }));
+        notify.error(i18n.t('settings.keyboard.registerFailed', { shortcut: accel }));
       }
     });
   };
