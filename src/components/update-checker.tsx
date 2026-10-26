@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { relaunch } from '@tauri-apps/plugin-process';
 // relaunch() calls the process plugin's restart command (process:allow-restart capability)
 import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { Copy } from 'lucide-react';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import {
@@ -205,7 +206,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
           // interrupt an active session). One non-blocking toast per
           // session; the MenuBar pill keeps the entry point visible.
           autoToastShownRef.current = true;
-          toast.info(t('updateChecker.autoToastTitle', { version: update.version }), {
+          notify.info(t('updateChecker.autoToastTitle', { version: update.version }), {
             description: t('updateChecker.autoToastDesc'),
             duration: AUTO_TOAST_DURATION_MS,
             id: 'update-available',
@@ -227,7 +228,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
         if (manual) {
           // Prefer the versioned message so the user learns which release
           // they are on; falls back to the generic text if getVersion failed.
-          toast.success(
+          notify.success(
             currentVersionRef.current
               ? t('updateChecker.upToDateDesc', { version: currentVersionRef.current })
               : t('updateChecker.upToDate')
@@ -254,7 +255,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
         setStatus('idle');
         if (manual) {
           const brewCommand = t('settings.updates.homebrewManaged.command');
-          toast.info(t('updateChecker.homebrewManaged'), {
+          notify.info(t('updateChecker.homebrewManaged'), {
             description: (
               <span className="flex flex-col gap-1.5">
                 <span>{t('updateChecker.homebrewManagedDesc')}</span>
@@ -268,7 +269,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
                     className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
                     onClick={() => {
                       void writeClipboardText(brewCommand)
-                        .then(() => toast.success(t('updateChecker.homebrewCommandCopied')))
+                        .then(() => notify.success(t('updateChecker.homebrewCommandCopied')))
                         .catch((err: unknown) => console.warn('clipboard write failed:', err));
                     }}
                   >
@@ -313,7 +314,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
       setStatus('error');
       setError(message);
       if (manual) {
-        toast.error(t('updateChecker.checkFailed'), { description: message });
+        notify.error(t('updateChecker.checkFailed'), { description: message });
       }
     }
   }, [t, applyAnnouncement]);
@@ -345,7 +346,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
             : t('updateChecker.downloadFailedFallback');
       setStatus('error');
       setError(message);
-      toast.error(t('updateChecker.downloadFailed'), { description: message });
+      notify.error(t('updateChecker.downloadFailed'), { description: message });
     }
   }, [t]);
 
@@ -366,7 +367,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
             : t('updateChecker.installFailedFallback');
       setStatus('error');
       setError(message);
-      toast.error(t('updateChecker.installFailed'), { description: message });
+      notify.error(t('updateChecker.installFailed'), { description: message });
     }
   }, [t, applyAnnouncement]);
 

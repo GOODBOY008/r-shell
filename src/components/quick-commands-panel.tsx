@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { Copy, Pencil, Plus, Search, Terminal, Trash2, Type } from 'lucide-react';
 import { Button } from './ui/button';
@@ -105,7 +105,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
 
   const requireTerminal = useCallback((): boolean => {
     if (activeTerminalId) return true;
-    toast.error(t('quickCommands.toast.noActiveTerminal'));
+    notify.error(t('quickCommands.toast.noActiveTerminal'));
     return false;
   }, [activeTerminalId, t]);
 
@@ -125,8 +125,8 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
 
   const handleCopy = useCallback((snippet: CommandSnippet) => {
     writeClipboardText(snippet.command)
-      .then(() => toast.success(t('quickCommands.toast.copied')))
-      .catch(() => toast.error(t('quickCommands.toast.copyFailed')));
+      .then(() => notify.success(t('quickCommands.toast.copied')))
+      .catch(() => notify.error(t('quickCommands.toast.copyFailed')));
   }, [t]);
 
   const handleEdit = useCallback((snippet: CommandSnippet) => {
@@ -142,7 +142,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
   const handleDeleteConfirmed = useCallback(() => {
     if (!pendingDelete) return;
     SnippetStorageManager.deleteSnippet(pendingDelete.id);
-    toast.success(t('quickCommands.toast.deleted'));
+    notify.success(t('quickCommands.toast.deleted'));
     setPendingDelete(null);
   }, [pendingDelete, t]);
 

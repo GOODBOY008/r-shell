@@ -47,7 +47,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from './ui/context-menu';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { formatKeyboardShortcut } from '../lib/keyboard-shortcuts';
 import { useShortcutBindings } from '../lib/shortcut-registry';
 
@@ -193,12 +193,12 @@ export function ConnectionManager({
   const handleDelete = (connectionId: string) => {
     if (ConnectionStorageManager.deleteConnection(connectionId)) {
       setConnections(loadConnections());
-      toast.success(t('connectionManager.connectionDeleted'));
+      notify.success(t('connectionManager.connectionDeleted'));
       if (onDeleteConnection) {
         onDeleteConnection(connectionId);
       }
     } else {
-      toast.error(t('connectionManager.failedToDeleteConnection'));
+      notify.error(t('connectionManager.failedToDeleteConnection'));
     }
   };
 
@@ -219,7 +219,7 @@ export function ConnectionManager({
           name: `${connectionData.name}${t('connectionManager.copySuffix')}`,
         });
         setConnections(loadConnections());
-        toast.success(t('connectionManager.duplicated', { name: duplicated.name }));
+        notify.success(t('connectionManager.duplicated', { name: duplicated.name }));
         if (onDuplicateConnection) {
           onDuplicateConnection(node);
         }
@@ -230,19 +230,19 @@ export function ConnectionManager({
   // Handle creating new folder
   const handleCreateFolder = () => {
     if (!newFolderName.trim()) {
-      toast.error(t('connectionManager.folderNameEmpty'));
+      notify.error(t('connectionManager.folderNameEmpty'));
       return;
     }
 
     try {
       ConnectionStorageManager.createFolder(newFolderName.trim(), newFolderParentPath);
       setConnections(loadConnections());
-      toast.success(t('connectionManager.folderCreated', { name: newFolderName }));
+      notify.success(t('connectionManager.folderCreated', { name: newFolderName }));
       setNewFolderDialogOpen(false);
       setNewFolderName('');
       setNewFolderParentPath(undefined);
     } catch (_error) {
-      toast.error(t('connectionManager.failedToCreateFolder'));
+      notify.error(t('connectionManager.failedToCreateFolder'));
     }
   };
 
@@ -252,11 +252,11 @@ export function ConnectionManager({
 
     if (ConnectionStorageManager.deleteFolder(folderToDelete.path, true)) {
       setConnections(loadConnections());
-      toast.success(t('connectionManager.folderDeleted', { name: folderToDelete.name }));
+      notify.success(t('connectionManager.folderDeleted', { name: folderToDelete.name }));
       setDeleteFolderDialogOpen(false);
       setFolderToDelete(null);
     } else {
-      toast.error(t('connectionManager.failedToDeleteFolder'));
+      notify.error(t('connectionManager.failedToDeleteFolder'));
     }
   };
 
@@ -269,7 +269,7 @@ export function ConnectionManager({
   // Handle renaming folder
   const handleRenameFolder = () => {
     if (!folderToRename || !renameFolderNewName.trim()) {
-      toast.error(t('connectionManager.folderNameEmpty'));
+      notify.error(t('connectionManager.folderNameEmpty'));
       return;
     }
 
@@ -320,12 +320,12 @@ export function ConnectionManager({
       ConnectionStorageManager.deleteFolder(oldPath, true);
 
       setConnections(loadConnections());
-      toast.success(t('connectionManager.folderRenamed', { name: newName }));
+      notify.success(t('connectionManager.folderRenamed', { name: newName }));
       setRenameFolderDialogOpen(false);
       setFolderToRename(null);
       setRenameFolderNewName('');
     } catch (error) {
-      toast.error(t('connectionManager.failedToRenameFolder'), {
+      notify.error(t('connectionManager.failedToRenameFolder'), {
         description: error instanceof Error ? error.message : 'Unable to rename folder.',
       });
     }
@@ -565,7 +565,7 @@ export function ConnectionManager({
     if (draggedNode.type === 'folder' && targetParentPath !== undefined) {
       const draggedPath = draggedNode.path!;
       if (targetParentPath === draggedPath || targetParentPath.startsWith(draggedPath + '/')) {
-        toast.error(t('connectionManager.cannotMoveIntoOwn'));
+        notify.error(t('connectionManager.cannotMoveIntoOwn'));
         return;
       }
     }
@@ -604,20 +604,20 @@ export function ConnectionManager({
       const resolvedTargetParent = targetParentPath ?? 'All Connections';
       if (sourceParentPath !== targetParentPath) {
         if (resolvedTargetParent === 'All Connections') {
-          toast.success(t('connectionManager.movedToRoot', { name: draggedNode.name }));
+          notify.success(t('connectionManager.movedToRoot', { name: draggedNode.name }));
         } else {
           const targetName = position === 'inside' && targetNode
             ? targetNode.name
             : targetParentPath?.split('/').pop() ?? 'All Connections';
           if (draggedNode.type === 'connection') {
-            toast.success(t('connectionManager.movedConnection', { source: draggedNode.name, target: targetName }));
+            notify.success(t('connectionManager.movedConnection', { source: draggedNode.name, target: targetName }));
           } else {
-            toast.success(t('connectionManager.movedFolder', { source: draggedNode.name, target: targetName }));
+            notify.success(t('connectionManager.movedFolder', { source: draggedNode.name, target: targetName }));
           }
         }
       }
     } else {
-      toast.error(t('connectionManager.failedToReorder'));
+      notify.error(t('connectionManager.failedToReorder'));
     }
   };
 

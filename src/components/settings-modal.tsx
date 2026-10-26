@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -220,7 +220,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     try {
       updateProxy = normalizeUpdateProxy(settings.updateProxy);
     } catch {
-      toast.error(t('settings.advanced.updateProxyInvalid'));
+      notify.error(t('settings.advanced.updateProxyInvalid'));
       return false;
     }
 
@@ -264,7 +264,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
         } catch {
           // Ignore storage errors — the toggle and toast already reflect reality
         }
-        toast.error(t('settings.interface.autostartFailed'), {
+        notify.error(t('settings.interface.autostartFailed'), {
           description: error instanceof Error ? error.message : String(error),
         });
       }

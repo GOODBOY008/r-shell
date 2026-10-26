@@ -13,7 +13,7 @@ import React, { useState, useCallback, useRef, useEffect } from "react";
 import { useTranslation } from 'react-i18next';
 import { invoke } from "@tauri-apps/api/core";
 import { submit, getTransferById, type SubmittedTransfer } from "@/lib/transfer-queue-service";
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import {
   Dialog,
   DialogContent,
@@ -361,11 +361,11 @@ export function DirectoryTransferDialog({
       ).errors.length;
 
       if (errorCount === 0) {
-        toast.success(
+        notify.success(
           t('directoryTransferDialog.toast.complete', { context: direction, processedFiles, processedDirs }),
         );
       } else {
-        toast.warning(
+        notify.warning(
           t('directoryTransferDialog.toast.failed', { errorCount }),
         );
       }
@@ -380,7 +380,7 @@ export function DirectoryTransferDialog({
           err instanceof Error ? err.message : String(err),
         ],
       }));
-      toast.error(t('directoryTransferDialog.toast.error'), {
+      notify.error(t('directoryTransferDialog.toast.error'), {
         description: err instanceof Error ? err.message : String(err),
       });
     }

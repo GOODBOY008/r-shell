@@ -21,7 +21,7 @@ import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import { sshConnect } from '@/lib/ssh-connect';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import {
   Server,
   Shield,
@@ -370,10 +370,10 @@ export function ConnectionDialog({
         privateKey: config.privateKeyPath,
       });
       setSavedProfiles(ConnectionProfileManager.getProfiles());
-      toast.success(t('connectionDialog.toast.savedProfile', { name: profile.name }));
+      notify.success(t('connectionDialog.toast.savedProfile', { name: profile.name }));
       setShowSaveProfile(false);
     } catch (_error) {
-      toast.error(t('connectionDialog.toast.failedToSaveProfile'));
+      notify.error(t('connectionDialog.toast.failedToSaveProfile'));
     }
   };
 
@@ -388,13 +388,13 @@ export function ConnectionDialog({
       password: profile.password,
       privateKeyPath: profile.privateKey,
     });
-    toast.success(t('connectionDialog.toast.loadedProfile', { name: profile.name }));
+    notify.success(t('connectionDialog.toast.loadedProfile', { name: profile.name }));
   };
 
   const _handleDeleteProfile = (id: string) => {
     if (ConnectionProfileManager.deleteProfile(id)) {
       setSavedProfiles(ConnectionProfileManager.getProfiles());
-      toast.success(t('connectionDialog.toast.profileDeleted'));
+      notify.success(t('connectionDialog.toast.profileDeleted'));
     }
   };
 
@@ -480,7 +480,7 @@ export function ConnectionDialog({
     // VNC also doesn't require a username
     const requiresUsername = config.authMethod !== 'anonymous' && config.protocol !== 'VNC';
     if (!config.name || !config.host || (requiresUsername && !config.username)) {
-      toast.error(t('connectionDialog.toast.missingFields'), {
+      notify.error(t('connectionDialog.toast.missingFields'), {
         description: requiresUsername
           ? t('connectionDialog.toast.missingFieldsDesc')
           : t('connectionDialog.toast.missingFieldsNoUsernameDesc'),
@@ -501,7 +501,7 @@ export function ConnectionDialog({
     try {
       sealedSecrets = await resolveSecretsForSave();
     } catch {
-      toast.error(t('connectionDialog.toast.credentialSyncFailed'));
+      notify.error(t('connectionDialog.toast.credentialSyncFailed'));
       resetConnectionState();
       return;
     }
@@ -700,9 +700,9 @@ export function ConnectionDialog({
         // Connection failed — config was already saved above, user can retry from sidebar
         console.error('Connection failed:', result.error);
         if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
-          toast.info(t('connectionDialog.toast.connectionCancelled'));
+          notify.info(t('connectionDialog.toast.connectionCancelled'));
         } else {
-          toast.error(t('connectionDialog.toast.connectionFailed'), {
+          notify.error(t('connectionDialog.toast.connectionFailed'), {
             description: result.error || t('connectionDialog.toast.connectionFailedDesc'),
             duration: 5000,
           });
@@ -711,9 +711,9 @@ export function ConnectionDialog({
     } catch (error) {
       console.error('Connection error:', error);
       if (cancelRequestedRef.current) {
-        toast.info(t('connectionDialog.toast.connectionCancelled'));
+        notify.info(t('connectionDialog.toast.connectionCancelled'));
       } else {
-        toast.error(t('connectionDialog.toast.connectionError'), {
+        notify.error(t('connectionDialog.toast.connectionError'), {
           description: typeof error === 'string'
             ? error
             : error instanceof Error
@@ -757,7 +757,7 @@ const handleCancelConnectionAttempt = async () => {
         connection_id: connectionId
       });
       if (response.success) {
-        toast.info(t('connectionDialog.toast.connectionCancelled'));
+        notify.info(t('connectionDialog.toast.connectionCancelled'));
       }
       // Whether successful or not, we want to reset the state
       // The user clicked cancel, so we should stop the "connecting" state
@@ -778,7 +778,7 @@ const handleCancelConnectionAttempt = async () => {
     try {
       sealed = await resolveSecretsForSave();
     } catch {
-      toast.error(t('connectionDialog.toast.credentialSyncFailed'));
+      notify.error(t('connectionDialog.toast.credentialSyncFailed'));
       return;
     }
 

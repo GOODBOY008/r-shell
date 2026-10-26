@@ -1112,6 +1112,17 @@
     "memory": "Memory: {{used}}/{{total}}",
     "ready": "Ready"
   },
+  "notifications": {
+    "center": "Notifications",
+    "bell": "Notifications",
+    "unread": "{{count}} unread",
+    "unread_one": "{{count}} unread",
+    "unread_other": "{{count}} unread",
+    "clearAll": "Clear All Notifications",
+    "dismiss": "Dismiss notification",
+    "empty": "No New Notifications",
+    "doNotDisturb": "Do Not Disturb"
+  },
   "transferQueue": {
     "title": "Transfer Queue",
     "empty": "No active transfers",

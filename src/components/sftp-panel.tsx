@@ -1,7 +1,7 @@
 /** @deprecated Use IntegratedFileBrowser instead. This component is no longer mounted. */
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
+import { notify } from '@/lib/notifications';
 import {
   Dialog,
   DialogContent,
@@ -130,7 +130,7 @@ export function SFTPPanel({
       }
     } catch (error) {
       console.error('Failed to load files:', error);
-      toast.error('Failed to Load Files', {
+      notify.error('Failed to Load Files', {
         description: error instanceof Error ? error.message : 'Unable to load remote directory contents.',
       });
     } finally {
@@ -238,14 +238,14 @@ export function SFTPPanel({
               : t
           )
         );
-        toast.success(`Downloaded ${file.name} successfully`);
+        notify.success(`Downloaded ${file.name} successfully`);
       } else {
         setTransfers((prev) =>
           prev.map((t) =>
             t.id === transferId ? { ...t, status: "error" as const } : t
           )
         );
-        toast.error('Download Failed', {
+        notify.error('Download Failed', {
           description: result.error || 'Unable to download file from server.',
         });
       }
@@ -255,7 +255,7 @@ export function SFTPPanel({
           t.id === transferId ? { ...t, status: "error" as const } : t
         )
       );
-      toast.error('Download Failed', {
+      notify.error('Download Failed', {
         description: error instanceof Error ? error.message : 'An unexpected error occurred during download.',
       });
     }
@@ -323,7 +323,7 @@ export function SFTPPanel({
               : t
           )
         );
-        toast.success(`Uploaded ${file.name} successfully`);
+        notify.success(`Uploaded ${file.name} successfully`);
         // Reload the file list to show the new file
         loadRemoteFiles(currentPath);
       } else {
@@ -332,7 +332,7 @@ export function SFTPPanel({
             t.id === transferId ? { ...t, status: "error" as const } : t
           )
         );
-        toast.error('Upload Failed', {
+        notify.error('Upload Failed', {
           description: result.error || 'Unable to upload file to server.',
         });
       }
@@ -343,7 +343,7 @@ export function SFTPPanel({
           t.id === transferId ? { ...t, status: "error" as const } : t
         )
       );
-      toast.error('Upload Failed', {
+      notify.error('Upload Failed', {
         description: error instanceof Error ? error.message : 'An unexpected error occurred during upload.',
       });
     }

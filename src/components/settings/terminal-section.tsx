@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { readLocalBinaryFile } from '../../lib/local-file-access';
@@ -104,14 +104,14 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
       if (!selected) return; // dialog dismissed
       const bytes = await readLocalBinaryFile(selected);
       if (bytes.length > 5 * 1024 * 1024) {
-        toast.error(t('settings.terminal.imageSizeWarning'));
+        notify.error(t('settings.terminal.imageSizeWarning'));
         return;
       }
       const ext = selected.split('.').pop()?.toLowerCase() ?? '';
       const mime = IMAGE_MIME[ext] ?? 'image/png';
       onChange('backgroundImage', `data:${mime};base64,${bytesToBase64(bytes)}`);
     } catch (err) {
-      toast.error(t('settings.terminal.imageLoadError'), { description: String(err) });
+      notify.error(t('settings.terminal.imageLoadError'), { description: String(err) });
     }
   };
 

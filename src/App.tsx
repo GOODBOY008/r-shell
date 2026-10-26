@@ -62,7 +62,7 @@ import {
   AlertDialogTitle,
 } from './components/ui/alert-dialog';
 import { buttonVariants } from './components/ui/button';
-import { toast } from 'sonner';
+import { notify } from '@/lib/notifications';
 import { dispatchTerminalCommand, type TerminalCommand } from './lib/terminal-commands';
 import { OPEN_SETTINGS_EVENT, QUICK_CONNECT_EVENT } from './lib/app-events';
 import {
@@ -802,7 +802,7 @@ function AppContent() {
         // hosts is still possible, and do not emit a contradicting success or
         // "all failed" toast here.
       } else if (restoredCount > 0) {
-        toast.success(t('app.connectionsRestored'), {
+        notify.success(t('app.connectionsRestored'), {
           duration: RESTORE_TOAST_DURATION_MS,
           description: lazyCount > 0
             ? t('app.restoreLazyDesc', { restoredCount, lazyCount })
@@ -814,18 +814,18 @@ function AppContent() {
         // Every restored connection failed and no lazy tabs are left to
         // activate: nothing left to restore.
         ActiveConnectionsManager.clearActiveConnections();
-        toast.error(t('app.restoreFailed'), {
+        notify.error(t('app.restoreFailed'), {
           description: t('app.restoreFailedDesc'),
         });
       } else if (failedCount > 0) {
         // The eager set failed but lazy tabs are still open — they retry
         // when activated, so keep the list and say so.
-        toast.error(t('app.restoreFailed'), {
+        notify.error(t('app.restoreFailed'), {
           description: t('app.restoreLazyFailedDesc', { lazyCount }),
         });
       } else if (lazyCount > 0) {
         // Only lazy tabs were restored (no tab was active at quit time).
-        toast.info(t('app.restoreLazyTitle'), {
+        notify.info(t('app.restoreLazyTitle'), {
           duration: RESTORE_TOAST_DURATION_MS,
           description: t('app.restoreLazyOnlyDesc', { lazyCount }),
         });
@@ -846,7 +846,7 @@ function AppContent() {
         // Soft-cancel: the in-flight connection may still complete, but the loop
         // must not start any new connections after this point.
         restoreCancelled = true;
-        toast.error(t('app.restoreTimedOut'), {
+        notify.error(t('app.restoreTimedOut'), {
           description: t('app.restoreTimedOutDesc'),
         });
       } else {
@@ -923,7 +923,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -973,7 +973,7 @@ function AppContent() {
               // connection as a toast plus a reopened connection dialog.
               return;
             }
-            toast.error(t('app.connectionFailed'), {
+            notify.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
             setEditingConnection(toConnectionConfig(connectionData));
@@ -986,7 +986,7 @@ function AppContent() {
           if (!liveTabIdsRef.current.has(sessionId)) {
             return;
           }
-          toast.error(t('app.connectionError'), {
+          notify.error(t('app.connectionError'), {
             description: typeof error === 'string'
               ? error
               : error instanceof Error
@@ -1071,7 +1071,7 @@ function AppContent() {
     const originalConnectionId = tabToDuplicate.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
-      toast.error(t('app.cannotDuplicate'), {
+      notify.error(t('app.cannotDuplicate'), {
         description: t('app.cannotDuplicateDesc'),
       });
       return;
@@ -1088,7 +1088,7 @@ function AppContent() {
     const hasCredentials = connectionHasCredentials(connectionData);
 
     if (!hasCredentials) {
-      toast.error(t('app.cannotDuplicate'), {
+      notify.error(t('app.cannotDuplicate'), {
         description: t('app.noCredentialsDesc'),
       });
       return;
@@ -1123,12 +1123,12 @@ function AppContent() {
             });
           }
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'connected' });
-          toast.success(t('app.tabDuplicated'), {
+          notify.success(t('app.tabDuplicated'), {
             description: t('app.tabDuplicatedDesc', { name: tabToDuplicate.name }),
           });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'disconnected' });
-          toast.error(t('app.duplicationFailed'), {
+          notify.error(t('app.duplicationFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1150,18 +1150,18 @@ function AppContent() {
 
           dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: duplicatedTab });
 
-          toast.success(t('app.tabDuplicated'), {
+          notify.success(t('app.tabDuplicated'), {
             description: t('app.tabDuplicatedDesc', { name: tabToDuplicate.name }),
           });
         } else {
-          toast.error(t('app.duplicationFailed'), {
+          notify.error(t('app.duplicationFailed'), {
             description: result.error || 'Unable to establish connection for the duplicated tab.',
           });
         }
       }
     } catch (error) {
       console.error('Error duplicating tab:', error);
-      toast.error(t('app.duplicationError'), {
+      notify.error(t('app.duplicationError'), {
         description: error instanceof Error ? error.message : t('app.duplicationErrorDesc'),
       });
     }
@@ -1210,7 +1210,7 @@ function AppContent() {
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
       clearReconnectRetry(tabId);
-      toast.error(t('app.cannotReconnect'), {
+      notify.error(t('app.cannotReconnect'), {
         description: t('app.cannotReconnectDesc'),
       });
       return;
@@ -1228,7 +1228,7 @@ function AppContent() {
 
     if (!hasCredentials) {
       clearReconnectRetry(tabId);
-      toast.error(t('app.cannotReconnect'), {
+      notify.error(t('app.cannotReconnect'), {
         description: t('app.noCredentialsDesc'),
       });
       setEditingConnection(toConnectionConfig(connectionData));
@@ -1296,7 +1296,7 @@ function AppContent() {
           ConnectionStorageManager.updateLastConnected(originalConnectionId);
         }
         dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
-        toast.success(t('app.reconnected'), {
+        notify.success(t('app.reconnected'), {
           description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
         });
       } else if (isFileBrowser) {
@@ -1325,7 +1325,7 @@ function AppContent() {
           ConnectionStorageManager.updateLastConnected(originalConnectionId);
         }
         dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
-        toast.success(t('app.reconnected'), {
+        notify.success(t('app.reconnected'), {
           description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
         });
       } else {
@@ -1346,7 +1346,7 @@ function AppContent() {
           // Remount PtyTerminal so it opens a fresh WebSocket/PTY on the
           // newly re-established SSH connection.
           dispatch({ type: 'RECONNECT_TAB', tabId });
-          toast.success(t('app.reconnected'), {
+          notify.success(t('app.reconnected'), {
             description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
           });
         } else {
@@ -1372,7 +1372,7 @@ function AppContent() {
             } else {
               dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
             }
-            toast.error(t('app.reconnectionFailed'), {
+            notify.error(t('app.reconnectionFailed'), {
               description: result.error || t('app.reconnectionFailedDesc'),
             });
           }
@@ -1386,7 +1386,7 @@ function AppContent() {
       } else {
         dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
       }
-      toast.error(t('app.reconnectionError'), {
+      notify.error(t('app.reconnectionError'), {
         description: error instanceof Error ? error.message : t('app.reconnectionErrorDesc'),
       });
     }
@@ -1442,7 +1442,7 @@ function AppContent() {
       }
     }
 
-    toast.success(t('app.sessionDetached'), {
+    notify.success(t('app.sessionDetached'), {
       description: t('app.sessionDetachedDesc', { name: tab.name }),
     });
   }, [allTabs, state.groups, dispatch, t]);
@@ -1461,7 +1461,7 @@ function AppContent() {
       });
       if (!alive) {
         setDetachedSessions(prev => prev.filter(s => s.connectionId !== session.connectionId));
-        toast.error(t('app.detachedSessionExpired'), {
+        notify.error(t('app.detachedSessionExpired'), {
           description: t('app.detachedSessionExpiredDesc', { name: session.name }),
         });
         return;
@@ -1482,7 +1482,7 @@ function AppContent() {
     };
     dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
     setDetachedSessions(prev => prev.filter(s => s.connectionId !== session.connectionId));
-    toast.success(t('app.sessionReattached'), {
+    notify.success(t('app.sessionReattached'), {
       description: t('app.sessionReattachedDesc', { name: session.name }),
     });
   }, [state.activeGroupId, dispatch, t]);
@@ -1501,9 +1501,9 @@ function AppContent() {
     setDetachedSessions(prev => prev.filter(s => s.connectionId !== connectionId));
     try {
       await invoke('close_detached_session', { connection_id: connectionId });
-      toast.success(t('app.detachedSessionClosed'));
+      notify.success(t('app.detachedSessionClosed'));
     } catch (error) {
-      toast.error(t('app.detachedSessionCloseFailed'), {
+      notify.error(t('app.detachedSessionCloseFailed'), {
         description: error instanceof Error ? error.message : String(error),
       });
     }
@@ -1520,7 +1520,7 @@ function AppContent() {
     if (!layout.rightSidebarVisible) {
       toggleRightSidebar();
     }
-    toast.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
+    notify.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
   }, [rightSidebar.select, layout.rightSidebarVisible, toggleRightSidebar, t]);
 
   // Opens (or focuses) the dedicated Tauri window editing a remote file.
@@ -1602,10 +1602,10 @@ function AppContent() {
         decorations: true,
       });
       win.once('tauri://error', (e) => {
-        toast.error(t('app.failedToOpenWindow'), { description: String(e.payload) });
+        notify.error(t('app.failedToOpenWindow'), { description: String(e.payload) });
       });
     } catch (err: unknown) {
-      toast.error(t('app.couldNotOpenWindow'), { description: err instanceof Error ? err.message : String(err) });
+      notify.error(t('app.couldNotOpenWindow'), { description: err instanceof Error ? err.message : String(err) });
     }
   }, [t]);
 
@@ -1698,7 +1698,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1721,7 +1721,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1767,7 +1767,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1799,7 +1799,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1952,7 +1952,7 @@ function AppContent() {
         setPendingConnectionId(null);
         setPendingReconnectTabId(null);
       } else {
-        toast.error(t('app.connectionNotFound'), {
+        notify.error(t('app.connectionNotFound'), {
           description: t('app.connectionNotFoundDesc1'),
         });
       }
@@ -2048,7 +2048,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -2085,7 +2085,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
         }
@@ -2125,12 +2125,12 @@ function AppContent() {
               dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
             }
           } else {
-            toast.error(t('app.connectionFailed'), {
+            notify.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
           }
         } catch (error) {
-          toast.error(t('app.connectionError'), {
+          notify.error(t('app.connectionError'), {
             description: typeof error === 'string'
               ? error
               : error instanceof Error
@@ -2163,7 +2163,7 @@ function AppContent() {
     const existingTab = allTabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
     if (existingTab) {
       handleTabSelect(existingTab.id);
-      toast.info(t('app.alreadyConnected'), {
+      notify.info(t('app.alreadyConnected'), {
         description: t('app.alreadyConnectedDesc', { name: existingTab.name }),
       });
       return;
@@ -2171,7 +2171,7 @@ function AppContent() {
 
     const connectionData = ConnectionStorageManager.getConnection(connectionId);
     if (!connectionData) {
-      toast.error(t('app.connectionNotFound'), {
+      notify.error(t('app.connectionNotFound'), {
         description: t('app.connectionNotFoundDesc2'),
       });
       return;
@@ -2198,7 +2198,7 @@ function AppContent() {
       // Route through handleConnectionDialogConnect which handles SFTP/FTP
       const config: ConnectionConfig = toConnectionConfig(connectionData);
       await handleConnectionDialogConnect(config);
-      toast.success(t('app.quickConnected'), {
+      notify.success(t('app.quickConnected'), {
         description: t('app.quickConnectedDesc', { name: connectionData.name }),
       });
     } else {
@@ -2213,12 +2213,12 @@ function AppContent() {
 
           handleConnectionDialogConnect(config);
 
-          toast.success(t('app.quickConnected'), {
+          notify.success(t('app.quickConnected'), {
             description: t('app.quickConnectedDesc', { name: connectionData.name }),
           });
         } else {
           console.error('Quick connect failed:', result.error);
-          toast.error(t('app.connectionFailed'), {
+          notify.error(t('app.connectionFailed'), {
             description: result.error || 'Unable to connect. Please try again.',
           });
           setEditingConnection(toConnectionConfig(connectionData));
@@ -2227,7 +2227,7 @@ function AppContent() {
         }
       } catch (error) {
         console.error('Quick connect error:', error);
-        toast.error(t('app.connectionError'), {
+        notify.error(t('app.connectionError'), {
           description: typeof error === 'string'
               ? error
               : error instanceof Error

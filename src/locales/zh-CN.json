@@ -1112,6 +1112,15 @@
     "memory": "内存：{{used}}/{{total}}",
     "ready": "就绪"
   },
+  "notifications": {
+    "center": "通知中心",
+    "bell": "通知",
+    "unread": "{{count}} 条未读",
+    "clearAll": "清除所有通知",
+    "dismiss": "关闭通知",
+    "empty": "无新通知",
+    "doNotDisturb": "请勿打扰模式"
+  },
   "transferQueue": {
     "title": "传输队列",
     "empty": "暂无活动传输",
