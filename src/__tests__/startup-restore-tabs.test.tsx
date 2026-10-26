@@ -305,4 +305,68 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       { timeout: 5000, interval: 50 },
     );
   });
+
+  it('restores an active RDP desktop tab with the connectionId as a top-level invoke arg', async () => {
+    // Regression: the desktop restore path used to nest connection_id inside
+    // `request`, but the Rust command takes it as a separate top-level arg —
+    // Tauri rejected the invoke, restore always failed, and the tab woke up
+    // on the "Desktop Disconnected" panel waiting for a manual Reconnect.
+    const rdpTab = {
+      id: 'rdp-1',
+      name: 'UTM Win11',
+      tabType: 'desktop' as const,
+      protocol: 'RDP',
+      host: '192.168.64.2',
+      username: 'user',
+      connectionStatus: 'connected' as const,
+      reconnectCount: 0,
+      originalConnectionId: 'rdp-1',
+    };
+    saveState({
+      groups: { 'group-1': { id: 'group-1', tabs: [rdpTab], activeTabId: 'rdp-1' } },
+      activeGroupId: 'group-1',
+      gridLayout: { type: 'leaf', groupId: 'group-1' },
+      nextGroupId: 2,
+      tabToGroupMap: { 'rdp-1': 'group-1' },
+    });
+    const rdpConnection = {
+      id: 'rdp-1',
+      name: 'UTM Win11',
+      host: '192.168.64.2',
+      port: 3389,
+      username: 'user',
+      protocol: 'RDP',
+      authMethod: 'password',
+      password: 'secret',
+      createdAt: '2026-01-01T00:00:00.000Z',
+    };
+    localStorage.setItem('r-shell-connections', JSON.stringify([rdpConnection]));
+    lifecycle.activeConnections = [
+      { tabId: 'rdp-1', connectionId: 'rdp-1', order: 0, tabType: 'desktop', protocol: 'RDP' },
+    ];
+
+    render(<App />);
+
+    await vi.waitFor(
+      () => {
+        expect(
+          lifecycle.invoke.mock.calls.filter(([cmd]) => cmd === 'desktop_connect'),
+        ).toHaveLength(1);
+      },
+      { timeout: 5000, interval: 50 },
+    );
+
+    const [, args] = lifecycle.invoke.mock.calls.find(([cmd]) => cmd === 'desktop_connect')!;
+    // The Rust command is desktop_connect(connection_id, request): the id
+    // must arrive as the top-level camelCase arg, and `request` must not
+    // smuggle a connection_id field the struct does not have.
+    expect(args).toEqual(
+      expect.objectContaining({ connectionId: 'rdp-1' }),
+    );
+    const request = (args as { request: Record<string, unknown> }).request;
+    expect(request.connection_id).toBeUndefined();
+    expect(request).toEqual(
+      expect.objectContaining({ host: '192.168.64.2', protocol: 'rdp', port: 3389 }),
+    );
+  });
 });
