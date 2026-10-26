@@ -28,7 +28,10 @@ pub struct FtpConfig {
     pub anonymous: bool,
 }
 
-fn default_ftps_verify_cert() -> bool {
+/// The single source for the "verify FTPS certificate" default: both the
+/// deserializer here and the `FtpConnectRequest` in commands.rs fall back to
+/// it, so the two defaults can never drift.
+pub(crate) fn default_ftps_verify_cert() -> bool {
     true
 }
 
@@ -112,8 +115,11 @@ impl FtpClient {
             //
             // Certificates are verified by default. The opt-out exists only
             // for self-signed deployments and is explicit per connection.
+            // Hostname verification is native-tls's default; spelling it out
+            // keeps the intent true if the connector is ever rebuilt.
             let tls_connector = async_native_tls::TlsConnector::new()
-                .danger_accept_invalid_certs(accepts_invalid_certs(config.ftps_verify_cert));
+                .danger_accept_invalid_certs(accepts_invalid_certs(config.ftps_verify_cert))
+                .danger_accept_invalid_hostnames(false);
             let secure_stream = ftp_stream
                 .into_secure(
                     suppaftp::tokio::AsyncNativeTlsConnector::from(tls_connector),

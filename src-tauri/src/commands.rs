@@ -5,10 +5,13 @@ use crate::os_keypath::resolve_private_key_path;
 use crate::proxy::{ProxyConfig, ProxyType};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
 use crate::sftp_transfer;
-use crate::ssh::{AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig};
+use crate::ssh::{
+    AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig,
+    DEFAULT_COMMAND_TIMEOUT_SECS,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_fs::FsExt;
 use tauri_plugin_updater::UpdaterExt;
@@ -737,6 +740,24 @@ fn shell_escape_single_quoted(path: &str) -> String {
     path.replace('\'', "'\\''")
 }
 
+/// Deadline for user-initiated reads that legitimately take minutes: a grep
+/// over a large log tree, a `du` across log sources, opening a big text file
+/// in the editor. Monitoring polls keep the shorter default via
+/// `SshClient::execute_command`.
+const LONG_COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Deadline for streaming `file_size` bytes through the base64 preview:
+/// floored at the default command timeout, then budgeted at 256 KB/s (2 Mbps)
+/// with a 1.5× margin. A 20 MB image (~27 MB of base64) gets 159 s (integer
+/// division of the 160 s budget) instead of dying at the 60 s default the
+/// review flagged.
+fn base64_transfer_deadline(file_size: u64) -> Duration {
+    const MIN_BYTES_PER_SEC: u64 = 256 * 1024;
+    let payload = file_size.saturating_mul(4) / 3; // base64 expands by 4/3
+    let secs = payload.saturating_mul(3) / (MIN_BYTES_PER_SEC * 2);
+    Duration::from_secs(secs.max(DEFAULT_COMMAND_TIMEOUT_SECS))
+}
+
 /// Validate the arguments of `kill_process` before they reach the shell.
 /// Only a numeric pid and a small whitelist of signals are accepted; both
 /// values are interpolated into `kill -SIG PID` and were previously passed
@@ -868,7 +889,12 @@ pub async fn read_file_content(
     let client = connection.read().await;
     let command = format!("cat '{}'", shell_escape_single_quoted(&path));
 
-    match client.execute_command(&command).await {
+    // The editor opens arbitrary text files; a large one streams for a while
+    // and must not die at the 60 s monitoring deadline.
+    match client
+        .execute_command_with_timeout(&command, LONG_COMMAND_TIMEOUT)
+        .await
+    {
         Ok(output) => Ok(output),
         Err(e) => Err(e.to_string()),
     }
@@ -926,7 +952,7 @@ pub async fn read_remote_file_base64(
         shell_escape_single_quoted(&path)
     );
     let b64_data = client
-        .execute_command(&b64_cmd)
+        .execute_command_with_timeout(&b64_cmd, base64_transfer_deadline(file_size))
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1225,7 +1251,10 @@ pub async fn discover_log_sources(
         "\\) -readable 2>/dev/null | head -80"
     );
 
-    if let Ok(output) = client.execute_command(file_cmd).await {
+    if let Ok(output) = client
+        .execute_command_with_timeout(file_cmd, LONG_COMMAND_TIMEOUT)
+        .await
+    {
         for line in output.lines() {
             let path = line.trim().to_string();
             if path.is_empty() {
@@ -1367,7 +1396,10 @@ pub async fn read_log(
         ),
     };
 
-    match client.execute_command(&cmd).await {
+    match client
+        .execute_command_with_timeout(&cmd, LONG_COMMAND_TIMEOUT)
+        .await
+    {
         Ok(output) => Ok(CommandResponse {
             success: true,
             output: Some(output),
@@ -1421,7 +1453,12 @@ pub async fn search_log(
         ),
     };
 
-    match client.execute_command(&cmd).await {
+    // A grep over a multi-GB log legitimately runs past the 60 s monitoring
+    // deadline — this is the path the review flagged as a regression.
+    match client
+        .execute_command_with_timeout(&cmd, LONG_COMMAND_TIMEOUT)
+        .await
+    {
         Ok(output) => Ok(CommandResponse {
             success: true,
             output: Some(output),
@@ -1841,8 +1878,12 @@ pub async fn ssh_tab_complete(
         } else {
             escaped_word.clone()
         };
+        // grep -F: the word is a fixed-string prefix, not a regex — `[`, `*`,
+        // `\` or `^` in the typed word would otherwise break the fallback or
+        // over-match. The client-side starts_with filter narrows to a prefix
+        // anyway, so a fixed match is exactly the intent.
         format!(
-            "compgen -f '{}' 2>/dev/null || ls -1ap '{}' 2>/dev/null | grep '^{}' || echo",
+            "compgen -f '{}' 2>/dev/null || ls -1ap '{}' 2>/dev/null | grep -F -- '{}' || echo",
             escaped_word, escaped_prefix, escaped_word
         )
     };
@@ -2535,14 +2576,11 @@ pub struct FtpConnectRequest {
     pub password: Option<String>,
     pub ftps_enabled: bool,
     /// Verify the FTPS certificate; defaults to `true` for older clients
-    /// that predate the explicit opt-out.
-    #[serde(default = "default_ftps_verify_cert")]
+    /// that predate the explicit opt-out. The default lives in
+    /// `ftp_client` so the two deserializers can never drift.
+    #[serde(default = "crate::ftp_client::default_ftps_verify_cert")]
     pub ftps_verify_cert: bool,
     pub anonymous: bool,
-}
-
-fn default_ftps_verify_cert() -> bool {
-    true
 }
 
 #[tauri::command]
@@ -5057,6 +5095,41 @@ mod tunnel_config_tests {
         req.tunnel_password = Some("jumppass".to_string());
         let tunnel = build_tunnel(&req).unwrap().unwrap();
         assert_eq!(tunnel.port, 22);
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::{base64_transfer_deadline, LONG_COMMAND_TIMEOUT};
+    use crate::ssh::DEFAULT_COMMAND_TIMEOUT_SECS;
+    use std::time::Duration;
+
+    #[test]
+    fn base64_deadline_scales_with_the_transfer_size() {
+        // Tiny/no-size files stay at the default.
+        assert_eq!(
+            base64_transfer_deadline(0),
+            Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS)
+        );
+        // 20 MB → ~27 MB of base64 → a 160 s nominal budget at 2 Mbps with a
+        // 1.5× margin (integer division lands it at 159, ≈1.5× the ~107 s the
+        // transfer itself needs at that rate).
+        let twenty_mb = 20 * 1024 * 1024;
+        assert_eq!(
+            base64_transfer_deadline(twenty_mb),
+            Duration::from_secs(159)
+        );
+        // Slow enough transfers still clear the preview contract: at 2 Mbps a
+        // 20 MB base64 payload needs ~107 s, the budget must exceed that.
+        assert!(
+            base64_transfer_deadline(twenty_mb).as_secs() > 107,
+            "deadline must cover a 2 Mbps 20 MB transfer"
+        );
+    }
+
+    #[test]
+    fn long_deadline_is_a_minute_scale_budget_for_user_reads() {
+        assert_eq!(LONG_COMMAND_TIMEOUT, Duration::from_secs(300));
     }
 }
 

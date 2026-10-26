@@ -10,6 +10,7 @@ use russh::Channel;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 use tokio::sync::mpsc;
+use crate::ssh::bounded_channel_close;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -744,7 +745,7 @@ pub fn bridge_x11_channel(
         link.cancel();
         // Cleanly half-close the local socket write side.
         let _ = sock_write.shutdown().await;
-        let _ = channel.close().await;
+        bounded_channel_close(&channel).await;
         tracing::info!("[X11] bridge {} exited", channel_id);
     })
 }
