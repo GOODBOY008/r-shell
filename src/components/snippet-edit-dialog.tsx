@@ -102,7 +102,7 @@ export function SnippetEditDialog({ open, onOpenChange, snippet }: SnippetEditDi
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent aria-describedby={undefined} className="inset-0! m-auto! translate-x-0! translate-y-0! h-fit sm:max-w-md">
         <DialogHeader>
           <DialogTitle>
             {snippet ? t('quickCommands.dialog.editTitle') : t('quickCommands.dialog.newTitle')}

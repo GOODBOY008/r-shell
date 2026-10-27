@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="src/assets/r-shell-logo.svg" alt="R-Shell logo" width="128" height="128">
+
 # R-Shell — Lightweight SSH Client for macOS, Windows & Linux
 
 [![GitHub license](https://img.shields.io/github/license/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/blob/main/LICENSE)
@@ -82,6 +84,13 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Session Restore** — Chrome-style lazy restore: reopens your workspace on launch, reconnects the tab you were on, and reconnects the rest as you open them
 - **Quick Connect** — Toolbar dropdown with recent connections
 - **Auto Reconnect** — Exponential backoff reconnection (up to 5 attempts)
+
+### 🖥️ RDP Display
+
+- **Balanced Auto (default)** — Adapts to the window using logical pixels, capped at 1920×1080 while preserving the aspect ratio. Fullscreen uses the same limit and resizing waits for the window transition to settle.
+- **Fixed resolution** — Choose 720p, 1080p, or 1440p for a stable remote desktop. Fit to Window scales the image locally; fullscreen does not change the selected resolution.
+- **Retina (optional)** — Requests physical pixels with matching Windows text scaling (200% on a 2× display). Requires more bandwidth and processing, and depends on server support.
+- **Bounded frame delivery** — Combines dirty rectangles without losing changed pixels and waits for each canvas paint before sending another frame.
 
 ### 💻 Interactive PTY Terminal
 
@@ -186,11 +195,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 
 > Layout shortcuts are registered at the OS level but ignored while terminal input is focused, so terminal-native bindings (e.g. tmux `Ctrl+B`) still reach the shell.
 
-Every shortcut can be remapped in **Settings → Keyboard**:
-
-<div align="center">
-  <img src="screenshots/settings-shortcuts.png" alt="R-Shell settings with the keyboard shortcut editor" width="100%">
-</div>
+Every shortcut can be remapped in **Settings → Keyboard**.
 
 ### 🔧 Additional Features
 

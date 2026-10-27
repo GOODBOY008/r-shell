@@ -1,4 +1,4 @@
-use crate::desktop_protocol::{DesktopConnectRequest, DesktopEvent, DesktopProtocol, SendableHandles};
+use crate::desktop_protocol::{DesktopConnectRequest, DesktopProtocol, SendableHandles};
 use crate::ftp_client::FtpClient;
 use crate::os_detect::OsInfoCache;
 use crate::rdp::RdpClient;
@@ -1011,7 +1011,7 @@ impl ConnectionManager {
     pub async fn start_desktop_stream(
         &self,
         connection_id: &str,
-        event_tx: mpsc::UnboundedSender<DesktopEvent>,
+        event_tx: crate::desktop_frames::DesktopEventSender,
         cancel: CancellationToken,
     ) -> Result<()> {
         let desktop = self.desktop_connections.read().await;

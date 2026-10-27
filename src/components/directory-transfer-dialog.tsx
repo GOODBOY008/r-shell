@@ -23,7 +23,6 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
-import { ScrollArea } from "./ui/scroll-area";
 import { Badge } from "./ui/badge";
 import {
   Upload,
@@ -398,7 +397,7 @@ export function DirectoryTransferDialog({
 
   return (
     <Dialog open={open} onOpenChange={isBusy ? undefined : onOpenChange}>
-      <DialogContent className="inset-0! m-auto! top-0! left-0! translate-x-0! translate-y-0! flex! flex-col! sm:max-w-md! h-fit! max-h-[60vh]! overflow-hidden">
+      <DialogContent aria-describedby={undefined} className="inset-0! m-auto! top-0! left-0! translate-x-0! translate-y-0! flex! flex-col! sm:max-w-md! h-fit! max-h-[calc(100dvh-2rem)]! overflow-y-auto">
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             {direction === "upload" ? (
@@ -413,7 +412,7 @@ export function DirectoryTransferDialog({
         </DialogHeader>
 
         {/* Path info */}
-        <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs shrink-0">
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs shrink-0">
           <span className="text-muted-foreground">{t('directoryTransferDialog.label.source')}</span>
           <span className="font-mono truncate" title={sourcePath}>
             {sourcePath}
@@ -443,7 +442,7 @@ export function DirectoryTransferDialog({
                 ) : (
                   <Download className="h-4 w-4 text-green-500" />
                 )}
-                <span className="text-sm">
+                <span className="min-w-0 break-all text-sm">
                   {progress.currentItem ?? t('directoryTransferDialog.status.preparing')}
                 </span>
               </>
@@ -478,7 +477,7 @@ export function DirectoryTransferDialog({
           {progress.phase === "transferring" && (
             <div className="space-y-1">
               <Progress value={progressPercent} className="h-1.5" />
-              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                 <span>
                   {t('directoryTransferDialog.progress.counts', {
                     files: progress.processedFiles,
@@ -498,19 +497,19 @@ export function DirectoryTransferDialog({
           {/* Summary badges */}
           {isDone && (
             <div className="flex items-center gap-2 flex-wrap">
-              <Badge variant="secondary" className="text-[10px] gap-1 h-5">
+              <Badge variant="secondary" className="text-[11px] gap-1 h-5">
                 {t('directoryTransferDialog.badge.files', { count: progress.processedFiles })}
               </Badge>
-              <Badge variant="secondary" className="text-[10px] gap-1 h-5">
+              <Badge variant="secondary" className="text-[11px] gap-1 h-5">
                 {t('directoryTransferDialog.badge.dirs', { count: progress.processedDirs })}
               </Badge>
-              <Badge variant="secondary" className="text-[10px] gap-1 h-5">
+              <Badge variant="secondary" className="text-[11px] gap-1 h-5">
                 {formatSize(progress.bytesTransferred)}
               </Badge>
               {progress.errors.length > 0 && (
                 <Badge
                   variant="outline"
-                  className="text-[10px] gap-1 h-5 border-destructive text-destructive"
+                  className="text-[11px] gap-1 h-5 border-destructive text-destructive"
                 >
                   {t('directoryTransferDialog.badge.errors', { count: progress.errors.length })}
                 </Badge>
@@ -521,13 +520,13 @@ export function DirectoryTransferDialog({
 
         {/* Error log */}
         {progress.errors.length > 0 && (
-          <ScrollArea className="max-h-24 border border-border rounded text-[10px] font-mono p-2">
+          <div className="max-h-24 overflow-y-auto shrink-0 break-words border border-border rounded text-[11px] font-mono p-2">
             {progress.errors.map((err, i) => (
               <div key={i} className="text-destructive">
                 {err}
               </div>
             ))}
-          </ScrollArea>
+          </div>
         )}
 
         {/* Footer */}

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="r-shell-icon-title r-shell-icon-description">
+  <title id="r-shell-icon-title">R-Shell</title>
+  <desc id="r-shell-icon-description">A prominent white terminal prompt with a small Rust-orange R at the upper-right of a dark tile, framed by jade, teal, and cyan diagonal fields.</desc>
+  <defs>
+    <linearGradient id="rs-icon-cyan" x1="464" y1="48" x2="120" y2="464" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#43C6DE"/>
+      <stop offset="1" stop-color="#217F9E"/>
+    </linearGradient>
+    <linearGradient id="rs-icon-jade" x1="48" y1="48" x2="256" y2="384" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#91D8A0"/>
+      <stop offset="1" stop-color="#22A885"/>
+    </linearGradient>
+    <clipPath id="rs-icon-bounds"><rect x="48" y="48" width="416" height="416" rx="96"/></clipPath>
+  </defs>
+  <g clip-path="url(#rs-icon-bounds)">
+    <rect x="48" y="48" width="416" height="416" fill="url(#rs-icon-cyan)"/>
+    <path d="M48 48H344L128 368H48Z" fill="url(#rs-icon-jade)"/>
+    <path d="M240 464L464 288V464Z" fill="#167967"/>
+  </g>
+  <rect x="96" y="96" width="320" height="320" rx="32" fill="#121820"/>
+  <path d="M128 352V160H208C252 160 280 181 280 218C280 244 268 262 246 272L292 352H236L194 280H176V352ZM176 208V240H208C224 240 232 235 232 224C232 213 224 208 208 208Z" transform="translate(230 48) scale(.5)" fill="#D34516" fill-rule="evenodd"/>
+  <path d="M144 248L208 304L144 360" stroke="#F4F7FA" stroke-width="40" stroke-linejoin="miter"/>
+  <path d="M248 336H376V376H248Z" fill="#F4F7FA"/>
+</svg>

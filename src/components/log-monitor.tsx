@@ -51,7 +51,6 @@ import {
   SelectValue,
 } from "./ui/select";
 import { Toggle } from "./ui/toggle";
-import { Separator } from "./ui/separator";
 import {
   Tooltip,
   TooltipContent,
@@ -124,28 +123,28 @@ const LOG_LEVELS: LogLevel[] = ["error", "warn", "info", "debug", "trace"];
 const LEVEL_COLORS: Record<LogLevel, { bg: string; text: string; badge: string }> = {
   error: {
     bg: "bg-red-500/10",
-    text: "text-red-400",
-    badge: "bg-red-500/20 text-red-400 border-red-500/30",
+    text: "text-destructive",
+    badge: "bg-red-500/20 text-destructive border-red-500/30",
   },
   warn: {
     bg: "bg-yellow-500/10",
-    text: "text-yellow-400",
-    badge: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
+    text: "text-[var(--warning)]",
+    badge: "bg-yellow-500/20 text-[var(--warning)] border-yellow-500/30",
   },
   info: {
-    bg: "bg-blue-500/10",
-    text: "text-blue-400",
-    badge: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+    bg: "",
+    text: "text-primary",
+    badge: "bg-primary/15 text-primary border-primary/30",
   },
   debug: {
-    bg: "bg-gray-500/10",
-    text: "text-gray-400",
-    badge: "bg-gray-500/20 text-gray-400 border-gray-500/30",
+    bg: "",
+    text: "text-muted-foreground",
+    badge: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
   },
   trace: {
-    bg: "bg-purple-500/10",
-    text: "text-purple-400",
-    badge: "bg-purple-500/20 text-purple-400 border-purple-500/30",
+    bg: "",
+    text: "text-[var(--chart-5)]",
+    badge: "bg-purple-500/20 text-[var(--chart-5)] border-purple-500/30",
   },
   unknown: {
     bg: "",
@@ -592,7 +591,18 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
 
   const parsedLines = useMemo(() => parseLogLines(rawLines), [rawLines]);
 
+  const invalidRegex = useMemo(() => {
+    if (!isRegex || !searchTerm) return false;
+    try {
+      new RegExp(searchTerm);
+      return false;
+    } catch {
+      return true;
+    }
+  }, [isRegex, searchTerm]);
+
   const filteredLines = useMemo(() => {
+    if (invalidRegex) return [];
     let lines = parsedLines;
 
     // Filter by level
@@ -618,7 +628,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
     }
 
     return lines;
-  }, [parsedLines, activeFilters, searchTerm, isRegex]);
+  }, [parsedLines, activeFilters, searchTerm, isRegex, invalidRegex]);
 
   // ── Level statistics ──
 
@@ -726,24 +736,25 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
 
       try {
         const re = isRegex
-          ? new RegExp(`(${searchTerm})`, "gi")
-          : new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi");
+          ? new RegExp(searchTerm, "gi")
+          : new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
 
-        const parts = text.split(re);
-        if (parts.length <= 1) return text;
-
-        return parts.map((part, i) =>
-          re.test(part) ? (
-            <mark
-              key={i}
-              className="bg-yellow-400/40 text-yellow-200 rounded-sm px-0.5"
-            >
-              {part}
+        const parts: React.ReactNode[] = [];
+        let cursor = 0;
+        for (const match of text.matchAll(re)) {
+          if (!match[0]) continue;
+          const index = match.index;
+          parts.push(text.slice(cursor, index));
+          parts.push(
+            <mark key={index} className="rounded-sm bg-primary/20 text-inherit underline decoration-primary/60 underline-offset-2">
+              {match[0]}
             </mark>
-          ) : (
-            part
-          )
-        );
+          );
+          cursor = index + match[0].length;
+        }
+        parts.push(text.slice(cursor));
+        return parts;
+
       } catch {
         return text;
       }
@@ -759,7 +770,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
 
   if (!connectionId) {
     return (
-      <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+      <div className="h-full flex items-center justify-center px-6 text-center text-sm text-muted-foreground">
         {t('logMonitor.connectToViewLogs')}
       </div>
     );
@@ -769,11 +780,11 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
 
   return (
     <TooltipProvider delayDuration={300}>
-      <div className="h-full flex flex-col text-foreground">
+      <div className="log-panel h-full min-w-0 flex flex-col text-foreground">
         {/* ── Row 1: Source selector ── */}
-        <div className="flex items-center gap-1 px-2 py-1 border-b border-border bg-muted/30 shrink-0">
+        <div className="flex flex-wrap items-center gap-1 px-3 py-2 border-b border-border bg-sidebar/40 shrink-0">
           <Select value={selectedSourceId} onValueChange={handleSourceChange}>
-            <SelectTrigger className="h-7 text-xs flex-1 min-w-0">
+            <SelectTrigger aria-label={t('logMonitor.selectLogSource')} className="log-source-selector h-8! text-xs min-w-0">
               <SelectValue placeholder={t('logMonitor.selectLogSource')} />
             </SelectTrigger>
             <SelectContent className="max-h-[300px]">
@@ -784,7 +795,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 };
                 return (
                   <SelectGroup key={type}>
-                    <SelectLabel className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                    <SelectLabel className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                       {meta.icon}
                       {meta.label}
                     </SelectLabel>
@@ -797,7 +808,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                         <div className="flex items-center justify-between gap-2 w-full">
                           <span className="truncate">{src.name}</span>
                           {src.size_human && (
-                            <span className="text-[10px] text-muted-foreground shrink-0">
+                            <span className="text-[11px] text-muted-foreground shrink-0">
                               {src.size_human}
                             </span>
                           )}
@@ -811,7 +822,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
               {/* Custom sources */}
               {sources.some((s) => s.category === "custom") && (
                 <SelectGroup>
-                  <SelectLabel className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+                  <SelectLabel className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
                     <FolderOpen className="h-3 w-3 inline mr-1" />
                     {t('logMonitor.customPaths')}
                   </SelectLabel>
@@ -838,6 +849,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 variant="ghost"
                 className="h-7 w-7 shrink-0"
                 onClick={discoverSources}
+                aria-label={t('logMonitor.rediscoverSources')}
                 disabled={isDiscovering}
               >
                 <RefreshCw
@@ -858,6 +870,8 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 variant={showCustomInput ? "secondary" : "ghost"}
                 className="h-7 w-7 shrink-0"
                 onClick={() => setShowCustomInput(!showCustomInput)}
+                aria-label={t('logMonitor.addCustomPath')}
+                aria-expanded={showCustomInput}
               >
                 <Plus className="h-3.5 w-3.5" />
               </Button>
@@ -865,7 +879,6 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
             <TooltipContent side="bottom">{t('logMonitor.addCustomPath')}</TooltipContent>
           </Tooltip>
 
-          <Separator orientation="vertical" className="h-4 mx-0.5" />
 
           {/* Auto-refresh toggle */}
           <Tooltip>
@@ -875,9 +888,11 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 variant={autoRefresh ? "default" : "ghost"}
                 className={cn(
                   "h-7 w-7 shrink-0",
-                  autoRefresh && "bg-green-600 hover:bg-green-700 text-white"
+                  autoRefresh && "bg-primary text-primary-foreground"
                 )}
                 onClick={() => setAutoRefresh(!autoRefresh)}
+                aria-label={autoRefresh ? t('logMonitor.stopLiveTail') : t('logMonitor.startLiveTail')}
+                aria-pressed={autoRefresh}
                 disabled={!selectedSourceId}
               >
                 {autoRefresh ? (
@@ -899,7 +914,8 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 px-1.5 text-[10px] shrink-0 gap-0.5"
+                  className="h-7 px-1.5 text-[11px] shrink-0 gap-0.5"
+                  aria-label={t('logMonitor.refreshInterval')}
                 >
                   {refreshInterval}s
                   <ChevronDown className="h-2.5 w-2.5" />
@@ -932,6 +948,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 variant="ghost"
                 className="h-7 w-7 shrink-0"
                 onClick={handleDownload}
+                aria-label={t('logMonitor.downloadLogs')}
                 disabled={rawLines.length === 0}
               >
                 <Download className="h-3.5 w-3.5" />
@@ -941,12 +958,19 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
           </Tooltip>
         </div>
 
+        {selectedSource && (
+          <div className="truncate border-b border-border px-3 py-1.5 font-mono text-[11px] text-muted-foreground" title={selectedSource.path ?? selectedSource.name}>
+            {selectedSource.path ?? selectedSource.name}
+          </div>
+        )}
+
         {/* ── Optional: Custom path input ── */}
         {showCustomInput && (
           <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border bg-muted/20 shrink-0">
             <Input
               placeholder={t('logMonitor.customPathPlaceholder')}
               value={customPath}
+              aria-label={t('logMonitor.addCustomPath')}
               onChange={(e) => setCustomPath(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleAddCustomPath()}
               className="h-7 text-xs flex-1"
@@ -965,6 +989,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
               variant="ghost"
               className="h-7 w-7"
               onClick={() => setShowCustomInput(false)}
+              aria-label={t('common.cancel')}
             >
               <X className="h-3.5 w-3.5" />
             </Button>
@@ -972,20 +997,25 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
         )}
 
         {/* ── Row 2: Filters ── */}
-        <div className="flex items-center gap-1 px-2 py-1 border-b border-border shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5 px-3 py-2 border-b border-border shrink-0">
           {/* Search input */}
-          <div className="relative flex-1 min-w-0">
+          <div className="log-search relative min-w-0">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground pointer-events-none" />
             <Input
               placeholder={t('logMonitor.searchLogs')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="h-7 text-xs pl-7 pr-7"
+              className="h-8 text-xs pl-7 pr-7"
+              aria-label={t('logMonitor.searchLogs')}
+              aria-invalid={invalidRegex}
+              aria-describedby={invalidRegex ? 'log-regex-error' : undefined}
+              onKeyDown={(event) => { if (event.key === 'Escape') setSearchTerm(''); }}
             />
             {searchTerm && (
               <button
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                 onClick={() => setSearchTerm("")}
+                aria-label={t('logMonitor.clearSearch')}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -999,15 +1029,14 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 size="sm"
                 pressed={isRegex}
                 onPressedChange={setIsRegex}
-                className="h-7 w-7 shrink-0 text-[10px] font-mono data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
+                aria-label={t('logMonitor.toggleRegex')}
+                className="h-7 w-7 shrink-0 text-[11px] font-mono data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
               >
                 .*
               </Toggle>
             </TooltipTrigger>
             <TooltipContent side="bottom">{t('logMonitor.toggleRegex')}</TooltipContent>
           </Tooltip>
-
-          <Separator orientation="vertical" className="h-4 mx-0.5" />
 
           {/* Level filter chips */}
           {LOG_LEVELS.map((level) => {
@@ -1019,10 +1048,12 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 <TooltipTrigger asChild>
                   <button
                     className={cn(
-                      "h-6 min-w-6 px-1.5 rounded text-[10px] font-semibold border border-border transition-all shrink-0",
-                      active ? colors.badge : "border-transparent text-muted-foreground/50 hover:text-muted-foreground"
+                      "h-6 min-w-6 px-1.5 rounded text-[11px] font-semibold border border-border transition-all shrink-0",
+                      active ? colors.badge : "border-border text-muted-foreground hover:bg-muted hover:text-foreground"
                     )}
                     onClick={() => toggleLevel(level)}
+                    aria-pressed={active}
+                    aria-label={t('logMonitor.filterLevel', { level: level.toUpperCase(), count })}
                   >
                     {LEVEL_LABELS[level]}
                     {count > 0 && active && (
@@ -1037,14 +1068,12 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
             );
           })}
 
-          <Separator orientation="vertical" className="h-4 mx-0.5" />
-
           {/* Line count selector */}
           <Select
             value={String(lineCount)}
             onValueChange={(v) => setLineCount(Number(v))}
           >
-            <SelectTrigger className="h-7 w-[70px] text-[10px] shrink-0">
+            <SelectTrigger aria-label={t('logMonitor.lineLimit')} className="h-7! w-[88px] text-[11px] px-2 shrink-0">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1076,10 +1105,16 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
           </Tooltip>
         </div>
 
+        {invalidRegex && (
+          <p id="log-regex-error" role="alert" className="border-b border-border bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            {t('logMonitor.invalidRegex')}
+          </p>
+        )}
+
         {/* ── Log content area ── */}
         <div
           ref={scrollRef}
-          className="flex-1 min-h-0 overflow-auto font-mono text-[11px] leading-[18px]"
+          className="flex-1 min-h-0 overflow-auto bg-card/40 font-mono text-xs leading-5"
           onScroll={handleScroll}
         >
           {!selectedSourceId ? (
@@ -1118,18 +1153,19 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                 <div
                   key={`${line.lineNumber}-${line.raw.substring(0, 20)}`}
                   className={cn(
-                    "flex items-start px-1 py-0 hover:bg-muted/40 transition-colors group",
+                    "flex items-start gap-2 px-2 py-1.5 hover:bg-muted/40 transition-colors group",
                     line.level !== "unknown" && LEVEL_COLORS[line.level].bg
                   )}
                 >
                   {/* Line number */}
-                  <span className="w-9 text-right text-[10px] text-muted-foreground/40 select-none shrink-0 pr-2 pt-px">
+                  <span className="w-6 text-right text-[11px] text-muted-foreground/70 select-none shrink-0 pt-px tabular-nums">
                     {line.lineNumber}
                   </span>
 
+                  <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
                   {/* Timestamp */}
                   {line.timestamp && (
-                    <span className="text-muted-foreground shrink-0 mr-1.5 whitespace-nowrap text-[10px] pt-px">
+                    <span className="text-muted-foreground text-[11px] break-all">
                       {line.timestamp}
                     </span>
                   )}
@@ -1138,7 +1174,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                   {line.level !== "unknown" && (
                     <span
                       className={cn(
-                        "inline-block w-[3ch] text-center text-[10px] font-bold shrink-0 mr-1.5 pt-px",
+                        "inline-block text-center text-[11px] font-semibold shrink-0",
                         LEVEL_COLORS[line.level].text
                       )}
                     >
@@ -1149,12 +1185,13 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
                   {/* Message */}
                   <span
                     className={cn(
-                      "break-all whitespace-pre-wrap min-w-0",
+                      "log-message break-words whitespace-pre-wrap min-w-0 [overflow-wrap:anywhere]",
                       LEVEL_COLORS[line.level].text
                     )}
                   >
                     {highlightSearch(line.message)}
                   </span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1162,7 +1199,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
         </div>
 
         {/* ── Status bar ── */}
-        <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t border-border bg-muted/30 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-3 py-1.5 text-[11px] text-muted-foreground border-t border-border bg-muted/30 shrink-0">
           {/* Line counts */}
           <span>
             {filteredLines.length === parsedLines.length
@@ -1191,17 +1228,19 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
             {autoRefresh && (
               <span className="flex items-center gap-1">
                 <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[var(--success)] opacity-75" />
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-[var(--success)]" />
                 </span>
-                <span className="text-green-400">{t('logMonitor.live')}</span>
+                <span className="text-[var(--success)]">{t('logMonitor.live')}</span>
               </span>
             )}
 
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  className="hover:text-foreground transition-colors"
+                  className="flex h-7 w-7 items-center justify-center rounded hover:bg-muted hover:text-foreground transition-colors"
+                  aria-label={scrollLocked ? t('logMonitor.scrollLocked') : t('logMonitor.scrollUnlocked')}
+                  aria-pressed={scrollLocked}
                   onClick={() => setScrollLocked(!scrollLocked)}
                 >
                   {scrollLocked ? (

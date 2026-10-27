@@ -1,5 +1,6 @@
 import i18n from '@/lib/i18n';
 import type { ThemeMode } from '@/lib/utils';
+import { DEFAULT_CONNECTION_LIST_APPEARANCE, type ConnectionListAppearance } from '@/lib/connection-list-appearance';
 
 /**
  * Shared shape of the Settings modal's persisted app-settings state
@@ -7,7 +8,7 @@ import type { ThemeMode } from '@/lib/utils';
  * live in their own stores; keyboard bindings live in the sparse
  * `shortcutBindings` map — none of them are part of this object.
  */
-export interface SettingsState {
+export interface SettingsState extends ConnectionListAppearance {
   // Connection settings
   defaultProtocol: string;
   connectionTimeout: number;
@@ -36,6 +37,7 @@ export interface SettingsState {
 
 /** Single source of the defaults (also what Reset restores). */
 export const DEFAULT_SETTINGS: SettingsState = {
+  ...DEFAULT_CONNECTION_LIST_APPEARANCE,
   defaultProtocol: 'SSH',
   connectionTimeout: 30,
   keepAliveInterval: 60,

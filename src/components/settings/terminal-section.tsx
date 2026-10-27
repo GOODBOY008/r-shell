@@ -116,8 +116,8 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
   };
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 rounded-lg shadow-none">
+      <CardHeader className="px-4 pt-4">
         <CardTitle className="flex items-center gap-2">
           <TerminalIcon className="h-4 w-4" />
           {t('settings.terminal.appearance')}
@@ -126,9 +126,9 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
           {t('settings.terminal.appearanceDesc')}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 last:pb-4">
         {(showFontFamily || showFontSize) && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid settings-fields gap-4">
             {showFontFamily && (
               <div className="space-y-2">
                 <Label>{t('settings.terminal.fontFamily')}</Label>
@@ -136,7 +136,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                   value={appearance.fontFamily}
                   onValueChange={(value) => onChange('fontFamily', value)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t('settings.terminal.fontFamily')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -157,7 +157,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
             {showFontSize && (
               <div className="space-y-2">
                 <Label>{t('settings.terminal.fontSize', { size: appearance.fontSize })}</Label>
-                <Slider
+                <Slider aria-label={t('settings.terminal.fontSize', { size: appearance.fontSize })}
                   value={[appearance.fontSize]}
                   onValueChange={([value]) => onChange('fontSize', value)}
                   min={8}
@@ -170,11 +170,11 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         )}
 
         {(showLineHeight || showLetterSpacing) && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid settings-fields gap-4">
             {showLineHeight && (
               <div className="space-y-2">
                 <Label>{t('settings.terminal.lineHeight', { height: appearance.lineHeight })}</Label>
-                <Slider
+                <Slider aria-label={t('settings.terminal.lineHeight', { height: appearance.lineHeight })}
                   value={[appearance.lineHeight]}
                   onValueChange={([value]) => onChange('lineHeight', value)}
                   min={1.0}
@@ -186,7 +186,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
             {showLetterSpacing && (
               <div className="space-y-2">
                 <Label>{t('settings.terminal.letterSpacing', { spacing: appearance.letterSpacing })}</Label>
-                <Slider
+                <Slider aria-label={t('settings.terminal.letterSpacing', { spacing: appearance.letterSpacing })}
                   value={[appearance.letterSpacing]}
                   onValueChange={([value]) => onChange('letterSpacing', value)}
                   min={-2}
@@ -199,7 +199,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         )}
 
         {(showColorTheme || showCursorStyle) && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid settings-fields gap-4">
             {showColorTheme && (
               <div className="space-y-2">
                 <Label>{t('settings.terminal.colorTheme')}</Label>
@@ -207,7 +207,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                   value={appearance.theme}
                   onValueChange={(value) => onChange('theme', value)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t('settings.terminal.colorTheme')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -232,7 +232,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                   value={appearance.cursorStyle}
                   onValueChange={(value: 'block' | 'underline' | 'bar') => onChange('cursorStyle', value)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t('settings.terminal.cursorStyle')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -249,7 +249,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         {showScrollback && (
           <div className="space-y-2">
             <Label>{t('settings.terminal.scrollbackLines', { count: appearance.scrollback.toLocaleString() })}</Label>
-            <Slider
+            <Slider aria-label={t('settings.terminal.scrollbackLines', { count: appearance.scrollback.toLocaleString() })}
               value={[appearance.scrollback]}
               onValueChange={([value]) => onChange('scrollback', value)}
               min={MIN_TERMINAL_SCROLLBACK}
@@ -262,14 +262,14 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         {(showCursorBlink || showTransparency) && <Separator />}
 
         {showCursorBlink && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label>{t('settings.terminal.cursorBlink')}</Label>
               <p className="text-sm text-muted-foreground">
                 {t('settings.terminal.cursorBlinkDesc')}
               </p>
             </div>
-            <Switch
+            <Switch aria-label={t('settings.terminal.cursorBlink')}
               checked={appearance.cursorBlink}
               onCheckedChange={(checked) => onChange('cursorBlink', checked)}
             />
@@ -277,14 +277,14 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         )}
 
         {showTransparency && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label>{t('settings.terminal.allowTransparency')}</Label>
               <p className="text-sm text-muted-foreground">
                 {t('settings.terminal.allowTransparencyDesc')}
               </p>
             </div>
-            <Switch
+            <Switch aria-label={t('settings.terminal.allowTransparency')}
               checked={appearance.allowTransparency}
               onCheckedChange={(checked) => onChange('allowTransparency', checked)}
             />
@@ -294,7 +294,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         {appearance.allowTransparency && showOpacity && (
           <div className="space-y-2">
             <Label>{t('settings.terminal.opacity', { opacity: appearance.opacity })}</Label>
-            <Slider
+            <Slider aria-label={t('settings.terminal.opacity', { opacity: appearance.opacity })}
               value={[appearance.opacity]}
               onValueChange={([value]) => onChange('opacity', value)}
               min={10}
@@ -376,7 +376,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                 {showImageOpacity && (
                   <div className="space-y-2">
                     <Label>{t('settings.terminal.imageOpacity', { opacity: appearance.backgroundImageOpacity })}</Label>
-                    <Slider
+                    <Slider aria-label={t('settings.terminal.imageOpacity', { opacity: appearance.backgroundImageOpacity })}
                       value={[appearance.backgroundImageOpacity]}
                       onValueChange={([value]) => onChange('backgroundImageOpacity', value)}
                       min={5}
@@ -389,7 +389,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                 {showImageBlur && (
                   <div className="space-y-2">
                     <Label>{t('settings.terminal.imageBlur', { blur: appearance.backgroundImageBlur })}</Label>
-                    <Slider
+                    <Slider aria-label={t('settings.terminal.imageBlur', { blur: appearance.backgroundImageBlur })}
                       value={[appearance.backgroundImageBlur]}
                       onValueChange={([value]) => onChange('backgroundImageBlur', value)}
                       min={0}
@@ -406,7 +406,7 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                       value={appearance.backgroundImagePosition}
                       onValueChange={(value: 'cover' | 'contain' | 'center' | 'tile') => onChange('backgroundImagePosition', value)}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger aria-label={t('settings.terminal.imagePosition')}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

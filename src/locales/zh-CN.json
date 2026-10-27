@@ -213,10 +213,14 @@
       "keepAliveDesc": "发送保持连接的消息以防止连接超时"
     },
     "rdp": {
-      "fitToWindow": "适应窗口",
+      "fitToWindow": "自动均衡（最高 1080p）",
       "h1024x768": "1024×768",
       "h1280x720": "1280×720（高清）",
-      "h1920x1080": "1920×1080（全高清）"
+      "h1920x1080": "1920×1080（全高清）",
+      "h2560x1440": "2560×1440（2K）",
+      "retina": "Retina（高精细度）",
+      "balancedHint": "自动均衡模式保持文字易读，分辨率最高为 1080p。固定分辨率在全屏时保持不变。",
+      "retinaHint": "使用显示器的像素密度，并请求匹配的 Windows 文字缩放。需要更多带宽和处理资源，效果取决于服务器支持。"
     },
     "vnc": {
       "trueColor": "真彩色（24 位）",
@@ -364,7 +368,12 @@
       "appTheme": "应用主题",
       "autostart": "登录时自动启动",
       "autostartDesc": "登录系统时自动启动 r-shell",
-      "autostartFailed": "无法更新自动启动设置"
+      "autostartFailed": "无法更新自动启动设置",
+      "connectionListFontSize": "连接列表字号",
+      "connectionListFontSizeDesc": "调整侧边栏中连接和文件夹名称的字号。保存后生效。",
+      "showConnectionHost": "显示主机地址",
+      "showConnectionHostDesc": "在连接名称下方显示 IP 地址或主机名。关闭后列表更紧凑。",
+      "fontSizeValue": "{{size}} px"
     },
     "keyboard": {
       "title": "键盘快捷键",
@@ -542,7 +551,20 @@
       "hours_other": "{{count}} 小时前",
       "days_one": "{{count}} 天前",
       "days_other": "{{count}} 天前"
-    }
+    },
+    "workspace": "工作区",
+    "workspaceEyebrow": "随时开始",
+    "headline": "连接每一台服务器。",
+    "headlineAccent": "尽在一个工作区。",
+    "workspaceDescription": "连接远程主机、管理文件、掌握系统状态。从上次停下的地方继续。",
+    "browseConnections": "浏览连接",
+    "noRecentTitle": "从这里开启新的会话",
+    "noRecentDescription": "连接服务器后，它会显示在这里，方便下次快速访问。",
+    "resumeHint": "选择最近的连接以打开新会话。",
+    "quickAccess": "快速访问",
+    "workflowTitle": "少些切换，多些专注。",
+    "workflowDescription": "在同一工作区使用终端、管理远程文件、访问 RDP 和 VNC 桌面并监控系统。",
+    "makeItYours": "自定义工作区"
   },
   "menuBar": {
     "file": "文件",
@@ -720,6 +742,7 @@
       "downloadedFilesSkippedFolders": "已下载 {{count}} 个文件，跳过 {{folders}} 个文件夹"
     },
     "toolbar": {
+      "editPath": "编辑路径",
       "back": "后退",
       "forward": "前进",
       "parentDir": "上级目录",
@@ -1000,7 +1023,12 @@
     "failedToReorder": "重新排序失败",
     "detachedSessions": "分离的会话",
     "reattachSession": "重新挂载会话",
-    "closeDetachedSession": "关闭会话"
+    "closeDetachedSession": "关闭会话",
+    "noSearchResults": "没有匹配的连接",
+    "searchHint": "试试其他名称、主机或用户名。",
+    "clearSearch": "清除搜索",
+    "expandFolder": "展开 {{name}}",
+    "collapseFolder": "折叠 {{name}}"
   },
   "filePanel": {
     "selectDirectory": "选择目录以查看其内容",
@@ -1112,7 +1140,9 @@
     "uptime": "运行时间：{{time}}",
     "cpu": "CPU：{{percent}}%",
     "memory": "内存：{{used}}/{{total}}",
-    "ready": "就绪"
+    "ready": "就绪",
+    "pending": "等待连接",
+    "workspace": "工作区"
   },
   "notifications": {
     "center": "通知中心",
@@ -1177,6 +1207,8 @@
     "lastConnected": "上次连接时间"
   },
   "desktopToolbar": {
+    "controls": "远程桌面控制栏",
+    "showControls": "显示远程桌面控制栏",
     "switchTo11": "切换为 1:1",
     "switchToFit": "切换为适应窗口",
     "fit": "适应",
@@ -1299,6 +1331,10 @@
     "gpuIndex": "GPU {{index}}"
   },
   "logMonitor": {
+    "clearSearch": "清除搜索",
+    "lineLimit": "日志行数",
+    "refreshInterval": "刷新间隔",
+    "invalidRegex": "正则表达式无效。请检查表达式或关闭正则搜索。",
     "noSourcesDiscovered": "未发现日志源",
     "failedToDiscoverSources": "发现日志源失败",
     "failedToLoadLog": "加载日志失败",

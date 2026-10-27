@@ -1,7 +1,6 @@
-use crate::desktop_protocol::{DesktopEvent, DesktopProtocol, VncConfig};
+use crate::desktop_protocol::{DesktopProtocol, VncConfig};
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// VNC (RFB protocol) remote desktop client.
@@ -65,7 +64,7 @@ impl VncClient {
 impl DesktopProtocol for VncClient {
     async fn start_frame_loop(
         &self,
-        _event_tx: mpsc::UnboundedSender<DesktopEvent>,
+        _event_tx: crate::desktop_frames::DesktopEventSender,
         _cancel: CancellationToken,
     ) -> Result<()> {
         if !self.connected {

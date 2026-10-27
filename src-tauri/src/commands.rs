@@ -4013,6 +4013,7 @@ pub async fn desktop_resize(
     connection_id: String,
     width: u16,
     height: u16,
+    scale_factor: Option<u32>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<(), String> {
     let client = state
@@ -4020,7 +4021,7 @@ pub async fn desktop_resize(
         .await
         .ok_or_else(|| format!("Desktop connection not found: {}", connection_id))?;
     let mut c = client.write().await;
-    c.resize(width, height).await.map_err(|e| e.to_string())
+    c.resize_with_scale(width, height, scale_factor).await.map_err(|e| e.to_string())
 }
 
 // ========== SOCKS Proxy Commands ==========

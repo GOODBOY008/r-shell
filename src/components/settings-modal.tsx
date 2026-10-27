@@ -42,6 +42,7 @@ import {
   type EditorConfig,
 } from '@/lib/editor-config';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
+import { loadConnectionListAppearance, normalizeConnectionListAppearance } from '@/lib/connection-list-appearance';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -145,10 +146,12 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
           // Drop fields whose controls no longer exist so saving this session
           // writes a clean blob instead of resurrecting the removed keys.
           stripRemovedSettingsKeys(parsed);
-          setSettings(prev => ({ ...prev, ...parsed }));
+          setSettings(prev => ({ ...prev, ...parsed, ...normalizeConnectionListAppearance(parsed) }));
+        } else {
+          setSettings(prev => ({ ...prev, ...loadConnectionListAppearance() }));
         }
       } catch {
-        // Ignore parsing errors
+        setSettings(prev => ({ ...prev, ...loadConnectionListAppearance() }));
       }
 
       // Load the real autostart state from the OS so the toggle reflects
@@ -207,6 +210,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     setTerminalAppearance(loadAppearanceSettings());
     setEditorConfig(loadEditorConfig());
     setShortcutOverrides(loadShortcutOverrides());
+    setSettings(prev => ({ ...prev, ...loadConnectionListAppearance() }));
   };
 
   const handleSave = (): boolean => {
@@ -284,6 +288,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     // sparse overrides map — commands at their default are absent.
     localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({
       ...settings,
+      ...normalizeConnectionListAppearance(settings),
       updateProxy: updateProxy ?? '',
       // A stored `current` preference that no longer qualifies (e.g. the app
       // moved to a Homebrew install or an older macOS) falls back to stable.
@@ -358,6 +363,10 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
             theme={settings.theme}
             languagePref={languagePref}
             autostart={settings.autostart}
+            connectionListFontSize={settings.connectionListFontSize}
+            showConnectionHost={settings.showConnectionHost}
+            onConnectionListFontSizeChange={(value) => updateSetting('connectionListFontSize', value)}
+            onShowConnectionHostChange={(checked) => updateSetting('showConnectionHost', checked)}
             onThemeChange={(value) => {
               updateSetting('theme', value as ThemeMode);
               // Apply theme immediately for instant preview
@@ -405,29 +414,23 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* sm:max-w-[min(900px,90vw)]! beats the DialogContent base's
-          sm:max-w-lg (512px): within Tailwind's utilities layer the sm:
-          variant group sorts after unvarianted max-w-*, so w-[900px] +
-          max-w-[90vw] alone lose and the dialog renders 512px wide,
-          squeezing the navigation layout (same class of problem as
-          AGENTS.md pitfall #9 — override the base deliberately). */}
-      <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] sm:max-w-[min(900px,90vw)]! max-h-[90vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
-          <div className="flex items-center justify-between gap-4">
-            <DialogTitle className="flex items-center gap-2">
+      <DialogContent className="inset-0! m-auto! translate-x-0! translate-y-0! w-[min(960px,calc(100vw-2rem))] max-w-none h-[min(760px,calc(100dvh-2rem))] flex flex-col overflow-hidden p-0 gap-0">
+        <DialogHeader className="px-5 py-5 pr-14 border-b border-border bg-sidebar/50">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
               <div className="p-2 bg-primary/10 rounded-lg">
                 <Settings className="h-5 w-5 text-primary" />
               </div>
               <div>
-                <div>{t('settings.title')}</div>
+                <DialogTitle>{t('settings.title')}</DialogTitle>
                 <DialogDescription className="mt-1">
                   {t('settings.description')}
                 </DialogDescription>
               </div>
-            </DialogTitle>
+            </div>
             {/* Global search: filters rows across every section; a non-empty
                 query stacks all sections and hides the navigation rail. */}
-            <div className="relative w-72 shrink-0 self-center">
+            <div className="relative w-full sm:w-60 shrink-0 self-center">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
               <Input
                 type="search"
@@ -451,11 +454,11 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
           </div>
         </DialogHeader>
 
-        <div className="flex-1 flex overflow-hidden">
+        <div className="min-h-0 flex-1 flex flex-col sm:flex-row overflow-hidden">
           {!searching && (
             <nav
               aria-label={t('settings.title')}
-              className="w-52 shrink-0 border-r border-border overflow-y-auto py-3 px-2 space-y-1"
+              className="flex sm:block sm:w-44 shrink-0 border-b sm:border-b-0 sm:border-r border-border overflow-auto p-2 gap-1 sm:space-y-1 bg-sidebar/30"
             >
               {SETTINGS_SECTION_IDS.map(section => {
                 const Icon = SECTION_ICONS[section];
@@ -467,7 +470,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
                     onClick={() => setActiveSection(section)}
                     aria-current={isActive ? 'true' : undefined}
                     className={
-                      'w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-left transition-colors ' +
+                      'sm:w-full shrink-0 flex items-center gap-2 rounded-md px-3 py-2.5 text-sm text-left transition-colors ' +
                       (isActive
                         ? 'bg-primary/15 text-primary font-medium'
                         : 'text-muted-foreground hover:text-foreground hover:bg-muted/60')
@@ -481,7 +484,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
             </nav>
           )}
 
-          <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          <div className="settings-content min-w-0 min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-5 bg-background/50">
             {searching
               ? SETTINGS_SECTION_IDS.map(section => (
                   <div key={section}>{renderSection(section)}</div>
@@ -495,7 +498,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
           </div>
         </div>
 
-        <div className="flex justify-between px-6 py-4 border-t border-border bg-muted/30">
+        <div className="flex shrink-0 flex-wrap justify-between gap-2 px-5 py-4 border-t border-border bg-sidebar/50">
           <Button variant="ghost" onClick={handleReset}>
             {t('settings.button.resetToDefaults')}
           </Button>

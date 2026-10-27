@@ -14,6 +14,7 @@ const lifecycle = vi.hoisted(() => ({
   dispatch: vi.fn(),
   reconnect: vi.fn(),
   ptyProps: vi.fn(),
+  desktopProps: vi.fn(),
 }));
 
 let mockState: TerminalGroupState;
@@ -50,7 +51,7 @@ vi.mock('../components/file-browser-view', () => ({
 }));
 
 vi.mock('../components/desktop-viewer', () => ({
-  DesktopViewer: () => <div />,
+  DesktopViewer: (props: unknown) => { lifecycle.desktopProps(props); return <div />; },
 }));
 
 vi.mock('../components/file-editor-view', () => ({
@@ -135,10 +136,23 @@ describe('TerminalTabPortalProvider', () => {
     lifecycle.dispatch.mockClear();
     lifecycle.reconnect.mockClear();
     lifecycle.ptyProps.mockClear();
+    lifecycle.desktopProps.mockClear();
+    localStorage.clear();
     mockState = singleGroupState();
   });
 
-  afterEach(() => cleanup());
+  afterEach(() => { cleanup(); localStorage.clear(); });
+
+  it.each([undefined, 'saved-rdp'])('passes the saved RDP resolution using the original connection id: %s', (originalConnectionId) => {
+    localStorage.setItem('r-shell-connections', JSON.stringify([
+      { id: originalConnectionId || tabA.id, rdpResolution: '1920x1080' },
+    ]));
+    mockState.groups['1'].tabs[0] = { ...tabA, tabType: 'desktop', protocol: 'RDP', originalConnectionId };
+    render(<PortalHosts split={false} />);
+    expect(lifecycle.desktopProps).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: tabA.id, rdpResolution: '1920x1080',
+    }));
+  });
 
   it('keeps live terminal components mounted when a tab moves to a new group', () => {
     const view = render(<PortalHosts split={false} />);

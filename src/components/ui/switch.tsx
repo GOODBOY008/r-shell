@@ -14,14 +14,11 @@ function Switch({
       data-slot="switch"
       className={cn(
         "peer inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent transition-colors outline-hidden",
-        // Unchecked track: themed via --switch-background (slate-300 light / slate-600 dark)
+        // Both states and the focus ring follow the application palette.
         "data-[state=unchecked]:bg-switch-background",
-        "data-[state=unchecked]:hover:bg-slate-400 dark:data-[state=unchecked]:hover:bg-slate-500",
-        // Checked track
-        "data-[state=checked]:bg-emerald-500",
-        "data-[state=checked]:hover:bg-emerald-600 dark:data-[state=checked]:hover:bg-emerald-500",
-        // Brand-blue focus ring (default-palette color so the /alpha modifier works)
-        "focus-visible:border-blue-500 focus-visible:ring-[3px] focus-visible:ring-blue-500/40",
+        "data-[state=unchecked]:hover:bg-muted-foreground/50",
+        "data-[state=checked]:bg-primary data-[state=checked]:hover:bg-[var(--primary-hover)]",
+        "focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40",
         "disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
@@ -30,7 +27,7 @@ function Switch({
       <SwitchPrimitive.Thumb
         data-slot="switch-thumb"
         className={cn(
-          "bg-white pointer-events-none block size-4 rounded-full shadow-sm ring-0 transition-transform",
+          "bg-white data-[state=checked]:bg-primary-foreground pointer-events-none block size-4 rounded-full shadow-sm ring-0 transition-transform",
           "data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0",
         )}
       />

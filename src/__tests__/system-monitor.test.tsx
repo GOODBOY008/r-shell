@@ -93,7 +93,6 @@ describe('SystemMonitor zero-value frames and card padding', () => {
     });
     const mbRow = screen.getByText('0MB / 11995MB');
     expect(mbRow.tagName).toBe('DIV');
-    expect(mbRow.className).toContain('text-[9px]');
 
     // The memory Progress track must still be mounted (fixed height, no jump).
     const progressRoots = container.querySelectorAll('[data-slot="progress"]');

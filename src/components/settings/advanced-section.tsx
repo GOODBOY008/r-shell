@@ -112,8 +112,8 @@ export function AdvancedSection({
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 rounded-lg shadow-none">
+      <CardHeader className="px-4 pt-4">
         <CardTitle className="flex items-center gap-2">
           <Monitor className="h-4 w-4" />
           {t('settings.advanced.title')}
@@ -122,13 +122,13 @@ export function AdvancedSection({
           {t('settings.advanced.desc')}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 last:pb-4">
         {showUpdates && (
           <>
             <Separator />
 
             {/* Current app version — visible on every platform (issue #166) */}
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
               <div className="space-y-0.5">
                 <Label>{t('settings.advanced.version')}</Label>
                 <p className="text-sm text-muted-foreground font-mono">{appVersion ?? '—'}</p>
@@ -172,7 +172,7 @@ export function AdvancedSection({
                     value={channelValue}
                     onValueChange={(value) => onChange('updateChannel', value)}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger aria-label={t('settings.updates.channel.label')}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -189,7 +189,7 @@ export function AdvancedSection({
                   </p>
                 </div>
 
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-4">
                   <div className="space-y-0.5">
                     <Label>{t('settings.advanced.checkUpdates')}</Label>
                     <p className="text-sm text-muted-foreground">
@@ -206,7 +206,7 @@ export function AdvancedSection({
                       <RefreshCw className="h-3.5 w-3.5" />
                       {t('settings.advanced.checkNow')}
                     </Button>
-                    <Switch
+                    <Switch aria-label={t('settings.advanced.checkUpdates')}
                       checked={checkUpdates}
                       onCheckedChange={(checked) => onChange('checkUpdates', checked)}
                     />
@@ -254,7 +254,7 @@ export function AdvancedSection({
               </div>
 
               <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
+                <div className="flex items-center justify-between gap-4 p-3 rounded-lg border border-border bg-card">
                   <div className="space-y-0.5">
                     <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
                     <p className="text-xs text-muted-foreground">
@@ -273,7 +273,7 @@ export function AdvancedSection({
                   </Button>
                 </div>
 
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-card">
+                <div className="flex items-center justify-between gap-4 p-3 rounded-lg border border-border bg-card">
                   <div className="space-y-0.5">
                     <p className="text-sm font-medium">{t('settings.advanced.importConfig')}</p>
                     <p className="text-xs text-muted-foreground">

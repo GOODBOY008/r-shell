@@ -103,7 +103,7 @@ describe('GroupTabBar custom drag', () => {
     const tabA = getTabEl('a');
     const capture = vi.fn();
     (tabA as HTMLElement & { setPointerCapture: (id: number) => void }).setPointerCapture = capture;
-    const closeButton = tabA.querySelector('button') as HTMLButtonElement;
+    const closeButton = tabA.querySelector('button[aria-label="Close"]') as HTMLButtonElement;
 
     fireEvent.pointerDown(closeButton, { button: 0, pointerId: 1, clientX: 100, clientY: 10 });
     expect(capture).not.toHaveBeenCalled();

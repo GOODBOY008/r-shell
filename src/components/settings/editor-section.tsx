@@ -44,8 +44,8 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 rounded-lg shadow-none">
+      <CardHeader className="px-4 pt-4">
         <CardTitle className="flex items-center gap-2">
           <Code2 className="h-4 w-4" />
           {t('settings.editor.title')}
@@ -54,9 +54,9 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
           {t('settings.editor.desc')}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 last:pb-4">
         {(show('settings.editor.theme', 'theme') || show('settings.editor.fontFamily', 'font')) && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid settings-fields gap-4">
             {show('settings.editor.theme', 'theme') && (
               <div className="space-y-2">
                 <Label>{t('settings.editor.theme')}</Label>
@@ -64,7 +64,7 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
                   value={config.theme}
                   onValueChange={(value) => onChange(prev => ({ ...prev, theme: value }))}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t('settings.editor.theme')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -82,7 +82,7 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
                   value={config.fontFamily}
                   onValueChange={(value) => onChange(prev => ({ ...prev, fontFamily: value }))}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t('settings.editor.fontFamily')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -101,11 +101,11 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
         )}
 
         {(show('settings.editor.fontSize', 'size') || show('settings.editor.tabSize', 'tab')) && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid settings-fields gap-4">
             {show('settings.editor.fontSize', 'size') && (
               <div className="space-y-2">
                 <Label>{t('settings.editor.fontSize', { size: config.fontSize })}</Label>
-                <Slider
+                <Slider aria-label={t('settings.editor.fontSize', { size: config.fontSize })}
                   value={[config.fontSize]}
                   onValueChange={([value]) => onChange(prev => ({ ...prev, fontSize: value }))}
                   min={10}
@@ -121,7 +121,7 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
                   value={String(config.tabSize)}
                   onValueChange={(value) => onChange(prev => ({ ...prev, tabSize: Number(value) }))}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t('settings.editor.tabSize', { size: config.tabSize })}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -146,12 +146,12 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
         ]
           .filter(row => show(row.labelKey, row.alias))
           .map(row => (
-            <div key={row.key} className="flex items-center justify-between">
+            <div key={row.key} className="flex items-center justify-between gap-4">
               <div className="space-y-0.5">
                 <Label>{tt(row.labelKey)}</Label>
                 <p className="text-sm text-muted-foreground">{tt(row.descKey)}</p>
               </div>
-              <Switch
+              <Switch aria-label={tt(row.labelKey)}
                 checked={config[row.key]}
                 onCheckedChange={(checked) => onChange(prev => ({ ...prev, [row.key]: checked }))}
               />

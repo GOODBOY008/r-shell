@@ -17,6 +17,7 @@ import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import { APP_SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcuts';
 import type { TerminalTab } from '../../lib/terminal-group-types';
 import { isTerminalTabVisible } from '../../lib/terminal-group-reducer';
+import { ConnectionStorageManager } from '../../lib/connection-storage';
 import { PtyTerminal } from '../pty-terminal';
 import { FileBrowserView } from '../file-browser-view';
 import { DesktopViewer } from '../desktop-viewer';
@@ -157,6 +158,7 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
         connectionName={tab.name}
         host={tab.host}
         protocol={tab.protocol}
+        rdpResolution={ConnectionStorageManager.getConnection(tab.originalConnectionId || tab.id)?.rdpResolution}
         isConnected={tab.connectionStatus === 'connected'}
         onReconnect={handleReconnect}
         onDisconnected={() => handleConnectionStatusChange(tab.id, 'disconnected')}

@@ -19,6 +19,18 @@ function makeTab(id: string): TerminalTab {
 }
 
 describe('GroupTabBar context menu', () => {
+  it('exposes focusable tab selectors with a separate close control', () => {
+    const onCloseTab = vi.fn();
+    render(<GroupTabBar groupId="1" tabs={[makeTab('a'), makeTab('b')]} activeTabId="a" onCloseTab={onCloseTab} />);
+    const selector = screen.getByRole('button', { name: 'b' });
+    expect(selector.getAttribute('aria-pressed')).toBe('false');
+    expect(screen.getByRole('button', { name: 'a' }).getAttribute('aria-pressed')).toBe('true');
+    expect(selector.querySelector('button')).toBeNull();
+    fireEvent.click(selector, { detail: 0 });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'ACTIVATE_TAB', groupId: '1', tabId: 'b' });
+    expect(onCloseTab).not.toHaveBeenCalled();
+  });
+
   it('offers Close All Tabs and dispatches CLOSE_ALL_TABS', async () => {
     const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
     render(<GroupTabBar groupId="1" tabs={tabs} activeTabId="a" />);

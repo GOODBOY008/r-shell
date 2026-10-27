@@ -93,8 +93,8 @@ export function KeyboardSection({ overrides, onOverrideChange, query }: Keyboard
   };
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 rounded-lg shadow-none">
+      <CardHeader className="px-4 pt-4">
         <CardTitle className="flex items-center gap-2">
           <Keyboard className="h-4 w-4" />
           {t('settings.keyboard.title')}
@@ -103,7 +103,7 @@ export function KeyboardSection({ overrides, onOverrideChange, query }: Keyboard
           {t('settings.keyboard.desc')}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 last:pb-4">
         <Table>
           <TableHeader>
             <TableRow>
@@ -153,6 +153,7 @@ export function KeyboardSection({ overrides, onOverrideChange, query }: Keyboard
                       </TableCell>
                       <TableCell className="py-2 align-top">
                         <ShortcutRecorderInput
+                          ariaLabel={tt(def.labelKey)}
                           value={overrides[def.id] ?? ''}
                           placeholder={formatKeyboardShortcut(DEFAULT_SHORTCUT_BINDINGS[def.id], isMac)}
                           onValueChange={(value) => onOverrideChange(def.id, value)}

@@ -58,13 +58,13 @@ export function HostKeyChangedDialog() {
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
-            <ShieldAlert className="h-5 w-5 text-destructive" />
+            <ShieldAlert className="h-5 w-5 shrink-0 text-destructive" />
             {t('hostKey.changedTitle')}
           </AlertDialogTitle>
           <AlertDialogDescription asChild>
-            <div className="space-y-3 text-sm">
+            <div className="space-y-3 break-words text-sm">
               <p>{t('hostKey.changedDesc', { host: info.host, port: info.port })}</p>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-xs">
+              <dl className="grid grid-cols-1 sm:grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-xs">
                 <dt className="text-muted-foreground">{t('hostKey.fingerprint')}</dt>
                 <dd className="break-all">{info.fingerprint}</dd>
                 <dt className="text-muted-foreground">{t('hostKey.recordedAt')}</dt>

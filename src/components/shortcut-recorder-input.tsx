@@ -8,6 +8,7 @@ interface ShortcutRecorderInputProps {
   onValueChange: (value: string) => void;
   placeholder?: string;
   id?: string;
+  ariaLabel?: string;
 }
 
 /** Keys that only report modifier state, never a chord's main key. */
@@ -30,7 +31,7 @@ function isPlainKey(event: React.KeyboardEvent<HTMLInputElement>, key: string): 
  * cannot be recorded — the previous binding keeps working until a
  * recordable chord is saved.
  */
-export function ShortcutRecorderInput({ value, onValueChange, placeholder, id }: ShortcutRecorderInputProps) {
+export function ShortcutRecorderInput({ value, onValueChange, placeholder, id, ariaLabel }: ShortcutRecorderInputProps) {
   const { t } = useTranslation();
   const [recording, setRecording] = useState(false);
   const isMac = navigator.platform.toUpperCase().includes('MAC');
@@ -86,6 +87,7 @@ export function ShortcutRecorderInput({ value, onValueChange, placeholder, id }:
   return (
     <Input
       id={id}
+      aria-label={ariaLabel}
       data-shortcut-recorder=""
       className={recording ? 'ring-1 ring-primary' : undefined}
       value={display}
