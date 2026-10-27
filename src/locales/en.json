@@ -40,6 +40,8 @@
   "app": {
     "title": "R-Shell",
     "description": "Modern SSH / SFTP / FTP client built with Tauri",
+    "storageCorrupted": "Connection data could not be read",
+    "storageCorruptedDesc": "The stored data was preserved where possible. Changes will not be saved until it is repaired.",
     "connectionsRestored": "Connections Restored",
     "connectionsRestoredDesc": "{{restoredCount}} connection(s) restored, {{failedCount}} failed",
     "connectionsRestoredAllDesc": "Successfully restored {{restoredCount}} connection(s)",

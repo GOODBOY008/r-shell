@@ -22,7 +22,7 @@ import { WelcomeScreen } from './components/welcome-screen';
 import { UpdateChecker, type UpdateAnnouncement } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
 import { buildFtpConnectRequest } from './lib/ftp-connect-request';
-import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, markSealFailed, clearSealFailed } from './lib/connection-storage';
+import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, getStorageCorruption, markSealFailed, clearSealFailed } from './lib/connection-storage';
 import { beginConnect, endConnect, nextDuplicateId } from './lib/connect-guard';
 import { ConnectionProfileManager } from './lib/connection-profiles';
 import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
@@ -694,6 +694,26 @@ function AppContent() {
   // (#246) — a beat shorter than sonner's 4 s default keeps the corner clear.
   // Errors keep the default: they deserve the reading time.
   const RESTORE_TOAST_DURATION_MS = 3000;
+
+  // Surface a corrupt connection store once on mount. The read below marks the
+  // store read-only, so the user must know their edits will not be saved.
+  const storageCorruptionReportedRef = useRef(false);
+  useEffect(() => {
+    if (storageCorruptionReportedRef.current) return;
+    storageCorruptionReportedRef.current = true;
+
+    ConnectionStorageManager.getConnections();
+    ConnectionStorageManager.getFolders();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) {
+      notify.error(t('app.storageCorrupted'), {
+        description: t('app.storageCorruptedDesc'),
+        // Keep it up long enough to survive the restore-failure toasts that
+        // follow on the same launch.
+        duration: 15000,
+      });
+    }
+  }, [t]);
 
   // Restore connections on mount
   useEffect(() => {

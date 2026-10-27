@@ -40,6 +40,8 @@
   "app": {
     "title": "R-Shell",
     "description": "Nowoczesny klient SSH / SFTP / FTP zbudowany w Tauri",
+    "storageCorrupted": "Nie udało się odczytać danych połączeń",
+    "storageCorruptedDesc": "Zapisane dane udało się zachować w miarę możliwości. Zmiany nie będą zapisywane, dopóki dane nie zostaną naprawione.",
     "connectionsRestored": "Połączenia przywrócone",
     "connectionsRestoredDesc": "Przywrócono połączenia: {{restoredCount}}, nieudane: {{failedCount}}",
     "connectionsRestoredAllDesc": "Pomyślnie przywrócono połączenia: {{restoredCount}}",
