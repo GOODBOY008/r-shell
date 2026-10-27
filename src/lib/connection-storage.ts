@@ -150,12 +150,13 @@ function hasIdenticalBackup(key: string, sanitized: string): boolean {
  * The live value can be a migrated legacy record set that still holds
  * plaintext credentials; the backup must not extend their lifetime.
  */
-function sanitizeForBackup(raw: string): string {
+function sanitizeForBackup(raw: string): string | null {
   try {
     return JSON.stringify(stripSecretsDeep(JSON.parse(raw) as unknown));
   } catch {
-    // Unparsable text has no structure to sanitize; keep it for recovery.
-    return raw;
+    // Malformed JSON may still contain plaintext credentials. Leave the live
+    // value intact for recovery, without creating an unsanitized second copy.
+    return null;
   }
 }
 
@@ -189,6 +190,7 @@ function stripSecretsDeep(value: unknown): unknown {
 
 function backupCorruptValue(key: string, raw: string): void {
   const sanitized = sanitizeForBackup(raw);
+  if (sanitized === null) return;
   // Reloads must not pile up copies (and eat the quota) of the same value. A
   // different corrupt value still gets its own backup.
   if (hasIdenticalBackup(key, sanitized)) return;
@@ -556,6 +558,8 @@ export class ConnectionStorageManager {
   ): boolean {
     const folders = this.getFolders();
     const connections = this.getConnections();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) return false;
 
     // Find the dragged item
     const folderIndex = itemType === 'folder' ? folders.findIndex(f => f.id === itemId) : -1;
@@ -637,6 +641,8 @@ export class ConnectionStorageManager {
 
     const folders = this.getFolders();
     const connections = this.getConnections();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) return false;
 
     const folder = folders.find(f => f.path === folderPath);
     if (!folder) return false;
@@ -717,6 +723,8 @@ export class ConnectionStorageManager {
 
     const folders = this.getFolders();
     const connections = this.getConnections();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) return false;
 
     // Filter out the folder and optionally subfolders
     const filteredFolders = folders.filter(f => {

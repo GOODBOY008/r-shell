@@ -35,15 +35,14 @@ describe('connection storage corruption guard', () => {
     vi.restoreAllMocks();
   });
 
-  it('backs up an unparsable connections value and reports the store as corrupt', () => {
+  it('preserves an unparsable connections value without an unsanitized backup', () => {
     localStorage.setItem(CONNECTIONS_KEY, '{not json');
 
     expect(ConnectionStorageManager.getConnections()).toEqual([]);
     expect(getStorageCorruption().connections).toBe(true);
 
-    const backups = backupKeys(CONNECTIONS_KEY);
-    expect(backups).toHaveLength(1);
-    expect(localStorage.getItem(backups[0])).toBe('{not json');
+    expect(localStorage.getItem(CONNECTIONS_KEY)).toBe('{not json');
+    expect(backupKeys(CONNECTIONS_KEY)).toHaveLength(0);
   });
 
   it('refuses to overwrite a corrupt connections value', () => {
@@ -93,7 +92,7 @@ describe('connection storage corruption guard', () => {
   });
 
   it('backs up a corrupt value only once across repeated reads', () => {
-    localStorage.setItem(CONNECTIONS_KEY, '{not json');
+    localStorage.setItem(CONNECTIONS_KEY, '{"not":"an array"}');
 
     ConnectionStorageManager.getConnections();
     ConnectionStorageManager.getConnections();
@@ -104,8 +103,8 @@ describe('connection storage corruption guard', () => {
 
   it('reuses an identical backup across page reloads', () => {
     // An earlier run already backed up the same content.
-    localStorage.setItem(`${CONNECTIONS_KEY}.corrupt.1000`, '{not json');
-    localStorage.setItem(CONNECTIONS_KEY, '{not json');
+    localStorage.setItem(`${CONNECTIONS_KEY}.corrupt.1000`, '{"not":"an array"}');
+    localStorage.setItem(CONNECTIONS_KEY, '{"not":"an array"}');
 
     ConnectionStorageManager.getConnections();
 
@@ -113,15 +112,15 @@ describe('connection storage corruption guard', () => {
   });
 
   it('keeps a separate backup when the corrupt value differs', () => {
-    localStorage.setItem(`${CONNECTIONS_KEY}.corrupt.1000`, '{older');
-    localStorage.setItem(CONNECTIONS_KEY, '{newer');
+    localStorage.setItem(`${CONNECTIONS_KEY}.corrupt.1000`, '{"value":"older"}');
+    localStorage.setItem(CONNECTIONS_KEY, '{"value":"newer"}');
 
     ConnectionStorageManager.getConnections();
 
     const backups = backupKeys(CONNECTIONS_KEY);
     expect(backups).toHaveLength(2);
     expect(backups.map((key) => localStorage.getItem(key))).toEqual(
-      expect.arrayContaining(['{older', '{newer']),
+      expect.arrayContaining(['{"value":"older"}', '{"value":"newer"}']),
     );
   });
 
@@ -135,7 +134,7 @@ describe('connection storage corruption guard', () => {
   });
 
   it('clearAll removes backups and re-enables writes', () => {
-    localStorage.setItem(CONNECTIONS_KEY, '{not json');
+    localStorage.setItem(CONNECTIONS_KEY, '{"not":"an array"}');
     ConnectionStorageManager.getConnections();
     expect(backupKeys(CONNECTIONS_KEY)).toHaveLength(1);
 
@@ -173,13 +172,13 @@ describe('connection storage corruption guard', () => {
   });
 
   it('backs up a corrupt folders store as well', () => {
-    localStorage.setItem(FOLDERS_KEY, 'oops');
+    localStorage.setItem(FOLDERS_KEY, '{"not":"an array"}');
 
     ConnectionStorageManager.getFolders();
 
     const backups = backupKeys(FOLDERS_KEY);
     expect(backups).toHaveLength(1);
-    expect(localStorage.getItem(backups[0])).toBe('oops');
+    expect(localStorage.getItem(backups[0])).toBe('{"not":"an array"}');
   });
 
   it('clears the folders flag after a successful read', () => {
@@ -217,6 +216,64 @@ describe('connection storage corruption guard', () => {
 
     const [backupKey] = backupKeys(CONNECTIONS_KEY);
     expect(localStorage.getItem(backupKey)).not.toContain('plain-secret');
+  });
+
+  it.each([CONNECTIONS_KEY, FOLDERS_KEY])('does not duplicate secrets in malformed %s', (key) => {
+    const raw = '[{"id":"c1","password":"plain-secret"}';
+    localStorage.setItem(key, raw);
+
+    ConnectionStorageManager.getConnections();
+    ConnectionStorageManager.getFolders();
+    expect(localStorage.getItem(key)).toBe(raw);
+    expect(backupKeys(key)).toHaveLength(0);
+
+    // Repair and remove the live value: no extra plaintext copy may survive.
+    localStorage.setItem(key, '[]');
+    ConnectionStorageManager.getConnections();
+    ConnectionStorageManager.getFolders();
+    expect(getStorageCorruption()).toEqual({ connections: false, folders: false });
+    expect(Object.values(localStorage).join('')).not.toContain('plain-secret');
+  });
+
+  describe.each([CONNECTIONS_KEY, FOLDERS_KEY])('operations with unreadable %s', (key) => {
+    it.each(['move', 'delete', 'reorder folder', 'reorder connection'])(
+      'rejects %s before changing either store and allows it after repair',
+      (operation) => {
+        ConnectionStorageManager.initialize();
+        const work = ConnectionStorageManager.getFolders().find(f => f.name === 'Work')!;
+        const nested = ConnectionStorageManager.createFolder('Production', work.path);
+        const connection = ConnectionStorageManager.saveConnection({
+          name: 'production', host: 'example.com', port: 22, username: 'pi',
+          protocol: 'SSH', folder: nested.path,
+        });
+        const tree = ConnectionStorageManager.buildConnectionTree();
+        const original = localStorage.getItem(key)!;
+        const performOperation = () => {
+          switch (operation) {
+            case 'move':
+              return ConnectionStorageManager.moveFolderRecursive(work.path, 'All Connections/Personal');
+            case 'delete':
+              return ConnectionStorageManager.deleteFolder(work.path, true);
+            case 'reorder folder':
+              return ConnectionStorageManager.reorderItem(work.id, 'folder', 'All Connections', 0);
+            default:
+              return ConnectionStorageManager.reorderItem(connection.id, 'connection', 'All Connections/Personal', 0);
+          }
+        };
+
+        localStorage.setItem(key, '{broken');
+        const connectionsBefore = localStorage.getItem(CONNECTIONS_KEY);
+        const foldersBefore = localStorage.getItem(FOLDERS_KEY);
+
+        expect(performOperation()).toBe(false);
+        expect(localStorage.getItem(CONNECTIONS_KEY)).toBe(connectionsBefore);
+        expect(localStorage.getItem(FOLDERS_KEY)).toBe(foldersBefore);
+
+        localStorage.setItem(key, original);
+        expect(ConnectionStorageManager.buildConnectionTree()).toEqual(tree);
+        expect(performOperation()).toBe(true);
+      },
+    );
   });
 
   it('aborts a replace-import instead of overwriting a corrupt store', () => {
