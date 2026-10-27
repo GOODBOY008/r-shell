@@ -40,6 +40,8 @@
   "app": {
     "title": "R-Shell",
     "description": "基于 Tauri 构建的现代 SSH/SFTP/FTP 客户端",
+    "storageCorrupted": "连接数据读取失败",
+    "storageCorruptedDesc": "原有数据已尽可能保留；修复前新的修改不会被保存。",
     "connectionsRestored": "连接已恢复",
     "connectionsRestoredDesc": "{{restoredCount}} 个连接已恢复，{{failedCount}} 个失败",
     "connectionsRestoredAllDesc": "成功恢复 {{restoredCount}} 个连接",

@@ -33,7 +33,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from './ui/alert-dialog';
-import { ConnectionStorageManager } from '../lib/connection-storage';
+import { ConnectionStorageManager, getStorageCorruption } from '../lib/connection-storage';
 import {
   applyCollapsedState,
   collectCollapsedFolderIds,
@@ -285,6 +285,13 @@ export function ConnectionManager({
 
       // Get all subfolders
       const subfolders = ConnectionStorageManager.getSubfoldersRecursive(oldPath);
+
+      // Renaming updates both stores. Neither may change if either read failed.
+      const corruption = getStorageCorruption();
+      if (corruption.connections || corruption.folders) {
+        notify.error(t('connectionManager.failedToRenameFolder'));
+        return;
+      }
 
       // Create new folder first
       ConnectionStorageManager.createFolder(newName, folderToRename.parentPath);

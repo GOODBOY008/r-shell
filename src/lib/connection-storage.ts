@@ -114,6 +114,174 @@ export function connectionHasCredentials(data: ConnectionData): boolean {
 const CONNECTIONS_STORAGE_KEY = 'r-shell-connections';
 const FOLDERS_STORAGE_KEY = 'r-shell-connection-folders';
 
+/**
+ * Storage keys whose current value could not be parsed. A failed parse makes
+ * the UI see an empty list, so the next write would otherwise replace the
+ * user's data — still often recoverable by hand — with that empty list. Once a
+ * key has been read and found corrupt it is listed here and every write to it
+ * is refused, so the original value survives; a later successful read (after
+ * the value is repaired) clears the flag again.
+ *
+ * The guard is therefore read-triggered: callers that write without reading
+ * first (import, migration) must read the store explicitly before writing.
+ */
+const corruptedKeys = new Set<string>();
+
+/** Whether an identical backup of `sanitized` already exists for `key`. */
+function hasIdenticalBackup(key: string, sanitized: string): boolean {
+  try {
+    for (let i = 0; i < localStorage.length; i += 1) {
+      const candidate = localStorage.key(i);
+      if (
+        candidate?.startsWith(`${key}.corrupt.`) &&
+        localStorage.getItem(candidate) === sanitized
+      ) {
+        return true;
+      }
+    }
+  } catch {
+    // Storage unavailable: let the write report the error.
+  }
+  return false;
+}
+
+/**
+ * Strip unencrypted secrets from a copy before it becomes a long-lived backup.
+ * The live value can be a migrated legacy record set that still holds
+ * plaintext credentials; the backup must not extend their lifetime.
+ */
+function sanitizeForBackup(raw: string): string | null {
+  try {
+    return JSON.stringify(stripSecretsDeep(JSON.parse(raw) as unknown));
+  } catch {
+    // Malformed JSON may still contain plaintext credentials. Leave the live
+    // value intact for recovery, without creating an unsanitized second copy.
+    return null;
+  }
+}
+
+/**
+ * Recursively remove unencrypted secret fields from a parsed value, whatever
+ * its shape (array, single record, or a nested wrapper). Unlike
+ * `stripUnencryptedSecrets` this ignores `sealFailedIds`: a backup is never the
+ * place to keep a plaintext fallback alive.
+ */
+function stripSecretsDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripSecretsDeep);
+  if (value === null || typeof value !== 'object') return value;
+
+  const clone: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+  for (const field of SECRET_FIELDS) {
+    const current = clone[field];
+    // Keep an empty string (a valid "no password" value) and sealed values;
+    // drop anything else, whatever its type — malformed stores may hold
+    // numbers or objects in these fields.
+    const isEmptyOrSealed =
+      typeof current === 'string' && (current.length === 0 || isSealed(current));
+    if (current !== undefined && current !== null && !isEmptyOrSealed) {
+      delete clone[field];
+    }
+  }
+  for (const [nestedKey, nestedValue] of Object.entries(clone)) {
+    clone[nestedKey] = stripSecretsDeep(nestedValue);
+  }
+  return clone;
+}
+
+function backupCorruptValue(key: string, raw: string): void {
+  const sanitized = sanitizeForBackup(raw);
+  if (sanitized === null) return;
+  // Reloads must not pile up copies (and eat the quota) of the same value. A
+  // different corrupt value still gets its own backup.
+  if (hasIdenticalBackup(key, sanitized)) return;
+  try {
+    let backupKey = `${key}.corrupt.${Date.now()}`;
+    // Same-millisecond writes of different values must not overwrite each other.
+    for (let suffix = 1; localStorage.getItem(backupKey) !== null; suffix += 1) {
+      backupKey = `${key}.corrupt.${Date.now()}-${suffix}`;
+    }
+    localStorage.setItem(backupKey, sanitized);
+  } catch (error) {
+    console.error(`[storage] Could not back up corrupt '${key}':`, error);
+  }
+}
+
+function removeCorruptBackups(key: string): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const candidate = localStorage.key(i);
+      if (candidate?.startsWith(`${key}.corrupt.`)) localStorage.removeItem(candidate);
+    }
+  } catch {
+    // Nothing to clean up when storage is unavailable.
+  }
+}
+
+/**
+ * Read and validate a JSON array. A corrupt or non-array value is reported as
+ * empty for rendering, but the key is marked so no write can replace it.
+ */
+function readStoredArray<T>(key: string, label: string): T[] {
+  let stored: string | null;
+  try {
+    stored = localStorage.getItem(key);
+  } catch (error) {
+    // Storage is unavailable (e.g. disabled in the webview). Treat it as
+    // read-only — there is nothing to back up.
+    corruptedKeys.add(key);
+    console.error(`[storage] ${label} is unavailable:`, error);
+    return [];
+  }
+  if (!stored) {
+    corruptedKeys.delete(key);
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(stored);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`expected an array, got ${parsed === null ? 'null' : typeof parsed}`);
+    }
+    corruptedKeys.delete(key);
+    return parsed as T[];
+  } catch (error) {
+    if (!corruptedKeys.has(key)) {
+      corruptedKeys.add(key);
+      backupCorruptValue(key, stored);
+      console.error(
+        `[storage] ${label} could not be parsed; preserving the stored value and refusing writes until it is repaired:`,
+        error,
+      );
+    }
+    return [];
+  }
+}
+
+/** Single guarded write path for the connections and folders arrays. */
+function writeStoredArray<T>(key: string, value: T[]): boolean {
+  if (corruptedKeys.has(key)) {
+    console.error(`[storage] Refusing to overwrite corrupt '${key}'`);
+    return false;
+  }
+  localStorage.setItem(key, JSON.stringify(value));
+  return true;
+}
+
+/**
+ * Stores that the last read found unreadable and that are therefore marked
+ * read-only. A store that has not been read yet reports `false`.
+ */
+export function getStorageCorruption(): { connections: boolean; folders: boolean } {
+  return {
+    connections: corruptedKeys.has(CONNECTIONS_STORAGE_KEY),
+    folders: corruptedKeys.has(FOLDERS_STORAGE_KEY),
+  };
+}
+
+/** Test-only: clear the corruption flags between cases. */
+export function resetStorageCorruptionForTests(): void {
+  corruptedKeys.clear();
+}
+
 // Legacy keys for migration
 const LEGACY_SESSIONS_STORAGE_KEY = 'r-shell-sessions';
 const LEGACY_FOLDERS_STORAGE_KEY = 'r-shell-session-folders';
@@ -160,10 +328,7 @@ function stripUnencryptedSecrets(connection: ConnectionData): ConnectionData {
  * before it can reach localStorage. Sealed (encrypted) values pass through.
  */
 function persistConnections(connections: ConnectionData[]): void {
-  localStorage.setItem(
-    CONNECTIONS_STORAGE_KEY,
-    JSON.stringify(connections.map(stripUnencryptedSecrets)),
-  );
+  writeStoredArray(CONNECTIONS_STORAGE_KEY, connections.map(stripUnencryptedSecrets));
 }
 
 export class ConnectionStorageManager {
@@ -182,9 +347,11 @@ export class ConnectionStorageManager {
         // Migrate sessions to connections
         const legacySessions = localStorage.getItem(LEGACY_SESSIONS_STORAGE_KEY);
         if (legacySessions) {
-          const sessions = JSON.parse(legacySessions);
+          const sessions = JSON.parse(legacySessions) as Array<
+            Record<string, unknown> & { folder?: string }
+          >;
           // Update folder paths from "All Sessions" to "All Connections"
-          const connections = sessions.map((session: any) => ({
+          const connections = sessions.map((session) => ({
             ...session,
             folder: session.folder?.replace(/All Sessions/g, 'All Connections')
           }));
@@ -192,22 +359,26 @@ export class ConnectionStorageManager {
           // `persistConnections` would strip them here, before the startup
           // credential migration (App.tsx) ever sees them, destroying the only
           // copy. The plaintext lands in the seal migration's path instead.
-          localStorage.setItem(CONNECTIONS_STORAGE_KEY, JSON.stringify(connections));
+          writeStoredArray(CONNECTIONS_STORAGE_KEY, connections);
           console.log(`[Migration] Migrated ${connections.length} sessions to connections`);
         }
         
         // Migrate folders
         const legacyFolders = localStorage.getItem(LEGACY_FOLDERS_STORAGE_KEY);
         if (legacyFolders) {
-          const folders = JSON.parse(legacyFolders);
+          // Detect a corrupt folders store before writing over it.
+          this.getFolders();
+          const folders = JSON.parse(legacyFolders) as Array<
+            Record<string, unknown> & { name: string; path: string; parentPath?: string }
+          >;
           // Update folder names and paths
-          const connectionFolders = folders.map((folder: any) => ({
+          const connectionFolders = folders.map((folder) => ({
             ...folder,
             name: folder.name.replace(/All Sessions/g, 'All Connections'),
             path: folder.path.replace(/All Sessions/g, 'All Connections'),
             parentPath: folder.parentPath?.replace(/All Sessions/g, 'All Connections')
           }));
-          localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(connectionFolders));
+          writeStoredArray(FOLDERS_STORAGE_KEY, connectionFolders);
           console.log(`[Migration] Migrated ${connectionFolders.length} session folders to connection folders`);
         }
         
@@ -238,14 +409,7 @@ export class ConnectionStorageManager {
    * Get all saved connections
    */
   static getConnections(): ConnectionData[] {
-    try {
-      const stored = localStorage.getItem(CONNECTIONS_STORAGE_KEY);
-      if (!stored) return [];
-      return JSON.parse(stored) as ConnectionData[];
-    } catch (error) {
-      console.error('Failed to load connections:', error);
-      return [];
-    }
+    return readStoredArray<ConnectionData>(CONNECTIONS_STORAGE_KEY, 'Saved connections');
   }
 
   /**
@@ -394,6 +558,8 @@ export class ConnectionStorageManager {
   ): boolean {
     const folders = this.getFolders();
     const connections = this.getConnections();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) return false;
 
     // Find the dragged item
     const folderIndex = itemType === 'folder' ? folders.findIndex(f => f.id === itemId) : -1;
@@ -455,7 +621,7 @@ export class ConnectionStorageManager {
       reindex(sourceSiblings, itemType);
     }
 
-    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+    writeStoredArray(FOLDERS_STORAGE_KEY, folders);
     persistConnections(connections);
     return true;
   }
@@ -475,6 +641,8 @@ export class ConnectionStorageManager {
 
     const folders = this.getFolders();
     const connections = this.getConnections();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) return false;
 
     const folder = folders.find(f => f.path === folderPath);
     if (!folder) return false;
@@ -508,7 +676,7 @@ export class ConnectionStorageManager {
       }
     }
 
-    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+    writeStoredArray(FOLDERS_STORAGE_KEY, folders);
     persistConnections(connections);
     return true;
   }
@@ -517,14 +685,7 @@ export class ConnectionStorageManager {
    * Get all folders
    */
   static getFolders(): ConnectionFolder[] {
-    try {
-      const stored = localStorage.getItem(FOLDERS_STORAGE_KEY);
-      if (!stored) return [];
-      return JSON.parse(stored) as ConnectionFolder[];
-    } catch (error) {
-      console.error('Failed to load folders:', error);
-      return [];
-    }
+    return readStoredArray<ConnectionFolder>(FOLDERS_STORAGE_KEY, 'Connection folders');
   }
 
   /**
@@ -548,7 +709,7 @@ export class ConnectionStorageManager {
     };
 
     folders.push(newFolder);
-    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+    writeStoredArray(FOLDERS_STORAGE_KEY, folders);
 
     return newFolder;
   }
@@ -562,6 +723,8 @@ export class ConnectionStorageManager {
 
     const folders = this.getFolders();
     const connections = this.getConnections();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) return false;
 
     // Filter out the folder and optionally subfolders
     const filteredFolders = folders.filter(f => {
@@ -579,7 +742,7 @@ export class ConnectionStorageManager {
 
     if (filteredFolders.length === folders.length) return false;
 
-    localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(filteredFolders));
+    writeStoredArray(FOLDERS_STORAGE_KEY, filteredFolders);
     persistConnections(filteredConnections);
 
     return true;
@@ -705,6 +868,17 @@ export class ConnectionStorageManager {
    */
   static importConnections(json: string, merge: boolean = false): number {
     try {
+      // Read before writing: this detects a corrupt store and gives merge its
+      // base, so a replace-import cannot overwrite the value the guard keeps.
+      const existingConnections = this.getConnections();
+      const existingFolders = this.getFolders();
+      const corruption = getStorageCorruption();
+      if (corruption.connections || corruption.folders) {
+        throw new Error(
+          'Stored connection data is unreadable; import aborted to avoid overwriting it.',
+        );
+      }
+
       const imported = JSON.parse(json) as {
         connections: ConnectionData[];
         folders?: ConnectionFolder[];
@@ -714,8 +888,8 @@ export class ConnectionStorageManager {
         throw new Error('Invalid JSON format');
       }
 
-      const connections = merge ? this.getConnections() : [];
-      const folders = merge ? this.getFolders() : [];
+      const connections = merge ? [...existingConnections] : [];
+      const folders = merge ? [...existingFolders] : [];
 
       // Import folders with new IDs
       if (imported.folders) {
@@ -740,7 +914,7 @@ export class ConnectionStorageManager {
       });
 
       persistConnections(connections);
-      localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(folders));
+      writeStoredArray(FOLDERS_STORAGE_KEY, folders);
 
       return imported.connections.length;
     } catch (error) {
@@ -755,6 +929,10 @@ export class ConnectionStorageManager {
   static clearAll(): void {
     localStorage.removeItem(CONNECTIONS_STORAGE_KEY);
     localStorage.removeItem(FOLDERS_STORAGE_KEY);
+    removeCorruptBackups(CONNECTIONS_STORAGE_KEY);
+    removeCorruptBackups(FOLDERS_STORAGE_KEY);
+    corruptedKeys.delete(CONNECTIONS_STORAGE_KEY);
+    corruptedKeys.delete(FOLDERS_STORAGE_KEY);
     this.initialize();
   }
 }
