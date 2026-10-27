@@ -1564,6 +1564,99 @@ pub struct ConnectionsResponse {
     pub error: Option<String>,
 }
 
+/// States `netstat` prints in the column between the peer address and the
+/// PID/program.
+///
+/// `has_ss == false` covers two different hosts: Linux without iproute2
+/// (BusyBox netstat) and BSD/macOS. They spell the same states differently,
+/// so both families are listed. On macOS the current command string
+/// (`os_detect.rs`) is itself rejected by netstat, so these BSD entries are
+/// defensive: they keep the parser correct for the output shape rather than
+/// for the host.
+const NETSTAT_STATES: &[&str] = &[
+    // Linux (procps-ng, BusyBox)
+    "ESTABLISHED",
+    "SYN_SENT",
+    "SYN_RECV",
+    "FIN_WAIT1",
+    "FIN_WAIT2",
+    "TIME_WAIT",
+    "CLOSE",
+    "CLOSE_WAIT",
+    "LAST_ACK",
+    "LISTEN",
+    "CLOSING",
+    // BSD / macOS
+    "SYN_RCVD",
+    "FIN_WAIT_1",
+    "FIN_WAIT_2",
+    "CLOSED",
+];
+
+/// Parse the output of `ss -tunp` or `netstat -tunp` into connection rows.
+///
+/// The two tools share neither column order nor column count:
+///
+/// - `ss`:      `Netid State Recv-Q Send-Q Local Peer [Process]`
+/// - `netstat`: `Proto Recv-Q Send-Q Local Foreign [State] [PID/Program]`
+///
+/// An `ss` row is six tokens without the Process column and seven or more
+/// with it (a process name may itself contain spaces). A `netstat` row is
+/// five tokens on BSD UDP (no state, no PID), six on BSD TCP (state, no PID)
+/// and seven or more on Linux (state + PID/program). Rows shorter than the
+/// minimum for their branch are truncated output, not connections: every
+/// access goes through `get()`, so a short row is skipped instead of indexed.
+fn parse_active_connections(output: &str, is_ss: bool) -> Vec<NetworkConnection> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            let proto = *parts.first()?;
+            // The commands strip their headers, but tolerate them anyway in
+            // case a remote shell echoes extra context. `Proto/ID` is macOS.
+            if proto == "Netid" || proto == "Proto" || proto == "Proto/ID" || proto == "Active" {
+                return None;
+            }
+
+            if is_ss {
+                // Local and peer are columns 4 and 5; anything after them is
+                // the Process column.
+                let local = parts.get(4)?;
+                let peer = parts.get(5)?;
+                Some(NetworkConnection {
+                    protocol: proto.to_string(),
+                    local_address: (*local).to_string(),
+                    remote_address: (*peer).to_string(),
+                    state: parts.get(1).copied().unwrap_or("").to_string(),
+                    pid_program: parts.get(6..).map(|p| p.join(" ")).unwrap_or_default(),
+                })
+            } else {
+                let local = parts.get(3)?;
+                let peer = parts.get(4)?;
+                // The token after the peer is the state on TCP rows and, on
+                // rows that print no state (BSD UDP), nothing at all or the
+                // PID/program. Only treat it as a state when it looks like
+                // one.
+                let state = parts
+                    .get(5)
+                    .copied()
+                    .filter(|token| NETSTAT_STATES.contains(token));
+                let pid_start = if state.is_some() { 6 } else { 5 };
+                Some(NetworkConnection {
+                    protocol: proto.to_string(),
+                    local_address: (*local).to_string(),
+                    remote_address: (*peer).to_string(),
+                    state: state.unwrap_or_default().to_string(),
+                    pid_program: parts
+                        .get(pid_start..)
+                        .map(|p| p.join(" "))
+                        .unwrap_or_default(),
+                })
+            }
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn get_active_connections(
     connection_id: String,
@@ -1582,35 +1675,7 @@ pub async fn get_active_connections(
 
     match client.execute_command(command).await {
         Ok(output) => {
-            let mut connections = Vec::new();
-
-            for line in output.lines() {
-                if line.trim().is_empty() {
-                    continue;
-                }
-
-                // Parse ss output format: Proto Recv-Q Send-Q Local-Address:Port Peer-Address:Port Process
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 5 {
-                    let protocol = parts[0].to_string();
-                    let local_address = parts[4].to_string();
-                    let remote_address = parts[5].to_string();
-                    let state = if parts.len() > 1 && parts[1] != "0" {
-                        "ESTAB".to_string()
-                    } else {
-                        parts.get(1).unwrap_or(&"").to_string()
-                    };
-                    let pid_program = parts.get(6).unwrap_or(&"").to_string();
-
-                    connections.push(NetworkConnection {
-                        protocol,
-                        local_address,
-                        remote_address,
-                        state,
-                        pid_program,
-                    });
-                }
-            }
+            let connections = parse_active_connections(&output, os_info.has_ss);
 
             Ok(ConnectionsResponse {
                 success: true,
@@ -5412,5 +5477,133 @@ mod shell_escape_tests {
         assert!(validate_kill_args("42", Some("SIGTERM")).is_err());
         assert!(validate_kill_args("42; rm -rf /", None).is_err());
         assert!(validate_kill_args("42", Some("15; rm -rf /")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod active_connection_parse_tests {
+    use super::parse_active_connections;
+
+    /// A non-root `ss -tunp` row is `Netid State Recv-Q Send-Q Local Peer` —
+    /// six tokens, no Process column (the process column only appears for
+    /// sockets the user owns). Both addresses must land in the right fields.
+    #[test]
+    fn ss_row_without_process_column() {
+        // `ss -tunp` (no -a) lists established sockets only; TIME-WAIT is a
+        // socket without a process, so neither row has a Process column.
+        let output = "\
+udp   ESTAB  0      0      10.0.0.5:51678        10.0.0.9:53
+tcp   ESTAB  0      0      10.0.0.5:22          10.0.0.9:54321
+tcp   TIME-WAIT 0    0     10.0.0.5:41234       10.0.0.9:443";
+        let rows = parse_active_connections(output, true);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].state, "ESTAB");
+        assert_eq!(rows[1].protocol, "tcp");
+        assert_eq!(rows[1].state, "ESTAB");
+        assert_eq!(rows[1].local_address, "10.0.0.5:22");
+        assert_eq!(rows[1].remote_address, "10.0.0.9:54321");
+        assert_eq!(rows[1].pid_program, "");
+        assert_eq!(rows[2].state, "TIME-WAIT");
+        assert_eq!(rows[2].remote_address, "10.0.0.9:443");
+    }
+
+    /// A row truncated before the peer address has five tokens. Reading
+    /// `parts[5]` on it used to abort the process (`panic = "abort"`); the
+    /// parser must skip it instead.
+    #[test]
+    fn truncated_five_token_ss_row_is_skipped() {
+        let output = "tcp ESTAB 0 0 10.0.0.5:22";
+        assert!(parse_active_connections(output, true).is_empty());
+    }
+
+    /// Root (or socket-owning) sessions get the trailing Process column. A
+    /// socket shared by two processes prints two `users:((...))` groups, so
+    /// everything after the peer must be joined, not truncated to one token.
+    #[test]
+    fn ss_process_column_is_kept_in_full() {
+        let output = "tcp ESTAB 0 0 10.0.0.5:22 10.0.0.9:54321 users:((\"sshd\",pid=123,fd=4)) users:((\"sshd\",pid=124,fd=5))";
+        let rows = parse_active_connections(output, true);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, "ESTAB");
+        assert_eq!(
+            rows[0].pid_program,
+            "users:((\"sshd\",pid=123,fd=4)) users:((\"sshd\",pid=124,fd=5))"
+        );
+    }
+
+    /// `netstat -tunp` puts State in column 5 and PID/program in columns 6+ —
+    /// the opposite of `ss`. BusyBox prints a program name containing spaces
+    /// (`19/sshd: pi [priv]`), which must be joined back together.
+    #[test]
+    fn netstat_tcp_row_with_multi_token_program() {
+        let output = "tcp        0      0 172.17.0.2:22           192.168.65.1:40802      ESTABLISHED 19/sshd: pi [priv]";
+        let rows = parse_active_connections(output, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].protocol, "tcp");
+        assert_eq!(rows[0].local_address, "172.17.0.2:22");
+        assert_eq!(rows[0].remote_address, "192.168.65.1:40802");
+        assert_eq!(rows[0].state, "ESTABLISHED");
+        assert_eq!(rows[0].pid_program, "19/sshd: pi [priv]");
+    }
+
+    /// Connected UDP rows on Linux still print a state.
+    #[test]
+    fn netstat_udp_row_with_established_state() {
+        let output = "udp        0      0 172.17.0.2:54000        1.1.1.1:53              ESTABLISHED 19/sshd";
+        let rows = parse_active_connections(output, false);
+        assert_eq!(rows[0].state, "ESTABLISHED");
+        assert_eq!(rows[0].pid_program, "19/sshd");
+    }
+
+    /// BSD/macOS UDP rows have five tokens and no state or PID column.
+    #[test]
+    fn netstat_bsd_udp_row_has_no_state_or_pid() {
+        let output = "udp4       0      0 0.0.0.0.68            *.*";
+        let rows = parse_active_connections(output, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].local_address, "0.0.0.0.68");
+        assert_eq!(rows[0].state, "");
+        assert_eq!(rows[0].pid_program, "");
+    }
+
+    /// BSD/macOS TCP rows carry a state but no PID column, and spell
+    /// `FIN_WAIT_1` with an underscore. Missing the spelling would leave the
+    /// state empty and fold the state token into `pid_program`.
+    #[test]
+    fn netstat_bsd_state_spelling_is_recognized() {
+        let output = "tcp4       0      0 1.2.3.4.22            5.6.7.8.1234          FIN_WAIT_1";
+        let rows = parse_active_connections(output, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].state, "FIN_WAIT_1");
+        assert_eq!(rows[0].pid_program, "");
+    }
+
+    /// A netstat row truncated before the peer address is skipped.
+    #[test]
+    fn truncated_netstat_row_is_skipped() {
+        let output = "tcp 0 0 10.0.0.5:22";
+        assert!(parse_active_connections(output, false).is_empty());
+    }
+
+    /// The commands strip their own headers, so real input starts at a data
+    /// row. Headers are tolerated defensively: a wrapper that echoes context
+    /// (`-l`'s "Active Internet connections", macOS's `Proto/ID` line) must
+    /// not produce a bogus connection.
+    #[test]
+    fn headers_blank_lines_and_short_rows_are_skipped() {
+        let ss = "\
+Netid State  Recv-Q Send-Q Local-Address:Port Peer-Address:Port
+
+tcp ESTAB 0 0
+tcp ESTAB 0 0 10.0.0.5:22 10.0.0.9:54321";
+        assert_eq!(parse_active_connections(ss, true).len(), 1);
+
+        let netstat = "\
+Active Internet connections (only servers)
+Proto Recv-Q Send-Q Local Address Foreign Address State PID/Program name
+Proto/ID  Flags  Local Address  Foreign Address  (state)
+tcp 0 0 0.0.0.0:22 0.0.0.0:* LISTEN 1/sshd
+tcp 0";
+        assert_eq!(parse_active_connections(netstat, false).len(), 1);
     }
 }
