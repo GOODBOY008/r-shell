@@ -60,7 +60,7 @@ class FakeWebSocket {
   binaryType = '';
   onmessage: ((event: { data: string }) => void) | null = null;
   constructor(_url: string) { FakeWebSocket.instances.push(this); }
-  send() {}
+  send = vi.fn();
   close() {}
 }
 
@@ -249,4 +249,62 @@ describe('DesktopViewer window-fit scaling', () => {
     await measure(800, 450);
     expect(resizeRequests()).toEqual([{ connectionId: 'conn-1', width: 800, height: 450, scaleFactor: 100 }]);
   });
+
+  it.each([0, 1, 2])('releases remote button %s over the toolbar exactly once', async (button) => {
+    const view = render(<DesktopViewer {...viewerProps()} />);
+    await measure(800, 450);
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+    const canvas = view.container.querySelector('canvas')!;
+    fireEvent.mouseDown(canvas, { button, clientX: 100, clientY: 100 });
+    fireEvent.blur(screen.getByRole('button', { name: 'Show remote desktop controls' }), {
+      relatedTarget: canvas.closest('[tabindex]'),
+    });
+    expect(ws.send).toHaveBeenCalledTimes(1);
+    fireEvent.mouseUp(screen.getByRole('button', { name: 'Show remote desktop controls' }), { button, clientX: 200, clientY: 10 });
+    // A second local release cannot produce a duplicate remote release.
+    fireEvent.mouseUp(canvas, { button });
+    const events = ws.send.mock.calls.map(([message]) => JSON.parse(message));
+    expect(events.filter(event => event.type === 'DesktopPointerButton')).toEqual([
+      expect.objectContaining({ connection_id: 'conn-1', button, pressed: true }),
+      expect.objectContaining({ connection_id: 'conn-1', button, pressed: false }),
+    ]);
+  });
+
+  it('ignores toolbar clicks and toolbar-origin drags into the desktop', async () => {
+    const view = render(<DesktopViewer {...viewerProps()} />);
+    await measure(800, 450);
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+    const canvas = view.container.querySelector('canvas')!;
+    const control = screen.getByRole('button', { name: 'Show remote desktop controls' });
+    fireEvent.mouseDown(control, { button: 0 });
+    fireEvent.mouseUp(control, { button: 0 });
+    expect(ws.send).not.toHaveBeenCalled();
+    fireEvent.mouseDown(control, { button: 0 });
+    fireEvent.mouseMove(canvas, { buttons: 1, clientX: 100, clientY: 100 });
+    fireEvent.mouseUp(canvas, { button: 0 });
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      expect.objectContaining({ type: 'DesktopPointerEvent', button_mask: 0 }),
+    ]);
+  });
+
+  it.each(['outside', 'window blur', 'viewer blur'])('releases a desktop drag on %s and clears its button state', async (target) => {
+    const view = render(<DesktopViewer {...viewerProps()} />);
+    await measure(800, 450);
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+    const canvas = view.container.querySelector('canvas')!;
+    fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 100 });
+    if (target === 'outside') fireEvent.mouseUp(document.body, { button: 0 });
+    else if (target === 'window blur') fireEvent(window, new Event('blur'));
+    else fireEvent.blur(canvas.closest('[tabindex]')!);
+    fireEvent.mouseMove(canvas, { buttons: 1 });
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      expect.objectContaining({ type: 'DesktopPointerButton', button: 0, pressed: true }),
+      expect.objectContaining({ type: 'DesktopPointerButton', button: 0, pressed: false }),
+      expect.objectContaining({ type: 'DesktopPointerEvent', button_mask: 0 }),
+    ]);
+  });
+
 });

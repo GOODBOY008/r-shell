@@ -154,6 +154,19 @@ describe('TerminalTabPortalProvider', () => {
     }));
   });
 
+  it.each(['retina', '2560x1440', 'fit'])('keeps the live %s mode when the saved profile changes', (rdpResolution) => {
+    localStorage.setItem('r-shell-connections', JSON.stringify([
+      { id: 'saved-rdp', rdpResolution: '1920x1080' },
+    ]));
+    mockState.groups['1'].tabs[0] = {
+      ...tabA, tabType: 'desktop', protocol: 'RDP', originalConnectionId: 'saved-rdp', rdpResolution,
+    };
+    render(<PortalHosts split={false} />);
+    expect(lifecycle.desktopProps).toHaveBeenCalledWith(expect.objectContaining({
+      connectionId: tabA.id, rdpResolution,
+    }));
+  });
+
   it('keeps live terminal components mounted when a tab moves to a new group', () => {
     const view = render(<PortalHosts split={false} />);
 

@@ -12,12 +12,14 @@ import { computeFitScale, translateCoordinates } from '@/lib/desktop-utils';
 import { Monitor, RefreshCw, ExternalLink, Unplug, Undo2 } from 'lucide-react';
 import { Button } from './ui/button';
 
+const POINTER_BUTTON_MASKS = [1, 4, 2, 8, 16];
+
 interface DesktopViewerProps {
   connectionId: string;
   connectionName: string;
   host?: string;
   protocol?: string;
-  /** Saved resolution; Balanced Auto and Retina adapt the remote desktop. */
+  /** Live session resolution; Balanced Auto and Retina adapt the remote desktop. */
   rdpResolution?: string;
   isConnected: boolean;
   onReconnect?: () => void;
@@ -40,6 +42,8 @@ export function DesktopViewer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pressedKeysRef = useRef(new Set<number>());
+  const pressedButtonsRef = useRef(new Set<number>());
+  const lastPointerPositionRef = useRef({ x: 0, y: 0 });
 
   const [desktopWidth, setDesktopWidth] = useState(1024);
   const [desktopHeight, setDesktopHeight] = useState(768);
@@ -359,6 +363,24 @@ export function DesktopViewer({
     }
   }, []);
 
+  const releasePointerButtons = useCallback(() => {
+    for (const button of pressedButtonsRef.current) {
+      sendWsEvent({
+        type: 'DesktopPointerButton', connection_id: connectionId,
+        ...lastPointerPositionRef.current, button, pressed: false,
+      });
+    }
+    pressedButtonsRef.current.clear();
+  }, [connectionId, sendWsEvent]);
+
+  useEffect(() => {
+    window.addEventListener('blur', releasePointerButtons);
+    return () => {
+      window.removeEventListener('blur', releasePointerButtons);
+      releasePointerButtons();
+    };
+  }, [releasePointerButtons, isConnected, sessionMissing, isPoppedOut]);
+
   // Handle keyboard events — forward via WebSocket
   // Let toolbar controls keep their own keystrokes: Space/Enter on a focused
   // button must activate the button, not travel into the remote desktop.
@@ -404,13 +426,16 @@ export function DesktopViewer({
     sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: e.keyCode, down: false });
   }, [connectionId, isConnected, sendWsEvent]);
 
-  // Release all keys on blur
-  const handleBlur = useCallback(() => {
+  // Release remote input when focus leaves the desktop.
+  const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
     for (const keyCode of pressedKeysRef.current) {
       sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: keyCode, down: false });
     }
     pressedKeysRef.current.clear();
-  }, [connectionId, sendWsEvent]);
+    // Clicking back into the desktop can move focus from a toolbar button
+    // after mousedown. That internal focus change must not cancel the new drag.
+    if (!event.currentTarget.contains(event.relatedTarget)) releasePointerButtons();
+  }, [connectionId, sendWsEvent, releasePointerButtons]);
 
   // Take keyboard focus as soon as the session is live (or restored after a
   // reconnect), like the PTY terminal does — otherwise every keystroke is
@@ -436,25 +461,39 @@ export function DesktopViewer({
     );
   }, [desktopWidth, desktopHeight, displayedWidth, displayedHeight]);
 
-  // Container-level mouse handlers — ensures events are captured even if overlays sit on top of canvas
-  // Button press/release use explicit stateless events (state lives in the
-  // DOM event itself), so a reconnect can never desync them into moves.
+  // Only desktop-origin presses belong to the remote session. Toolbar events
+  // stay local, but their stopPropagation must not swallow an ongoing drag's release.
   const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
+    pressedButtonsRef.current.add(e.button);
+    lastPointerPositionRef.current = { x, y };
     sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: e.button, pressed: true });
   }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
 
-  const handleContainerMouseUp = useCallback((e: React.MouseEvent) => {
-    if (!isConnected) return;
-    const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: e.button, pressed: false });
-  }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
+  useEffect(() => {
+    if (!isConnected || sessionMissing || isPoppedOut) return;
+    const releaseButton = (event: MouseEvent) => {
+      if (!pressedButtonsRef.current.delete(event.button)) return;
+      const { x, y } = getRemoteCoordsFromEvent(event.clientX, event.clientY);
+      lastPointerPositionRef.current = { x, y };
+      sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: event.button, pressed: false });
+    };
+    // Capture before the toolbar stops bubbling, also covering releases outside
+    // the viewer. Untracked buttons (including toolbar-only clicks) are ignored.
+    document.addEventListener('mouseup', releaseButton, true);
+    return () => document.removeEventListener('mouseup', releaseButton, true);
+  }, [connectionId, isConnected, sessionMissing, isPoppedOut, getRemoteCoordsFromEvent, sendWsEvent]);
 
   const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: e.buttons });
+    lastPointerPositionRef.current = { x, y };
+    // DOM buttons are left=1, middle=4, right=2. A drag starting on a local
+    // toolbar control must not become a remote press when it enters the canvas.
+    let buttonMask = 0;
+    for (const button of pressedButtonsRef.current) buttonMask |= POINTER_BUTTON_MASKS[button] ?? 0;
+    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: e.buttons & buttonMask });
   }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
 
   const handleContainerWheel = useCallback((e: React.WheelEvent) => {
@@ -636,7 +675,6 @@ export function DesktopViewer({
       onKeyUp={handleKeyUp}
       onBlur={handleBlur}
       onMouseDown={handleContainerMouseDown}
-      onMouseUp={handleContainerMouseUp}
       onMouseMove={handleContainerMouseMove}
       onWheel={handleContainerWheel}
       onContextMenu={(e) => e.preventDefault()}

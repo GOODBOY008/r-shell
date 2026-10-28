@@ -574,7 +574,11 @@ export function terminalGroupReducer(
       if (tabIndex === -1) return state;
 
       const newTabs = [...group.tabs];
-      newTabs[tabIndex] = { ...newTabs[tabIndex], connectionStatus: status };
+      newTabs[tabIndex] = {
+        ...newTabs[tabIndex],
+        connectionStatus: status,
+        ...(action.rdpResolution !== undefined ? { rdpResolution: action.rdpResolution } : {}),
+      };
 
       return {
         ...state,

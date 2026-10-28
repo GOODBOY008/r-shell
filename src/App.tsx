@@ -683,6 +683,7 @@ function AppContent() {
         type: 'UPDATE_TAB_STATUS',
         tabId: tab.id,
         status: isDesktop || isFileBrowser ? 'connected' : 'connecting',
+        ...(isDesktop ? { rdpResolution: connectionData.rdpResolution || 'fit' } : {}),
       });
       return true;
     } catch (error) {
@@ -965,6 +966,7 @@ function AppContent() {
           id: sessionId,
           name: connectionData.name,
           tabType: 'desktop',
+          rdpResolution: connectionData.rdpResolution || 'fit',
           protocol: connectionData.protocol,
           host: connectionData.host,
           username: connectionData.username,
@@ -1364,7 +1366,7 @@ function AppContent() {
         if (!tabToReconnect.originalConnectionId) {
           ConnectionStorageManager.updateLastConnected(originalConnectionId);
         }
-        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: connectionData.rdpResolution || 'fit' });
         notify.success(t('app.reconnected'), {
           description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
         });
@@ -1787,7 +1789,7 @@ function AppContent() {
               color_depth: config.vncColorDepth || 24,
             }
           });
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
           notify.error(t('app.connectionFailed'), {
@@ -1810,6 +1812,7 @@ function AppContent() {
           id: tabId,
           name: config.name,
           tabType: 'desktop',
+          rdpResolution: config.rdpResolution || 'fit',
           protocol: config.protocol,
           host: config.host,
           username: config.username,
@@ -1833,7 +1836,7 @@ function AppContent() {
             }
           });
           ConnectionStorageManager.updateLastConnected(config.id || tabId);
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
           notify.error(t('app.connectionFailed'), {
@@ -2086,6 +2089,7 @@ function AppContent() {
             id: sessionId,
             name: config.name,
             tabType: 'desktop',
+            rdpResolution: config.rdpResolution || 'fit',
             protocol: config.protocol,
             host: config.host,
             username: config.username,
@@ -2114,7 +2118,7 @@ function AppContent() {
             }
           });
           ConnectionStorageManager.updateLastConnected(config.id);
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
           notify.error(t('app.connectionFailed'), {
