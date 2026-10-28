@@ -59,8 +59,8 @@
     "restoreLazyDesc": "{{restoredCount}} connection(s) reconnected; {{lazyCount}} more will reconnect when you open them",
     "restoreLazyOnlyDesc": "Your previous tabs are back — {{lazyCount}} will reconnect when you open them",
     "restoreLazyFailedDesc": "No connection could be restored automatically; {{lazyCount}} tab(s) will retry when you open them",
-    "quitSessionsTitle_one": "{{count}} SSH session still connected",
-    "quitSessionsTitle_other": "{{count}} SSH sessions still connected",
+    "quitSessionsTitle_one": "{{count}} session still connected",
+    "quitSessionsTitle_other": "{{count}} sessions still connected",
     "quitSessionsDescription": "Quitting will disconnect all active sessions.",
     "quitSessionsConfirm": "Quit",
     "cannotDuplicate": "Cannot Duplicate Tab",
@@ -1529,5 +1529,12 @@
     "warning": "This can mean a man-in-the-middle attack. Continue only if you know the server was reinstalled or its key was rotated.",
     "trustHint": "Trusting replaces the saved key for this host and connects again.",
     "trust": "Trust new key and connect"
+  },
+  "desktopConnect": {
+    "waiting": "Connecting to {{host}}…",
+    "permissionHint": "If macOS asks for Local Network access, choose Allow. R-Shell will retry for up to 30 seconds. If no prompt appears, check the server and your network connection.",
+    "networkUnavailable": "The server is still unreachable. For a local server or VM, check System Settings → Privacy & Security → Local Network → r-shell, then try Connect again. Also check that the server is running and the address, VPN, and network route are correct.",
+    "cancelled": "Connection cancelled.",
+    "cancelFailed": "Could not cancel the connection."
   }
 }

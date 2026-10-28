@@ -59,8 +59,8 @@
     "restoreLazyDesc": "已重连 {{restoredCount}} 个连接；其余 {{lazyCount}} 个将在打开时自动重连",
     "restoreLazyOnlyDesc": "已恢复上次打开的标签页 —— {{lazyCount}} 个将在打开时自动重连",
     "restoreLazyFailedDesc": "没有连接能自动恢复；{{lazyCount}} 个标签页将在打开时重试",
-    "quitSessionsTitle_one": "仍有 {{count}} 个 SSH 会话已连接",
-    "quitSessionsTitle_other": "仍有 {{count}} 个 SSH 会话已连接",
+    "quitSessionsTitle_one": "仍有 {{count}} 个会话已连接",
+    "quitSessionsTitle_other": "仍有 {{count}} 个会话已连接",
     "quitSessionsDescription": "退出将断开所有已连接的会话。",
     "quitSessionsConfirm": "退出",
     "cannotDuplicate": "无法复制标签页",
@@ -1527,5 +1527,12 @@
     "warning": "这可能意味着中间人攻击。仅当您确定服务器已重装或密钥已更换时才继续。",
     "trustHint": "信任后将替换该主机已保存的密钥并重新连接。",
     "trust": "信任新密钥并连接"
+  },
+  "desktopConnect": {
+    "waiting": "正在连接 {{host}}…",
+    "permissionHint": "如果 macOS 询问是否允许访问本地网络，请选择“允许”。R-Shell 将在 30 秒内自动重试。如果没有出现提示，请检查服务器和网络连接。",
+    "networkUnavailable": "仍无法访问服务器。如果连接的是本地服务器或虚拟机，请检查“系统设置 → 隐私与安全性 → 本地网络 → r-shell”，然后再次点击连接。同时请确认服务器已启动，地址、VPN 和网络路由正确。",
+    "cancelled": "连接已取消。",
+    "cancelFailed": "无法取消连接。"
   }
 }

@@ -251,6 +251,12 @@ Download from the [Releases](https://github.com/GOODBOY008/r-shell/releases) pag
 
 Direct downloads update themselves in-app on the stable channel.
 
+On macOS 15 or later, choose **Allow** when macOS asks for Local Network access while connecting to a LAN server or local virtual machine. RDP retries the initial TCP connection for up to 30 seconds after a macOS **“No route to host”** error, so accepting the prompt can continue the same connection. A waiting notice offers **Cancel**; closing the tab also cancels the pending connection. Password and certificate failures are not retried by this permission recovery.
+
+If the server remains unreachable, check **System Settings → Privacy & Security → Local Network → r-shell**, then try **Connect** again. Also check that the VM/server is running and the address, VPN, and route are correct: “No route to host” alone does not prove a permission denial. A development build launched from Terminal can have different access from the installed app; see [Apple's Local Network privacy documentation](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+
+macOS builds use free **ad hoc signing** for the complete app bundle. Building and distributing these packages does not require an Apple Developer account or paid certificate. macOS may still require you to approve opening the downloaded app in Privacy & Security, and Local Network permission may need to be granted again after an update. See [Tauri ad hoc signing](https://v2.tauri.app/distribute/sign/macos/#ad-hoc-signing).
+
 ### 🧪 Current channel (pre-release)
 
 The evolution line carries all new features and requires **macOS 26 or later on Apple Silicon**; Windows and Linux builds follow the same version numbers.

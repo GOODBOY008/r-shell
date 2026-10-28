@@ -1,3 +1,4 @@
 /* Localized Info.plist keys for simplified Chinese (zh-Hans). */
 CFBundleDisplayName = "r-shell";
 CFBundleName = "r-shell";
+NSLocalNetworkUsageDescription = "R-Shell 需要连接本地网络中的 SSH、文件传输和远程桌面服务器。";

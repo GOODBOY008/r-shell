@@ -62,6 +62,10 @@ impl VncClient {
 
 #[async_trait]
 impl DesktopProtocol for VncClient {
+    fn is_connected(&self) -> bool {
+        self.connected
+    }
+
     async fn start_frame_loop(
         &self,
         _event_tx: crate::desktop_frames::DesktopEventSender,

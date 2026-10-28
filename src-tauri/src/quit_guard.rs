@@ -105,18 +105,31 @@ pub fn request_quit_confirmed(app: &AppHandle) {
 }
 
 fn request_quit_inner(app: &AppHandle, sessions_confirmed: bool) {
-    // Terminal.app / iTerm2 convention: quitting while SSH sessions are
+    // Terminal.app / iTerm2 convention: quitting while remote sessions are
     // still connected asks first — a confirmed quit tears down live remote
     // work along with the process. Main-thread sync read (see
-    // `active_ssh_connection_count`); the main window answers with
+    // `active_session_count`); the main window answers with
     // `confirm_app_quit` or `cancel_app_quit`.
     if !sessions_confirmed {
         // Managed as Arc<ConnectionManager> (lib.rs) — the state lookup is
         // runtime-typed, so fetching the bare type would panic here.
         let active = app
             .state::<Arc<ConnectionManager>>()
-            .active_ssh_connection_count();
+            .active_session_count();
         if active > 0 {
+            // The main window hosts this prompt, but on macOS it may be hidden
+            // while a native RDP window remains open. Reveal it before asking.
+            if let Some(main) = app.get_webview_window("main") {
+                if let Err(e) = main.show() {
+                    tracing::warn!("failed to show quit-confirmation window: {e}");
+                }
+                if let Err(e) = main.unminimize() {
+                    tracing::warn!("failed to restore quit-confirmation window: {e}");
+                }
+                if let Err(e) = main.set_focus() {
+                    tracing::warn!("failed to focus quit-confirmation window: {e}");
+                }
+            }
             if let Err(e) = app.emit("confirm-quit-sessions", active) {
                 tracing::warn!("failed to emit confirm-quit-sessions: {e}");
             }

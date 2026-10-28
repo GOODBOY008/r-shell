@@ -3906,6 +3906,7 @@ fn matches_exclude(name: &str, patterns: &[String]) -> bool {
 pub async fn desktop_connect(
     connection_id: String,
     request: crate::desktop_protocol::DesktopConnectRequest,
+    on_progress: tauri::ipc::Channel<crate::desktop_protocol::DesktopConnectProgress>,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<crate::desktop_protocol::DesktopConnectResponse, String> {
     tracing::info!(
@@ -3917,7 +3918,13 @@ pub async fn desktop_connect(
     );
 
     let (width, height) = state
-        .create_desktop_connection(connection_id, &request)
+        .create_desktop_connection(
+            connection_id,
+            &request,
+            Arc::new(move |progress| {
+                let _ = on_progress.send(progress);
+            }),
+        )
         .await
         .map_err(|e| e.to_string())?;
 

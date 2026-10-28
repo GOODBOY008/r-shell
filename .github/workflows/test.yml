@@ -70,6 +70,12 @@ jobs:
         working-directory: src-tauri
         run: cargo test
 
+      - name: Build and verify macOS app bundle
+        if: matrix.platform == 'macos-latest'
+        run: |
+          pnpm tauri build --debug --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          bash scripts/verify-macos-bundle.sh src-tauri/target/debug/bundle/macos/r-shell.app
+
       # The windows test binary fails to start with STATUS_ENTRYPOINT_NOT_FOUND
       # (0xc0000139) — a runtime DLL loader error. dumpbin isn't on PATH by
       # default on windows-latest, so we locate it via vsdevshell, then dump the

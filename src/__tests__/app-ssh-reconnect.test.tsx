@@ -128,12 +128,15 @@ vi.mock('@/lib/connection-storage', async (importOriginal) => {
   };
 });
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => lifecycle.invoke(...args),
-  // App's keyboard-shortcut hook branches on this; these tests run in
-  // browser mode where there is no Tauri backend.
-  isTauri: () => false,
-}));
+vi.mock('@tauri-apps/api/core', async () => {
+  const { ChannelStub } = await import('./helpers/tauri-channel-stub');
+  return {
+    invoke: (...args: unknown[]) => lifecycle.invoke(...args),
+    // These tests run in browser mode, with no Tauri backend.
+    isTauri: () => false,
+    Channel: ChannelStub,
+  };
+});
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => vi.fn()),
@@ -298,6 +301,24 @@ describe('App connection dialog and reconnect', () => {
     const tab = lastState.groups['group-1'].tabs[0];
     expect(tab.reconnectCount).toBe(1);
     expect(tab.connectionStatus).toBe('connecting');
+  });
+
+  it('leaves a cancelled RDP attempt disconnected without an error toast', async () => {
+    mockState.groups['group-1'].tabs = [];
+    mockState.groups['group-1'].activeTabId = null;
+    mockState.tabToGroupMap = {};
+    mockDialogConfig = { ...mockDialogConfig, id: 'cancelled-rdp', protocol: 'RDP', port: 3389 };
+    lifecycle.invoke.mockImplementation(async (command: string) => {
+      if (command === 'desktop_connect') throw '[desktop-connect-cancelled]';
+      return {};
+    });
+    render(<App />);
+    fireEvent.click(screen.getByTestId('trigger-onconnect'));
+    await vi.waitFor(() => {
+      const lastState = lifecycle.stateHistory[lifecycle.stateHistory.length - 1];
+      expect(lastState.groups['group-1'].tabs.find(tab => tab.id === 'cancelled-rdp')?.connectionStatus).toBe('disconnected');
+    });
+    expect(lifecycle.toast.error).not.toHaveBeenCalled();
   });
 
   it.each(['retina', '2560x1440'])('keeps an unsaved %s RDP mode through the real tab reducer and portal', async (rdpResolution) => {

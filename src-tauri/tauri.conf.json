@@ -48,8 +48,11 @@
       "icons/icon.ico"
     ],
     "macOS": {
+      "signingIdentity": "-",
       "files": {
-        "Resources/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings"
+        "Resources/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings",
+        "Resources/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings",
+        "Resources/pl.lproj/InfoPlist.strings": "pl.lproj/InfoPlist.strings"
       }
     }
   }

@@ -1,4 +1,5 @@
 import { rdpConnectDisplay } from '@/lib/rdp-display';
+import { desktopConnect, DesktopConnectCancelledError } from '@/lib/desktop-connect';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
@@ -169,7 +170,7 @@ function AppContent() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   // Sessions-still-connected quit prompt: the backend quit guard emits
   // `confirm-quit-sessions` with the active session count when quitting
-  // would tear down live SSH work (quit_guard.rs).
+  // would tear down live SSH or remote desktop work (quit_guard.rs).
   const [sessionQuitCount, setSessionQuitCount] = useState<number | null>(null);
   const [editingConnection, setEditingConnection] = useState<ConnectionConfig | null>(null);
   // Track whether the edit dialog was opened due to a failed connection attempt (double-click)
@@ -626,7 +627,7 @@ function AppContent() {
       if (isDesktop) {
         const proto = connectionData.protocol;
         await withTimeout(
-          invoke('desktop_connect', {
+          desktopConnect({
             connectionId: tab.id,
             request: {
               host: connectionData.host,
@@ -639,7 +640,8 @@ function AppContent() {
               color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
             }
           }),
-          connectTimeout,
+          // Allow the backend's 60s deadline to include the macOS prompt.
+          Math.max(connectTimeout, 65_000),
           `desktop_connect ${connectionData.name}`,
         );
       } else if (isFileBrowser) {
@@ -977,7 +979,7 @@ function AppContent() {
         dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
 
         try {
-          await invoke('desktop_connect', {
+          await desktopConnect({
             connectionId: sessionId,
             request: {
               host: connectionData.host,
@@ -994,6 +996,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          if (error instanceof DesktopConnectCancelledError) return;
           notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
@@ -1348,7 +1351,7 @@ function AppContent() {
         }
 
         const proto = connectionData.protocol;
-        await invoke('desktop_connect', {
+        await desktopConnect({
           connectionId: tabId,
           request: {
             host: connectionData.host,
@@ -1457,6 +1460,7 @@ function AppContent() {
       } else {
         dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
       }
+      if (error instanceof DesktopConnectCancelledError) return;
       notify.error(t('app.reconnectionError'), {
         description: error instanceof Error ? error.message : t('app.reconnectionErrorDesc'),
       });
@@ -1776,7 +1780,7 @@ function AppContent() {
       } else if (isDesktop) {
         // RDP/VNC reconnect flow
         try {
-          await invoke('desktop_connect', {
+          await desktopConnect({
             connectionId: tabId,
             request: {
               host: config.host,
@@ -1786,12 +1790,13 @@ function AppContent() {
               password: config.password || '',
               domain: config.domain || null,
               ...rdpConnectDisplay(config.rdpResolution),
-              color_depth: config.vncColorDepth || 24,
+              color_depth: Number(config.vncColorDepth || 24),
             }
           });
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+          if (error instanceof DesktopConnectCancelledError) return;
           notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
@@ -1822,7 +1827,7 @@ function AppContent() {
         dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
 
         try {
-          await invoke('desktop_connect', {
+          await desktopConnect({
             connectionId: tabId,
             request: {
               host: config.host,
@@ -1832,13 +1837,14 @@ function AppContent() {
               password: config.password || '',
               domain: config.domain || null,
               ...rdpConnectDisplay(config.rdpResolution),
-              color_depth: config.vncColorDepth || 24,
+              color_depth: Number(config.vncColorDepth || 24),
             }
           });
           ConnectionStorageManager.updateLastConnected(config.id || tabId);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
+          if (error instanceof DesktopConnectCancelledError) return;
           notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
@@ -1926,7 +1932,7 @@ function AppContent() {
     true,
   );
 
-  // App quit with live SSH sessions: the backend quit guard (quit_guard.rs)
+  // App quit with live remote sessions: the backend quit guard (quit_guard.rs)
   // emits `confirm-quit-sessions` with the connection count — Terminal.app
   // style confirmation before quitting tears down remote work. Confirming
   // re-runs the quit with the session gate satisfied (dirty editor windows
@@ -2104,7 +2110,7 @@ function AppContent() {
         }
 
         try {
-          await invoke('desktop_connect', {
+          await desktopConnect({
             connectionId: sessionId,
             request: {
               host: config.host,
@@ -2121,6 +2127,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          if (error instanceof DesktopConnectCancelledError) return;
           notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });

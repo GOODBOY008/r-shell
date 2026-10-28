@@ -11,7 +11,7 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
 import App from '../App';
 
@@ -200,7 +200,7 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
-describe('Ctrl+W with no terminal tabs closes the main window', () => {
+describe('App window close and session quit confirmation', () => {
   beforeEach(() => {
     (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverMock;
 
@@ -268,5 +268,34 @@ describe('Ctrl+W with no terminal tabs closes the main window', () => {
 
     expect(lifecycle.closeMainWindow).not.toHaveBeenCalled();
     hasFocus.mockRestore();
+  });
+
+  it.each([1, 2])('shows a protocol-neutral quit warning for %i active sessions and supports Cancel then Quit', async (count) => {
+    // RDP-only must work without a terminal tab. A mixed count uses the same
+    // event and plural-aware dialog, regardless of the active tab's protocol.
+    mockState.groups['group-1'].tabs = [{
+      id: 'rdp-1', name: 'Windows', protocol: 'RDP', tabType: 'desktop',
+      connectionStatus: 'connected', reconnectCount: 0,
+    }];
+    mockState.groups['group-1'].activeTabId = 'rdp-1';
+    mockState.tabToGroupMap = { 'rdp-1': 'group-1' };
+    render(<App />);
+
+    act(() => lifecycle.eventHandlers.get('confirm-quit-sessions')!(count));
+    const title = count === 1 ? '1 session still connected' : '2 sessions still connected';
+    const dialog = screen.getByRole('alertdialog', { name: title });
+    expect(within(dialog).getByText('Quitting will disconnect all active sessions.')).toBeTruthy();
+    expect(lifecycle.invoke).not.toHaveBeenCalledWith('confirm_app_quit');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(lifecycle.invoke).toHaveBeenCalledWith('cancel_app_quit');
+    expect(lifecycle.invoke).not.toHaveBeenCalledWith('confirm_app_quit');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+
+    lifecycle.invoke.mockClear();
+    act(() => lifecycle.eventHandlers.get('confirm-quit-sessions')!(count));
+    fireEvent.click(within(screen.getByRole('alertdialog', { name: title })).getByRole('button', { name: 'Quit' }));
+    expect(lifecycle.invoke).toHaveBeenCalledWith('confirm_app_quit');
+    expect(lifecycle.invoke).not.toHaveBeenCalledWith('cancel_app_quit');
   });
 });

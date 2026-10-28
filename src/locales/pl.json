@@ -59,10 +59,10 @@
     "restoreLazyDesc": "Ponownie połączono {{restoredCount}} połączeń; kolejne {{lazyCount}} połączą się po otwarciu",
     "restoreLazyOnlyDesc": "Twoje poprzednie karty wróciły — {{lazyCount}} połączy się po otwarciu",
     "restoreLazyFailedDesc": "Nie udało się automatycznie przywrócić żadnego połączenia; {{lazyCount}} kart spróbuje ponownie po otwarciu",
-    "quitSessionsTitle_one": "{{count}} sesja SSH jest nadal połączona",
-    "quitSessionsTitle_few": "{{count}} sesje SSH są nadal połączone",
-    "quitSessionsTitle_many": "{{count}} sesji SSH jest nadal połączonych",
-    "quitSessionsTitle_other": "{{count}} sesji SSH jest nadal połączonych",
+    "quitSessionsTitle_one": "{{count}} sesja jest nadal połączona",
+    "quitSessionsTitle_few": "{{count}} sesje są nadal połączone",
+    "quitSessionsTitle_many": "{{count}} sesji jest nadal połączonych",
+    "quitSessionsTitle_other": "{{count}} sesji jest nadal połączonych",
     "quitSessionsDescription": "Zamknięcie aplikacji rozłączy wszystkie aktywne sesje.",
     "quitSessionsConfirm": "Zakończ",
     "cannotDuplicate": "Nie można powielić karty",
@@ -1579,5 +1579,12 @@
     "warning": "Może to oznaczać atak typu man-in-the-middle. Kontynuuj tylko, jeśli wiesz, że serwer został przeinstalowany lub jego klucz wymieniono.",
     "trustHint": "Zaufanie zastąpi zapisany klucz tego hosta i ponowi połączenie.",
     "trust": "Zaufaj nowemu kluczowi i połącz"
+  },
+  "desktopConnect": {
+    "waiting": "Łączenie z {{host}}…",
+    "permissionHint": "Jeśli macOS poprosi o dostęp do sieci lokalnej, wybierz Zezwól. R-Shell będzie ponawiać próbę przez maksymalnie 30 sekund. Jeśli monit się nie pojawi, sprawdź serwer i połączenie sieciowe.",
+    "networkUnavailable": "Serwer jest nadal nieosiągalny. W przypadku serwera lokalnego lub maszyny wirtualnej sprawdź Ustawienia systemowe → Prywatność i ochrona → Sieć lokalna → r-shell, a następnie ponownie wybierz Połącz. Sprawdź też, czy serwer działa oraz czy adres, VPN i trasa sieciowa są poprawne.",
+    "cancelled": "Anulowano połączenie.",
+    "cancelFailed": "Nie udało się anulować połączenia."
   }
 }

@@ -3,16 +3,11 @@ import { cleanup, configure, fireEvent, render, screen, waitFor } from '@testing
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IntegratedFileBrowser } from '../components/integrated-file-browser';
 
-// File-wide async-wait budget: 5 s instead of the 1 s default. This file takes
-// 6.6 s+ on a CI runner, and different tests have missed the 1 s window on
-// different runs: Shift+Click range selection failed at 1224 ms (ubuntu) and
-// 1276 ms (macOS) in PR #197, then Ctrl+A select-all failed at 1103 ms on
-// upstream main after #192 merged. Fixing waits one at a time chases the last
-// flake; the whole file runs near the edge, so the budget is set once here.
-// A genuinely broken behavior still fails — a deleted branch makes the
-// assertion exhaust even 5 s — while a slow-render regression is the accepted
-// trade-off of any raised budget.
+// These integration tests perform several renders and async waits. Keep the
+// total test budget above the per-wait budget: CI can finish an individual
+// wait within 5 s but still exceed Vitest's default 5 s for the whole test.
 configure({ asyncUtilTimeout: 5000 });
+vi.setConfig({ testTimeout: 15000 });
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -185,8 +180,6 @@ describe('IntegratedFileBrowser terminal directory following', () => {
   });
 
   it('returns to the same terminal directory after manual navigation on the next prompt', async () => {
-    // Generous timeout: this follow-effect test chains several async waits
-    // and has a history of timing out on slow CI runners (pre-existing flake).
     const { rerender } = render(
       <IntegratedFileBrowser
         connectionId="conn-manual"
@@ -237,7 +230,7 @@ describe('IntegratedFileBrowser terminal directory following', () => {
         mocks.invoke.mock.calls.filter(([, args]) => args.path === '/srv/app'),
       ).toHaveLength(2);
     });
-  }, 15000);
+  });
 
   it('keeps the last good directory and warns once when a terminal path is inaccessible', async () => {
     mocks.invoke.mockImplementation(async (_command: string, args: { path: string }) => {

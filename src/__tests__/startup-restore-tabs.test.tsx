@@ -77,10 +77,14 @@ vi.mock('@/lib/connection-storage', async (importOriginal) => {
   };
 });
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => lifecycle.invoke(...args),
-  isTauri: () => false,
-}));
+vi.mock('@tauri-apps/api/core', async () => {
+  const { ChannelStub } = await import('./helpers/tauri-channel-stub');
+  return {
+    invoke: (...args: unknown[]) => lifecycle.invoke(...args),
+    isTauri: () => false,
+    Channel: ChannelStub,
+  };
+});
 
 vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async () => vi.fn()),

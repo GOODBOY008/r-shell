@@ -7,6 +7,7 @@ pub mod native_render;
 pub mod cert_store;
 mod connect;
 mod session;
+mod tcp;
 mod tls;
 
 use crate::desktop_protocol::{DesktopProtocol, RdpConfig, SendableHandles};
@@ -21,6 +22,9 @@ use tokio_util::sync::CancellationToken;
 
 use self::connect::rdp_connect_inner;
 use self::session::{rdp_session_loop, RenderMode, SessionState};
+
+pub type ConnectProgress =
+    std::sync::Arc<dyn Fn(crate::desktop_protocol::DesktopConnectProgress) + Send + Sync>;
 
 type ErasedStream = Box<dyn AsyncReadWrite + Unpin + Send + Sync>;
 
@@ -78,7 +82,12 @@ pub struct RdpClient {
 }
 
 impl RdpClient {
+    #[cfg(test)]
     pub async fn connect(config: &RdpConfig) -> Result<Self> {
+        Self::connect_with_progress(config, std::sync::Arc::new(|_| {})).await
+    }
+
+    pub async fn connect_with_progress(config: &RdpConfig, progress: ConnectProgress) -> Result<Self> {
         tracing::info!("RdpClient::connect called for {}:{}", config.host, config.port);
         if config.host.is_empty() {
             return Err(anyhow::anyhow!("RDP host cannot be empty"));
@@ -96,7 +105,7 @@ impl RdpClient {
             mpsc::unbounded_channel::<SessionSignal>();
 
         // Channel to receive the desktop size (or error) from the thread
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<(u16, u16)>>();
+        let (mut result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<(u16, u16)>>();
 
         // Spawn a dedicated thread that owns the tokio runtime for ALL RDP IO.
         // This avoids the "tokio context being shutdown" error that occurs when
@@ -110,7 +119,14 @@ impl RdpClient {
 
             rt.block_on(async move {
                 // Phase 1: Handshake (TCP → TLS → connect_finalize)
-                let state = match rdp_connect_inner(&cfg, input_rx).await {
+                // Dropping the caller (cancel/timeout) must stop the dedicated
+                // thread too, including a dial waiting for Local Network access.
+                let result = tokio::select! {
+                    biased;
+                    _ = result_tx.closed() => return,
+                    result = rdp_connect_inner(&cfg, input_rx, &progress) => result,
+                };
+                let state = match result {
                     Ok((framed, connection_result, new_input_rx)) => {
                         let enable_server_pointer =
                             connection_result.enable_server_pointer;
@@ -202,6 +218,12 @@ impl RdpClient {
 
 #[async_trait]
 impl DesktopProtocol for RdpClient {
+    fn is_connected(&self) -> bool {
+        // The worker owns the input receiver for the entire connected
+        // lifetime, including before streaming starts and in native mode.
+        !self.cancel.is_cancelled() && !self.input_tx.is_closed()
+    }
+
     /// Signal the dedicated thread to start the frame loop (WebSocket/canvas path).
     async fn start_frame_loop(
         &self,

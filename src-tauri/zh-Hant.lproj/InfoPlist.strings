@@ -1,0 +1,2 @@
+/* Localized Info.plist keys for traditional Chinese (zh-Hant). */
+NSLocalNetworkUsageDescription = "R-Shell 需要連線至區域網路中的 SSH、檔案傳輸和遠端桌面伺服器。";

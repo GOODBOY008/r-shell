@@ -4,7 +4,7 @@
 #[cfg(target_os = "macos")]
 use super::tls::tls_upgrade_native;
 use super::tls::tls_upgrade_openssl;
-use super::ErasedStream;
+use super::{ConnectProgress, ErasedStream};
 use crate::desktop_protocol::RdpConfig;
 use crate::rdp::input::InputCommand;
 use anyhow::Result;
@@ -13,8 +13,6 @@ use ironrdp_connector::{
     ServerName,
 };
 use std::net::SocketAddr;
-use std::time::Duration;
-use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 
 /// Establish an RDP connection with NLA (CredSSP) preferred and automatic
@@ -22,12 +20,13 @@ use tokio::sync::mpsc;
 pub(super) async fn rdp_connect_inner(
     config: &RdpConfig,
     input_rx: mpsc::UnboundedReceiver<InputCommand>,
+    progress: &ConnectProgress,
 ) -> Result<(
     ironrdp_tokio::TokioFramed<ErasedStream>,
     ConnectionResult,
     mpsc::UnboundedReceiver<InputCommand>,
 )> {
-    match rdp_connect_attempt(config, input_rx, true, true).await {
+    match rdp_connect_attempt(config, input_rx, true, true, progress).await {
         Ok(v) => Ok(v),
         // The server answered the NTLM exchange with "bad credentials" —
         // a final verdict on the supplied username/password, not a
@@ -43,7 +42,7 @@ pub(super) async fn rdp_connect_inner(
         )),
         Err((e, rx)) if is_credssp_error(&e) => {
             tracing::warn!("RDP CredSSP/NLA failed ({}), retrying TLS-only", e);
-            rdp_connect_attempt(config, rx, false, true)
+            rdp_connect_attempt(config, rx, false, true, progress)
                 .await
                 .map_err(|(e2, _rx)| {
                     anyhow::anyhow!("RDP connect failed (NLA: {}, TLS-only: {})", e, e2)
@@ -95,6 +94,7 @@ async fn rdp_connect_attempt(
     input_rx: mpsc::UnboundedReceiver<InputCommand>,
     enable_credssp: bool,
     enable_tls: bool,
+    progress: &ConnectProgress,
 ) -> Result<
     (
         ironrdp_tokio::TokioFramed<ErasedStream>,
@@ -108,7 +108,7 @@ async fn rdp_connect_attempt(
     let result: Result<
         (ironrdp_tokio::TokioFramed<ErasedStream>, ConnectionResult),
         anyhow::Error,
-    > = rdp_connect_attempt_body(config, enable_credssp, enable_tls).await;
+    > = rdp_connect_attempt_body(config, enable_credssp, enable_tls, progress).await;
 
     match result {
         Ok((framed, connection_result)) => Ok((framed, connection_result, input_rx)),
@@ -120,6 +120,7 @@ async fn rdp_connect_attempt_body(
     config: &RdpConfig,
     enable_credssp: bool,
     enable_tls: bool,
+    progress: &ConnectProgress,
 ) -> Result<
     (ironrdp_tokio::TokioFramed<ErasedStream>, ConnectionResult),
     anyhow::Error,
@@ -129,10 +130,7 @@ async fn rdp_connect_attempt_body(
 
     // ── 1. TCP connect ──────────────────────────────────────────────────
     tracing::info!("RDP: attempting TCP connect to {}", dest);
-    let stream = tokio::time::timeout(Duration::from_secs(30), TcpStream::connect(&dest))
-        .await
-        .map_err(|_| anyhow::anyhow!("RDP TCP connection timeout after 30s to {}", dest))?
-        .map_err(|e| anyhow::anyhow!("RDP TCP connect to {} failed: {}", dest, e))?;
+    let stream = super::tcp::connect(&config.host, config.port, progress).await?;
     tracing::info!("RDP: TCP connected to {}", dest);
 
     let client_addr = stream
@@ -165,10 +163,7 @@ async fn rdp_connect_attempt_body(
             tracing::warn!("RDP OpenSSL TLS failed: {:?}, falling back to native-tls", e);
             // Reconnect TCP and redo X.224 negotiation
             tracing::info!("RDP: reconnecting TCP for native-tls fallback");
-            let new_stream = tokio::time::timeout(Duration::from_secs(30), TcpStream::connect(&dest))
-                .await
-                .map_err(|_| anyhow::anyhow!("RDP TCP reconnect timeout"))?
-                .map_err(|e| anyhow::anyhow!("RDP TCP reconnect failed: {}", e))?;
+            let new_stream = super::tcp::connect(&config.host, config.port, progress).await?;
 
             let mut new_framed = ironrdp_tokio::TokioFramed::new(new_stream);
             let mut new_connector = new_connector(config, client_addr, enable_credssp, enable_tls);
@@ -375,6 +370,103 @@ fn new_connector(config: &RdpConfig, client_addr: SocketAddr, enable_credssp: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_session_does_not_inject_keys_and_preserves_user_shift() {
+        use crate::rdp::input::{encode_slow_path_input_pdus, map_input};
+        use crate::rdp::session::{rdp_session_loop, RenderMode, SessionState};
+        use ironrdp_connector::connection_activation::ConnectionActivationFactory;
+        use tokio::io::{AsyncReadExt, DuplexStream};
+        use tokio_util::sync::CancellationToken;
+
+        let config = build_ironrdp_config(
+            &RdpConfig {
+                host: "unused.test".into(),
+                port: 3389,
+                username: "test".into(),
+                password: String::new(),
+                domain: None,
+                width: 640,
+                height: 480,
+                desktop_scale_factor: 100,
+            },
+            true,
+            true,
+        );
+        let connection_result = ConnectionResult {
+            io_channel_id: 1003,
+            user_channel_id: 1001,
+            message_channel_id: None,
+            share_id: 1,
+            static_channels: Default::default(),
+            desktop_size: config.desktop_size,
+            input_flags: ironrdp_pdu::rdp::capability_sets::InputFlags::empty(),
+            enable_server_pointer: true,
+            pointer_software_rendering: false,
+            refresh_rect_support: false,
+            suppress_output_support: false,
+            window_support_level: None,
+            monitor_layout: None,
+            activation_factory: ConnectionActivationFactory::new(config, 1003, 1001),
+            compression_type: None,
+        };
+        let (client, mut server) = tokio::io::duplex(4096);
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (_signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let cancel = CancellationToken::new();
+        let state = SessionState {
+            framed: ironrdp_tokio::TokioFramed::new(Box::new(client) as ErasedStream),
+            connection_result,
+            input_rx,
+            enable_server_pointer: true,
+            desktop_scale_factor: 100,
+        };
+
+        async fn assert_quiet(server: &mut DuplexStream) {
+            let mut byte = [0];
+            // More than five former 10-second keep-alive intervals. No
+            // synthetic keyboard or pointer input may reach the remote host.
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(60), server.read(&mut byte),)
+                    .await
+                    .is_err(),
+                "idle session sent unsolicited input or disconnected"
+            );
+        }
+
+        let session = rdp_session_loop(
+            state,
+            RenderMode::Noop,
+            signal_rx,
+            cancel.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new((640, 480))),
+        );
+        let scenario = async {
+            assert_quiet(&mut server).await;
+            for down in [true, false] {
+                let cmd = InputCommand::Key {
+                    scancode: 0x2a,
+                    down,
+                };
+                let expected = encode_slow_path_input_pdus(1001, 1003, 1, &map_input(&cmd)).concat();
+                input_tx.send(cmd).unwrap();
+                let mut actual = vec![0; expected.len()];
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(1),
+                    server.read_exact(&mut actual),
+                )
+                .await
+                .expect("user key was not forwarded")
+                .unwrap();
+                assert_eq!(actual, expected);
+                // Also protect a user-held Shift from an automatic release.
+                assert_quiet(&mut server).await;
+            }
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::join!(session, scenario);
+        result.unwrap();
+    }
 
     /// Unit test: CredSSP error heuristic recognizes TLS alert 80.
     #[test]

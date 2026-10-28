@@ -153,16 +153,9 @@ pub(super) async fn rdp_session_loop(
     // rows at the full image stride; we compact to the rect's tight width).
     let mut rgba_buf: Vec<u8> = Vec::new();
 
-    // Keep-alive timer: send periodic input to prevent server idle disconnect.
-    // Windows RDP servers may disconnect TLS-only sessions after ~30s of silence.
-    // Seeded with the desktop centre; updated on every real pointer event so
-    // keep-alive moves are invisible no-ops at the current position.
-    let mut last_pointer_pos = (
-        desktop_size.width / 2,
-        desktop_size.height / 2,
-    );
-    let mut keep_alive = tokio::time::interval(Duration::from_secs(10));
-    keep_alive.tick().await; // consume the first immediate tick
+    // Do not simulate user input to keep a session awake. Periodic Shift
+    // taps trigger Windows Sticky Keys and can release a user-held modifier.
+    // Server idle/lock policies must be driven by real user activity.
 
     // NOTE: do NOT send a fast-path Sync Event here. A 1-byte sync PDU right
     // after finalization makes this Windows build (26200.9457) reset the
@@ -276,7 +269,6 @@ pub(super) async fn rdp_session_loop(
                     // Explicit button press/release from the frontend —
                     // stateless, immune to dropped events during reconnects.
                     InputCommand::PointerButton { x, y, button, down } => {
-                        last_pointer_pos = (x, y);
                         map_input_to_outputs(
                             route,
                             enable_server_pointer,
@@ -293,7 +285,6 @@ pub(super) async fn rdp_session_loop(
                             .min(image.width().saturating_sub(1));
                         let y = ((yn.clamp(0.0, 1.0) * image.height() as f32) as u16)
                             .min(image.height().saturating_sub(1));
-                        last_pointer_pos = (x, y);
                         if mask != prev_mask {
                             tracing::debug!(
                                 "RDP native pointer button {:#04x}->{:#04x} at remote ({}, {})",
@@ -312,9 +303,6 @@ pub(super) async fn rdp_session_loop(
                         )
                     }
                     other => {
-                        if let InputCommand::Pointer { x, y, .. } = other {
-                            last_pointer_pos = (x, y);
-                        }
                         map_input_to_outputs(
                             route,
                             enable_server_pointer,
@@ -339,24 +327,6 @@ pub(super) async fn rdp_session_loop(
             _ = tokio::time::sleep(Duration::from_secs(3)) => {
                 tracing::debug!("RDP select heartbeat");
                 Vec::new()
-            }
-
-            // Keep-alive: re-send the last pointer position as a no-op move.
-            // Some legacy servers disconnect idle sessions after ~30s and do
-            // NOT count SyncEvents as activity — pointer moves do count.
-            _ = keep_alive.tick() => {
-                tracing::debug!("RDP keep-alive arm fired");
-                // A Shift press+release counts as real user activity on the
-                // server (resetting its idle timers, keeping the display
-                // awake) and is harmless on its own — a pointer move is not.
-                tracing::debug!("RDP: sending keep-alive shift tap");
-                map_input_to_outputs(
-                    route,
-                    enable_server_pointer,
-                    &mut active_stage,
-                    &mut image,
-                    InputCommand::KeyboardTap,
-                )
             }
 
             // Runtime render-mode switch (tab canvas ⇄ native window). The
@@ -889,32 +859,6 @@ fn map_input_to_outputs(
     image: &mut DecodedImage,
     cmd: InputCommand,
 ) -> Vec<ActiveStageOutput> {
-    // The keep-alive is expressed as a synthetic keyboard tap (a Shift
-    // press+release — real user activity that resets the server's idle
-    // timers and keeps its display awake; a pointer move is not).
-    let cmd = match cmd {
-        InputCommand::KeyboardTap => {
-            let mut outputs = Vec::new();
-            for (flags, sc) in [
-                (ironrdp_pdu::input::fast_path::KeyboardFlags::empty(), 0x2au8),
-                (ironrdp_pdu::input::fast_path::KeyboardFlags::RELEASE, 0x2a),
-            ] {
-                outputs.extend(map_input_to_outputs(
-                    route,
-                    enable_server_pointer,
-                    active_stage,
-                    image,
-                    InputCommand::Key {
-                        scancode: u16::from(sc),
-                        down: flags.is_empty(),
-                    },
-                ));
-            }
-            return outputs;
-        }
-        other => other,
-    };
-
     let events = map_input(&cmd);
     if events.is_empty() {
         return Vec::new();

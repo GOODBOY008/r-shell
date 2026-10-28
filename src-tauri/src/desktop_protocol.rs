@@ -55,6 +55,10 @@ pub enum DesktopEvent {
 /// `ConnectionManager` and Tauri commands can work protocol-agnostically.
 #[async_trait]
 pub trait DesktopProtocol: Send + Sync {
+    /// Whether the remote session is still alive, including when displayed
+    /// in a separate native window. Used by the app's quit confirmation.
+    fn is_connected(&self) -> bool;
+
     /// Start the frame update loop, sending `DesktopEvent` messages via the
     /// provided sender until the cancellation token is triggered.
     async fn start_frame_loop(
@@ -144,6 +148,12 @@ pub trait DesktopProtocol: Send + Sync {
 // Request / response data models shared between Tauri commands and WebSocket
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DesktopConnectProgress {
+    WaitingForNetwork,
+    TcpConnected,
+}
 /// Request to establish an RDP or VNC connection.
 #[derive(Debug, Deserialize)]
 pub struct DesktopConnectRequest {

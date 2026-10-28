@@ -1,0 +1,2 @@
+/* Localized Info.plist keys for Polish (pl). */
+NSLocalNetworkUsageDescription = "R-Shell łączy się z serwerami SSH, przesyłania plików i pulpitu zdalnego w sieci lokalnej.";

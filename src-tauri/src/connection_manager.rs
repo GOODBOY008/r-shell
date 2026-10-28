@@ -170,6 +170,9 @@ pub struct ConnectionManager {
     ftp_connections: Arc<RwLock<HashMap<String, Arc<tokio::sync::Mutex<FtpClient>>>>>,
     /// Remote desktop (RDP/VNC) connections
     desktop_connections: Arc<RwLock<HashMap<String, Arc<RwLock<Box<dyn DesktopProtocol>>>>>>,
+    /// Keep cancelled attempts registered until they finish, so an old
+    /// attempt cannot clear a newer attempt's token or resurrect a closed tab.
+    pending_desktop_connections: RwLock<HashMap<String, CancellationToken>>,
     /// Track protocol type per connection ID ("SSH", "SFTP", "FTP", "RDP", "VNC")
     connection_types: Arc<RwLock<HashMap<String, String>>>,
     /// In-flight transfer jobs, keyed by (connection_id, transfer_id). The
@@ -198,6 +201,7 @@ impl ConnectionManager {
             sftp_connections: Arc::new(RwLock::new(HashMap::new())),
             ftp_connections: Arc::new(RwLock::new(HashMap::new())),
             desktop_connections: Arc::new(RwLock::new(HashMap::new())),
+            pending_desktop_connections: RwLock::new(HashMap::new()),
             connection_types: Arc::new(RwLock::new(HashMap::new())),
             transfer_jobs: Arc::new(RwLock::new(HashMap::new())),
             os_info_cache: OsInfoCache::new(),
@@ -368,6 +372,19 @@ impl ConnectionManager {
         connections.keys().cloned().collect()
     }
 
+    /// Live interactive sessions that quitting would disconnect. Desktop
+    /// sessions live outside the SSH/PTY maps and must be counted separately;
+    /// their display mode (tab or native window) does not affect liveness.
+    /// Sync + main-thread only, just like `active_ssh_connection_count`.
+    pub fn active_session_count(&self) -> usize {
+        let ssh = self.active_ssh_connection_count();
+        let desktops = self.desktop_connections.blocking_read();
+        ssh + desktops
+            .values()
+            .filter(|client| client.blocking_read().is_connected())
+            .count()
+    }
+
     /// Number of SSH connections that still have live remote work — an
     /// active PTY session (open terminal tab) or a parked one (Ctrl+A+D
     /// detach, or the WebSocket-drop grace window). The quit guard uses
@@ -383,7 +400,7 @@ impl ConnectionManager {
     ///
     /// Sync + main-thread only (quit handling); `blocking_read` must never
     /// be called from inside the async runtime.
-    pub fn active_ssh_connection_count(&self) -> usize {
+    fn active_ssh_connection_count(&self) -> usize {
         let connections = self.connections.blocking_read();
         let ptys = self.pty_sessions.blocking_read();
         let detached = self.detached_sessions.blocking_read();
@@ -961,19 +978,45 @@ impl ConnectionManager {
         &self,
         connection_id: String,
         request: &DesktopConnectRequest,
+        progress: crate::rdp::ConnectProgress,
     ) -> Result<(u16, u16)> {
+        let cancel = CancellationToken::new();
+        {
+            let mut pending = self.pending_desktop_connections.write().await;
+            if pending.contains_key(&connection_id) {
+                return Err(anyhow::anyhow!(
+                    "A desktop connection attempt is already in progress"
+                ));
+            }
+            pending.insert(connection_id.clone(), cancel.clone());
+        }
         let protocol = request.protocol.to_uppercase();
-        let client: Box<dyn DesktopProtocol> = match protocol.as_str() {
-            "RDP" => {
-                let config = request.to_rdp_config();
-                Box::new(RdpClient::connect(&config).await?)
-            }
-            "VNC" => {
-                let config = request.to_vnc_config();
-                Box::new(VncClient::connect(&config).await?)
-            }
-            _ => return Err(anyhow::anyhow!("Unknown desktop protocol: {}", protocol)),
+        let connect = async {
+            let client: Box<dyn DesktopProtocol> = match protocol.as_str() {
+                "RDP" => Box::new(
+                    RdpClient::connect_with_progress(&request.to_rdp_config(), progress).await?,
+                ),
+                "VNC" => Box::new(VncClient::connect(&request.to_vnc_config()).await?),
+                _ => return Err(anyhow::anyhow!("Unknown desktop protocol: {}", protocol)),
+            };
+            Ok(client)
         };
+        let result = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(anyhow::anyhow!("[desktop-connect-cancelled]")),
+            result = tokio::time::timeout(Duration::from_secs(60), connect) => {
+                result.unwrap_or_else(|_| Err(anyhow::anyhow!("Desktop connection timed out after 60s")))
+            }
+        };
+
+        // Serialize the final insert with disconnect. If disconnect won,
+        // dropping the client closes its session instead of storing an orphan.
+        let mut pending = self.pending_desktop_connections.write().await;
+        pending.remove(&connection_id);
+        if cancel.is_cancelled() {
+            return Err(anyhow::anyhow!("[desktop-connect-cancelled]"));
+        }
+        let client = result?;
 
         let (w, h) = client.desktop_size();
 
@@ -997,6 +1040,10 @@ impl ConnectionManager {
 
     /// Close and remove a desktop connection.
     pub async fn close_desktop_connection(&self, connection_id: &str) -> Result<()> {
+        let pending = self.pending_desktop_connections.write().await;
+        if let Some(cancel) = pending.get(connection_id) {
+            cancel.cancel();
+        }
         let mut desktop = self.desktop_connections.write().await;
         if let Some(client) = desktop.remove(connection_id) {
             let mut client = client.write().await;
@@ -1682,6 +1729,98 @@ mod tests {
 
         // Only the open tab and the detached shell count.
         assert_eq!(mgr.active_ssh_connection_count(), 2);
+        assert_eq!(mgr.active_session_count(), 2);
+
+        insert_desktop_for_quit_test(&mgr, "rdp", true);
+        assert_eq!(mgr.active_session_count(), 3);
+    }
+
+    struct QuitTestDesktop {
+        alive: Arc<AtomicBool>,
+        native: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl DesktopProtocol for QuitTestDesktop {
+        fn is_connected(&self) -> bool {
+            self.alive.load(Ordering::SeqCst)
+        }
+        fn is_native_rendering(&self) -> bool {
+            self.native
+        }
+        fn desktop_size(&self) -> (u16, u16) {
+            (1280, 720)
+        }
+        async fn start_frame_loop(
+            &self,
+            _: crate::desktop_frames::DesktopEventSender,
+            _: CancellationToken,
+        ) -> Result<()> {
+            unreachable!()
+        }
+        async fn send_key(&self, _: u32, _: bool) -> Result<()> {
+            unreachable!()
+        }
+        async fn send_pointer(&self, _: u16, _: u16, _: u8) -> Result<()> {
+            unreachable!()
+        }
+        async fn request_full_frame(&self) -> Result<()> {
+            unreachable!()
+        }
+        async fn set_clipboard(&self, _: String) -> Result<()> {
+            unreachable!()
+        }
+        async fn resize(&mut self, _: u16, _: u16) -> Result<()> {
+            unreachable!()
+        }
+        async fn disconnect(&mut self) -> Result<()> {
+            self.alive.store(false, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    fn insert_desktop_for_quit_test(
+        mgr: &ConnectionManager,
+        id: &str,
+        native: bool,
+    ) -> Arc<AtomicBool> {
+        let alive = Arc::new(AtomicBool::new(true));
+        mgr.desktop_connections.blocking_write().insert(
+            id.into(),
+            Arc::new(RwLock::new(Box::new(QuitTestDesktop {
+                alive: alive.clone(),
+                native,
+            }))),
+        );
+        alive
+    }
+
+    #[test]
+    fn quit_counts_rdp_without_any_ssh_in_both_display_modes() {
+        for native in [false, true] {
+            let mgr = ConnectionManager::new();
+            assert_eq!(mgr.active_session_count(), 0);
+            let alive = insert_desktop_for_quit_test(&mgr, "rdp-only", native);
+            assert_eq!(mgr.active_ssh_connection_count(), 0);
+            assert_eq!(mgr.active_session_count(), 1);
+
+            // A finished worker can remain registered until UI cleanup.
+            alive.store(false, Ordering::SeqCst);
+            assert_eq!(mgr.active_session_count(), 0);
+        }
+    }
+
+    #[test]
+    fn quit_does_not_count_disconnected_or_pending_desktops() {
+        let mgr = ConnectionManager::new();
+        insert_desktop_for_quit_test(&mgr, "closed-rdp", false);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(mgr.close_desktop_connection("closed-rdp"))
+            .unwrap();
+        mgr.pending_desktop_connections
+            .blocking_write()
+            .insert("pending-rdp".into(), CancellationToken::new());
+        assert_eq!(mgr.active_session_count(), 0);
     }
 
     #[tokio::test]
@@ -2159,5 +2298,84 @@ mod tests {
         // Full teardown: connection cleanup removes the proxy.
         mgr.cleanup_socks_proxies("c-restart").await;
         assert!(mgr.list_socks_proxies().await.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod desktop_connect_tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    fn request(port: u16) -> DesktopConnectRequest {
+        serde_json::from_value(serde_json::json!({
+            "protocol": "RDP", "host": "127.0.0.1", "port": port,
+            "username": "test", "password": "", "resolution": "fit"
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn closing_a_connecting_desktop_cancels_the_worker_and_prevents_an_orphan() {
+        let manager = Arc::new(ConnectionManager::new());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let connecting_manager = manager.clone();
+        let connecting = tokio::spawn(async move {
+            connecting_manager
+                .create_desktop_connection("pending-rdp".into(), &request(port), Arc::new(|_| {}))
+                .await
+        });
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let duplicate = manager
+            .create_desktop_connection("pending-rdp".into(), &request(port), Arc::new(|_| {}))
+            .await;
+        assert!(duplicate
+            .unwrap_err()
+            .to_string()
+            .contains("already in progress"));
+        manager
+            .close_desktop_connection("pending-rdp")
+            .await
+            .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), connecting)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("[desktop-connect-cancelled]"));
+        assert!(manager.pending_desktop_connections.read().await.is_empty());
+        assert!(manager
+            .get_desktop_connection("pending-rdp")
+            .await
+            .is_none());
+        // The thread owns the socket. EOF proves cancellation reached that
+        // thread, rather than merely hiding a still-running dial in the UI.
+        tokio::time::timeout(Duration::from_secs(5), socket.read_to_end(&mut Vec::new()))
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_desktop_connect_clears_its_pending_registration() {
+        let manager = ConnectionManager::new();
+        let mut invalid = request(3389);
+        invalid.protocol = "unsupported".into();
+        for _ in 0..2 {
+            let result = manager
+                .create_desktop_connection("invalid".into(), &invalid, Arc::new(|_| {}))
+                .await;
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown desktop protocol"));
+            assert!(manager.pending_desktop_connections.read().await.is_empty());
+        }
     }
 }
