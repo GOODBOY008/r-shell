@@ -149,8 +149,8 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
   return (
     <div className="flex h-full flex-col gap-2 overflow-hidden">
       {/* Toolbar: search · sort · new */}
-      <div className="flex items-center gap-1.5">
-        <div className="relative min-w-0 flex-1">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="relative min-w-0 basis-full">
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
@@ -162,7 +162,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
         </div>
         <Select value={sortBy} onValueChange={(value) => setSortBy(value as SnippetSort)}>
           <SelectTrigger
-            className="h-7 w-[118px] shrink-0 text-xs"
+            className="h-8! min-w-0 flex-1 text-xs"
             aria-label={t('quickCommands.sort.ariaLabel')}
           >
             <SelectValue />
@@ -210,6 +210,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
                 )}
                 onClick={() => handleRun(snippet)}
                 onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return;
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     handleRun(snippet);
@@ -220,7 +221,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
                   <span className="min-w-0 truncate text-xs font-medium text-foreground">
                     {snippet.name}
                   </span>
-                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                  <div className="flex shrink-0 items-center gap-0.5 opacity-70 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
                     <Button
                       variant="ghost"
                       size="icon"
@@ -278,7 +279,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
                 {snippet.tags.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {snippet.tags.map((tag) => (
-                      <Badge key={tag} variant="secondary" className="px-1.5 text-[10px]">
+                      <Badge key={tag} variant="secondary" className="px-1.5 text-[11px]">
                         {tag}
                       </Badge>
                     ))}

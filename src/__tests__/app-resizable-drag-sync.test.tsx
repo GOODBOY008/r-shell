@@ -283,12 +283,12 @@ describe('main layout reports panel sizes through onLayout, not onResize', () =>
 
     await act(async () => {
       (horizontal!.onLayout as (layout: Record<string, number>) => void)({
-        'left-sidebar': 18,
-        'right-sidebar': 24,
+        'left-sidebar': 23,
+        'right-sidebar': 28,
       });
     });
 
-    expect(latestPanels().get('right-sidebar')?.defaultSize).toBe(24);
+    expect(latestPanels().get('right-sidebar')?.defaultSize).toBe(28);
   });
 
   it('leaves the bottom panel size alone when the vertical layout omits it', async () => {

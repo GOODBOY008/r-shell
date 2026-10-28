@@ -51,8 +51,8 @@ export function ConnectionSection({
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 rounded-lg shadow-none">
+      <CardHeader className="px-4 pt-4">
         <CardTitle className="flex items-center gap-2">
           <Network className="h-4 w-4" />
           {t('settings.connection.title')}
@@ -61,14 +61,14 @@ export function ConnectionSection({
           {t('settings.connection.desc')}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 last:pb-4">
         {(show('settings.connection.defaultProtocol', 'protocol') || show('settings.connection.connectionTimeout', 'timeout')) && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid settings-fields gap-4">
             {show('settings.connection.defaultProtocol', 'protocol') && (
               <div className="space-y-2">
                 <Label>{t('settings.connection.defaultProtocol')}</Label>
                 <Select value={defaultProtocol} onValueChange={(value) => onChange('defaultProtocol', value)}>
-                  <SelectTrigger>
+                  <SelectTrigger aria-label={t('settings.connection.defaultProtocol')}>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -82,7 +82,7 @@ export function ConnectionSection({
             {show('settings.connection.connectionTimeout', 'timeout') && (
               <div className="space-y-2">
                 <Label>{t('settings.connection.connectionTimeout', { timeout: connectionTimeout })}</Label>
-                <Slider
+                <Slider aria-label={t('settings.connection.connectionTimeout', { timeout: connectionTimeout })}
                   value={[connectionTimeout]}
                   onValueChange={([value]) => onChange('connectionTimeout', value)}
                   min={5}
@@ -97,7 +97,7 @@ export function ConnectionSection({
         {show('settings.connection.keepAliveInterval', 'keepalive') && (
           <div className="space-y-2">
             <Label>{t('settings.connection.keepAliveInterval', { interval: keepAliveInterval })}</Label>
-            <Slider
+            <Slider aria-label={t('settings.connection.keepAliveInterval', { interval: keepAliveInterval })}
               value={[keepAliveInterval]}
               onValueChange={([value]) => onChange('keepAliveInterval', value)}
               min={30}
@@ -108,14 +108,14 @@ export function ConnectionSection({
         )}
 
         {show('settings.connection.autoReconnect', 'reconnect') && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label>{t('settings.connection.autoReconnect')}</Label>
               <p className="text-sm text-muted-foreground">
                 {t('settings.connection.autoReconnectDesc')}
               </p>
             </div>
-            <Switch
+            <Switch aria-label={t('settings.connection.autoReconnect')}
               checked={autoReconnect}
               onCheckedChange={(checked) => onChange('autoReconnect', checked)}
             />
@@ -125,14 +125,14 @@ export function ConnectionSection({
         <Separator />
 
         {show('settings.connection.restoreSessionsOnStartup', 'restore session startup') && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label htmlFor="restore-sessions-on-startup">{t('settings.connection.restoreSessionsOnStartup')}</Label>
               <p className="text-sm text-muted-foreground">
                 {t('settings.connection.restoreSessionsOnStartupDesc')}
               </p>
             </div>
-            <Switch
+            <Switch aria-label={t('settings.connection.restoreSessionsOnStartup')}
               id="restore-sessions-on-startup"
               checked={restoreSessionsOnStartup}
               onCheckedChange={(checked) => onChange('restoreSessionsOnStartup', checked)}

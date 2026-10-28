@@ -215,10 +215,14 @@
       "keepAliveDesc": "Wysyłaj pakiety podtrzymujące, aby zapobiec zerwaniu połączenia"
     },
     "rdp": {
-      "fitToWindow": "Dopasuj do okna",
+      "fitToWindow": "Automatycznie — tryb zrównoważony (do 1080p)",
       "h1024x768": "1024×768",
       "h1280x720": "1280×720 (HD)",
-      "h1920x1080": "1920×1080 (Full HD)"
+      "h1920x1080": "1920×1080 (Full HD)",
+      "h2560x1440": "2560×1440 (QHD)",
+      "retina": "Retina (wysoka szczegółowość)",
+      "balancedHint": "Tryb zrównoważony zapewnia czytelny tekst i ogranicza rozdzielczość do 1080p. Stała rozdzielczość nie zmienia się na pełnym ekranie.",
+      "retinaHint": "Używa gęstości pikseli ekranu i żąda odpowiedniego skalowania tekstu w Windows. Wymaga większej przepustowości i mocy obliczeniowej; zależy od obsługi przez serwer."
     },
     "vnc": {
       "trueColor": "Pełny kolor (24-bit)",
@@ -366,7 +370,12 @@
       "appTheme": "Motyw aplikacji",
       "autostart": "Uruchamiaj przy logowaniu",
       "autostartDesc": "Uruchamiaj r-shell automatycznie po zalogowaniu",
-      "autostartFailed": "Nie udało się zmienić ustawienia uruchamiania przy logowaniu"
+      "autostartFailed": "Nie udało się zmienić ustawienia uruchamiania przy logowaniu",
+      "connectionListFontSize": "Rozmiar czcionki listy połączeń",
+      "connectionListFontSizeDesc": "Dostosuj nazwy połączeń i folderów na pasku bocznym. Zmiany zostaną zastosowane po zapisaniu.",
+      "showConnectionHost": "Pokaż adresy hostów",
+      "showConnectionHostDesc": "Wyświetlaj adresy IP lub nazwy hostów pod nazwami połączeń. Wyłącz, aby uzyskać bardziej zwartą listę.",
+      "fontSizeValue": "{{size}} px"
     },
     "keyboard": {
       "title": "Skróty klawiszowe",
@@ -552,7 +561,20 @@
       "days_few": "{{count}} dni temu",
       "days_many": "{{count}} dni temu",
       "days_other": "{{count}} dni temu"
-    }
+    },
+    "workspace": "Obszar roboczy",
+    "workspaceEyebrow": "Gotowy do pracy",
+    "headline": "Twoje serwery.",
+    "headlineAccent": "Jedno miejsce pracy.",
+    "workspaceDescription": "Łącz się z serwerami, zarządzaj plikami i monitoruj systemy. Kontynuuj tam, gdzie przerwano.",
+    "browseConnections": "Przeglądaj połączenia",
+    "noRecentTitle": "Tutaj zaczyna się następna sesja",
+    "noRecentDescription": "Połącz się z serwerem, a pojawi się tutaj, aby ułatwić kolejny dostęp.",
+    "resumeHint": "Wybierz ostatnie połączenie, aby otworzyć nową sesję.",
+    "quickAccess": "Szybki dostęp",
+    "workflowTitle": "Mniej przełączania.",
+    "workflowDescription": "Terminale, pliki zdalne, pulpity RDP i VNC oraz monitorowanie systemu w jednym obszarze roboczym.",
+    "makeItYours": "Dostosuj do siebie"
   },
   "menuBar": {
     "file": "Plik",
@@ -740,6 +762,7 @@
       "downloadedFilesSkippedFolders": "Pobrano pliki: {{count}}, pominięto foldery: {{folders}}"
     },
     "toolbar": {
+      "editPath": "Edytuj ścieżkę",
       "back": "Wstecz",
       "forward": "Dalej",
       "parentDir": "Katalog nadrzędny",
@@ -1038,7 +1061,12 @@
     "failedToReorder": "Nie udało się zmienić kolejności elementów",
     "detachedSessions": "Odłączone sesje",
     "reattachSession": "Podłącz sesję ponownie",
-    "closeDetachedSession": "Zamknij sesję"
+    "closeDetachedSession": "Zamknij sesję",
+    "noSearchResults": "Brak pasujących połączeń",
+    "searchHint": "Spróbuj innej nazwy, hosta lub użytkownika.",
+    "clearSearch": "Wyczyść wyszukiwanie",
+    "expandFolder": "Rozwiń {{name}}",
+    "collapseFolder": "Zwiń {{name}}"
   },
   "filePanel": {
     "selectDirectory": "Wybierz katalog, aby zobaczyć jego zawartość",
@@ -1162,7 +1190,9 @@
     "uptime": "Czas działania: {{time}}",
     "cpu": "CPU: {{percent}}%",
     "memory": "Pamięć: {{used}}/{{total}}",
-    "ready": "Gotowe"
+    "ready": "Gotowe",
+    "pending": "Oczekiwanie na połączenie",
+    "workspace": "Obszar roboczy"
   },
   "notifications": {
     "center": "Powiadomienia",
@@ -1227,6 +1257,8 @@
     "lastConnected": "Ostatnie połączenie"
   },
   "desktopToolbar": {
+    "controls": "Sterowanie pulpitem zdalnym",
+    "showControls": "Pokaż sterowanie pulpitem zdalnym",
     "switchTo11": "Przełącz na skalę 1:1",
     "switchToFit": "Przełącz na dopasowanie do okna",
     "fit": "Dopasuj",
@@ -1349,6 +1381,10 @@
     "gpuIndex": "GPU {{index}}"
   },
   "logMonitor": {
+    "clearSearch": "Wyczyść wyszukiwanie",
+    "lineLimit": "Liczba wierszy dziennika",
+    "refreshInterval": "Interwał odświeżania",
+    "invalidRegex": "Nieprawidłowe wyrażenie regularne. Sprawdź wzorzec lub wyłącz wyszukiwanie wyrażeń regularnych.",
     "noSourcesDiscovered": "Nie wykryto źródeł logów",
     "failedToDiscoverSources": "Nie udało się wykryć źródeł logów",
     "failedToLoadLog": "Nie udało się wczytać logu",

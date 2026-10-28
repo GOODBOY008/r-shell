@@ -517,7 +517,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
         </AlertDialogHeader>
 
         <div className="space-y-3">
-          <p className="text-sm text-muted-foreground whitespace-pre-line">{notes}</p>
+          <p className="max-h-[45dvh] overflow-y-auto break-words rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground whitespace-pre-line">{notes}</p>
           {status === 'downloading' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -528,7 +528,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
             </div>
           )}
           {status === 'error' && error && (
-            <p className="text-sm text-destructive">{error}</p>
+            <p className="break-words text-sm text-destructive">{error}</p>
           )}
           {readyToInstall && (
             <p className="text-sm text-muted-foreground">

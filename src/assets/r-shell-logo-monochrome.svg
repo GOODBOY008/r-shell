@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="r-shell-monochrome-title r-shell-monochrome-description">
+  <title id="r-shell-monochrome-title">R-Shell</title>
+  <desc id="r-shell-monochrome-description">A prominent terminal prompt and small upper-right R cut out of a framed tile in a single ink.</desc>
+  <defs>
+    <mask id="rs-monochrome-cutouts" x="0" y="0" width="512" height="512" maskUnits="userSpaceOnUse" style="mask-type:luminance">
+      <rect x="48" y="48" width="416" height="416" rx="96" fill="#fff"/>
+      <rect x="88" y="88" width="336" height="336" rx="48" fill="#000"/>
+      <rect x="104" y="104" width="304" height="304" rx="32" fill="#fff"/>
+      <path d="M140 340V164H212C251 164 272 184 272 216C272 239 260 256 240 265L280 340H232L196 272H180V340ZM180 204V232H210C224 232 232 227 232 218C232 209 224 204 210 204Z" transform="translate(214 36) scale(.55)" fill="#000" fill-rule="evenodd"/>
+      <path d="M152 256L208 308L152 360" stroke="#000" stroke-width="32"/>
+      <path d="M248 340H368V372H248Z" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="512" height="512" fill="currentColor" mask="url(#rs-monochrome-cutouts)"/>
+</svg>

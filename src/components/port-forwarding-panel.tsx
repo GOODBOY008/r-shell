@@ -92,7 +92,7 @@ export function PortForwardingPanel({ connectionId, connectionNames }: PortForwa
                 )}
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <Globe className="h-3 w-3 shrink-0 text-green-500" aria-hidden />
+                  <Globe className="h-3 w-3 shrink-0 text-[var(--success)]" aria-hidden />
                   <div className="flex flex-col min-w-0">
                     <span className="truncate font-mono">
                       {p.bind_address}:{p.bind_port}
@@ -117,34 +117,34 @@ export function PortForwardingPanel({ connectionId, connectionNames }: PortForwa
         )}
       </div>
 
-      <div className="border-t p-2 space-y-2">
+      <div className="shrink-0 border-t border-border bg-sidebar/30 p-3 space-y-3">
         <p className="text-xs font-medium text-muted-foreground">{t("portForwarding.newProxy")}</p>
-        <div className="flex items-center gap-1">
-          <div className="flex-1">
-            <Label className="sr-only" htmlFor="bind-address">{t("portForwarding.bindAddress")}</Label>
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-24 flex-1">
+            <Label className="mb-1.5 block text-xs text-muted-foreground" htmlFor="bind-address">{t("portForwarding.bindAddress")}</Label>
             <Input
               id="bind-address"
               placeholder="127.0.0.1"
-              className="h-7 text-xs"
+              className="h-8 text-xs"
               value={bindAddress}
               onChange={(e) => setBindAddress(e.target.value)}
             />
           </div>
           <span className="text-muted-foreground">:</span>
           <div className="w-20">
-            <Label className="sr-only" htmlFor="bind-port">{t("portForwarding.bindPort")}</Label>
+            <Label className="mb-1.5 block text-xs text-muted-foreground" htmlFor="bind-port">{t("portForwarding.bindPort")}</Label>
             <Input
               id="bind-port"
               placeholder="1080"
               inputMode="numeric"
-              className="h-7 text-xs"
+              className="h-8 text-xs"
               value={bindPort}
               onChange={(e) => setBindPort(e.target.value)}
             />
           </div>
           <Button
             size="sm"
-            className="h-7 px-2"
+            className="h-8 px-3"
             onClick={handleStart}
             disabled={loading || !connectionId}
             title={!connectionId ? t("portForwarding.noConnection") : undefined}

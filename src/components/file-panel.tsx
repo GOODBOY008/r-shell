@@ -498,15 +498,8 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     // ------ Render ------
     const segments = getSegments(currentPath);
-    const activeBorderColor =
-      mode === "local" ? "border-blue-500" : "border-emerald-500";
-    const borderClass = isActive
-      ? `border-2 ${activeBorderColor}`
-      : "border border-border";
-    const selectedBg =
-      mode === "local"
-        ? "bg-blue-500/20 dark:bg-blue-400/20"
-        : "bg-emerald-500/20 dark:bg-emerald-400/20";
+    const borderClass = isActive ? "border border-primary/60" : "border border-border";
+    const selectedBg = "bg-primary/12";
 
     // Show the ring overlay for either cross-panel drag or OS drop;
     // the inner banner picks the right copy below.
@@ -525,24 +518,24 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         data-panel-mode={mode}
       >
         {/* Panel header */}
-        <div className="flex items-center gap-1 px-2 py-0.5 border-b border-border bg-muted/60 shrink-0">
+        <div className="flex items-center gap-1 px-3 py-2 border-b border-border bg-sidebar/50 shrink-0">
           <Badge
             variant={mode === "local" ? "outline" : "secondary"}
-            className="text-[10px] px-1.5 py-0 h-5"
+            className="text-[11px] px-1.5 py-0 h-5"
           >
             {t(mode === "local" ? 'filePanel.panel.local' : 'filePanel.panel.remote')}
           </Badge>
-          <span className="text-[10px] text-muted-foreground truncate flex-1">
+          <span className="text-[11px] text-muted-foreground truncate flex-1">
             {label}
           </span>
         </div>
 
         {/* Toolbar */}
-        <div className="flex items-center gap-0.5 px-1 py-0.5 border-b border-border bg-muted/30 shrink-0">
+        <div className="flex flex-wrap items-center gap-1 px-2 py-1.5 border-b border-border bg-muted/30 shrink-0">
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.goUp')}
             disabled={disabled || currentPath === "/"}
             onClick={() => loadDirectory(getParentPath(currentPath))}
@@ -552,7 +545,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.home')}
             disabled={disabled}
             onClick={() => loadDirectory(initialPath ?? "/")}
@@ -562,7 +555,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.refresh')}
             disabled={disabled}
             onClick={() => loadDirectory(currentPath)}
@@ -573,7 +566,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           </Button>
 
           {/* Breadcrumbs */}
-          <div className="flex items-center gap-0.5 ml-1 text-[10px] overflow-x-auto whitespace-nowrap flex-1 min-w-0">
+          <div className="flex items-center gap-0.5 ml-1 text-[11px] overflow-x-auto whitespace-nowrap flex-1 min-w-0">
             {segments.map((seg, i) => (
               <React.Fragment key={seg.path}>
                 {i > 0 && (
@@ -591,11 +584,12 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           </div>
 
           {/* Filter */}
-          <div className="flex items-center shrink-0 h-6 rounded bg-muted/50 px-1.5 gap-1">
+          <div className="order-last flex basis-full items-center h-8 rounded-md border border-input bg-muted/50 px-2 gap-1.5">
             <Search className="h-3 w-3 text-muted-foreground/60 shrink-0" />
             <input
+              aria-label={t('filePanel.toolbar.filter')}
               placeholder={t('filePanel.toolbar.filter')}
-              className="h-full w-24 text-[10px] bg-transparent outline-hidden placeholder:text-muted-foreground/50"
+              className="h-full min-w-0 w-full text-xs bg-transparent outline-hidden placeholder:text-muted-foreground/50"
               autoComplete="off"
               autoCorrect="off"
               autoCapitalize="off"
@@ -608,7 +602,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.newFolder')}
             disabled={disabled}
             onClick={handleCreateDir}
@@ -620,10 +614,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* File list */}
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div className={`flex-1 min-h-0 overflow-y-auto transition-opacity duration-150 ${showOverlay && entries.length > 0 ? "opacity-40" : ""}`}>
+            <div className={`flex-1 min-h-0 overflow-auto transition-opacity duration-150 ${showOverlay && entries.length > 0 ? "opacity-40" : ""}`}>
               {loading && entries.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-40 gap-2">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />
+                  <Loader2 className="h-7 w-7 shrink-0 animate-spin text-muted-foreground/60" />
                   <span className="text-[11px] text-muted-foreground/60">{t('filePanel.loading')}</span>
                 </div>
               ) : filteredEntries.length === 0 ? (
@@ -631,7 +625,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                   {filter ? t('filePanel.empty.noMatches') : t('filePanel.empty.emptyDirectory')}
                 </div>
               ) : (
-                <table className="w-full text-[11px]" style={{ tableLayout: "fixed" }}>
+                <table className="w-full text-xs" style={{ tableLayout: "fixed", minWidth: 140 + colWidths.size + colWidths.modified + (showPermissions ? colWidths.permissions : 0) }}>
                   <colgroup>
                     <col />
                     <col style={{ width: colWidths.size }} />
@@ -640,7 +634,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                       <col style={{ width: colWidths.permissions }} />
                     )}
                   </colgroup>
-                  <thead className="sticky top-0 bg-muted/60 z-10">
+                  <thead className="sticky top-0 bg-muted z-10">
                     <tr className="border-b border-border text-muted-foreground">
                       <th
                         className="text-left px-2 py-0.5 font-medium cursor-pointer hover:bg-muted/80 select-none relative"
@@ -727,7 +721,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                                 {entry.modified ?? "—"}
                               </td>
                               {showPermissions && (
-                                <td className="px-2 py-0.5 text-muted-foreground font-mono text-[10px] overflow-hidden whitespace-nowrap">
+                                <td className="px-2 py-0.5 text-muted-foreground font-mono text-[11px] overflow-hidden whitespace-nowrap">
                                   {entry.permissions ?? "—"}
                                 </td>
                               )}
@@ -831,7 +825,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
             <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-xs border border-border">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              <span className="text-[10px] text-muted-foreground">{t('filePanel.loading')}</span>
+              <span className="text-[11px] text-muted-foreground">{t('filePanel.loading')}</span>
             </div>
           </div>
         )}
@@ -851,7 +845,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         )}
 
         {/* Status bar */}
-        <div className="flex items-center justify-between px-2 py-0.5 text-[10px] text-muted-foreground border-t border-border bg-muted/30 shrink-0">
+        <div className="flex items-center justify-between px-2 py-0.5 text-[11px] text-muted-foreground border-t border-border bg-muted/30 shrink-0">
           <span>
             {t('filePanel.statusBar.items', { count: filteredEntries.length })}
             {selectedNames.size > 0 && (

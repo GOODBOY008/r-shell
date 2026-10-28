@@ -309,17 +309,17 @@ export function FileEditorView({
 
   // ---------- Shared header toolbar ----------
   const renderToolbar = (showSaveButton: boolean) => (
-    <div className="flex items-center gap-2 px-2 py-1 border-b border-border bg-muted/30 text-xs shrink-0">
-      <span className="font-mono text-muted-foreground truncate flex-1" title={filePath}>
+    <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-sidebar/40 text-xs shrink-0">
+      <span className="font-mono min-w-0 text-muted-foreground truncate flex-1" title={filePath}>
         {filePath}
       </span>
       {showSaveButton && dirty && (
-        <span className="text-yellow-500 text-[10px] font-medium">{t('fileEditorView.modified')}</span>
+        <span className="text-[var(--warning)] text-[11px] font-medium">{t('fileEditorView.modified')}</span>
       )}
       <Button
         variant="ghost"
         size="sm"
-        className="h-6 px-2"
+        className="h-7 px-2"
         onClick={loadFile}
         disabled={loading || imageLoading}
         title={t('fileEditorView.reload')}
@@ -330,7 +330,7 @@ export function FileEditorView({
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 px-2"
+          className="h-7 px-2"
           onClick={handleSave}
           disabled={saving || !dirty}
           title={t('fileEditorView.saveTooltip')}
@@ -404,7 +404,7 @@ export function FileEditorView({
         {renderToolbar(false)}
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-4 p-6">
           <FileArchive className="h-16 w-16 text-muted-foreground/40" />
-          <div className="text-center space-y-2">
+          <div className="text-center break-words min-w-0 space-y-2">
             <p className="text-sm font-medium">{t('fileEditorView.binaryFileTitle')}</p>
             <p className="text-xs text-muted-foreground max-w-sm">
               {t('fileEditorView.binaryFileDesc', { fileName })}

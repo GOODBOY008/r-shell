@@ -13,6 +13,8 @@ export interface TerminalTab {
   /** Tab type: 'terminal' for SSH PTY, 'file-browser' for SFTP/FTP, 'desktop' for RDP/VNC, 'editor' for remote file editing */
   tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor';
   protocol?: string;
+  /** Display mode used by this desktop session, including unsaved connections. */
+  rdpResolution?: string;
   host?: string;
   username?: string;
   originalConnectionId?: string;
@@ -59,7 +61,7 @@ export type TerminalGroupAction =
   | { type: 'MOVE_TAB_TO_NEW_GROUP'; groupId: string; tabId: string; direction: SplitDirection }
   | { type: 'MARK_TAB_UNREAD_OUTPUT'; tabId: string; reconnectCount: number }
   | { type: 'ACKNOWLEDGE_TAB_OUTPUT'; tabId: string }
-  | { type: 'UPDATE_TAB_STATUS'; tabId: string; status: 'connected' | 'connecting' | 'disconnected' | 'pending' }
+  | { type: 'UPDATE_TAB_STATUS'; tabId: string; status: 'connected' | 'connecting' | 'disconnected' | 'pending'; rdpResolution?: string }
   | { type: 'UPDATE_TAB_NAME'; tabId: string; name: string }
   | { type: 'RECONNECT_TAB'; tabId: string }
   | { type: 'UPDATE_GRID_SIZES'; path: number[]; sizes: number[] }

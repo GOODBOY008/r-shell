@@ -66,7 +66,7 @@ pub enum InputCommand {
     /// sense relative to the window; the session thread scales them to the
     /// current remote desktop size.
     PointerNorm { xn: f32, yn: f32, mask: u8, prev_mask: u8 },
-    Resize { width: u16, height: u16 },
+    Resize { width: u16, height: u16, scale_factor: Option<u32> },
     FullFrame,
     /// Internal: the keep-alive tap (a Shift press+release) — real user
     /// activity that resets the server's idle timers and keeps its display
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn resize_and_fullframe_emit_nothing() {
-        assert!(map_input(&InputCommand::Resize { width: 800, height: 600 }).is_empty());
+        assert!(map_input(&InputCommand::Resize { width: 800, height: 600, scale_factor: None }).is_empty());
         assert!(map_input(&InputCommand::FullFrame).is_empty());
     }
 

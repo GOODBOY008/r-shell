@@ -399,7 +399,7 @@ export function GroupTabBar({
 
   return (
     <>
-      <div className="bg-muted border-b border-border flex items-center">
+      <div className="bg-sidebar border-b border-border flex min-h-10 items-center">
         <div
           ref={tabBarRef}
           data-tab-bar-group={groupId}
@@ -417,15 +417,21 @@ export function GroupTabBar({
                 <ContextMenuTrigger asChild>
                   <div
                     data-tab-id={tab.id}
-                    className={`flex items-center gap-2 px-3 py-2 border-r border-border cursor-pointer group min-w-0 select-none ${
-                      tab.id === activeTabId ? 'bg-background' : 'hover:bg-background/50'
+                    className={`relative flex items-center gap-2 px-3 py-2.5 border-r border-border/60 cursor-pointer group min-w-0 select-none transition-colors ${
+                      tab.id === activeTabId ? 'bg-background text-foreground shadow-[inset_0_2px_0_var(--primary)]' : 'text-muted-foreground hover:bg-background/60'
                     } ${activeDrag?.tabId === tab.id ? 'opacity-40' : ''}`}
                     onPointerDown={(e) => handlePointerDown(e, tab.id, tab.name)}
                     onDragStart={handleNativeDragStart}
                     draggable={false}
                     onClick={() => handleTabSelect(tab.id)}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
+                    <button
+                      type="button"
+                      className="flex items-center gap-2 min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label={getTabDisplayName(tab, tabs)}
+                      aria-pressed={tab.id === activeTabId}
+                      title={getTabDisplayName(tab, tabs)}
+                    >
                       {tab.tabType === 'file-browser' ? (
                         <FolderSync className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
                       ) : tab.tabType === 'desktop' ? (
@@ -435,16 +441,19 @@ export function GroupTabBar({
                       ) : (
                         <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
-                      <div
+                      <span
+                        data-connection-status={tab.connectionStatus}
                         className={`w-2 h-2 rounded-full shrink-0 ${
                           tab.connectionStatus === 'connected'
-                            ? 'bg-green-500'
+                            ? 'bg-[var(--status-connected)]'
                             : tab.connectionStatus === 'connecting'
-                              ? 'bg-yellow-500 animate-pulse'
-                              : 'bg-red-500'
+                              ? 'bg-[var(--status-connecting)] animate-pulse'
+                              : tab.connectionStatus === 'pending'
+                                ? 'bg-muted-foreground/50'
+                                : 'bg-[var(--status-disconnected)]'
                         }`}
                       />
-                      <span className="text-sm truncate">{getTabDisplayName(tab, tabs)}</span>
+                      <span className="text-xs font-medium truncate">{getTabDisplayName(tab, tabs)}</span>
                       {tab.hasUnreadOutput && tab.id !== activeTabId &&
                         (tab.tabType === undefined || tab.tabType === 'terminal') && (
                           <span
@@ -454,12 +463,13 @@ export function GroupTabBar({
                             className="h-1.5 w-1.5 rounded-full shrink-0 bg-blue-500"
                           />
                         )}
-                    </div>
+                    </button>
 
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="p-0 h-4 w-4 opacity-0 group-hover:opacity-100"
+                      className="p-0 h-5 w-5 opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
+                      aria-label={t('common.close')}
                       // Keep the press off the tab's drag handler: it calls
                       // setPointerCapture on the tab, which retargets pointerup
                       // to the tab, so the browser dispatches the click to the
@@ -593,6 +603,8 @@ export function GroupTabBar({
           variant="ghost"
           size="sm"
           className="p-2 h-8 w-8"
+          aria-label={t('toolbar.newConnection')}
+          title={t('toolbar.newConnection')}
           onClick={onNewTab}
         >
           <Plus className="w-4 h-4" />

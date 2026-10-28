@@ -59,7 +59,7 @@ pub trait DesktopProtocol: Send + Sync {
     /// provided sender until the cancellation token is triggered.
     async fn start_frame_loop(
         &self,
-        event_tx: mpsc::UnboundedSender<DesktopEvent>,
+        event_tx: crate::desktop_frames::DesktopEventSender,
         cancel: CancellationToken,
     ) -> Result<()>;
 
@@ -118,6 +118,11 @@ pub trait DesktopProtocol: Send + Sync {
     /// For VNC: no-op (VNC does not support server-side resize; client-side scaling is used).
     async fn resize(&mut self, width: u16, height: u16) -> Result<()>;
 
+    /// Resize with an optional Windows text-scale hint (ignored by other protocols).
+    async fn resize_with_scale(&mut self, width: u16, height: u16, _scale_factor: Option<u32>) -> Result<()> {
+        self.resize(width, height).await
+    }
+
     /// Disconnect and release resources.
     async fn disconnect(&mut self) -> Result<()>;
 
@@ -148,8 +153,9 @@ pub struct DesktopConnectRequest {
     pub username: Option<String>, // RDP only
     pub password: Option<String>,
     pub domain: Option<String>, // RDP only
-    /// RDP resolution: "1024x768", "1280x720", "1920x1080", or "fit"
+    /// RDP: a fixed resolution, "fit" (Balanced Auto), or "retina".
     pub resolution: Option<String>,
+    pub desktop_scale_factor: Option<u32>,
     /// VNC color depth: 24, 16, or 8
     pub color_depth: Option<u8>,
 }
@@ -174,6 +180,7 @@ pub struct RdpConfig {
     pub domain: Option<String>,
     pub width: u16,
     pub height: u16,
+    pub desktop_scale_factor: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -185,13 +192,14 @@ pub struct VncConfig {
 }
 
 impl DesktopConnectRequest {
-    /// Parse the resolution string into (width, height), defaulting to 1024×768.
+    /// Parse the resolution string into (width, height), defaulting to 1920×1080.
     pub fn parse_resolution(&self) -> (u16, u16) {
         match self.resolution.as_deref() {
+            Some("2560x1440") => (2560, 1440),
             Some("1920x1080") => (1920, 1080),
             Some("1280x720") => (1280, 720),
             Some("1024x768") => (1024, 768),
-            _ => (1024, 768), // "fit" or unknown → default
+            _ => (1920, 1080), // Balanced Auto / Retina start conservatively, then resize.
         }
     }
 
@@ -206,6 +214,7 @@ impl DesktopConnectRequest {
             domain: self.domain.clone(),
             width: w,
             height: h,
+            desktop_scale_factor: self.desktop_scale_factor.unwrap_or(100).clamp(100, 500),
         }
     }
 
@@ -217,5 +226,25 @@ impl DesktopConnectRequest {
             password: self.password.clone(),
             color_depth: self.color_depth.unwrap_or(24),
         }
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+    fn request(resolution: Option<&str>, scale: Option<u32>) -> DesktopConnectRequest {
+        DesktopConnectRequest { protocol: "rdp".into(), host: "localhost".into(), port: 3389,
+            username: None, password: None, domain: None, resolution: resolution.map(str::to_string),
+            desktop_scale_factor: scale, color_depth: None }
+    }
+    #[test]
+    fn default_and_auto_start_at_1080p_and_retina_preserves_text_scale() {
+        for mode in [None, Some("fit"), Some("retina")] {
+            assert_eq!(request(mode, None).parse_resolution(), (1920, 1080));
+        }
+        assert_eq!(request(Some("2560x1440"), None).parse_resolution(), (2560, 1440));
+        assert_eq!(request(Some("retina"), Some(200)).to_rdp_config().desktop_scale_factor, 200);
+        assert_eq!(request(None, Some(0)).to_rdp_config().desktop_scale_factor, 100);
+        assert_eq!(request(None, Some(900)).to_rdp_config().desktop_scale_factor, 500);
     }
 }

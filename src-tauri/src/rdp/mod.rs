@@ -9,7 +9,7 @@ mod connect;
 mod session;
 mod tls;
 
-use crate::desktop_protocol::{DesktopEvent, DesktopProtocol, RdpConfig, SendableHandles};
+use crate::desktop_protocol::{DesktopProtocol, RdpConfig, SendableHandles};
 use crate::rdp::input::InputCommand;
 use crate::rdp_keymap;
 use anyhow::Result;
@@ -32,7 +32,7 @@ impl<T> AsyncReadWrite for T where T: AsyncRead + AsyncWrite {}
 /// (tab canvas ⇄ native window) without restarting the RDP session.
 enum SessionSignal {
     /// Frame-channel output (WebSocket path).
-    FrameLoop(mpsc::UnboundedSender<DesktopEvent>, CancellationToken),
+    FrameLoop(crate::desktop_frames::DesktopEventSender, CancellationToken),
     /// Native rendering (softbuffer window).
     NativeRender(SendableHandles, CancellationToken),
     /// Drop the native renderer after its window closed. A no-op in any
@@ -122,6 +122,7 @@ impl RdpClient {
                             connection_result,
                             input_rx: new_input_rx,
                             enable_server_pointer,
+                            desktop_scale_factor: cfg.desktop_scale_factor,
                         }
                     }
                     Err(e) => {
@@ -204,7 +205,7 @@ impl DesktopProtocol for RdpClient {
     /// Signal the dedicated thread to start the frame loop (WebSocket/canvas path).
     async fn start_frame_loop(
         &self,
-        event_tx: mpsc::UnboundedSender<DesktopEvent>,
+        event_tx: crate::desktop_frames::DesktopEventSender,
         cancel: CancellationToken,
     ) -> Result<()> {
         let self_cancel = self.cancel.clone();
@@ -323,7 +324,7 @@ impl DesktopProtocol for RdpClient {
     /// legacy mask-diff path stays coherent) but emits a stateless
     /// PointerButton that always produces the requested DOWN/RELEASE.
     async fn send_pointer_button(&self, x: u16, y: u16, button: u8, pressed: bool) -> Result<()> {
-        tracing::info!("RDP client send_pointer_button: x={} y={} button={:#04x} pressed={}", x, y, button, pressed);
+        tracing::debug!("RDP client send_pointer_button: x={} y={} button={:#04x} pressed={}", x, y, button, pressed);
         let prev = if pressed {
             self.prev_pointer_mask.fetch_or(button, Ordering::Relaxed)
         } else {
@@ -364,8 +365,13 @@ impl DesktopProtocol for RdpClient {
     /// the viewer. Reporting the requested size here would lie to
     /// `DesktopStarted` whenever the server ignores the request.
     async fn resize(&mut self, width: u16, height: u16) -> Result<()> {
-        let _ = self.input_tx.send(InputCommand::Resize { width, height });
+        let _ = self.input_tx.send(InputCommand::Resize { width, height, scale_factor: None });
         Ok(())
+    }
+
+    async fn resize_with_scale(&mut self, width: u16, height: u16, scale_factor: Option<u32>) -> Result<()> {
+        self.input_tx.send(InputCommand::Resize { width, height, scale_factor })
+            .map_err(|_| anyhow::anyhow!("RDP session has ended"))
     }
 
     async fn disconnect(&mut self) -> Result<()> {
@@ -467,6 +473,7 @@ mod e2e_tests {
             domain: None,
             width: 1920,
             height: 1080,
+            desktop_scale_factor: 100,
         }
     }
 
@@ -487,7 +494,7 @@ mod e2e_tests {
         assert!(w > 0 && h > 0);
 
         // Start frame loop in channel mode
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -669,7 +676,7 @@ mod e2e_tests {
         println!("Logged on via NLA: desktop {}x{}", w, h);
         assert!(w > 0 && h > 0);
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -740,7 +747,7 @@ mod e2e_tests {
             .expect("RDP connect should succeed");
 
         // Phase 1: attach channel mode and collect at least one frame.
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel1 = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel1.clone())
@@ -764,7 +771,7 @@ mod e2e_tests {
         // loop must swap back to channel mode and push a full repaint.
         drop(event_rx);
 
-        let (event_tx2, mut event_rx2) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx2, mut event_rx2) = crate::desktop_frames::desktop_event_channel();
         let cancel2 = CancellationToken::new();
         client
             .start_frame_loop(event_tx2, cancel2.clone())
@@ -791,7 +798,7 @@ mod e2e_tests {
 
     /// Wait up to `secs` for an event matching `pred`, draining others.
     async fn wait_for_event(
-        rx: &mut mpsc::UnboundedReceiver<DesktopEvent>,
+        rx: &mut crate::desktop_frames::DesktopEventReceiver,
         secs: u64,
         pred: impl Fn(&DesktopEvent) -> bool,
     ) -> bool {
@@ -885,7 +892,7 @@ mod e2e_tests {
 
     /// Collect frames into `fb` until `secs` elapse. Returns frames received.
     async fn collect_frames(
-        rx: &mut mpsc::UnboundedReceiver<DesktopEvent>,
+        rx: &mut crate::desktop_frames::DesktopEventReceiver,
         fb: &mut [u8],
         w: u16,
         h: u16,
@@ -924,7 +931,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -1022,7 +1029,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -1082,7 +1089,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -1179,7 +1186,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -1402,7 +1409,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -1517,7 +1524,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -1585,7 +1592,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())
@@ -1650,7 +1657,7 @@ mod e2e_tests {
         let (w, h) = client.desktop_size();
         println!("connected: desktop {w}x{h}");
 
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<DesktopEvent>();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
         let cancel = CancellationToken::new();
         client
             .start_frame_loop(event_tx, cancel.clone())

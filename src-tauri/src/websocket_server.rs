@@ -5,11 +5,11 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex, Semaphore};
+use tokio::sync::{mpsc, watch, Mutex, Semaphore};
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
@@ -99,7 +99,11 @@ pub enum WsMessage {
         connection_id: String,
         width: u16,
         height: u16,
+        stream_id: u32,
     },
+    /// Sent only after the canvas has painted this frame. At most one frame
+    /// per stream is in flight; stale acknowledgements cannot unlock a new stream.
+    DesktopFrameAck { connection_id: String, stream_id: u32, frame_id: u32 },
     /// Remote desktop size changed (reactivation or resize took effect)
     DesktopResized {
         connection_id: String,
@@ -199,7 +203,14 @@ type ReaderTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
 /// connection id → the token that cancels the session-side frame loop.
 /// Cancelled when the transport dies, so a dropped socket cannot leave an
 /// unwatched session running forever (native pop-out sessions are spared).
-type DesktopStreams = Arc<Mutex<HashMap<String, CancellationToken>>>;
+struct DesktopStream {
+    session_cancel: CancellationToken,
+    forward_cancel: CancellationToken,
+    stream_id: u32,
+    acknowledged: watch::Sender<u32>,
+}
+type DesktopStreams = Arc<Mutex<HashMap<String, DesktopStream>>>;
+static NEXT_DESKTOP_STREAM: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Debug, PartialEq, Eq)]
 enum SendOutcome {
@@ -319,10 +330,12 @@ fn decode_input_frame(data: &[u8]) -> Option<(String, &[u8])> {
 
 /// Encode a binary desktop frame:
 ///   [0x02][id_len: u16 BE][connection_id bytes]
-///   [x: u16 BE][y: u16 BE][w: u16 BE][h: u16 BE]
-///   [rgba bytes]
+///   [stream_id: u32 BE][frame_id: u32 BE]
+///   [x: u16 BE][y: u16 BE][w: u16 BE][h: u16 BE][rgba bytes]
 fn encode_desktop_frame(
     connection_id: &str,
+    stream_id: u32,
+    frame_id: u32,
     x: u16,
     y: u16,
     w: u16,
@@ -331,17 +344,78 @@ fn encode_desktop_frame(
 ) -> Vec<u8> {
     let id_bytes = connection_id.as_bytes();
     let id_len = id_bytes.len().min(u16::MAX as usize);
-    let header_size = 1 + 2 + id_len + 8; // cmd + id_len + id + x/y/w/h
+    let header_size = 1 + 2 + id_len + 16; // command, id, stream/frame ids, rectangle
     let mut frame = Vec::with_capacity(header_size + rgba.len());
     frame.push(BINARY_DESKTOP_CMD);
     frame.extend_from_slice(&(id_len as u16).to_be_bytes());
     frame.extend_from_slice(&id_bytes[..id_len]);
+    frame.extend_from_slice(&stream_id.to_be_bytes());
+    frame.extend_from_slice(&frame_id.to_be_bytes());
     frame.extend_from_slice(&x.to_be_bytes());
     frame.extend_from_slice(&y.to_be_bytes());
     frame.extend_from_slice(&w.to_be_bytes());
     frame.extend_from_slice(&h.to_be_bytes());
     frame.extend_from_slice(rgba);
     frame
+}
+
+/// A single acknowledged frame bounds both the shared outgoing queue and the
+/// browser event queue. Pixel coalescing continues while the consumer is busy.
+async fn forward_desktop_frames(
+    cid: String,
+    stream_id: u32,
+    mut event_rx: crate::desktop_frames::DesktopEventReceiver,
+    mut ack_rx: watch::Receiver<u32>,
+    tx_clone: WsTx,
+    forward_cancel: CancellationToken,
+) {
+    use crate::desktop_protocol::DesktopEvent;
+    let mut frame_id = 0u32;
+    loop {
+        let ev = tokio::select! {
+            biased;
+            _ = forward_cancel.cancelled() => return,
+            event = event_rx.recv() => event,
+        };
+        let Some(ev) = ev else { break; };
+        match ev {
+            DesktopEvent::Frame(frame) => {
+                frame_id = frame_id.wrapping_add(1);
+                let binary = encode_desktop_frame(&cid, stream_id, frame_id,
+                    frame.x, frame.y, frame.width, frame.height, &frame.rgba_data);
+                let delivered = tokio::select! {
+                    biased;
+                    _ = forward_cancel.cancelled() => return,
+                    result = tx_clone.send(Message::Binary(binary.into())) => result.is_ok(),
+                };
+                if !delivered { return; }
+                drop(frame);
+                // Never queue another image until the browser has painted.
+                // Meanwhile the producer composites into its bounded mailbox.
+                tokio::select! {
+                    biased;
+                    _ = forward_cancel.cancelled() => return,
+                    result = ack_rx.wait_for(|ack| *ack == frame_id) => {
+                        if result.is_err() { return; }
+                    }
+                }
+            }
+            DesktopEvent::Resized { width, height } => {
+                let msg = WsMessage::DesktopResized { connection_id: cid.clone(), width, height };
+                // Resize ordering is essential: never drop this control message.
+                let message = Message::Text(serde_json::to_string(&msg).unwrap().into());
+                tokio::select! {
+                    biased;
+                    _ = forward_cancel.cancelled() => return,
+                    result = tx_clone.send(message) => { if result.is_err() { return; } }
+                }
+            }
+        }
+    }
+    let ended = WsMessage::Error {
+        message: format!("desktop_session_ended: {cid}"), code: None,
+    };
+    let _ = send_control(&tx_clone, &ended).await;
 }
 
 /// Send a JSON control message with a timeout.
@@ -630,11 +704,12 @@ impl WebSocketServer {
         // alive forever with nobody watching — cancel it, unless the session
         // is currently popped out into a native window, which keeps running
         // (and taking input) without this socket.
-        let orphaned: Vec<(String, CancellationToken)> = {
+        let orphaned: Vec<(String, DesktopStream)> = {
             let mut streams = desktop_streams.lock().await;
             streams.drain().collect()
         };
-        for (connection_id, cancel) in orphaned {
+        for (connection_id, stream) in orphaned {
+            stream.forward_cancel.cancel();
             if self
                 .connection_manager
                 .is_desktop_native_rendering(&connection_id)
@@ -650,7 +725,7 @@ impl WebSocketServer {
                 "Transport closed — cancelling desktop stream for {}",
                 connection_id
             );
-            cancel.cancel();
+            stream.session_cancel.cancel();
         }
         ws_sender_task.abort();
 
@@ -968,91 +1043,60 @@ impl WebSocketServer {
                         c.desktop_size()
                     };
                     tracing::info!("Desktop size: {}x{}", w, h);
-                    let started = WsMessage::DesktopStarted {
-                        connection_id: connection_id.clone(),
-                        width: w,
-                        height: h,
+                    let stream_id = NEXT_DESKTOP_STREAM.fetch_add(1, Ordering::Relaxed);
+                    let (acknowledged, ack_rx) = watch::channel(0);
+                    let forward_cancel = CancellationToken::new();
+                    let desktop_cancel = {
+                        let mut streams = desktop_streams.lock().await;
+                        // Reattaching replaces the consumer, not the RDP session.
+                        let session_cancel = if let Some(old) = streams.remove(&connection_id) {
+                            old.forward_cancel.cancel();
+                            old.session_cancel
+                        } else { CancellationToken::new() };
+                        streams.insert(connection_id.clone(), DesktopStream {
+                            session_cancel: session_cancel.clone(),
+                            forward_cancel: forward_cancel.clone(),
+                            stream_id,
+                            acknowledged,
+                        });
+                        session_cancel
                     };
-                    tracing::info!("Sending DesktopStarted message for {}", connection_id);
-                    let result = send_control(&tx, &started).await;
-                    tracing::info!("send_control result: {:?}", result);
-                    result?;
+                    let started = WsMessage::DesktopStarted {
+                        connection_id: connection_id.clone(), width: w, height: h, stream_id,
+                    };
+                    let message = serde_json::to_string(&started).map_err(anyhow::Error::from)?;
+                    tx.send(Message::Text(message.into())).await.map_err(anyhow::Error::from)?;
 
-                    // Spawn frame streaming: start_frame_loop + binary forwarder
-                    let (event_tx, mut event_rx) =
-                        mpsc::unbounded_channel::<crate::desktop_protocol::DesktopEvent>();
-                    let desktop_cancel = CancellationToken::new();
-                    // Track it so transport loss below can cancel the stream.
-                    desktop_streams
-                        .lock()
-                        .await
-                        .insert(connection_id.clone(), desktop_cancel.clone());
-
-                    // Spawn the frame loop on the connection manager
+                    let (event_tx, event_rx) = crate::desktop_frames::desktop_event_channel();
                     let cm = self.connection_manager.clone();
                     let cid = connection_id.clone();
-                    let cancel_clone = desktop_cancel.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = cm.start_desktop_stream(&cid, event_tx, cancel_clone).await
-                        {
+                        if let Err(e) = cm.start_desktop_stream(&cid, event_tx, desktop_cancel).await {
                             tracing::error!("Desktop frame loop error for {}: {}", cid, e);
                         }
                     });
 
-                    // Spawn a forwarder that drains event_rx and dispatches:
-                    //  - Frame    → binary desktop-frame message
-                    //  - Resized  → JSON DesktopResized control message
                     let tx_clone = tx.clone();
                     let cid = connection_id.clone();
-                    tokio::spawn(async move {
-                        use crate::desktop_protocol::DesktopEvent;
-                        while let Some(ev) = event_rx.recv().await {
-                            match ev {
-                                DesktopEvent::Frame(frame) => {
-                                    let binary = encode_desktop_frame(
-                                        &cid,
-                                        frame.x,
-                                        frame.y,
-                                        frame.width,
-                                        frame.height,
-                                        &frame.rgba_data,
-                                    );
-                                    if tx_clone.send(Message::Binary(binary.into())).await.is_err() {
-                                        break;
-                                    }
-                                }
-                                DesktopEvent::Resized { width, height } => {
-                                    let msg = WsMessage::DesktopResized {
-                                        connection_id: cid.clone(),
-                                        width,
-                                        height,
-                                    };
-                                    let closed = send_control(&tx_clone, &msg)
-                                        .await
-                                        .map(|o| o == SendOutcome::Closed)
-                                        .unwrap_or(true);
-                                    if closed {
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        // The frame channel closed without the frontend asking:
-                        // the RDP session loop exited on its own (server
-                        // disconnect, protocol error). Tell the viewer so it
-                        // shows the reconnect panel instead of a frozen frame.
-                        let ended = WsMessage::Error {
-                            message: format!("desktop_session_ended: {cid}"),
-                            code: None,
-                        };
-                        let _ = send_control(&tx_clone, &ended).await;
-                    });
+                    tokio::spawn(forward_desktop_frames(cid, stream_id, event_rx, ack_rx, tx_clone, forward_cancel));
                 } else {
                     let error = WsMessage::Error {
                         message: format!("Desktop connection not found: {}", connection_id),
                         code: None,
                     };
                     send_control(&tx, &error).await?;
+                }
+                Ok(PtyLifecycleEvent::None)
+            }
+
+            WsMessage::DesktopFrameAck { connection_id, stream_id, frame_id } => {
+                if let Some(stream) = desktop_streams.lock().await.get(&connection_id) {
+                    if stream.stream_id == stream_id {
+                        let previous = *stream.acknowledged.borrow();
+                        if frame_id == previous.wrapping_add(1) {
+                            stream.acknowledged.send_replace(frame_id);
+                        }
+                    }
                 }
                 Ok(PtyLifecycleEvent::None)
             }
@@ -1082,7 +1126,7 @@ impl WebSocketServer {
                 button_mask,
             } => {
                 if button_mask != 0 {
-                    tracing::info!("WS pointer event: x={} y={} mask={:#04x}", x, y, button_mask);
+                    tracing::debug!("WS pointer event: x={} y={} mask={:#04x}", x, y, button_mask);
                 }
                 if let Some(client) = self
                     .connection_manager
@@ -1163,7 +1207,10 @@ impl WebSocketServer {
 
             WsMessage::CloseDesktop { connection_id } => {
                 tracing::info!("Closing desktop session: {}", connection_id);
-                desktop_streams.lock().await.remove(&connection_id);
+                if let Some(stream) = desktop_streams.lock().await.remove(&connection_id) {
+                    stream.forward_cancel.cancel();
+                    stream.session_cancel.cancel();
+                }
                 if let Err(e) = self
                     .connection_manager
                     .close_desktop_connection(&connection_id)
@@ -1426,5 +1473,44 @@ mod handshake_tests {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
         assert_ne!(a, b);
+    }
+}
+
+#[cfg(test)]
+mod desktop_delivery_tests {
+    use super::*;
+    use crate::desktop_protocol::{DesktopEvent, FrameUpdate};
+
+    fn patch(value: u8) -> DesktopEvent {
+        DesktopEvent::Frame(FrameUpdate { x: 0, y: 0, width: 1, height: 1, rgba_data: vec![value; 4] })
+    }
+
+    #[tokio::test]
+    async fn only_one_frame_is_in_flight_and_slow_painter_gets_latest_pixels() {
+        let (events, rx) = crate::desktop_frames::desktop_event_channel();
+        let (ack, ack_rx) = watch::channel(0);
+        let (tx, mut output) = mpsc::channel(8);
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(forward_desktop_frames("conn".into(), 7, rx, ack_rx, tx, cancel.clone()));
+        events.send(DesktopEvent::Resized { width: 2, height: 2 }).unwrap();
+        events.send(patch(1)).unwrap();
+        assert!(matches!(output.recv().await, Some(Message::Text(_))));
+        let Some(Message::Binary(first)) = output.recv().await else { panic!("missing first frame") };
+        assert_eq!(&first[7..15], &[0, 0, 0, 7, 0, 0, 0, 1]);
+        events.send(patch(2)).unwrap();
+        events.send(patch(3)).unwrap();
+        tokio::task::yield_now().await;
+        assert!(output.try_recv().is_err(), "must wait for the browser paint");
+        ack.send_replace(1);
+        let Some(Message::Binary(second)) = output.recv().await else { panic!("missing second frame") };
+        assert_eq!(&second[second.len()-4..], &[3; 4]);
+        // Repeated old acknowledgements must not release the next frame.
+        events.send(patch(4)).unwrap();
+        ack.send_replace(1);
+        tokio::task::yield_now().await;
+        assert!(output.try_recv().is_err());
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(1), task).await.unwrap().unwrap();
+        assert!(output.recv().await.is_none(), "replaced streams must not send a session-ended error");
     }
 }

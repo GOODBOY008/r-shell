@@ -30,6 +30,8 @@ import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-
 import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
 import { useShortcutBindings } from '@/lib/shortcut-registry';
 import type { UpdateAnnouncement } from './update-checker';
+import rShellLogo from '@/assets/r-shell-logo.svg';
+import rShellIcon from '@/assets/r-shell-icon.svg';
 import { 
   Plus, 
   FolderOpen, 
@@ -183,9 +185,13 @@ export function MenuBar({
 
   return (
     <div
-      className="border-b border-border bg-background py-1 flex items-center gap-1"
+      className="border-b border-border bg-sidebar min-h-11 py-1.5 flex items-center gap-1"
       style={{ paddingLeft: isMac ? '80px' : '8px' }}
     >
+      <div className="mr-3 flex shrink-0 items-center gap-2 px-2" data-tauri-drag-region>
+        <img src={rShellIcon} alt="" aria-hidden="true" className="size-6 shrink-0" draggable={false} data-tauri-drag-region />
+        <span className="text-xs font-semibold tracking-tight" data-tauri-drag-region>{t('app.title')}</span>
+      </div>
       {/* Menu dropdowns — hidden on macOS because native system menu bar handles these */}
       {!isMac && (
         <>
@@ -462,7 +468,12 @@ export function MenuBar({
         onDoubleClick={handleDragRegionDoubleClick}
       />
 
-      {/* Layout controls — VS Code style, right-aligned */}
+      <Button variant="ghost" size="sm" onClick={onNewConnection} className="mr-2 h-7 gap-1.5 text-xs text-primary">
+        <Plus className="size-3.5" aria-hidden="true" />
+        <span className="hidden sm:inline">{t('menuBar.newConnection')}</span>
+        <span className="sr-only sm:hidden">{t('menuBar.newConnection')}</span>
+      </Button>
+      {/* Layout controls */}
       <div className="flex items-center gap-0.5 pr-1">
         <TooltipProvider>
           {/* Update pill: non-intrusive persistent cue for a discovered
@@ -500,7 +511,7 @@ export function MenuBar({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleLeftSidebar}>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleLeftSidebar} aria-label={t('menuBar.toggleConnectionManager')} aria-pressed={leftSidebarVisible}>
                 {leftSidebarVisible
                   ? <PanelLeftClose className="w-4 h-4" />
                   : <PanelLeftOpen className="w-4 h-4" />}
@@ -516,7 +527,7 @@ export function MenuBar({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleBottomPanel}>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleBottomPanel} aria-label={t('menuBar.toggleFileBrowser')} aria-pressed={bottomPanelVisible}>
                 {bottomPanelVisible
                   ? <PanelBottomClose className="w-4 h-4" />
                   : <PanelBottomOpen className="w-4 h-4" />}
@@ -532,7 +543,7 @@ export function MenuBar({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleRightSidebar}>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onToggleRightSidebar} aria-label={t('menuBar.toggleMonitorPanel')} aria-pressed={rightSidebarVisible}>
                 {rightSidebarVisible
                   ? <PanelRightClose className="w-4 h-4" />
                   : <PanelRightOpen className="w-4 h-4" />}
@@ -553,6 +564,8 @@ export function MenuBar({
                 size="sm"
                 className={`h-7 w-7 p-0 ${zenMode ? 'bg-accent' : ''}`}
                 onClick={onToggleZenMode}
+                aria-label={t('menuBar.toggleZenMode')}
+                aria-pressed={zenMode}
               >
                 <Maximize2 className="w-4 h-4" />
               </Button>
@@ -569,7 +582,7 @@ export function MenuBar({
             <Tooltip>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label={t('menuBar.layoutPresets')}>
                     <LayoutGrid className="w-4 h-4" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -590,7 +603,7 @@ export function MenuBar({
 
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onOpenSettings}>
+              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={onOpenSettings} aria-label={t('common.options')}>
                 <Settings className="w-4 h-4" />
               </Button>
             </TooltipTrigger>
@@ -603,6 +616,7 @@ export function MenuBar({
       <Dialog open={aboutOpen} onOpenChange={setAboutOpen}>
         <DialogContent className="sm:max-w-[320px]">
           <DialogHeader>
+            <img src={rShellLogo} alt="" aria-hidden="true" className="mb-2 size-16" />
             <DialogTitle>{t('menuBar.about')}</DialogTitle>
             <DialogDescription>{t('app.title')}</DialogDescription>
           </DialogHeader>

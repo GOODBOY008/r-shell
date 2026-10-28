@@ -213,10 +213,14 @@
       "keepAliveDesc": "Send keep-alive messages to prevent connection timeout"
     },
     "rdp": {
-      "fitToWindow": "Fit to Window",
+      "fitToWindow": "Balanced Auto (up to 1080p)",
       "h1024x768": "1024×768",
       "h1280x720": "1280×720 (HD)",
-      "h1920x1080": "1920×1080 (Full HD)"
+      "h1920x1080": "1920×1080 (Full HD)",
+      "h2560x1440": "2560×1440 (QHD)",
+      "retina": "Retina (high detail)",
+      "balancedHint": "Balanced Auto keeps text readable and limits resolution to 1080p. Fixed sizes stay unchanged in full screen.",
+      "retinaHint": "Uses your display’s pixel density and requests matching Windows text scaling. Requires more bandwidth and processing; server support may vary."
     },
     "vnc": {
       "trueColor": "True Color (24-bit)",
@@ -364,7 +368,12 @@
       "appTheme": "Application Theme",
       "autostart": "Launch at Login",
       "autostartDesc": "Start r-shell automatically when you log in",
-      "autostartFailed": "Failed to update launch-at-login setting"
+      "autostartFailed": "Failed to update launch-at-login setting",
+      "connectionListFontSize": "Connection list font size",
+      "connectionListFontSizeDesc": "Adjust connection and folder names in the sidebar. Changes apply after saving.",
+      "showConnectionHost": "Show host addresses",
+      "showConnectionHostDesc": "Show IP addresses or hostnames below connection names. Turn off for a compact list.",
+      "fontSizeValue": "{{size}} px"
     },
     "keyboard": {
       "title": "Keyboard Shortcuts",
@@ -542,7 +551,20 @@
       "hours_other": "{{count}} hours ago",
       "days_one": "{{count}} day ago",
       "days_other": "{{count}} days ago"
-    }
+    },
+    "workspace": "Workspace",
+    "workspaceEyebrow": "Ready when you are",
+    "headline": "Your servers.",
+    "headlineAccent": "One workspace.",
+    "workspaceDescription": "Connect to your machines, manage files, and keep an eye on everything. Pick up where you left off.",
+    "browseConnections": "Browse connections",
+    "noRecentTitle": "Your next session starts here",
+    "noRecentDescription": "Connect to a server and it will appear here for quick access next time.",
+    "resumeHint": "Select a recent connection to open a new session.",
+    "quickAccess": "Quick access",
+    "workflowTitle": "A little less switching.",
+    "workflowDescription": "Terminals, remote files, RDP and VNC desktops, and system monitoring in one connected workspace.",
+    "makeItYours": "Make it yours"
   },
   "menuBar": {
     "file": "File",
@@ -720,6 +742,7 @@
       "downloadedFilesSkippedFolders": "Downloaded {{count}} files, skipped {{folders}} folder(s)"
     },
     "toolbar": {
+      "editPath": "Edit path",
       "back": "Back",
       "forward": "Forward",
       "parentDir": "Parent directory",
@@ -1000,7 +1023,12 @@
     "failedToReorder": "Failed to reorder items",
     "detachedSessions": "Detached Sessions",
     "reattachSession": "Reattach Session",
-    "closeDetachedSession": "Close Session"
+    "closeDetachedSession": "Close Session",
+    "noSearchResults": "No matching connections",
+    "searchHint": "Try a different name, host, or username.",
+    "clearSearch": "Clear search",
+    "expandFolder": "Expand {{name}}",
+    "collapseFolder": "Collapse {{name}}"
   },
   "filePanel": {
     "selectDirectory": "Select a directory to view its contents",
@@ -1112,7 +1140,9 @@
     "uptime": "Uptime: {{time}}",
     "cpu": "CPU: {{percent}}%",
     "memory": "Memory: {{used}}/{{total}}",
-    "ready": "Ready"
+    "ready": "Ready",
+    "pending": "Waiting to connect",
+    "workspace": "Workspace"
   },
   "notifications": {
     "center": "Notifications",
@@ -1179,6 +1209,8 @@
     "lastConnected": "Last Connected"
   },
   "desktopToolbar": {
+    "controls": "Remote desktop controls",
+    "showControls": "Show remote desktop controls",
     "switchTo11": "Switch to 1:1",
     "switchToFit": "Switch to Fit to Window",
     "fit": "Fit",
@@ -1301,6 +1333,10 @@
     "gpuIndex": "GPU {{index}}"
   },
   "logMonitor": {
+    "clearSearch": "Clear search",
+    "lineLimit": "Number of log lines",
+    "refreshInterval": "Refresh interval",
+    "invalidRegex": "Invalid regular expression. Check the pattern or turn off regex search.",
     "noSourcesDiscovered": "No log sources discovered",
     "failedToDiscoverSources": "Failed to discover log sources",
     "failedToLoadLog": "Failed to load log",

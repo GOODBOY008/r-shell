@@ -173,6 +173,21 @@ describe('QuickCommandsPanel', () => {
     stop();
   });
 
+  it.each(['Enter', ' '])('does not run a snippet when %s is pressed on an action', (key) => {
+    seedSnippets();
+    const { events, stop } = captureTerminalEvents();
+    render(<QuickCommandsPanel activeTerminalId="tab-1" />);
+    const card = snippetCard('Restart nginx');
+    for (const button of within(card).getAllByRole('button')) {
+      fireEvent.keyDown(button, { key });
+    }
+    expect(events).toEqual([]);
+    fireEvent.keyDown(card, { key });
+    expect(events).toHaveLength(1);
+    expect(events[0].execute).toBe(true);
+    stop();
+  });
+
   it('inserts without executing via the insert action', () => {
     seedSnippets();
     const { events, stop } = captureTerminalEvents();

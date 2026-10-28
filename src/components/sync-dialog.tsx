@@ -24,7 +24,6 @@ import { Checkbox } from "./ui/checkbox";
 import { Progress } from "./ui/progress";
 import { Label } from "./ui/label";
 import { Switch } from "./ui/switch";
-import { ScrollArea } from "./ui/scroll-area";
 import { Badge } from "./ui/badge";
 import {
   Select,
@@ -477,7 +476,7 @@ export function SyncDialog({
 
   return (
     <Dialog open={open} onOpenChange={isBusy ? undefined : onOpenChange}>
-      <DialogContent className={`top-0! left-0! translate-x-0! translate-y-0! inset-0! m-auto! flex! flex-col! sm:max-w-3xl! max-h-[85vh]! overflow-hidden ${compared ? "h-[85vh]!" : "h-fit!"}`}>
+      <DialogContent aria-describedby={undefined} className={`top-0! left-0! translate-x-0! translate-y-0! inset-0! m-auto! flex! flex-col! sm:max-w-3xl! max-h-[calc(100dvh-2rem)]! overflow-y-auto ${compared ? "h-[min(720px,calc(100dvh-2rem))]!" : "h-fit!"}`}>
         <DialogHeader className="shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <ArrowRightLeft className="h-5 w-5" />
@@ -486,17 +485,17 @@ export function SyncDialog({
         </DialogHeader>
 
         {/* ── Paths ── */}
-        <div className="grid grid-cols-2 gap-3 text-xs shrink-0">
-          <div>
-            <Label className="text-muted-foreground text-[10px]">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs shrink-0">
+          <div className="min-w-0">
+            <Label className="text-muted-foreground text-[11px]">
               {t('syncDialog.localDirectory')}
             </Label>
             <div className="mt-0.5 px-2 py-1 bg-muted/50 rounded text-xs font-mono truncate">
               {localPath}
             </div>
           </div>
-          <div>
-            <Label className="text-muted-foreground text-[10px]">
+          <div className="min-w-0">
+            <Label className="text-muted-foreground text-[11px]">
               {t('syncDialog.remoteDirectory')}
             </Label>
             <div className="mt-0.5 px-2 py-1 bg-muted/50 rounded text-xs font-mono truncate">
@@ -521,7 +520,7 @@ export function SyncDialog({
                 }
                 disabled={isBusy}
               >
-                <SelectTrigger className="h-7 text-xs w-[160px]">
+                <SelectTrigger aria-label={t('syncDialog.direction')} className="h-8! text-xs w-[160px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -548,7 +547,7 @@ export function SyncDialog({
                 }
                 disabled={isBusy}
               >
-                <SelectTrigger className="h-7 text-xs w-[140px]">
+                <SelectTrigger aria-label={t('syncDialog.compareBy')} className="h-8! text-xs w-[140px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -599,7 +598,8 @@ export function SyncDialog({
             <Filter className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <Label className="text-xs whitespace-nowrap">{t('syncDialog.exclude')}</Label>
             <input
-              className="flex-1 h-7 text-xs bg-muted/50 rounded px-2 outline-hidden placeholder:text-muted-foreground/50"
+              aria-label={t('syncDialog.exclude')}
+              className="min-w-0 flex-1 h-8 text-xs bg-muted/50 rounded px-2 outline-hidden placeholder:text-muted-foreground/50"
               placeholder={t('syncDialog.excludePlaceholder')}
               autoComplete="off"
               autoCorrect="off"
@@ -614,13 +614,13 @@ export function SyncDialog({
 
         {/* ── Comparison Results ── */}
         {compared && (
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div className="flex-1 min-h-56 shrink-0 flex flex-col overflow-hidden">
             {/* Summary bar */}
             <div className="flex items-center gap-2 text-xs py-1 flex-wrap shrink-0">
               {summary.toUpload > 0 && (
                 <Badge
                   variant="secondary"
-                  className="text-[10px] gap-1 h-5"
+                  className="text-[11px] gap-1 h-5"
                 >
                   <Upload className="h-3 w-3 text-blue-500" />
                   {t('syncDialog.badgeUpload', { count: summary.toUpload })}
@@ -629,7 +629,7 @@ export function SyncDialog({
               {summary.toCreateDir > 0 && (
                 <Badge
                   variant="secondary"
-                  className="text-[10px] gap-1 h-5"
+                  className="text-[11px] gap-1 h-5"
                 >
                   <FolderPlus className="h-3 w-3 text-yellow-500" />
                   {t('syncDialog.badgeMkdir', { count: summary.toCreateDir })}
@@ -638,7 +638,7 @@ export function SyncDialog({
               {summary.toDelete > 0 && (
                 <Badge
                   variant="secondary"
-                  className="text-[10px] gap-1 h-5"
+                  className="text-[11px] gap-1 h-5"
                 >
                   <Trash2 className="h-3 w-3 text-destructive" />
                   {t('syncDialog.badgeDelete', { count: summary.toDelete })}
@@ -647,7 +647,7 @@ export function SyncDialog({
               {summary.toDownload > 0 && (
                 <Badge
                   variant="secondary"
-                  className="text-[10px] gap-1 h-5"
+                  className="text-[11px] gap-1 h-5"
                 >
                   <Download className="h-3 w-3 text-green-500" />
                   {t('syncDialog.badgeDownload', { count: summary.toDownload })}
@@ -656,7 +656,7 @@ export function SyncDialog({
               {summary.skipped > 0 && (
                 <Badge
                   variant="outline"
-                  className="text-[10px] gap-1 h-5"
+                  className="text-[11px] gap-1 h-5"
                 >
                   <Equal className="h-3 w-3" />
                   {t('syncDialog.badgeIdentical', { count: summary.skipped })}
@@ -665,23 +665,23 @@ export function SyncDialog({
               {summary.conflicts > 0 && (
                 <Badge
                   variant="outline"
-                  className="text-[10px] gap-1 h-5 border-orange-400"
+                  className="text-[11px] gap-1 h-5 border-orange-400"
                 >
                   <AlertTriangle className="h-3 w-3 text-orange-500" />
                   {t('syncDialog.badgeConflict', { count: summary.conflicts })}
                 </Badge>
               )}
-              <span className="text-muted-foreground text-[10px] ml-auto">
+              <span className="text-muted-foreground text-[11px] ml-auto">
                 {t('syncDialog.badgeTotal', { size: formatSize(summary.totalBytes) })}
               </span>
             </div>
 
             {/* Bulk actions */}
-            <div className="flex items-center gap-2 mb-1 shrink-0">
+            <div className="flex flex-wrap items-center gap-2 mb-1 shrink-0">
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 text-[10px] px-2"
+                className="h-6 text-[11px] px-2"
                 onClick={selectAll}
                 disabled={isBusy}
               >
@@ -691,7 +691,7 @@ export function SyncDialog({
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 text-[10px] px-2"
+                className="h-6 text-[11px] px-2"
                 onClick={selectNone}
                 disabled={isBusy}
               >
@@ -706,7 +706,7 @@ export function SyncDialog({
                 />
                 <Label
                   htmlFor="show-skipped"
-                  className="text-[10px] text-muted-foreground"
+                  className="text-[11px] text-muted-foreground"
                 >
                   {t('syncDialog.showIdentical')}
                 </Label>
@@ -714,8 +714,8 @@ export function SyncDialog({
             </div>
 
             {/* Result table */}
-            <ScrollArea className="flex-1 min-h-0 border border-border rounded">
-              <table className="w-full text-[11px]" style={{ tableLayout: "fixed" }}>
+            <div className="flex-1 min-h-32 overflow-auto border border-border rounded">
+              <table className="w-full min-w-[520px] text-xs" style={{ tableLayout: "fixed" }}>
                 <colgroup>
                   <col style={{ width: 28 }} />
                   <col />
@@ -723,7 +723,7 @@ export function SyncDialog({
                   <col style={{ width: 70 }} />
                   <col style={{ width: 70 }} />
                 </colgroup>
-                <thead className="sticky top-0 bg-muted/60 z-10">
+                <thead className="sticky top-0 bg-muted z-10">
                   <tr className="border-b border-border text-muted-foreground">
                     <th className="px-1 py-0.5" />
                     <th className="text-left px-2 py-0.5 font-medium">
@@ -758,6 +758,7 @@ export function SyncDialog({
                         <td className="px-1 py-0.5 text-center">
                           {entry.action !== "skip" && (
                             <Checkbox
+                              aria-label={entry.relativePath}
                               checked={entry.checked}
                               onCheckedChange={() => toggleEntry(realIdx)}
                               className="h-3.5 w-3.5"
@@ -783,7 +784,7 @@ export function SyncDialog({
                         <td className="px-1 py-0.5">
                           <div className="flex items-center justify-center gap-1">
                             {actionIcon(entry.action)}
-                            <span className="text-[10px]">
+                            <span className="text-[11px]">
                               {actionLabel(entry.action, t)}
                             </span>
                           </div>
@@ -815,7 +816,7 @@ export function SyncDialog({
                   )}
                 </tbody>
               </table>
-            </ScrollArea>
+            </div>
           </div>
         )}
 

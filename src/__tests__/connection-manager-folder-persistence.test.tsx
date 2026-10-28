@@ -31,8 +31,8 @@ function seedStorage() {
   localStorage.setItem(
     'r-shell-connections',
     JSON.stringify([
-      { id: crypto.randomUUID(), name: 'Prod box', host: 'p', port: 22, username: 'u', protocol: 'SSH', folder: 'Work/Prod', createdAt: now },
-      { id: crypto.randomUUID(), name: 'Home box', host: 'h', port: 22, username: 'u', protocol: 'SSH', folder: 'Personal', createdAt: now },
+      { id: crypto.randomUUID(), name: 'Prod box', host: 'prod.internal', port: 22, username: 'u', protocol: 'SSH', folder: 'Work/Prod', createdAt: now },
+      { id: crypto.randomUUID(), name: 'Home box', host: 'home.internal', port: 22, username: 'u', protocol: 'SSH', folder: 'Personal', createdAt: now },
     ]),
   );
   ConnectionStorageManager.initialize();
@@ -106,5 +106,51 @@ describe('ConnectionManager folder expansion persistence', () => {
     localStorage.setItem(COLLAPSED_FOLDERS_STORAGE_KEY, '{oops');
     mount();
     expect(screen.getByText('Prod box')).toBeTruthy();
+  });
+
+  it('finds a connection inside collapsed folders without changing their saved state', () => {
+    localStorage.setItem(COLLAPSED_FOLDERS_STORAGE_KEY, JSON.stringify([workId, prodId]));
+    mount();
+    const search = screen.getByRole('searchbox');
+    expect(screen.queryByText('Prod box')).toBeNull();
+
+    fireEvent.change(search, { target: { value: 'PROD BOX' } });
+    expect(screen.getByText('Prod box')).toBeTruthy();
+    expect(screen.queryByText('Home box')).toBeNull();
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_FOLDERS_STORAGE_KEY)!)).toEqual([workId, prodId]);
+
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(screen.queryByText('Prod box')).toBeNull();
+    expect(screen.getByText('Home box')).toBeTruthy();
+  });
+
+  it('searches host and username, and lets users clear an empty result', () => {
+    mount();
+    const search = screen.getByRole('searchbox');
+    fireEvent.change(search, { target: { value: 'home.internal' } });
+    expect(screen.getByText('Home box')).toBeTruthy();
+    expect(screen.queryByText('Prod box')).toBeNull();
+    fireEvent.change(search, { target: { value: 'u' } });
+    expect(screen.getByText('Prod box')).toBeTruthy();
+    expect(screen.getByText('Home box')).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'missing-server' } });
+    expect(screen.getByRole('status').textContent).toContain('No matching connections');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    expect(screen.getByText('Prod box')).toBeTruthy();
+    expect(screen.getByText('Home box')).toBeTruthy();
+  });
+
+  it('opens a connection from its explicit action or the Enter key', () => {
+    const onConnect = vi.fn();
+    const onSelect = vi.fn();
+    render(<ConnectionManager onConnectionSelect={onSelect} onConnectionConnect={onConnect} selectedConnectionId={null} activeConnections={new Set()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Connect to Prod box' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Connect to Prod box' }), { detail: 2 });
+    expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onConnect).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Prod box' }));
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Home box' }), { key: 'Enter' });
+    expect(onConnect).toHaveBeenCalledTimes(2);
+    expect(onConnect).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Home box' }));
   });
 });

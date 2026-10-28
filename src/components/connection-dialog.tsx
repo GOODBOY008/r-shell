@@ -87,7 +87,7 @@ export interface ConnectionConfig {
 
   // RDP specific
   domain?: string;
-  rdpResolution?: '1024x768' | '1280x720' | '1920x1080' | 'fit';
+  rdpResolution?: '1024x768' | '1280x720' | '1920x1080' | '2560x1440' | 'fit' | 'retina';
 
   // VNC specific
   vncColorDepth?: '24' | '16' | '8';
@@ -848,63 +848,63 @@ const handleCancelConnectionAttempt = async () => {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="top-[50%] left-[50%] -translate-x-1/2 -translate-y-1/2 w-[900px] h-[680px] max-w-[90vw] max-h-[90vh] flex flex-col p-0 gap-0">
-        <DialogHeader className="px-6 pt-6 pb-4 border-b border-border">
-          <DialogTitle className="flex items-center gap-2">
+      <DialogContent className="inset-0! m-auto! translate-x-0! translate-y-0! w-[min(900px,calc(100vw-2rem))] max-w-none h-[min(720px,calc(100dvh-2rem))] flex flex-col overflow-hidden p-0 gap-0">
+        <DialogHeader className="px-6 py-5 pr-14 border-b border-border bg-sidebar/50">
+          <div className="flex items-start gap-3">
             <div className="p-2 bg-primary/10 rounded-lg">
               <Server className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <div>{editingConnection ? t('connectionDialog.title.edit') : t('connectionDialog.title.new')}</div>
+              <DialogTitle>{editingConnection ? t('connectionDialog.title.edit') : t('connectionDialog.title.new')}</DialogTitle>
               <DialogDescription className="mt-1">
                 {t('connectionDialog.description')}
               </DialogDescription>
             </div>
-          </DialogTitle>
+          </div>
         </DialogHeader>
 
-        <Tabs defaultValue="connection" className="flex-1 flex flex-col overflow-hidden">
-          <TabsList className="w-full justify-start rounded-none border-b border-border bg-transparent h-auto p-0 px-4 overflow-x-auto">
+        <Tabs defaultValue="connection" className="min-h-0 flex-1 flex flex-col overflow-hidden">
+          <TabsList className="w-full shrink-0 justify-start rounded-none border-b border-border bg-sidebar/30 h-auto p-0 px-4 overflow-x-auto">
             <TabsTrigger
               value="connection"
-              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+              className="flex-none items-center gap-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Server className="h-3.5 w-3.5" />
               <span>{t('connectionDialog.tab.connection')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="authentication"
-              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+              className="flex-none items-center gap-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Shield className="h-3.5 w-3.5" />
               <span>{t('connectionDialog.tab.auth')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="proxy"
-              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+              className="flex-none items-center gap-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Network className="h-3.5 w-3.5" />
               <span>{t('connectionDialog.tab.proxy')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="tunnel"
-              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+              className="flex-none items-center gap-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <Waypoints className="h-3.5 w-3.5" />
               <span>{t('connectionDialog.tab.tunnel')}</span>
             </TabsTrigger>
             <TabsTrigger
               value="advanced"
-              className="flex items-center gap-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
+              className="flex-none items-center gap-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none px-2.5 py-2.5 text-sm whitespace-nowrap"
             >
               <TerminalIcon className="h-3.5 w-3.5" />
               <span>{t('connectionDialog.tab.advanced')}</span>
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="connection" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
+          <TabsContent value="connection" className="configuration-content min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 mt-0 bg-background/50">
+            <Card className="gap-4 rounded-lg shadow-none">
+              <CardHeader className="px-5 pt-5">
                 <CardTitle className="flex items-center gap-2">
                   <Server className="h-4 w-4" />
                   {t('connectionDialog.section.basicSettings')}
@@ -913,8 +913,8 @@ const handleCancelConnectionAttempt = async () => {
                   {t('connectionDialog.section.basicSettingsDesc')}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+              <CardContent className="space-y-4 px-5 last:pb-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="connection-name">{t('connectionDialog.label.connectionName')}</Label>
                     <Input
@@ -944,7 +944,7 @@ const handleCancelConnectionAttempt = async () => {
                         setDisplayValues(prev => ({ ...prev, port: defaultPort }));
                       }}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger id="protocol">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -997,7 +997,7 @@ const handleCancelConnectionAttempt = async () => {
 
                 {/* RDP-specific: domain and resolution */}
                 {config.protocol === 'RDP' && (
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="rdp-domain">{t('connectionDialog.label.domain')}</Label>
                       <Input
@@ -1013,7 +1013,7 @@ const handleCancelConnectionAttempt = async () => {
                         value={config.rdpResolution || 'fit'}
                         onValueChange={(value) => updateConfig({ rdpResolution: value as ConnectionConfig['rdpResolution'] })}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger aria-label={t('connectionDialog.label.displayResolution')}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1021,8 +1021,13 @@ const handleCancelConnectionAttempt = async () => {
                           <SelectItem value="1024x768">{t('connectionDialog.rdp.h1024x768')}</SelectItem>
                           <SelectItem value="1280x720">{t('connectionDialog.rdp.h1280x720')}</SelectItem>
                           <SelectItem value="1920x1080">{t('connectionDialog.rdp.h1920x1080')}</SelectItem>
+                          <SelectItem value="2560x1440">{t('connectionDialog.rdp.h2560x1440')}</SelectItem>
+                          <SelectItem value="retina">{t('connectionDialog.rdp.retina')}</SelectItem>
                         </SelectContent>
                       </Select>
+                      <p className="text-xs leading-relaxed text-muted-foreground">
+                        {t(config.rdpResolution === 'retina' ? 'connectionDialog.rdp.retinaHint' : 'connectionDialog.rdp.balancedHint')}
+                      </p>
                     </div>
                   </div>
                 )}
@@ -1035,7 +1040,7 @@ const handleCancelConnectionAttempt = async () => {
                       value={config.vncColorDepth || '24'}
                       onValueChange={(value) => updateConfig({ vncColorDepth: value as ConnectionConfig['vncColorDepth'] })}
                     >
-                      <SelectTrigger>
+                      <SelectTrigger aria-label={t('connectionDialog.label.colorDepth')}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1065,9 +1070,9 @@ const handleCancelConnectionAttempt = async () => {
             </Card>
           </TabsContent>
 
-          <TabsContent value="authentication" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
+          <TabsContent value="authentication" className="configuration-content min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 mt-0 bg-background/50">
+            <Card className="gap-4 rounded-lg shadow-none">
+              <CardHeader className="px-5 pt-5">
                 <CardTitle className="flex items-center gap-2">
                   <Shield className="h-4 w-4" />
                   {t('connectionDialog.section.authentication')}
@@ -1076,14 +1081,14 @@ const handleCancelConnectionAttempt = async () => {
                   {t('connectionDialog.section.authenticationDesc')}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 px-5 last:pb-5">
                 <div className="space-y-2">
                   <Label>{t('connectionDialog.section.authentication')}</Label>
                   <Select
                     value={config.authMethod}
                     onValueChange={(value: ConnectionConfig['authMethod']) => updateConfig({ authMethod: value })}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger aria-label={t('connectionDialog.section.authentication')}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1157,7 +1162,7 @@ const handleCancelConnectionAttempt = async () => {
                 {config.protocol === 'FTP' && (
                   <>
                     <Separator />
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="space-y-0.5">
                         <Label>{t('connectionDialog.ftp.enableFtps')}</Label>
                         <p className="text-sm text-muted-foreground">
@@ -1165,6 +1170,7 @@ const handleCancelConnectionAttempt = async () => {
                         </p>
                       </div>
                       <Switch
+                        aria-label={t('connectionDialog.ftp.enableFtps')}
                         checked={config.ftpsEnabled ?? false}
                         onCheckedChange={(checked) => updateConfig({ ftpsEnabled: checked })}
                       />
@@ -1172,7 +1178,7 @@ const handleCancelConnectionAttempt = async () => {
                     {config.ftpsEnabled && (
                       <>
                         <Separator />
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="space-y-0.5">
                             <Label>{t('connectionDialog.ftp.verifyCert')}</Label>
                             <p className="text-sm text-muted-foreground">
@@ -1180,6 +1186,7 @@ const handleCancelConnectionAttempt = async () => {
                             </p>
                           </div>
                           <Switch
+                            aria-label={t('connectionDialog.ftp.verifyCert')}
                             checked={config.ftpsVerifyCert ?? true}
                             onCheckedChange={(checked) => updateConfig({ ftpsVerifyCert: checked })}
                           />
@@ -1208,9 +1215,9 @@ const handleCancelConnectionAttempt = async () => {
             </Card>
           </TabsContent>
 
-          <TabsContent value="proxy" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
-            <Card>
-              <CardHeader>
+          <TabsContent value="proxy" className="configuration-content min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 mt-0 bg-background/50">
+            <Card className="gap-4 rounded-lg shadow-none">
+              <CardHeader className="px-5 pt-5">
                 <CardTitle className="flex items-center gap-2">
                   <Network className="h-4 w-4" />
                   {t('connectionDialog.section.proxySettings')}
@@ -1219,14 +1226,14 @@ const handleCancelConnectionAttempt = async () => {
                   {t('connectionDialog.section.proxySettingsDesc')}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent className="space-y-4 px-5 last:pb-5">
                 <div className="space-y-2">
                   <Label>{t('connectionDialog.label.proxyType')}</Label>
                   <Select
                     value={config.proxyType}
                     onValueChange={(value: string) => updateConfig({ proxyType: value as ConnectionConfig['proxyType'] })}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger aria-label={t('connectionDialog.label.proxyType')}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -1261,7 +1268,7 @@ const handleCancelConnectionAttempt = async () => {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label htmlFor="proxy-username">{t('connectionDialog.label.proxyUsername')}</Label>
                         <Input
@@ -1287,13 +1294,13 @@ const handleCancelConnectionAttempt = async () => {
             </Card>
           </TabsContent>
 
-          <TabsContent value="tunnel" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+          <TabsContent value="tunnel" className="configuration-content min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 mt-0 bg-background/50">
             {(() => {
               const canTunnel = config.protocol === 'SSH' || config.protocol === 'SFTP';
               if (!canTunnel) {
                 return (
-                  <Card>
-                    <CardHeader>
+                  <Card className="gap-4 rounded-lg shadow-none">
+                    <CardHeader className="px-5 pt-5">
                       <CardTitle className="flex items-center gap-2">
                         <Waypoints className="h-4 w-4" />
                         {t('connectionDialog.section.tunnelSettings')}
@@ -1307,8 +1314,8 @@ const handleCancelConnectionAttempt = async () => {
               }
 
               return (
-                <Card>
-                  <CardHeader>
+                <Card className="gap-4 rounded-lg shadow-none">
+                  <CardHeader className="px-5 pt-5">
                     <CardTitle className="flex items-center gap-2">
                       <Waypoints className="h-4 w-4" />
                       {t('connectionDialog.section.tunnelSettings')}
@@ -1317,8 +1324,8 @@ const handleCancelConnectionAttempt = async () => {
                       {t('connectionDialog.section.tunnelSettingsDesc')}
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="flex items-center justify-between">
+                  <CardContent className="space-y-4 px-5 last:pb-5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="space-y-0.5">
                         <Label>{t('connectionDialog.tunnel.enable')}</Label>
                         <p className="text-sm text-muted-foreground">
@@ -1372,7 +1379,7 @@ const handleCancelConnectionAttempt = async () => {
                             value={config.tunnelAuthMethod}
                             onValueChange={(value: string) => updateConfig({ tunnelAuthMethod: value as ConnectionConfig['tunnelAuthMethod'] })}
                           >
-                            <SelectTrigger>
+                            <SelectTrigger aria-label={t('connectionDialog.label.tunnelAuthMethod')}>
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
@@ -1434,7 +1441,7 @@ const handleCancelConnectionAttempt = async () => {
             })()}
           </TabsContent>
 
-          <TabsContent value="advanced" className="flex-1 overflow-y-auto px-6 py-4 space-y-4 mt-0">
+          <TabsContent value="advanced" className="configuration-content min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 mt-0 bg-background/50">
             {(() => {
               const hiddenFields = getHiddenFields(config.protocol);
               const isCompHidden = hiddenFields.includes('compression');
@@ -1443,8 +1450,8 @@ const handleCancelConnectionAttempt = async () => {
 
               if (isAllHidden) {
                 return (
-                  <Card>
-                    <CardHeader>
+                  <Card className="gap-4 rounded-lg shadow-none">
+                    <CardHeader className="px-5 pt-5">
                       <CardTitle className="flex items-center gap-2">
                         <TerminalIcon className="h-4 w-4" />
                         {t('connectionDialog.section.advancedOptions')}
@@ -1458,8 +1465,8 @@ const handleCancelConnectionAttempt = async () => {
               }
 
               return (
-                <Card>
-                  <CardHeader>
+                <Card className="gap-4 rounded-lg shadow-none">
+                  <CardHeader className="px-5 pt-5">
                       <CardTitle className="flex items-center gap-2">
                         <TerminalIcon className="h-4 w-4" />
                         {t('connectionDialog.section.advancedSsh')}
@@ -1468,10 +1475,10 @@ const handleCancelConnectionAttempt = async () => {
                         {t('connectionDialog.section.advancedSshDesc')}
                       </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-4">
+                  <CardContent className="space-y-4 px-5 last:pb-5">
                     <div className="space-y-4">
                       {!isCompHidden && (
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="space-y-0.5">
                             <Label>{t('connectionDialog.advanced.enableCompression')}</Label>
                             <p className="text-sm text-muted-foreground">
@@ -1479,6 +1486,7 @@ const handleCancelConnectionAttempt = async () => {
                             </p>
                           </div>
                           <Switch
+                            aria-label={t('connectionDialog.advanced.enableCompression')}
                             checked={config.compression}
                             onCheckedChange={(checked) => updateConfig({ compression: checked })}
                           />
@@ -1489,7 +1497,7 @@ const handleCancelConnectionAttempt = async () => {
 
                       {!isKaHidden && (
                         <>
-                          <div className="flex items-center justify-between">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
                             <div className="space-y-0.5">
                               <Label>{t('connectionDialog.advanced.keepAlive')}</Label>
                               <p className="text-sm text-muted-foreground">
@@ -1497,6 +1505,7 @@ const handleCancelConnectionAttempt = async () => {
                               </p>
                             </div>
                             <Switch
+                              aria-label={t('connectionDialog.advanced.keepAlive')}
                               checked={config.keepAlive}
                               onCheckedChange={(checked) => updateConfig({ keepAlive: checked })}
                             />
@@ -1531,7 +1540,7 @@ const handleCancelConnectionAttempt = async () => {
 
                       {/* X11 Forwarding */}
                       <div className="space-y-3">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
                           <div className="space-y-0.5">
                             <Label htmlFor="x11-enable">{t('connectionDialog.x11.enable')}</Label>
                             <p className="text-sm text-muted-foreground">
@@ -1585,11 +1594,11 @@ const handleCancelConnectionAttempt = async () => {
 
         </Tabs>
 
-        <DialogFooter className="px-6 py-4 border-t border-border bg-muted/30 flex-col sm:flex-col">
+        <DialogFooter className="px-4 sm:px-6 py-4 border-t border-border bg-sidebar/50 flex-col sm:flex-col">
           <div className="flex flex-col gap-3 w-full">
             {/* Save as Connection Option - Only show for new connections */}
             {!editingConnection && (
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                   <Switch
                     id="save-connection"
@@ -1602,7 +1611,7 @@ const handleCancelConnectionAttempt = async () => {
                 </div>
                 {saveAsConnection && (
                   <Select value={connectionFolder} onValueChange={setConnectionFolder}>
-                      <SelectTrigger className="w-[200px] h-8">
+                      <SelectTrigger aria-label={t('connectionDialog.selectFolder')} className="w-[200px] h-8">
                         <SelectValue placeholder={t('connectionDialog.selectFolder')} />
                     </SelectTrigger>
                     <SelectContent>

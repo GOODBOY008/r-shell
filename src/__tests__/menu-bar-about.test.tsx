@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MenuBar } from '../components/menu-bar';
 
@@ -56,7 +56,7 @@ describe('MenuBar About dialog', () => {
     const dialog = await screen.findByRole('dialog');
     expect(dialog).toBeTruthy();
     // Brand name comes from the shared app.title key (R-Shell, not a hardcoded string)
-    expect(screen.getByText('R-Shell')).toBeTruthy();
+    expect(within(dialog).getByText('R-Shell')).toBeTruthy();
     expect(screen.getByText('Version:')).toBeTruthy();
     await waitFor(() => expect(screen.getByText('2.9.3')).toBeTruthy());
   });

@@ -93,7 +93,7 @@ describe('unread output through real group state and stable portals', () => {
     const marker = screen.getByRole('img', { name: 'Unread terminal output' });
     const tabElement = marker.closest('[data-tab-id]')!;
     expect(tabElement.getAttribute('data-tab-id')).toBe('b');
-    expect(tabElement.querySelector('.bg-green-500')).not.toBeNull();
+    expect(tabElement.querySelector('[data-connection-status="connected"]')).not.toBeNull();
     expect(localStorage.getItem(STORAGE_KEY)).not.toContain('hasUnreadOutput');
     expect(lifecycle.props.get('b')?.onOutput).toBeUndefined(); // no dispatch storm once unread
     fireEvent.click(screen.getByText('Server B'));

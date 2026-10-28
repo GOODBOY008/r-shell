@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { TerminalGroupState, TerminalTab } from '../lib/terminal-group-types';
 import App from '../App';
+import type { ConnectionConfig } from '../components/connection-dialog';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared mocks
@@ -32,11 +33,13 @@ const lifecycle = vi.hoisted(() => ({
   ptyMounts: [] as string[],
   stateHistory: [] as TerminalGroupState[],
   invoke: vi.fn(),
+  desktopProps: vi.fn(),
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
 // Assigned in beforeEach; the mocked provider reads it at render time.
 let mockState: TerminalGroupState;
+let mockDialogConfig: ConnectionConfig;
 
 function makeMockState(): TerminalGroupState {
   const tab: TerminalTab = {
@@ -141,40 +144,20 @@ vi.mock('sonner', () => ({
 }));
 
 // Heavy panels / viewers — not under test; stub them to keep the shell light.
-// ConnectionDialog mock: exposes a button that invokes props.onConnect with an
-// existing tab's id — the exact entry into the existing-tab branch of
-// handleConnectionDialogConnect. (No current UI path reaches that branch for
-// SSH, so we drive it directly to lock in the fix as a consistency guarantee.)
+// Drive the dialog callback through the real App, reducer and portal so both
+// new unsaved sessions and existing-tab reconnects retain their configuration.
 vi.mock('@/components/connection-dialog', async () => {
   const ReactModule = await import('react');
   return {
     ConnectionDialog: (props: {
-      onConnect?: (config: {
-        id?: string;
-        name: string;
-        host: string;
-        port: number;
-        username: string;
-        protocol: string;
-        authMethod?: string;
-        password?: string;
-      }) => void;
+      onConnect?: (config: ConnectionConfig) => void;
     }) =>
       ReactModule.createElement(
         'button',
         {
           'data-testid': 'trigger-onconnect',
           onClick: () =>
-            props.onConnect?.({
-              id: 'conn-1',
-              name: 'Test Server',
-              host: 'example.com',
-              port: 22,
-              username: 'root',
-              protocol: 'SSH',
-              authMethod: 'password',
-              password: 'secret',
-            }),
+            props.onConnect?.(mockDialogConfig),
         },
         'trigger',
       ),
@@ -215,7 +198,10 @@ vi.mock('@/components/ui/sonner', async () => {
 });
 vi.mock('@/components/desktop-viewer', async () => {
   const ReactModule = await import('react');
-  return { DesktopViewer: () => ReactModule.createElement('div') };
+  return { DesktopViewer: (props: unknown) => {
+    lifecycle.desktopProps(props);
+    return ReactModule.createElement('div');
+  } };
 });
 vi.mock('@/components/file-browser-view', async () => {
   const ReactModule = await import('react');
@@ -237,11 +223,16 @@ class ResizeObserverMock {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('SSH existing-tab reconnect', () => {
+describe('App connection dialog and reconnect', () => {
   beforeEach(() => {
     (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverMock;
 
     mockState = makeMockState();
+    mockDialogConfig = {
+      id: 'conn-1', name: 'Test Server', host: 'example.com', port: 22,
+      username: 'root', protocol: 'SSH', authMethod: 'password', password: 'secret',
+    };
+    lifecycle.desktopProps.mockClear();
 
     localStorage.setItem(
       'r-shell-connections',
@@ -308,4 +299,30 @@ describe('SSH existing-tab reconnect', () => {
     expect(tab.reconnectCount).toBe(1);
     expect(tab.connectionStatus).toBe('connecting');
   });
+
+  it.each(['retina', '2560x1440'])('keeps an unsaved %s RDP mode through the real tab reducer and portal', async (rdpResolution) => {
+    mockState.groups['group-1'].tabs = [];
+    mockState.groups['group-1'].activeTabId = null;
+    mockState.tabToGroupMap = {};
+    localStorage.removeItem('r-shell-connections');
+    mockDialogConfig = {
+      ...mockDialogConfig, id: 'unsaved-rdp', protocol: 'RDP', port: 3389, rdpResolution,
+    };
+    lifecycle.invoke.mockResolvedValue({});
+    render(<App />);
+    fireEvent.click(screen.getByTestId('trigger-onconnect'));
+    await vi.waitFor(() => expect(lifecycle.desktopProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      connectionId: 'unsaved-rdp', isConnected: true, rdpResolution,
+    })));
+    expect(JSON.parse(localStorage.getItem('r-shell-connections') || '[]')).toEqual([]);
+
+    // Reconnecting the same unsaved tab with another mode must refresh the
+    // existing tab as well, including an explicit reset to Balanced Auto.
+    mockDialogConfig = { ...mockDialogConfig, rdpResolution: undefined };
+    fireEvent.click(screen.getByTestId('trigger-onconnect'));
+    await vi.waitFor(() => expect(lifecycle.desktopProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      connectionId: 'unsaved-rdp', isConnected: true, rdpResolution: 'fit',
+    })));
+  });
+
 });

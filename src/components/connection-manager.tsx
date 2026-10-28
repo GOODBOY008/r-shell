@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock, Search, X, ArrowUpRight } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
@@ -50,6 +50,7 @@ import {
 import { notify } from '@/lib/notifications';
 import { formatKeyboardShortcut } from '../lib/keyboard-shortcuts';
 import { useShortcutBindings } from '../lib/shortcut-registry';
+import { useConnectionListAppearance } from '../lib/connection-list-appearance';
 
 export interface DetachedSession {
   connectionId: string;
@@ -115,6 +116,9 @@ export function ConnectionManager({
   onCloseDetachedSession,
 }: ConnectionManagerProps) {
   const { t } = useTranslation();
+  const { connectionListFontSize, showConnectionHost } = useConnectionListAppearance();
+  const connectionNameStyle = { fontSize: connectionListFontSize, lineHeight: 1.3 };
+  const connectionHostStyle = { fontSize: Math.max(10, connectionListFontSize - 2), lineHeight: 1.3 };
   // Badge follows the customizable binding (shortcut registry), not a fixed chord.
   const shortcutBindings = useShortcutBindings();
   const newConnectionShortcut = formatKeyboardShortcut(
@@ -147,6 +151,8 @@ export function ConnectionManager({
   };
 
   const [connections, setConnections] = useState<ConnectionNode[]>(loadConnections());
+
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Folder management state
   const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
@@ -669,7 +675,7 @@ export function ConnectionManager({
 
     switch (node.protocol) {
       case 'SSH':
-        return <Server className="w-4 h-4 text-green-500" />;
+        return <Server className="w-4 h-4 text-primary" />;
       case 'CMD':
       case 'PowerShell':
       case 'Shell':
@@ -680,6 +686,21 @@ export function ConnectionManager({
         return <Monitor className="w-4 h-4" />;
     }
   };
+
+  // Filter a derived tree so searching never overwrites saved folder expansion.
+  const query = searchQuery.trim().toLocaleLowerCase();
+  const filterNodes = (nodes: ConnectionNode[]): ConnectionNode[] => nodes.flatMap(node => {
+    const matches = [node.name, node.host, node.username, node.protocol]
+      .some(value => value?.toLocaleLowerCase().includes(query));
+    const children = node.children ? filterNodes(node.children) : undefined;
+    if (matches) return [{ ...node, children: node.children?.map(expandForSearch), isExpanded: true }];
+    if (children?.length) return [{ ...node, children, isExpanded: true }];
+    return [];
+  });
+  function expandForSearch(node: ConnectionNode): ConnectionNode {
+    return { ...node, isExpanded: true, children: node.children?.map(expandForSearch) };
+  }
+  const visibleConnections = query ? filterNodes(connections) : connections;
 
   const renderNode = (node: ConnectionNode, level: number = 0) => {
     const isSelected = selectedConnectionId === node.id;
@@ -711,13 +732,13 @@ export function ConnectionManager({
     const nodeContent = (
       <div
         data-conn-node-id={node.id}
-        className={`relative flex items-center gap-2 px-2 py-1 hover:bg-accent cursor-pointer select-none ${
-          isSelected ? 'bg-accent' : ''
+        className={`relative mx-2 flex min-h-7 items-center gap-2 rounded-md px-2 py-0.5 hover:bg-accent/60 cursor-pointer select-none transition-colors ${
+          isSelected ? 'bg-accent text-accent-foreground' : ''
         } ${isDragging ? 'opacity-50' : ''} ${isDropInside ? 'bg-accent/60 ring-1 ring-primary/50 rounded-sm' : ''}`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
         onClick={handleNodeClick}
         onDoubleClick={handleNodeDoubleClick}
-        onPointerDown={(e) => handleNodePointerDown(e, node)}
+        onPointerDown={(e) => { if (!query) handleNodePointerDown(e, node); }}
         draggable={false}
         onDragStart={(e) => e.preventDefault()}
       >
@@ -731,7 +752,10 @@ export function ConnectionManager({
           <Button
             variant="ghost"
             size="sm"
-            className="p-0 h-4 w-4"
+            className="p-0 h-5 w-5 shrink-0"
+            aria-label={t(node.isExpanded ? 'connectionManager.collapseFolder' : 'connectionManager.expandFolder', { name: node.name })}
+            aria-expanded={node.isExpanded}
+            disabled={!!query}
             onClick={(e) => {
               e.stopPropagation();
               toggleExpanded(node.id);
@@ -743,12 +767,45 @@ export function ConnectionManager({
             }
           </Button>
         )}
-        {node.type === 'connection' && <div className="w-4" />}
-
-        <div className="relative">
-          {getIcon(node)}
-        </div>
-        <span className="text-sm flex-1">{node.name}</span>
+        {node.type === 'connection' && <div className="w-5 shrink-0" />}
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded text-left"
+          aria-label={node.name}
+          title={node.host ? `${node.name} · ${node.host}` : node.name}
+          aria-pressed={isSelected}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && node.type === 'connection') {
+              event.preventDefault();
+              handleNodeDoubleClick();
+            }
+          }}
+        >
+          <span className="shrink-0 text-muted-foreground">{getIcon(node)}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium" style={connectionNameStyle}>{node.name}</span>
+            {showConnectionHost && node.type === 'connection' && node.host && (
+              <span className="block truncate font-mono text-muted-foreground" style={connectionHostStyle}>{node.host}</span>
+            )}
+          </span>
+        </button>
+        {node.type === 'connection' && onConnectionConnect && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-6 shrink-0 text-muted-foreground hover:text-primary"
+            aria-label={t('welcome.connectTo', { name: node.name })}
+            title={t('welcome.connectTo', { name: node.name })}
+            onPointerDown={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (event.detail <= 1) onConnectionConnect(node);
+            }}
+          >
+            <ArrowUpRight className="size-3.5" />
+          </Button>
+        )}
       </div>
     );
 
@@ -863,18 +920,18 @@ export function ConnectionManager({
 
   return (
     <>
-    <div className="bg-card border-r border-border h-full flex flex-col">
+    <div className="bg-sidebar text-sidebar-foreground h-full flex flex-col">
       {/* Connection Browser */}
       <div className="flex-1 min-h-0 flex flex-col">
-        <div className="px-3 py-1.5 border-b border-border flex items-center gap-1">
-          <h3 className="font-medium text-sm flex-1">{t('connectionManager.connectionsHeader')}</h3>
+        <div className="px-3 pt-4 pb-3 flex items-center gap-1">
+          <h3 className="font-semibold text-xs flex-1">{t('connectionManager.connectionsHeader')}</h3>
           <TooltipProvider>
             {/* Quick Connect */}
             <DropdownMenu>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label={t('toolbar.quickConnect')}>
                       <Zap className="w-3.5 h-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -892,14 +949,16 @@ export function ConnectionManager({
                     <DropdownMenuItem
                       key={conn.id}
                       onClick={() => onQuickConnect?.(conn.id)}
-                      className="flex items-start gap-2 py-2 cursor-pointer"
+                      className="flex min-h-7 items-start gap-2 py-1 cursor-pointer"
                     >
                       <Server className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{conn.name}</div>
-                        <div className="text-xs text-muted-foreground truncate">
-                          {conn.username}@{conn.host}
-                        </div>
+                        <div className="font-medium truncate" style={connectionNameStyle}>{conn.name}</div>
+                        {showConnectionHost && (
+                          <div className="text-muted-foreground truncate" style={connectionHostStyle}>
+                            {conn.username}@{conn.host}
+                          </div>
+                        )}
                       </div>
                     </DropdownMenuItem>
                   ))
@@ -918,7 +977,8 @@ export function ConnectionManager({
                   variant="ghost"
                   size="sm"
                   onClick={() => openNewFolderDialog()}
-                  className="h-6 w-6 p-0"
+                  aria-label={t('connectionManager.newFolder')}
+                  className="h-7 w-7 p-0"
                 >
                   <FolderPlus className="w-3.5 h-3.5" />
                 </Button>
@@ -933,7 +993,8 @@ export function ConnectionManager({
                   variant="ghost"
                   size="sm"
                   onClick={() => onNewConnection?.()}
-                  className="h-6 w-6 p-0"
+                  aria-label={t('connectionManager.newConnection')}
+                  className="h-7 w-7 p-0 text-primary bg-primary/10 hover:bg-primary/20"
                 >
                   <Plus className="w-3.5 h-3.5" />
                 </Button>
@@ -947,6 +1008,23 @@ export function ConnectionManager({
             </Tooltip>
           </TooltipProvider>
         </div>
+        <div className="relative mx-3 mb-3">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 size-3.5 text-muted-foreground" aria-hidden="true" />
+          <Input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Escape') setSearchQuery(''); }}
+            placeholder={t('connectionManager.searchPlaceholder')}
+            aria-label={t('connectionManager.searchPlaceholder')}
+            className="h-8 pl-8 pr-8 text-xs md:text-xs [&::-webkit-search-cancel-button]:appearance-none"
+          />
+          {searchQuery && (
+            <button type="button" onClick={() => setSearchQuery('')} aria-label={t('connectionManager.clearSearch')} className="absolute right-1 top-1 flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-accent">
+              <X className="size-3" />
+            </button>
+          )}
+        </div>
         {detachedSessions.length > 0 && (
           <div className="border-b border-border px-3 py-2">
             <div className="flex items-center gap-2 mb-1.5">
@@ -956,19 +1034,21 @@ export function ConnectionManager({
               </h4>
               <span className="text-[10px] text-muted-foreground">{detachedSessions.length}</span>
             </div>
-            <div className="space-y-1">
+            <div>
               {detachedSessions.map((session) => (
                 <div
                   key={session.connectionId}
-                  className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60 cursor-pointer group"
+                  className="flex min-h-7 items-center gap-2 rounded-md px-1.5 py-0.5 hover:bg-muted/60 cursor-pointer group"
                   onClick={() => onReattachSession?.(session)}
                   title={t('connectionManager.reattachSession')}
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium truncate">{session.name}</div>
-                    <div className="text-[10px] text-muted-foreground truncate">
-                      {session.username ? `${session.username}@` : ''}{session.host || ''}
-                    </div>
+                    <div className="font-medium truncate" style={connectionNameStyle}>{session.name}</div>
+                    {showConnectionHost && session.host && (
+                      <div className="text-muted-foreground truncate" style={connectionHostStyle}>
+                        {session.username ? `${session.username}@` : ''}{session.host}
+                      </div>
+                    )}
                   </div>
                   <button
                     className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
@@ -1000,19 +1080,25 @@ export function ConnectionManager({
                 </Button>
               )}
             </div>
+          ) : visibleConnections.length === 0 ? (
+            <div role="status" className="px-4 py-8 text-center">
+              <Search className="mx-auto mb-3 size-5 text-muted-foreground" aria-hidden="true" />
+              <p className="text-xs font-medium">{t('connectionManager.noSearchResults')}</p>
+              <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{t('connectionManager.searchHint')}</p>
+            </div>
           ) : (
-            connections.map(connection => renderNode(connection))
+            visibleConnections.map(connection => renderNode(connection))
           )}
         </div>
       </div>
 
       {/* Connection Details */}
-      <div className="border-t border-border">
-        <div className="p-3">
-          <h3 className="font-medium text-sm mb-3">{t('connectionManager.connectionDetails')}</h3>
+      <div className="max-h-[35%] overflow-auto border-t border-border/70">
+        <div className="p-4">
+          <h3 className="font-semibold text-[10px] uppercase tracking-wider text-muted-foreground mb-3">{t('connectionManager.connectionDetails')}</h3>
 
           {!selectedConnection || selectedConnection.type === 'folder' ? (
-            <p className="text-sm text-muted-foreground">{t('connectionManager.noConnectionSelected')}</p>
+            <p className="text-xs leading-relaxed text-muted-foreground">{t('connectionManager.noConnectionSelected')}</p>
           ) : (
             <div className="space-y-3">
               <div className="space-y-2">
@@ -1176,7 +1262,7 @@ export function ConnectionManager({
         className="fixed z-50 pointer-events-none flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-border bg-popover text-popover-foreground shadow-md text-sm"
         style={{ left: dragGhost.x + 12, top: dragGhost.y + 12 }}
       >
-        {dragGhost.type === 'folder' ? <Folder className="w-3.5 h-3.5" /> : <Server className="w-3.5 h-3.5 text-green-500" />}
+        {dragGhost.type === 'folder' ? <Folder className="w-3.5 h-3.5" /> : <Server className="w-3.5 h-3.5 text-primary" />}
         <span className="max-w-[160px] truncate">{dragGhost.name}</span>
       </div>
     )}

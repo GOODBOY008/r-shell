@@ -318,7 +318,7 @@ fn build_ironrdp_config(cfg: &RdpConfig, enable_credssp: bool, enable_tls: bool)
             height: cfg.height,
         },
         monitor_layout: None,
-        desktop_scale_factor: 100,
+        desktop_scale_factor: cfg.desktop_scale_factor,
         enable_tls,
         enable_credssp,
         enable_standard_rdp_security: false,

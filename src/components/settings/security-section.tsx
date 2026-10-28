@@ -41,8 +41,8 @@ export function SecuritySection({
   }
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="gap-4 rounded-lg shadow-none">
+      <CardHeader className="px-4 pt-4">
         <CardTitle className="flex items-center gap-2">
           <Shield className="h-4 w-4" />
           {t('settings.security.title')}
@@ -51,16 +51,16 @@ export function SecuritySection({
           {t('settings.security.desc')}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="space-y-4 px-4 last:pb-4">
         {show('settings.security.hostKeyVerification', 'host key known_hosts') && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label>{t('settings.security.hostKeyVerification')}</Label>
               <p className="text-sm text-muted-foreground">
                 {t('settings.security.hostKeyVerificationDesc')}
               </p>
             </div>
-            <Switch
+            <Switch aria-label={t('settings.security.hostKeyVerification')}
               checked={hostKeyVerification}
               onCheckedChange={(checked) => onChange('hostKeyVerification', checked)}
             />
@@ -70,14 +70,14 @@ export function SecuritySection({
         <Separator />
 
         {show('settings.security.allowPasswordSaving', 'password save credentials') && (
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
               <Label>{t('settings.security.allowPasswordSaving')}</Label>
               <p className="text-sm text-muted-foreground">
                 {t('settings.security.allowPasswordSavingDesc')}
               </p>
             </div>
-            <Switch
+            <Switch aria-label={t('settings.security.allowPasswordSaving')}
               checked={allowPasswordSaving}
               onCheckedChange={(checked) => onChange('allowPasswordSaving', checked)}
             />

@@ -1,4 +1,4 @@
-import { useCallback, type KeyboardEvent } from 'react';
+import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
@@ -38,35 +38,15 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
     [dispatch, onReconnectTab],
   );
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      // Don't intercept keys that originate from within the terminal.
-      // xterm.js uses a hidden <textarea> for keyboard input; calling
-      // preventDefault() here would block the character from reaching
-      // the textarea, which breaks Space (and Enter) input – especially
-      // when an IME is active (keyCode 229 path relies on the browser
-      // inserting the character into the textarea).
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'TEXTAREA' || target.closest('.xterm')) {
-        return;
-      }
-
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        handleMouseDown();
-      }
-    },
-    [handleMouseDown],
-  );
-
   if (!group) return null;
 
   const isLastGroup = Object.keys(state.groups).length === 1;
   const showWelcome = group.tabs.length === 0 && isLastGroup;
 
-  const containerClass = isActive
-    ? 'h-full w-full flex flex-col border-2 border-primary'
-    : 'h-full w-full flex flex-col border border-border';
+  // Keep the terminal's dimensions stable when focus moves between groups.
+  const containerClass = `h-full w-full min-w-0 flex flex-col border ${
+    isActive && !isLastGroup ? 'border-primary/60' : 'border-transparent'
+  }`;
 
   return (
     <section
@@ -74,7 +54,9 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
       data-testid={`terminal-group-view-${groupId}`}
       className={containerClass}
       onMouseDownCapture={handleMouseDown}
-      onKeyDown={handleKeyDown}
+      // Focus also activates the group when navigating its controls with Tab.
+      // Never cancel descendant key events: buttons and xterm need their defaults.
+      onFocusCapture={handleMouseDown}
       aria-label={t('terminal.groupAriaLabel', { id: groupId })}
     >
       <GroupTabBar

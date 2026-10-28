@@ -1,3 +1,4 @@
+import { DesktopFrameRenderer } from '@/lib/desktop-frame-renderer';
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
@@ -6,15 +7,20 @@ import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { notify } from '@/lib/notifications';
 import { DesktopToolbar } from './desktop-toolbar';
+import { rdpDisplaySize } from '@/lib/rdp-display';
 import { computeFitScale, translateCoordinates } from '@/lib/desktop-utils';
 import { Monitor, RefreshCw, ExternalLink, Unplug, Undo2 } from 'lucide-react';
 import { Button } from './ui/button';
+
+const POINTER_BUTTON_MASKS = [1, 4, 2, 8, 16];
 
 interface DesktopViewerProps {
   connectionId: string;
   connectionName: string;
   host?: string;
   protocol?: string;
+  /** Live session resolution; Balanced Auto and Retina adapt the remote desktop. */
+  rdpResolution?: string;
   isConnected: boolean;
   onReconnect?: () => void;
   /** Fired after a successful explicit disconnect so the parent can flip
@@ -27,6 +33,7 @@ export function DesktopViewer({
   connectionName,
   host,
   protocol = 'RDP',
+  rdpResolution = 'fit',
   isConnected,
   onReconnect,
   onDisconnected,
@@ -35,11 +42,14 @@ export function DesktopViewer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pressedKeysRef = useRef(new Set<number>());
+  const pressedButtonsRef = useRef(new Set<number>());
+  const lastPointerPositionRef = useRef({ x: 0, y: 0 });
 
   const [desktopWidth, setDesktopWidth] = useState(1024);
   const [desktopHeight, setDesktopHeight] = useState(768);
   const [scalingMode, setScalingMode] = useState<'fit' | 'native'>('fit');
   const [isFullScreen, setIsFullScreen] = useState(false);
+  const fullscreenSettleUntilRef = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -112,7 +122,7 @@ export function DesktopViewer({
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [isConnected, sessionMissing]);
+  }, [isConnected, sessionMissing, isPoppedOut]);
 
   // WebSocket connection for receiving frame updates and clipboard data from remote
   useEffect(() => {
@@ -127,6 +137,7 @@ export function DesktopViewer({
     startedRef.current = false;
     setSessionMissing(false);
 
+    let renderer: DesktopFrameRenderer | null = null;
     const connect = async () => {
       // Port + per-launch bridge token from the backend (issue #138).
       const wsUrl = await getWebSocketUrl();
@@ -136,6 +147,15 @@ export function DesktopViewer({
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
+      renderer?.dispose();
+      const socket = ws;
+      const painter = new DesktopFrameRenderer(connectionId, () => canvasRef.current, (streamId, frameId) => {
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'DesktopFrameAck', connection_id: connectionId, stream_id: streamId, frame_id: frameId }));
+        }
+        setIsLoading(false);
+      });
+      renderer = painter;
 
       ws.onopen = () => {
         // Send StartDesktop to initiate the desktop streaming session
@@ -145,13 +165,16 @@ export function DesktopViewer({
       ws.onmessage = (event) => {
         try {
           if (typeof event.data === 'string') {
-            const msg = JSON.parse(event.data);
+            const value: unknown = JSON.parse(event.data);
+            if (!value || typeof value !== 'object') return;
+            const msg = value as Record<string, unknown>;
             if (msg.type === 'DesktopStarted' && msg.connection_id === connectionId) {
               startedRef.current = true;
               setSessionMissing(false);
               reconnectAttemptRef.current = 0;
               // Update canvas dimensions from negotiated desktop size
-              if (msg.width && msg.height) {
+              if (typeof msg.width === 'number' && typeof msg.height === 'number' && msg.width > 0 && msg.height > 0) {
+                if (typeof msg.stream_id === 'number') painter.start(msg.stream_id, msg.width, msg.height);
                 setDesktopWidth(msg.width);
                 setDesktopHeight(msg.height);
               }
@@ -165,50 +188,25 @@ export function DesktopViewer({
               setSessionMissing(true);
             } else if (msg.type === 'DesktopResized' && msg.connection_id === connectionId) {
               // Remote desktop size changed (reactivation or resize) — update canvas
-              if (msg.width && msg.height) {
+              if (typeof msg.width === 'number' && typeof msg.height === 'number' && msg.width > 0 && msg.height > 0) {
+                painter.resize(msg.width, msg.height);
                 setDesktopWidth(msg.width);
                 setDesktopHeight(msg.height);
               }
-            } else if (msg.type === 'ClipboardUpdate' && msg.connection_id === connectionId) {
+            } else if (msg.type === 'ClipboardUpdate' && msg.connection_id === connectionId && typeof msg.text === 'string') {
               // Write incoming remote clipboard text to local clipboard
               writeClipboardText(msg.text).catch(() => {
                 // Clipboard write denied — silently ignore
               });
             }
           } else if (event.data instanceof ArrayBuffer) {
-            // Binary desktop frame: [0x02][id_len: u16 BE][id bytes][x: u16][y: u16][w: u16][h: u16][rgba...]
-            const view = new DataView(event.data);
-            if (view.byteLength < 3) return;
-            const cmd = view.getUint8(0);
-            if (cmd !== 0x02) return; // not a desktop frame
-            lastFrameRef.current = Date.now();
-            // A frame is definitive proof the session is alive: clear the
-            // missing-session overlay. A stale `desktop_session_ended` from
-            // the previous session's teardown can arrive after the new
-            // DesktopStarted (reconnect race) and must not mask a live
-            // stream behind the disconnected panel.
-            if (sessionMissingRef.current) {
-              sessionMissingRef.current = false;
-              setSessionMissing(false);
-            }
-            const idLen = view.getUint16(1, false); // big-endian
-            const headerSize = 1 + 2 + idLen + 8;
-            if (event.data.byteLength < headerSize) return;
-            const off = 3 + idLen; // skip cmd + id_len + id
-            const x = view.getUint16(off, false);
-            const y = view.getUint16(off + 2, false);
-            const w = view.getUint16(off + 4, false);
-            const h = view.getUint16(off + 6, false);
-            const rgbaBytes = new Uint8ClampedArray(event.data, headerSize, w * h * 4);
-            const canvas = canvasRef.current;
-            if (canvas && w > 0 && h > 0) {
-              const ctx = canvas.getContext('2d');
-              if (ctx) {
-                const imageData = new ImageData(rgbaBytes, w, h);
-                ctx.putImageData(imageData, x, y);
+            if (painter.receive(event.data)) {
+              lastFrameRef.current = Date.now();
+              if (sessionMissingRef.current) {
+                sessionMissingRef.current = false;
+                setSessionMissing(false);
               }
             }
-            setIsLoading(false);
           }
         } catch {
           // Unexpected format — ignore
@@ -216,6 +214,7 @@ export function DesktopViewer({
       };
 
       ws.onclose = () => {
+        painter.dispose();
         if (wsRef.current === ws) {
           wsRef.current = null;
         }
@@ -279,6 +278,7 @@ export function DesktopViewer({
         clearTimeout(reconnectTimer);
       }
       clearInterval(watchdog);
+      renderer?.dispose();
       // If the session is showing in a native window, tear that window down
       // together with the tab (the Destroyed handler drops the renderer).
       if (poppedOutRef.current) {
@@ -321,28 +321,33 @@ export function DesktopViewer({
   }, [connectionId, isConnected, protocol]);
 
 
+  const lastResizeRef = useRef<string | null>(null);
+  useEffect(() => { lastResizeRef.current = null; }, [connectionId, isConnected, sessionMissing, isPoppedOut, rdpResolution]);
+
   // For RDP sessions: debounce container resize and notify the remote host
   useEffect(() => {
-    if (!isConnected || protocol?.toUpperCase() !== 'RDP') return;
+    if (!isConnected || sessionMissing || isPoppedOut || protocol?.toUpperCase() !== 'RDP') return;
+    if (rdpResolution !== 'fit' && rdpResolution !== 'retina') return;
     if (scalingMode !== 'fit') return;
     if (containerSize.width === 0 || containerSize.height === 0) return;
 
     const timer = setTimeout(() => {
-      // Request PHYSICAL pixels (CSS size × devicePixelRatio): on a 2×
-      // display a session sized in CSS pixels is upscaled and blurry. At
-      // dpr=1 this is the plain container size.
-      const dpr = window.devicePixelRatio || 1;
+      const display = rdpDisplaySize(containerSize.width, containerSize.height, rdpResolution);
+      if (!display) return;
+      const key = `${display.width}x${display.height}@${display.scaleFactor}`;
+      if (lastResizeRef.current === key) return;
+      lastResizeRef.current = key;
       invoke('desktop_resize', {
         connectionId,
-        width: Math.round(containerSize.width * dpr),
-        height: Math.round(containerSize.height * dpr),
+        ...display,
       }).catch(() => {
+        if (lastResizeRef.current === key) lastResizeRef.current = null;
         // Server rejected resize — keep current resolution and scale client-side
       });
-    }, 500); // 500ms debounce
+    }, Math.max(800, fullscreenSettleUntilRef.current - Date.now()));
 
     return () => clearTimeout(timer);
-  }, [connectionId, isConnected, protocol, scalingMode, containerSize.width, containerSize.height]);
+  }, [connectionId, isConnected, sessionMissing, isPoppedOut, protocol, rdpResolution, scalingMode, isFullScreen, containerSize.width, containerSize.height]);
 
   const scale = scalingMode === 'fit'
     ? computeFitScale(desktopWidth, desktopHeight, containerSize.width, containerSize.height)
@@ -357,6 +362,24 @@ export function DesktopViewer({
       ws.send(JSON.stringify(msg));
     }
   }, []);
+
+  const releasePointerButtons = useCallback(() => {
+    for (const button of pressedButtonsRef.current) {
+      sendWsEvent({
+        type: 'DesktopPointerButton', connection_id: connectionId,
+        ...lastPointerPositionRef.current, button, pressed: false,
+      });
+    }
+    pressedButtonsRef.current.clear();
+  }, [connectionId, sendWsEvent]);
+
+  useEffect(() => {
+    window.addEventListener('blur', releasePointerButtons);
+    return () => {
+      window.removeEventListener('blur', releasePointerButtons);
+      releasePointerButtons();
+    };
+  }, [releasePointerButtons, isConnected, sessionMissing, isPoppedOut]);
 
   // Handle keyboard events — forward via WebSocket
   // Let toolbar controls keep their own keystrokes: Space/Enter on a focused
@@ -403,13 +426,16 @@ export function DesktopViewer({
     sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: e.keyCode, down: false });
   }, [connectionId, isConnected, sendWsEvent]);
 
-  // Release all keys on blur
-  const handleBlur = useCallback(() => {
+  // Release remote input when focus leaves the desktop.
+  const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
     for (const keyCode of pressedKeysRef.current) {
       sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: keyCode, down: false });
     }
     pressedKeysRef.current.clear();
-  }, [connectionId, sendWsEvent]);
+    // Clicking back into the desktop can move focus from a toolbar button
+    // after mousedown. That internal focus change must not cancel the new drag.
+    if (!event.currentTarget.contains(event.relatedTarget)) releasePointerButtons();
+  }, [connectionId, sendWsEvent, releasePointerButtons]);
 
   // Take keyboard focus as soon as the session is live (or restored after a
   // reconnect), like the PTY terminal does — otherwise every keystroke is
@@ -435,25 +461,39 @@ export function DesktopViewer({
     );
   }, [desktopWidth, desktopHeight, displayedWidth, displayedHeight]);
 
-  // Container-level mouse handlers — ensures events are captured even if overlays sit on top of canvas
-  // Button press/release use explicit stateless events (state lives in the
-  // DOM event itself), so a reconnect can never desync them into moves.
+  // Only desktop-origin presses belong to the remote session. Toolbar events
+  // stay local, but their stopPropagation must not swallow an ongoing drag's release.
   const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
+    pressedButtonsRef.current.add(e.button);
+    lastPointerPositionRef.current = { x, y };
     sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: e.button, pressed: true });
   }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
 
-  const handleContainerMouseUp = useCallback((e: React.MouseEvent) => {
-    if (!isConnected) return;
-    const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: e.button, pressed: false });
-  }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
+  useEffect(() => {
+    if (!isConnected || sessionMissing || isPoppedOut) return;
+    const releaseButton = (event: MouseEvent) => {
+      if (!pressedButtonsRef.current.delete(event.button)) return;
+      const { x, y } = getRemoteCoordsFromEvent(event.clientX, event.clientY);
+      lastPointerPositionRef.current = { x, y };
+      sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: event.button, pressed: false });
+    };
+    // Capture before the toolbar stops bubbling, also covering releases outside
+    // the viewer. Untracked buttons (including toolbar-only clicks) are ignored.
+    document.addEventListener('mouseup', releaseButton, true);
+    return () => document.removeEventListener('mouseup', releaseButton, true);
+  }, [connectionId, isConnected, sessionMissing, isPoppedOut, getRemoteCoordsFromEvent, sendWsEvent]);
 
   const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: e.buttons });
+    lastPointerPositionRef.current = { x, y };
+    // DOM buttons are left=1, middle=4, right=2. A drag starting on a local
+    // toolbar control must not become a remote press when it enters the canvas.
+    let buttonMask = 0;
+    for (const button of pressedButtonsRef.current) buttonMask |= POINTER_BUTTON_MASKS[button] ?? 0;
+    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: e.buttons & buttonMask });
   }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
 
   const handleContainerWheel = useCallback((e: React.WheelEvent) => {
@@ -495,11 +535,15 @@ export function DesktopViewer({
     } else {
       document.exitFullscreen?.().catch(() => {});
     }
-  }, [isFullScreen]);
+  }, [isFullScreen, t]);
 
   useEffect(() => {
     const handleFullScreenChange = () => {
-      setIsFullScreen(!!document.fullscreenElement);
+      // macOS briefly reports a size with its menu bar before the final
+      // fullscreen viewport. Keep local scaling immediate; resize the server
+      // only after that transition, including Escape and toolbar exit.
+      fullscreenSettleUntilRef.current = Date.now() + 2000;
+      setIsFullScreen(document.fullscreenElement === containerRef.current && document.fullscreenElement !== null);
     };
     document.addEventListener('fullscreenchange', handleFullScreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullScreenChange);
@@ -567,7 +611,7 @@ export function DesktopViewer({
   if (!isConnected || sessionMissing) {
     return (
       <div className="h-full w-full flex items-center justify-center bg-muted/30">
-        <div className="text-center space-y-4">
+        <div className="min-w-0 max-w-xl p-6 break-words text-center space-y-4">
           <Monitor className="h-12 w-12 mx-auto text-muted-foreground/50" />
           <div>
             <p className="text-lg font-medium text-muted-foreground">
@@ -593,7 +637,7 @@ export function DesktopViewer({
   if (protocol?.toUpperCase() === 'RDP' && isPoppedOut) {
     return (
       <div className="h-full w-full flex items-center justify-center bg-muted/30">
-        <div className="text-center space-y-4">
+        <div className="min-w-0 max-w-xl p-6 break-words text-center space-y-4">
           <ExternalLink className="h-12 w-12 mx-auto text-primary/70" />
           <div>
             <p className="text-lg font-medium">
@@ -603,7 +647,7 @@ export function DesktopViewer({
               {connectionName} ({host})
             </p>
           </div>
-          <div className="flex gap-2 justify-center">
+          <div className="flex flex-wrap gap-2 justify-center">
             <Button variant="outline" onClick={handleFocusWindow}>
               <ExternalLink className="h-4 w-4 mr-2" />
               {t('desktopViewer.focusWindow')}
@@ -631,7 +675,6 @@ export function DesktopViewer({
       onKeyUp={handleKeyUp}
       onBlur={handleBlur}
       onMouseDown={handleContainerMouseDown}
-      onMouseUp={handleContainerMouseUp}
       onMouseMove={handleContainerMouseMove}
       onWheel={handleContainerWheel}
       onContextMenu={(e) => e.preventDefault()}

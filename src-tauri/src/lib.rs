@@ -1,3 +1,4 @@
+mod desktop_frames;
 #[cfg(test)]
 mod acl_tests;
 mod commands;

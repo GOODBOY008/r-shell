@@ -49,6 +49,15 @@ describe('GridRenderer', () => {
     expect(container.querySelector('[data-group-id="g1"]')).not.toBeNull();
   });
 
+  it('activates a group when its controls receive keyboard focus without cancelling their keys', () => {
+    const { getByRole } = render(<GridRenderer node={{ type: 'leaf', groupId: 'g2' }} path={[]} />);
+    const newTab = getByRole('button', { name: 'New Connection' });
+    fireEvent.focus(newTab);
+    expect(mockDispatch).toHaveBeenCalledWith({ type: 'ACTIVATE_GROUP', groupId: 'g2' });
+    expect(fireEvent.keyDown(newTab, { key: 'Enter' })).toBe(true);
+    expect(fireEvent.keyDown(newTab, { key: ' ' })).toBe(true);
+  });
+
   it('renders a branch node with multiple panels', () => {
     const node: GridNode = {
       type: 'branch',
