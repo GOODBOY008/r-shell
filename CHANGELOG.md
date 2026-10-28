@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-10-28
+
+### 🔖 R-Shell 3.1.0 — Remote Desktops & Workspace Refresh
+
+This minor release adds an IronRDP remote desktop client with an in-tab canvas and native window pop-out, trusted SSH X11 forwarding, and a VS Code-style notification center. The workspace theme, dialogs, and branding are refreshed. Connection storage preserves corrupt data, SSH command deadlines adapt to their workloads, and system-monitor fixes improve Linux, BusyBox, and macOS readings.
+
+### New Features 🎉
+
+- feat(ui): refresh workspace theme, dialogs, and branding by @GOODBOY008 in #256
+- feat(rdp): iron-rdp remote desktop with in-tab canvas and native window pop-out by @GOODBOY008 in #154
+- feat(ui): VS Code-style notification center by @GOODBOY008 in #251
+- feat(x11): SSH X11 forwarding (always trusted, -Y) by @GOODBOY008 in #64
+
+### Bug Fixes 🐛
+
+- fix(storage): preserve corrupt connection data instead of overwriting it by @sunxiaobin89 in #255
+- fix(monitor): parse ss and netstat active connections separately by @sunxiaobin89 in #253
+- fix(ssh): size command deadlines per workload and bound channel closes by @sunxiaobin89 in #249
+- fix(ui): VS Code-style toast notifications by @GOODBOY008 in #250
+- fix(monitor): detect BusyBox top by scanning all of top -v's output by @GOODBOY008 in #245
+- fix(e2e): make the docker e2e suite runnable from a clean checkout by @GOODBOY008 in #243
+- fix(monitor): query the macOS Data volume for disk usage by @GOODBOY008 in #242
+- fix(monitor): compute Linux CPU from /proc/stat deltas and match the swap row by token by @GOODBOY008 in #241
+
+### Other Changes
+
+- chore(deps): bump the npm-minor-patch group with 11 updates by @dependabot[bot] in #248
+- chore(deps): bump the cargo-minor-patch group by @dependabot[bot] in #247
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@dependabot[bot]](https://github.com/apps/dependabot) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.0.5...v3.1.0
+
 ## [3.0.5] - 2026-10-21
 
 ### 🔧 R-Shell 3.0.5 — Session Lifecycle & Webview Hardening
