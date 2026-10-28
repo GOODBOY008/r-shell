@@ -117,8 +117,8 @@ export function ConnectionManager({
 }: ConnectionManagerProps) {
   const { t } = useTranslation();
   const { connectionListFontSize, showConnectionHost } = useConnectionListAppearance();
-  const connectionNameStyle = { fontSize: connectionListFontSize, lineHeight: 1.4 };
-  const connectionHostStyle = { fontSize: Math.max(10, connectionListFontSize - 2), lineHeight: 1.4 };
+  const connectionNameStyle = { fontSize: connectionListFontSize, lineHeight: 1.3 };
+  const connectionHostStyle = { fontSize: Math.max(10, connectionListFontSize - 2), lineHeight: 1.3 };
   // Badge follows the customizable binding (shortcut registry), not a fixed chord.
   const shortcutBindings = useShortcutBindings();
   const newConnectionShortcut = formatKeyboardShortcut(
@@ -732,7 +732,7 @@ export function ConnectionManager({
     const nodeContent = (
       <div
         data-conn-node-id={node.id}
-        className={`relative mx-2 my-0.5 flex min-h-9 items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-accent/60 cursor-pointer select-none transition-colors ${
+        className={`relative mx-2 flex min-h-7 items-center gap-2 rounded-md px-2 py-0.5 hover:bg-accent/60 cursor-pointer select-none transition-colors ${
           isSelected ? 'bg-accent text-accent-foreground' : ''
         } ${isDragging ? 'opacity-50' : ''} ${isDropInside ? 'bg-accent/60 ring-1 ring-primary/50 rounded-sm' : ''}`}
         style={{ paddingLeft: `${level * 16 + 8}px` }}
@@ -785,7 +785,7 @@ export function ConnectionManager({
           <span className="min-w-0 flex-1">
             <span className="block truncate font-medium" style={connectionNameStyle}>{node.name}</span>
             {showConnectionHost && node.type === 'connection' && node.host && (
-              <span className="mt-0.5 block truncate font-mono text-muted-foreground" style={connectionHostStyle}>{node.host}</span>
+              <span className="block truncate font-mono text-muted-foreground" style={connectionHostStyle}>{node.host}</span>
             )}
           </span>
         </button>
@@ -949,7 +949,7 @@ export function ConnectionManager({
                     <DropdownMenuItem
                       key={conn.id}
                       onClick={() => onQuickConnect?.(conn.id)}
-                      className="flex items-start gap-2 py-2 cursor-pointer"
+                      className="flex min-h-7 items-start gap-2 py-1 cursor-pointer"
                     >
                       <Server className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
@@ -1034,11 +1034,11 @@ export function ConnectionManager({
               </h4>
               <span className="text-[10px] text-muted-foreground">{detachedSessions.length}</span>
             </div>
-            <div className="space-y-1">
+            <div>
               {detachedSessions.map((session) => (
                 <div
                   key={session.connectionId}
-                  className="flex items-center gap-2 rounded-md px-1.5 py-1 hover:bg-muted/60 cursor-pointer group"
+                  className="flex min-h-7 items-center gap-2 rounded-md px-1.5 py-0.5 hover:bg-muted/60 cursor-pointer group"
                   onClick={() => onReattachSession?.(session)}
                   title={t('connectionManager.reattachSession')}
                 >
