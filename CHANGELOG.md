@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.1] - 2026-10-29
+
+### 🔖 R-Shell 3.1.1 — macOS RDP Recovery & Session Protection
+
+This patch release signs the complete macOS app bundle and adds localized Local Network guidance with cancellable retries for RDP connections. Quitting now warns about active remote desktop sessions and brings the confirmation window into view. Idle RDP sessions stop sending synthetic Shift input, and bracketed IPv6 hosts remain usable.
+
+### Bug Fixes 🐛
+
+- fix(rdp): recover macOS connections and protect active sessions by @GOODBOY008 in #257
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.1.0...v3.1.1
+
 ## [3.1.0] - 2026-10-28
 
 ### 🔖 R-Shell 3.1.0 — Remote Desktops & Workspace Refresh
