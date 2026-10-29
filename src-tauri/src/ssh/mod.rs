@@ -651,6 +651,113 @@ async fn authenticate_session(
         })?
 }
 
+/// Public-key login shared by the terminal and SFTP paths.
+///
+/// An empty `key_path` means no key file is configured: like OpenSSH, every
+/// default key in `~/.ssh` is offered in turn until the server accepts one.
+/// Keys that cannot be loaded (e.g. encrypted with another passphrase) are
+/// skipped; the final error lists what was tried and why it failed.
+pub(crate) async fn authenticate_with_key_files(
+    session: &mut client::Handle<Client>,
+    username: &str,
+    key_path: &str,
+    passphrase: Option<&str>,
+) -> Result<()> {
+    if !key_path.trim().is_empty() {
+        let path = crate::os_keypath::expand_tilde(key_path);
+        let key = load_private_key(&path, key_path, passphrase)?;
+        if offer_key(session, username, key, &path).await? {
+            return Ok(());
+        }
+        return Err(anyhow::anyhow!(
+            "Public key authentication failed with key {}. The key may not be authorized on the server.",
+            path
+        ));
+    }
+
+    let candidates = crate::os_keypath::default_key_candidates();
+    if candidates.is_empty() {
+        return Err(anyhow::anyhow!(
+            "No default SSH private key found in ~/.ssh. Checked {}.",
+            crate::os_keypath::DEFAULT_KEY_FILES.join(", ")
+        ));
+    }
+    let mut tried = Vec::new();
+    for path in &candidates {
+        match load_private_key(path, path, passphrase) {
+            Ok(key) => {
+                if offer_key(session, username, key, path).await? {
+                    return Ok(());
+                }
+                tried.push(format!("{path} (not accepted by the server)"));
+            }
+            Err(e) => tried.push(format!("{path} (skipped: {e})")),
+        }
+    }
+    Err(anyhow::anyhow!(
+        "Public key authentication failed: none of the default keys was accepted. Tried: {}.",
+        tried.join("; ")
+    ))
+}
+
+/// Read and decode a private key file. `shown` is the path as the user wrote it.
+fn load_private_key(path: &str, shown: &str, passphrase: Option<&str>) -> Result<PrivateKey> {
+    if !Path::new(path).exists() {
+        return Err(anyhow::anyhow!(
+            "SSH key file not found: {}. Please check the file path and try again.",
+            shown
+        ));
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", shown, e))?;
+    // Keys created or edited on Windows use \r\n; the PEM / OpenSSH decoder wants \n.
+    decode_secret_key(&content.replace("\r\n", "\n"), passphrase).map_err(|e| {
+        if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
+            anyhow::anyhow!(
+                "Failed to decrypt SSH key {}. The key may be encrypted. Please provide the correct passphrase.",
+                shown
+            )
+        } else {
+            anyhow::anyhow!(
+                "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
+                shown,
+                e
+            )
+        }
+    })
+}
+
+/// Offer one key. `Ok(false)` means the server rejected it (russh reports that
+/// as a failed AuthResult, not an error). RSA keys go first with rsa-sha2-256,
+/// then legacy `ssh-rsa` (SHA-1) for ancient servers; other key types are
+/// offered once, so trying several keys stays within the server's MaxAuthTries.
+async fn offer_key(
+    session: &mut client::Handle<Client>,
+    username: &str,
+    key: PrivateKey,
+    path: &str,
+) -> Result<bool> {
+    let is_rsa = matches!(key.algorithm(), Algorithm::Rsa { .. });
+    let key = Arc::new(key);
+    let hashes: &[Option<HashAlg>] = if is_rsa {
+        &[Some(HashAlg::Sha256), None]
+    } else {
+        &[Some(HashAlg::Sha256)]
+    };
+    for hash in hashes {
+        let result = session
+            .authenticate_publickey(username, PrivateKeyWithHashAlg::new(key.clone(), *hash))
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!("Public key authentication failed with key {}: {}.", path, e)
+            })?;
+        if result.success() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 async fn authenticate(
     session: &mut client::Handle<Client>,
     username: &str,
@@ -682,81 +789,8 @@ async fn authenticate(
             key_path,
             passphrase,
         } => {
-            // Expand tilde in path — use dirs::home_dir() for cross-platform
-            // support (HOME is not set on Windows; USERPROFILE is used instead).
-            let expanded_path = crate::os_keypath::expand_tilde(key_path);
-
-            // Check if file exists
-            if !std::path::Path::new(&expanded_path).exists() {
-                return Err(anyhow::anyhow!(
-                    "SSH key file not found: {}. Please check the file path and try again.",
-                    key_path
-                ));
-            }
-
-            // Read the key file and normalise CRLF line endings so that keys
-            // created or edited on Windows (which use \r\n) are parsed correctly
-            // by the PEM / OpenSSH decoder.
-            let key_content = std::fs::read_to_string(&expanded_path)
-                .map_err(|e| anyhow::anyhow!("Failed to read SSH key file {}: {}", key_path, e))?;
-            let key_content = key_content.replace("\r\n", "\n");
-
-            // decode_secret_key takes the key *content* as a &str.
-            let key = decode_secret_key(&key_content, passphrase.as_deref()).map_err(|e| {
-                if e.to_string().contains("encrypted") || e.to_string().contains("passphrase") {
-                    anyhow::anyhow!(
-                        "Failed to decrypt SSH key. The key may be encrypted. Please provide the correct passphrase."
-                    )
-                } else {
-                    anyhow::anyhow!(
-                        "Failed to load SSH key from {}: {}. Ensure the file is a valid SSH private key (RSA, Ed25519, or ECDSA).",
-                        key_path, e
-                    )
-                }
-            })?;
-
-            // russh reports a rejected key as AuthResult::Failure — no
-            // transport error — so the "not authorized" branch must name the
-            // key itself; the map_err above only sees real transport errors.
-            // RSA keys are offered first with rsa-sha2-256 (what russh 0.44
-            // used) and fall back to legacy `ssh-rsa` (SHA-1) for ancient
-            // servers that reject the SHA-2 signature; non-RSA keys ignore
-            // the hash entirely.
-            let mut authenticated = session
-                .authenticate_publickey(
-                    username,
-                    PrivateKeyWithHashAlg::new(Arc::new(key.clone()), Some(HashAlg::Sha256)),
-                )
-                .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Public key authentication failed with key {}: {}.",
-                        expanded_path,
-                        e
-                    )
-                })?;
-            if !authenticated.success() {
-                authenticated = session
-                    .authenticate_publickey(
-                        username,
-                        PrivateKeyWithHashAlg::new(Arc::new(key.clone()), None),
-                    )
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Public key authentication failed with key {}: {}.",
-                            expanded_path,
-                            e
-                        )
-                    })?;
-            }
-            if !authenticated.success() {
-                return Err(anyhow::anyhow!(
-                    "Public key authentication failed with key {}. The key may not be authorized on the server.",
-                    expanded_path
-                ));
-            }
-            authenticated
+            return authenticate_with_key_files(session, username, key_path, passphrase.as_deref())
+                .await;
         }
     };
 
