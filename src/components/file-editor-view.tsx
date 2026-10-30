@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { parentPath } from "@/lib/file-entry-types";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -163,6 +164,9 @@ export function FileEditorView({
       const localPath = `${homeDir}/.rshell-preview-${fileName}`;
       // Routed through the global queue service so the download serializes
       // with other transfers and is cancellable like any other.
+      // fileName comes from the server listing: the confined command makes
+      // the backend refuse separators or `..` instead of writing outside home.
+      const remoteName = filePath.slice(filePath.lastIndexOf("/") + 1);
       const transfer = submit({
         connectionId,
         fileName,
@@ -170,6 +174,12 @@ export function FileEditorView({
         sourcePath: filePath,
         destinationPath: localPath,
         totalBytes: 0,
+        confined: {
+          remoteRoot: parentPath(filePath),
+          destinationRoot: homeDir,
+          remoteRelativePath: remoteName,
+          destinationRelativePath: `.rshell-preview-${fileName}`,
+        },
       });
       const outcome = await transfer.done;
       if (outcome !== "completed") {
