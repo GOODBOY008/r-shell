@@ -8,6 +8,8 @@ import { Button } from './ui/button';
 import { Toggle } from './ui/toggle';
 import { Input } from './ui/input';
 import { useTransferQueue, onItemSettled } from '@/lib/transfer-queue-service';
+import { confinedFileDownload } from '@/lib/confined-download';
+import { parentPath } from '@/lib/file-entry-types';
 import {
   buildDirectoryUploadPlan,
   buildFileUploadItems,
@@ -991,14 +993,9 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
       dispatchTransfer({
         type: "ENQUEUE",
-        items: filesToDownload.map((f) => ({
-          connectionId,
-          fileName: f.name,
-          direction: "download" as const,
-          sourcePath: f.path,
-          destinationPath: `${destDir}/${f.name}`,
-          totalBytes: f.size,
-        })),
+        items: filesToDownload.map((f) =>
+          confinedFileDownload(connectionId, parentPath(f.path), destDir, f.name, f.size),
+        ),
       });
       if (skippedDirs > 0) {
         notify.info(

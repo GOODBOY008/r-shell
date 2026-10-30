@@ -21,6 +21,7 @@ import { TransferControls } from "./transfer-controls";
 import { TransferQueue } from "./transfer-queue";
 import type { FileEntry } from "@/lib/file-entry-types";
 import { pathJoin } from "@/lib/file-entry-types";
+import { confinedFileDownload } from "@/lib/confined-download";
 import {
   useTransferQueue,
   onItemSettled,
@@ -325,14 +326,9 @@ export function FileBrowserView({
       if (fileItems.length === 0) return;
       dispatchTransfer({
         type: "ENQUEUE",
-        items: fileItems.map((f) => ({
-          connectionId,
-          fileName: f.name,
-          direction: "download" as const,
-          sourcePath: pathJoin(remoteDir, f.name),
-          destinationPath: pathJoin(localPath, f.name),
-          totalBytes: f.size,
-        })),
+        items: fileItems.map((f) =>
+          confinedFileDownload(connectionId, remoteDir, localPath, f.name, f.size),
+        ),
       });
       notify.info(t('fileBrowser.toast.queuedDownload', { count: fileItems.length }));
     },
@@ -383,14 +379,9 @@ export function FileBrowserView({
           type: "ENQUEUE",
           items: files
             .filter((f: { file_type: string }) => f.file_type === "File")
-            .map((f: { name: string; size: number }) => ({
-              connectionId,
-              fileName: f.name,
-              direction: "download" as const,
-              sourcePath: pathJoin(sourcePath, f.name),
-              destinationPath: pathJoin(targetPath, f.name),
-              totalBytes: f.size,
-            })),
+            .map((f: { name: string; size: number }) =>
+              confinedFileDownload(connectionId, sourcePath, targetPath, f.name, f.size),
+            ),
         });
       }
     };
