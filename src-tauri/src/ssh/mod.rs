@@ -386,10 +386,10 @@ pub(crate) enum HostKeyVerdict {
 
 /// Verify `key` for `host:port` against the known_hosts file at `path`.
 ///
-/// A mismatch surfaces as `russh::keys::Error::KeyChanged { line }` — the
-/// caller must refuse the connection. An unknown host is recorded and
-/// accepted, which is what most GUI clients do; a confirmation prompt can be
-/// layered on top later.
+/// A mismatch — including a host recorded with a key of another type —
+/// surfaces as `russh::keys::Error::KeyChanged { line }`; the caller must
+/// refuse the connection. An unknown host is recorded and accepted, which is
+/// what most GUI clients do; a confirmation prompt can be layered on top later.
 pub(crate) fn verify_host_key(
     host: &str,
     port: u16,
@@ -397,7 +397,21 @@ pub(crate) fn verify_host_key(
     path: &Path,
     accept_new: bool,
 ) -> std::result::Result<HostKeyVerdict, russh::keys::Error> {
-    match check_known_hosts_path(host, port, key, path) {
+    let checked = match check_known_hosts_path(host, port, key, path) {
+        // russh only compares keys of the presented algorithm, so a host
+        // recorded with another key type looks unknown. Treat that as a
+        // changed key: otherwise an impostor could offer just a key type the
+        // user never recorded and be trusted on first use.
+        Ok(false) => {
+            let recorded = russh::keys::known_hosts::known_host_keys_path(host, port, path)?;
+            match recorded.first() {
+                Some((line, _)) => Err(russh::keys::Error::KeyChanged { line: *line }),
+                None => Ok(false),
+            }
+        }
+        other => other,
+    };
+    match checked {
         Ok(true) => Ok(HostKeyVerdict::Known),
         Ok(false) => {
             russh::keys::known_hosts::learn_known_hosts_path(host, port, key, path)?;
@@ -1905,6 +1919,57 @@ mod host_key_tests {
                 .count(),
             1
         );
+    }
+
+    fn fresh_ecdsa_key() -> PublicKey {
+        PrivateKey::random(
+            &mut rand::rng(),
+            Algorithm::Ecdsa {
+                curve: EcdsaCurve::NistP256,
+            },
+        )
+        .expect("ecdsa keygen")
+        .public_key()
+        .clone()
+    }
+
+    #[test]
+    fn different_key_type_for_known_host_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+
+        verify_host_key("example.test", 22, &fresh_key(), &path, false).unwrap();
+        let recorded = std::fs::read_to_string(&path).unwrap();
+
+        // An impostor offering only a key type the user never recorded must
+        // not be trusted on first use.
+        let impostor = fresh_ecdsa_key();
+        let err = verify_host_key("example.test", 22, &impostor, &path, false).unwrap_err();
+        assert!(
+            matches!(err, russh::keys::Error::KeyChanged { .. }),
+            "expected KeyChanged, got {err:?}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), recorded);
+
+        // Other hosts are unaffected.
+        assert_eq!(
+            verify_host_key("other.test", 22, &fresh_ecdsa_key(), &path, false).unwrap(),
+            HostKeyVerdict::Learned
+        );
+
+        // Once the user confirms, the new key type replaces the old record.
+        let replacement = fresh_ecdsa_key();
+        assert_eq!(
+            verify_host_key("example.test", 22, &replacement, &path, true).unwrap(),
+            HostKeyVerdict::Replaced
+        );
+        assert_eq!(
+            verify_host_key("example.test", 22, &replacement, &path, false).unwrap(),
+            HostKeyVerdict::Known
+        );
+        let rewritten = std::fs::read_to_string(&path).unwrap();
+        assert!(!rewritten.contains("example.test ssh-ed25519 "), "{rewritten:?}");
+        assert!(rewritten.contains("example.test ecdsa-sha2-nistp256 "), "{rewritten:?}");
     }
 
     #[tokio::test]
