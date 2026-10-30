@@ -98,7 +98,11 @@ describe('sshConnect (changed host key → user decision → accept-new retry)',
     }
     expect(invoke).toHaveBeenCalledTimes(2);
     expect(invoke).toHaveBeenLastCalledWith('ssh_connect', {
-      request: { ...request, host_key_policy: 'accept-new' },
+      request: {
+        ...request,
+        host_key_policy: 'accept-new',
+        accept_new_for: { host: changed.host, port: changed.port },
+      },
     });
   });
 

@@ -18,7 +18,8 @@ pub struct SftpConfig {
     pub auth_method: SftpAuthMethod,
     /// Optional SSH jump host (bastion) to route the connection through.
     pub tunnel: Option<TunnelConfig>,
-    /// Host-key policy for this connection and its jump host.
+    /// Host-key policy for this connection and its jump host (`AcceptNew`
+    /// names the one hop it applies to).
     #[serde(default)]
     pub host_key_policy: HostKeyPolicy,
     /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
@@ -210,7 +211,7 @@ impl StandaloneSftpClient {
             Client::new(
                 &config.host,
                 config.port,
-                config.host_key_policy,
+                config.host_key_policy.clone(),
                 crate::ssh::fresh_x11_registry(),
             );
         let mut ssh_session = if let Some(tunnel) = &config.tunnel {
@@ -221,7 +222,7 @@ impl StandaloneSftpClient {
                 &config.host,
                 config.port,
                 connection_timeout,
-                config.host_key_policy,
+                config.host_key_policy.clone(),
             )
             .await
             .map_err(|e| anyhow::anyhow!("SFTP SSH tunnel failed: {e}"))?;
@@ -282,7 +283,10 @@ impl StandaloneSftpClient {
         Ok(Self {
             session: Some(session),
             sftp: Some(sftp),
-            config: Some(config.clone()),
+            config: Some(SftpConfig {
+                host_key_policy: config.host_key_policy.after_connect(),
+                ..config.clone()
+            }),
         })
     }
 
@@ -361,7 +365,7 @@ impl StandaloneSftpClient {
                 Client::new(
                 &config.host,
                 config.port,
-                config.host_key_policy,
+                config.host_key_policy.clone(),
                 crate::ssh::fresh_x11_registry(),
             );
             let host = config.host.clone();

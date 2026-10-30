@@ -1893,6 +1893,10 @@ mod x11_e2e_tests {
 
     fn x11_config(enabled: bool, display: Option<&str>) -> SshConfig {
         let (host, port) = e2e_endpoint();
+        let host_key_policy = HostKeyPolicy::AcceptNew {
+            host: host.clone(),
+            port,
+        };
         SshConfig {
             host,
             port,
@@ -1900,10 +1904,6 @@ mod x11_e2e_tests {
             auth_method: AuthMethod::Password {
                 password: E2E_PASS.to_string(),
             },
-            // The container regenerates its host keys on every rebuild, so a
-            // Strict policy would refuse the second run against the same
-            // port. AcceptNew is the fixture's documented "host-key
-            // auto-accepted" contract (tests/x11-e2e/Dockerfile).
             compression: true,
             keepalive_interval: Some(60),
             keepalive_max: Some(3),
@@ -1912,7 +1912,7 @@ mod x11_e2e_tests {
             // Strict policy would refuse the second run against the same
             // port. AcceptNew is the fixture's documented "host-key
             // auto-accepted" contract (tests/x11-e2e/Dockerfile).
-            host_key_policy: HostKeyPolicy::AcceptNew,
+            host_key_policy,
             connect_timeout: 10,
             tunnel: None,
             x11: Some(X11Config {

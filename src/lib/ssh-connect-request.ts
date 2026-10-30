@@ -78,6 +78,8 @@ export interface SshConnectRequest {
   passphrase: string | null;
   /** See `HostKeyPolicy`; derived from Settings unless overridden for a retry. */
   host_key_policy: HostKeyPolicy;
+  /** With `accept-new`: the endpoint (target or jump host) whose changed key the user confirmed. */
+  accept_new_for?: { host: string; port: number };
   /** Seconds; `null` keeps the backend default (see `getConnectionTimeoutSetting`). */
   connect_timeout: number | null;
   compression: boolean;

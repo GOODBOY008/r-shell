@@ -30,6 +30,9 @@ pub struct ConnectRequest {
     /// "strict" (default), "accept-new" (after the user confirmed a changed
     /// key) or "off" (Host Key Verification switched off in Settings).
     pub host_key_policy: Option<String>,
+    /// With "accept-new": the endpoint (target or jump host) whose changed
+    /// key the user confirmed. Missing means the target.
+    pub accept_new_for: Option<AcceptNewFor>,
     /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
     /// Timeout" slider. `None` keeps the backend default (3 s).
     pub connect_timeout: Option<u64>,
@@ -104,10 +107,21 @@ pub struct SshConnectResponse {
     pub host_key_changed: Option<HostKeyChanged>,
 }
 
-fn parse_host_key_policy(value: Option<&str>) -> HostKeyPolicy {
+/// Endpoint named by an "accept-new" request: the host whose changed key the
+/// user confirmed in the "host key changed" dialog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcceptNewFor {
+    pub host: String,
+    pub port: u16,
+}
+
+fn parse_host_key_policy(value: Option<&str>, accept_new_for: AcceptNewFor) -> HostKeyPolicy {
     match value {
         Some("off") => HostKeyPolicy::Off,
-        Some("accept-new") => HostKeyPolicy::AcceptNew,
+        Some("accept-new") => HostKeyPolicy::AcceptNew {
+            host: accept_new_for.host,
+            port: accept_new_for.port,
+        },
         _ => HostKeyPolicy::Strict,
     }
 }
@@ -144,6 +158,13 @@ pub async fn ssh_connect(
         _ => return Err("Invalid auth method".to_string()),
     };
 
+    let host_key_policy = parse_host_key_policy(
+        request.host_key_policy.as_deref(),
+        request.accept_new_for.unwrap_or(AcceptNewFor {
+            host: request.host.clone(),
+            port: request.port,
+        }),
+    );
     let config = SshConfig {
         host: request.host,
         port: request.port,
@@ -154,7 +175,7 @@ pub async fn ssh_connect(
         keepalive_max,
         proxy,
         tunnel,
-        host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
+        host_key_policy,
         connect_timeout: request.connect_timeout.unwrap_or(3),
         x11: request.x11,
     };
@@ -2579,13 +2600,20 @@ pub async fn sftp_connect(
         request.tunnel_passphrase.clone(),
     )?;
 
+    let host_key_policy = parse_host_key_policy(
+        request.host_key_policy.as_deref(),
+        AcceptNewFor {
+            host: request.host.clone(),
+            port: request.port,
+        },
+    );
     let config = SftpConfig {
         host: request.host,
         port: request.port,
         username: request.username,
         auth_method: auth,
         tunnel,
-        host_key_policy: parse_host_key_policy(request.host_key_policy.as_deref()),
+        host_key_policy,
         connect_timeout: request.connect_timeout.unwrap_or(10),
     };
 
@@ -5271,6 +5299,7 @@ mod proxy_config_tests {
             key_path: None,
             passphrase: None,
             host_key_policy: None,
+            accept_new_for: None,
             compression: None,
             keepalive_enabled: None,
             keepalive_interval: None,
