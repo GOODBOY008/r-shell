@@ -13,8 +13,9 @@ export interface SshConnectResult {
 /**
  * Run `ssh_connect`, and when the backend refuses a changed host key, ask the
  * user whether to trust the new key. On "trust" the connect is retried once
- * with the `accept-new` policy, which replaces the recorded key; on "cancel"
- * the original refusal is returned unchanged.
+ * with the `accept-new` policy for that host, which replaces its recorded key
+ * (any other hop stays strict); on "cancel" the original refusal is returned
+ * unchanged.
  *
  * Every SSH connect path goes through here so the decision dialog appears no
  * matter how the connection was started (dialog, sidebar, restore, reconnect).
@@ -28,7 +29,8 @@ export async function sshConnect(request: SshConnectRequest): Promise<SshConnect
   if (!trust) {
     return result;
   }
+  const { host, port } = result.host_key_changed;
   return invoke<SshConnectResult>('ssh_connect', {
-    request: { ...request, host_key_policy: 'accept-new' },
+    request: { ...request, host_key_policy: 'accept-new', accept_new_for: { host, port } },
   });
 }

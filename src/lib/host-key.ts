@@ -4,8 +4,9 @@ import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcuts';
  * Host-key policy sent with every `ssh_connect` request.
  * - `strict`: verify against ~/.ssh/known_hosts; unknown hosts are recorded;
  *   a changed key refuses the connection (the backend default);
- * - `accept-new`: like strict, but a changed key replaces the recorded one.
- *   Sent only for the one-shot retry after the user confirmed the new key;
+ * - `accept-new`: like strict, but a changed key for the endpoint named in
+ *   `accept_new_for` replaces the recorded one. Sent only for the one-shot
+ *   retry after the user confirmed the new key;
  * - `off`: no verification — the "Host Key Verification" switch is off.
  */
 export type HostKeyPolicy = 'strict' | 'accept-new' | 'off';
