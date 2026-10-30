@@ -636,10 +636,10 @@ mod shell_integration_tests {
     static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     // The exact path a user hits when creating a connection with publickey auth
-    // and no key path: commands.rs resolves the empty key path via
-    // resolve_private_key_path(None), which falls back to $HOME/.ssh/id_rsa.
-    // The fallback target here matches the server's authorized_keys, so the
-    // connection must authenticate end-to-end with the default key.
+    // and no key path: commands.rs resolves the empty key path to "" and
+    // authentication offers id_rsa, id_ecdsa, id_ed25519 in turn. Only the last
+    // one is authorized here, so the login must walk past a rejected key and an
+    // unreadable file, like OpenSSH does.
     #[tokio::test]
     #[ignore]
     async fn docker_ssh_default_keypath_fallback() {
@@ -647,17 +647,25 @@ mod shell_integration_tests {
         let home = tempfile::tempdir().expect("tempdir for fake HOME");
         let ssh_dir = home.path().join(".ssh");
         std::fs::create_dir_all(&ssh_dir).expect("create $HOME/.ssh");
+        // File names only set the order; the decoder reads the key type from
+        // the content. id_rsa: a key the server rejects. id_ecdsa: not a key.
+        // id_ed25519: the authorized fixture key.
+        let rejected = russh::keys::PrivateKey::random(&mut rand::rng(), russh::keys::Algorithm::Ed25519)
+            .expect("generate unauthorized key");
+        let mut pem = Vec::new();
+        russh::keys::encode_pkcs8_pem(&rejected, &mut pem).expect("encode unauthorized key");
+        std::fs::write(ssh_dir.join("id_rsa"), &pem).expect("write unauthorized key");
+        std::fs::write(ssh_dir.join("id_ecdsa"), "not a key").expect("write unreadable key");
         let fixture_key =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docker/default-key-sshd/id_rsa");
-        std::fs::copy(&fixture_key, ssh_dir.join("id_rsa")).expect("copy fixture key to fake HOME");
+        std::fs::copy(&fixture_key, ssh_dir.join("id_ed25519")).expect("copy fixture key to fake HOME");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(
-                ssh_dir.join("id_rsa"),
-                std::fs::Permissions::from_mode(0o600),
-            )
-            .expect("chmod 600 the fixture key");
+            for name in ["id_rsa", "id_ecdsa", "id_ed25519"] {
+                std::fs::set_permissions(ssh_dir.join(name), std::fs::Permissions::from_mode(0o600))
+                    .expect("chmod 600 the test keys");
+            }
         }
 
         struct RestoreHome(Option<std::ffi::OsString>);
@@ -676,11 +684,7 @@ mod shell_integration_tests {
         // The exact production resolution for an empty key path.
         let resolved =
             crate::os_keypath::resolve_private_key_path(None).expect("default key resolves");
-        assert_eq!(
-            resolved,
-            ssh_dir.join("id_rsa").to_string_lossy(),
-            "fallback must pick $HOME/.ssh/id_rsa"
-        );
+        assert_eq!(resolved, "", "a blank key path means: offer the default keys");
 
         let (host, port) = default_key_endpoint();
         let mut client = SshClient::new();
