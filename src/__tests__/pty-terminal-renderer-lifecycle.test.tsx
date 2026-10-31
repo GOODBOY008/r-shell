@@ -2,6 +2,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import { PtyTerminal } from '../components/pty-terminal';
+import { loadAppearanceSettings } from '../lib/terminal-config';
 
 const mocks = vi.hoisted(() => {
   const terminals: Array<any> = [];
@@ -26,7 +27,11 @@ const mocks = vi.hoisted(() => {
       registerOscHandler: vi.fn(() => ({ dispose: vi.fn() })),
     };
 
-    loadAddon = vi.fn();
+    loadAddon = vi.fn((addon) => {
+      if (webglInstances.includes(addon) && rendererFailure.enabled) {
+        throw new Error('WebGL unavailable');
+      }
+    });
     open = vi.fn();
     focus = vi.fn();
     refresh = vi.fn();
@@ -67,6 +72,7 @@ const mocks = vi.hoisted(() => {
     }
   }
 
+  const rendererFailure = { enabled: false };
   const Terminal = vi.fn(function Terminal() {
     const terminal = new MockTerminal();
     terminals.push(terminal);
@@ -90,7 +96,7 @@ const mocks = vi.hoisted(() => {
     callback: (entries: Array<{ contentRect: { width: number; height: number } }>) => void;
   }> = [];
 
-  return { terminals, webSockets, webglInstances, resizeObservers, terminalCallbacks, Terminal, FitAddon, WebglAddon, MockWebSocket };
+  return { terminals, webSockets, webglInstances, resizeObservers, terminalCallbacks, rendererFailure, Terminal, FitAddon, WebglAddon, MockWebSocket };
 });
 
 vi.mock('@xterm/xterm', () => ({
@@ -154,7 +160,8 @@ vi.mock('../lib/terminal-config', () => ({
     opacity: 100,
     theme: 'vs-code-dark',
   })),
-  getThemeAwareTerminalOptions: vi.fn(() => ({
+  getThemeAwareTerminalOptions: vi.fn((appearance) => ({
+    allowTransparency: appearance.allowTransparency || !!appearance.backgroundImage,
     cursorBlink: true,
     cursorStyle: 'block',
     fontFamily: 'monospace',
@@ -217,6 +224,13 @@ describe('PtyTerminal renderer lifecycle (issue #87)', () => {
     mocks.webSockets.length = 0;
     mocks.webglInstances.length = 0;
     mocks.resizeObservers.length = 0;
+    mocks.rendererFailure.enabled = false;
+    vi.mocked(loadAppearanceSettings).mockReturnValue({
+      allowTransparency: false,
+      backgroundImage: '',
+      opacity: 100,
+      theme: 'vs-code-dark',
+    } as ReturnType<typeof loadAppearanceSettings>);
     containerSize = 800;
     stubContainerSize();
 
@@ -263,6 +277,72 @@ describe('PtyTerminal renderer lifecycle (issue #87)', () => {
     // Hidden panes must stay on the DOM renderer so many mounted tabs cannot
     // exhaust Chromium's WebGL context budget.
     expect(mocks.WebglAddon).not.toHaveBeenCalled();
+  });
+
+  it('changes background and transparency without rebuilding the terminal or PTY', async () => {
+    const props = { connectionId: 'appearance-1', connectionName: 'Appearance', isActive: true };
+    const view = render(<PtyTerminal {...props} />);
+    await flushFrames(5);
+    const terminal = mocks.terminals[0];
+    const socket = mocks.webSockets[0];
+    expect(socket).toBeDefined();
+    const originalAppearance = loadAppearanceSettings();
+
+    vi.mocked(loadAppearanceSettings).mockReturnValue({
+      ...originalAppearance, backgroundImage: 'data:image/png;base64,background',
+    });
+    view.rerender(<PtyTerminal {...props} appearanceKey={1} />);
+    expect(terminal.options.allowTransparency).toBe(true);
+    expect(mocks.webglInstances[0].dispose).toHaveBeenCalledTimes(1);
+
+    vi.mocked(loadAppearanceSettings).mockReturnValue({
+      ...originalAppearance, allowTransparency: true,
+    });
+    view.rerender(<PtyTerminal {...props} appearanceKey={2} />);
+    expect(mocks.webglInstances).toHaveLength(1);
+    expect(terminal.options.allowTransparency).toBe(true);
+
+    vi.mocked(loadAppearanceSettings).mockReturnValue(originalAppearance);
+    view.rerender(<PtyTerminal {...props} appearanceKey={3} />);
+    expect(terminal.options.allowTransparency).toBe(false);
+    expect(mocks.webglInstances).toHaveLength(2);
+    expect(mocks.terminals).toHaveLength(1);
+    expect(mocks.webSockets).toHaveLength(1);
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(terminal.reset).not.toHaveBeenCalled();
+  });
+
+  it('disposes failed WebGL initialization and does not retry on every activation', async () => {
+    mocks.rendererFailure.enabled = true;
+    const props = { connectionId: 'failed-renderer', connectionName: 'Fallback' };
+    const view = render(<PtyTerminal {...props} isActive />);
+    await flushFrames(5);
+    expect(mocks.webglInstances).toHaveLength(1);
+    expect(mocks.webglInstances[0].dispose).toHaveBeenCalledTimes(1);
+
+    view.rerender(<PtyTerminal {...props} isActive={false} />);
+    view.rerender(<PtyTerminal {...props} isActive />);
+    await flushFrames(3);
+    expect(mocks.webglInstances).toHaveLength(1);
+    expect(mocks.terminals[0].refresh).toHaveBeenCalled();
+    expect(mocks.terminals).toHaveLength(1);
+  });
+
+  it('releases resources without allocating a replacement buffer on unmount', async () => {
+    const view = render(<PtyTerminal connectionId="dispose-1" connectionName="Dispose" />);
+    await flushFrames(5);
+    const terminal = mocks.terminals[0];
+    const socket = mocks.webSockets[0];
+    view.unmount();
+    expect(terminal.dispose).toHaveBeenCalledTimes(1);
+    expect(terminal.reset).not.toHaveBeenCalled();
+    expect(mocks.webglInstances[0].dispose).toHaveBeenCalledTimes(1);
+    expect(terminal.onSelectionChange.mock.results[0].value.dispose).toHaveBeenCalledOnce();
+    expect(socket.onmessage).toBeNull();
+    expect(socket.onclose).toBeNull();
+    expect(socket.onerror).toBeNull();
+    expect(socket.onopen).toBeNull();
   });
 
   it('loads WebGL when the terminal becomes active and releases it when hidden again', async () => {

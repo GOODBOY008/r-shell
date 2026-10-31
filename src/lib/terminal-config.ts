@@ -32,10 +32,18 @@ export interface TerminalAppearanceSettings {
 }
 
 export const DEFAULT_TERMINAL_SCROLLBACK = 10000;
-export const MIN_TERMINAL_SCROLLBACK = 1000;
+export const MIN_TERMINAL_SCROLLBACK = 0;
 export const MAX_TERMINAL_SCROLLBACK = 50000;
 
 export function normalizeScrollbackLines(value: unknown): number {
+  // Zero disables history. Do not coerce missing settings, booleans or empty
+  // strings to zero: those indicate invalid persisted/imported configuration.
+  if (
+    (typeof value !== 'number' && typeof value !== 'string') ||
+    (typeof value === 'string' && value.trim() === '')
+  ) {
+    return DEFAULT_TERMINAL_SCROLLBACK;
+  }
   const numericValue = typeof value === 'number' ? value : Number(value);
 
   if (!Number.isFinite(numericValue) || numericValue < MIN_TERMINAL_SCROLLBACK) {
@@ -335,7 +343,8 @@ export const defaultTerminalOptions: ITerminalOptions = {
   letterSpacing: 0,
   theme: defaultTerminalTheme,
   allowProposedApi: true,
-  convertEol: true,
+  // A PTY controls CR/LF itself (including applications using raw mode).
+  convertEol: false,
   scrollback: DEFAULT_TERMINAL_SCROLLBACK,
   tabStopWidth: 8,
   allowTransparency: false,
@@ -362,31 +371,52 @@ export function getTerminalOptions(appearance: TerminalAppearanceSettings): ITer
     theme: needsTransparency ? {
       ...theme,
       background: '#00000000', // Fully transparent background
-    } : theme,
+    } : { ...theme },
   };
 }
+
+// Keep one shared parsed snapshot. Each terminal otherwise parses and retains
+// its own potentially multi-megabyte background image. Comparing the stored
+// source also catches imports and changes made by another window.
+let cachedAppearanceSource: string | null | undefined;
+let cachedAppearanceSettings: TerminalAppearanceSettings = defaultAppearanceSettings;
 
 export function loadAppearanceSettings(): TerminalAppearanceSettings {
   try {
     const saved = localStorage.getItem('terminalAppearance');
+    if (saved === cachedAppearanceSource) {
+      return { ...cachedAppearanceSettings };
+    }
+    let settings = defaultAppearanceSettings;
     if (saved) {
       const parsed = JSON.parse(saved) as unknown;
-      if (parsed && typeof parsed === 'object') {
-        return normalizeAppearanceSettings({
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        settings = normalizeAppearanceSettings({
           ...defaultAppearanceSettings,
           ...(parsed as Partial<TerminalAppearanceSettings>),
         });
       }
     }
+    cachedAppearanceSource = saved;
+    cachedAppearanceSettings = settings;
+    // Callers edit settings in forms; sharing the parsed strings is safe,
+    // sharing a mutable settings object would leak unsaved changes to tabs.
+    return { ...settings };
   } catch (e) {
+    cachedAppearanceSource = undefined;
+    cachedAppearanceSettings = defaultAppearanceSettings;
     console.error('Failed to load terminal appearance settings:', e);
   }
-  return defaultAppearanceSettings;
+  return { ...defaultAppearanceSettings };
 }
 
 export function saveAppearanceSettings(settings: TerminalAppearanceSettings): void {
   try {
-    localStorage.setItem('terminalAppearance', JSON.stringify(normalizeAppearanceSettings(settings)));
+    const normalized = normalizeAppearanceSettings(settings);
+    const saved = JSON.stringify(normalized);
+    localStorage.setItem('terminalAppearance', saved);
+    cachedAppearanceSource = saved;
+    cachedAppearanceSettings = normalized;
   } catch (e) {
     console.error('Failed to save terminal appearance settings:', e);
   }
@@ -487,6 +517,6 @@ export function getThemeAwareTerminalOptions(appearance: TerminalAppearanceSetti
     theme: needsTransparency ? {
       ...theme,
       background: '#00000000',
-    } : theme,
+    } : { ...theme },
   };
 }
