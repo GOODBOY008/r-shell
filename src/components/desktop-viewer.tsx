@@ -7,10 +7,12 @@ import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { notify } from '@/lib/notifications';
 import { DesktopToolbar } from './desktop-toolbar';
-import { rdpDisplaySize } from '@/lib/rdp-display';
+import { observeDevicePixelRatio, rdpDisplaySize } from '@/lib/rdp-display';
 import { computeFitScale, translateCoordinates } from '@/lib/desktop-utils';
 import { Monitor, RefreshCw, ExternalLink, Unplug, Undo2 } from 'lucide-react';
 import { Button } from './ui/button';
+import { RdpSessionStatus } from './rdp-session-status';
+import { parseRdpSessionInfo, type RdpSessionInfo } from '@/lib/rdp-session-info';
 
 const POINTER_BUTTON_MASKS = [1, 4, 2, 8, 16];
 
@@ -52,6 +54,7 @@ export function DesktopViewer({
   const fullscreenSettleUntilRef = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
+  const [sessionInfo, setSessionInfo] = useState<RdpSessionInfo | null>(null);
 
   // RDP only: the session is currently displayed in a standalone native
   // window (softbuffer) instead of this tab's canvas. Mirrored in a ref so
@@ -61,6 +64,11 @@ export function DesktopViewer({
 
   // Calculate displayed dimensions
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const [devicePixelRatio, setDevicePixelRatio] = useState(window.devicePixelRatio);
+  useEffect(() => {
+    if (!isConnected || protocol.toUpperCase() !== 'RDP' || rdpResolution !== 'retina') return;
+    return observeDevicePixelRatio(setDevicePixelRatio);
+  }, [isConnected, protocol, rdpResolution]);
   // Frame-stream watchdog bookkeeping
   const activeCloseRef = useRef(false);
   const lastFrameRef = useRef(0);
@@ -128,6 +136,7 @@ export function DesktopViewer({
   useEffect(() => {
     if (!isConnected) return;
 
+    setSessionInfo(null);
     let ws: WebSocket | null = null;
     let cancelled = false;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -193,6 +202,9 @@ export function DesktopViewer({
                 setDesktopWidth(msg.width);
                 setDesktopHeight(msg.height);
               }
+            } else if (msg.type === 'DesktopSessionInfo' && msg.connection_id === connectionId) {
+              const info = parseRdpSessionInfo(msg.info);
+              if (info) setSessionInfo(info);
             } else if (msg.type === 'ClipboardUpdate' && msg.connection_id === connectionId && typeof msg.text === 'string') {
               // Write incoming remote clipboard text to local clipboard
               writeClipboardText(msg.text).catch(() => {
@@ -332,7 +344,7 @@ export function DesktopViewer({
     if (containerSize.width === 0 || containerSize.height === 0) return;
 
     const timer = setTimeout(() => {
-      const display = rdpDisplaySize(containerSize.width, containerSize.height, rdpResolution);
+      const display = rdpDisplaySize(containerSize.width, containerSize.height, rdpResolution, devicePixelRatio);
       if (!display) return;
       const key = `${display.width}x${display.height}@${display.scaleFactor}`;
       if (lastResizeRef.current === key) return;
@@ -347,7 +359,7 @@ export function DesktopViewer({
     }, Math.max(800, fullscreenSettleUntilRef.current - Date.now()));
 
     return () => clearTimeout(timer);
-  }, [connectionId, isConnected, sessionMissing, isPoppedOut, protocol, rdpResolution, scalingMode, isFullScreen, containerSize.width, containerSize.height]);
+  }, [connectionId, isConnected, sessionMissing, isPoppedOut, protocol, rdpResolution, scalingMode, isFullScreen, containerSize.width, containerSize.height, devicePixelRatio]);
 
   const scale = scalingMode === 'fit'
     ? computeFitScale(desktopWidth, desktopHeight, containerSize.width, containerSize.height)
@@ -571,7 +583,7 @@ export function DesktopViewer({
   // rendering + native input). The tab canvas goes idle; the session itself
   // keeps running — returning re-attaches it without reconnecting.
   const handlePopOut = useCallback(() => {
-    invoke<string>('rdp_open_native_window', { connectionId, title: connectionName })
+    invoke<string>('rdp_open_native_window', { connectionId, title: connectionName, resolution: rdpResolution })
       .then(() => {
         poppedOutRef.current = true;
         setIsPoppedOut(true);
@@ -581,7 +593,7 @@ export function DesktopViewer({
           description: String(err),
         });
       });
-  }, [connectionId, connectionName, t]);
+  }, [connectionId, connectionName, rdpResolution, t]);
 
   // Focus the existing native window (rdp_open_native_window focuses
   // instead of recreating when the window already exists).
@@ -627,6 +639,7 @@ export function DesktopViewer({
               {t('desktopViewer.reconnect')}
             </Button>
           )}
+          {protocol.toUpperCase() === 'RDP' && <RdpSessionStatus info={sessionInfo} disconnected />}
         </div>
       </div>
     );
@@ -661,6 +674,7 @@ export function DesktopViewer({
               {t('desktopViewer.disconnect')}
             </Button>
           </div>
+          <RdpSessionStatus info={sessionInfo} />
         </div>
       </div>
     );
@@ -688,8 +702,14 @@ export function DesktopViewer({
         onToggleFullScreen={handleToggleFullScreen}
         onDisconnect={handleDisconnect}
         onPopOut={protocol?.toUpperCase() === 'RDP' ? handlePopOut : undefined}
+        sessionInfo={protocol.toUpperCase() === 'RDP' ? sessionInfo : null}
       />
 
+      {protocol.toUpperCase() === 'RDP' && sessionInfo?.notification && (
+        <div className="absolute bottom-2 left-2 right-2 z-50 pointer-events-none">
+          <RdpSessionStatus info={sessionInfo} />
+        </div>
+      )}
       {/* Loading overlay — pointer-events-none so clicks pass through to canvas */}
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80 z-40 pointer-events-none">

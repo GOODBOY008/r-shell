@@ -110,6 +110,10 @@ pub enum WsMessage {
         width: u16,
         height: u16,
     },
+    DesktopSessionInfo {
+        connection_id: String,
+        info: crate::rdp::diagnostics::SessionInfo,
+    },
     /// Desktop keyboard event from frontend
     DesktopKeyEvent {
         connection_id: String,
@@ -371,7 +375,7 @@ async fn forward_desktop_frames(
 ) {
     use crate::desktop_protocol::DesktopEvent;
     let mut frame_id = 0u32;
-    loop {
+    'stream: loop {
         let ev = tokio::select! {
             biased;
             _ = forward_cancel.cancelled() => return,
@@ -379,6 +383,15 @@ async fn forward_desktop_frames(
         };
         let Some(ev) = ev else { break; };
         match ev {
+            DesktopEvent::SessionInfo(info) => {
+                let msg = WsMessage::DesktopSessionInfo { connection_id: cid.clone(), info };
+                let message = Message::Text(serde_json::to_string(&msg).unwrap().into());
+                tokio::select! {
+                    biased;
+                    _ = forward_cancel.cancelled() => return,
+                    result = tx_clone.send(message) => { if result.is_err() { return; } }
+                }
+            }
             DesktopEvent::Frame(frame) => {
                 frame_id = frame_id.wrapping_add(1);
                 let binary = encode_desktop_frame(&cid, stream_id, frame_id,
@@ -392,11 +405,26 @@ async fn forward_desktop_frames(
                 drop(frame);
                 // Never queue another image until the browser has painted.
                 // Meanwhile the producer composites into its bounded mailbox.
-                tokio::select! {
-                    biased;
-                    _ = forward_cancel.cancelled() => return,
-                    result = ack_rx.wait_for(|ack| *ack == frame_id) => {
-                        if result.is_err() { return; }
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = forward_cancel.cancelled() => return,
+                        acknowledged = async { ack_rx.wait_for(|ack| *ack == frame_id).await.is_ok() } => {
+                            if !acknowledged { return; }
+                            break;
+                        }
+                        info = event_rx.recv_session_info() => {
+                            // Session death must be visible even if the canvas
+                            // is suspended and will never acknowledge this frame.
+                            let Some(info) = info else { break 'stream; };
+                            let msg = WsMessage::DesktopSessionInfo { connection_id: cid.clone(), info };
+                            let message = Message::Text(serde_json::to_string(&msg).unwrap().into());
+                            tokio::select! {
+                                biased;
+                                _ = forward_cancel.cancelled() => return,
+                                result = tx_clone.send(message) => { if result.is_err() { return; } }
+                            }
+                        }
                     }
                 }
             }
@@ -1481,6 +1509,41 @@ mod desktop_delivery_tests {
     use super::*;
     use crate::desktop_protocol::{DesktopEvent, FrameUpdate};
 
+    #[tokio::test]
+    async fn a_suspended_canvas_does_not_hide_session_termination() {
+        let (events, rx) = crate::desktop_frames::desktop_event_channel();
+        let (_ack, ack_rx) = watch::channel(0);
+        let (tx, mut output) = mpsc::channel(8);
+        let task = tokio::spawn(forward_desktop_frames("conn".into(), 7, rx, ack_rx, tx, CancellationToken::new()));
+        events.send(DesktopEvent::Resized { width: 1, height: 1 }).unwrap();
+        events.send(patch(42)).unwrap();
+        assert!(matches!(output.recv().await, Some(Message::Text(_))));
+        assert!(matches!(output.recv().await, Some(Message::Binary(_))));
+        drop(events); // no paint ACK will arrive
+        tokio::time::timeout(Duration::from_secs(1), task).await.unwrap().unwrap();
+        assert!(matches!(output.recv().await, Some(Message::Text(message)) if message.contains("desktop_session_ended")));
+    }
+
+    #[tokio::test]
+    async fn session_diagnostics_are_forwarded_with_the_connection_id_before_shutdown() {
+        let (events, rx) = crate::desktop_frames::desktop_event_channel();
+        let (_ack, ack_rx) = watch::channel(0);
+        let (tx, mut output) = mpsc::channel(8);
+        events.send(DesktopEvent::SessionInfo(crate::rdp::diagnostics::SessionInfo {
+            logon_complete: false, session_id: None,
+            notification: Some(crate::rdp::diagnostics::LogonNotification { code: 0xc000_0234, data: 2 }),
+        })).unwrap();
+        drop(events);
+        forward_desktop_frames("conn".into(), 7, rx, ack_rx, tx, CancellationToken::new()).await;
+        let Some(Message::Text(message)) = output.recv().await else { panic!("missing logon info") };
+        let message: serde_json::Value = serde_json::from_str(&message).unwrap();
+        assert_eq!(message["type"], "DesktopSessionInfo");
+        assert_eq!(message["connection_id"], "conn");
+        assert_eq!(message["info"]["notification"]["code"], 0xc000_0234u32);
+        let Some(Message::Text(ended)) = output.recv().await else { panic!("missing disconnect") };
+        assert!(ended.contains("desktop_session_ended"));
+    }
+
     fn patch(value: u8) -> DesktopEvent {
         DesktopEvent::Frame(FrameUpdate { x: 0, y: 0, width: 1, height: 1, rgba_data: vec![value; 4] })
     }
@@ -1501,6 +1564,12 @@ mod desktop_delivery_tests {
         events.send(patch(3)).unwrap();
         tokio::task::yield_now().await;
         assert!(output.try_recv().is_err(), "must wait for the browser paint");
+        // A logon failure must remain visible even if the canvas is not
+        // painting; subsequent pixels still wait for the original ACK.
+        events.send(DesktopEvent::SessionInfo(crate::rdp::diagnostics::SessionInfo::default())).unwrap();
+        let status = tokio::time::timeout(Duration::from_secs(1), output.recv()).await.unwrap();
+        assert!(matches!(status, Some(Message::Text(message)) if message.contains("DesktopSessionInfo")));
+        assert!(output.try_recv().is_err());
         ack.send_replace(1);
         let Some(Message::Binary(second)) = output.recv().await else { panic!("missing second frame") };
         assert_eq!(&second[second.len()-4..], &[3; 4]);

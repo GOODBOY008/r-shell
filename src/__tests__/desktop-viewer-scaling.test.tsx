@@ -118,6 +118,73 @@ describe('DesktopViewer window-fit scaling', () => {
     Reflect.deleteProperty(document, 'exitFullscreen');
   });
 
+  it('updates Retina pixels when moving between monitors without a CSS resize, then removes listeners', async () => {
+    const queries: Array<{ change: (() => void) | null; remove: ReturnType<typeof vi.fn> }> = [];
+    vi.stubGlobal('matchMedia', vi.fn(() => {
+      const query = { change: null as (() => void) | null, remove: vi.fn() };
+      queries.push(query);
+      return {
+        addEventListener: (_: string, fn: () => void) => { query.change = fn; },
+        removeEventListener: query.remove,
+      };
+    }));
+    vi.stubGlobal('devicePixelRatio', 2);
+    const view = render(<DesktopViewer {...viewerProps({ rdpResolution: 'retina' })} />);
+    await measure(800, 450);
+    expect(resizeRequests().at(-1)).toEqual({ connectionId: 'conn-1', width: 1600, height: 900, scaleFactor: 200 });
+    const oldQuery = queries.at(-1)!;
+    vi.stubGlobal('devicePixelRatio', 1.5);
+    await act(async () => oldQuery.change?.());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(oldQuery.remove).toHaveBeenCalledWith('change', oldQuery.change);
+    expect(resizeRequests().at(-1)).toEqual({ connectionId: 'conn-1', width: 1200, height: 675, scaleFactor: 150 });
+    const latestQuery = queries.at(-1)!;
+    view.unmount();
+    expect(latestQuery.remove).toHaveBeenCalledWith('change', latestQuery.change);
+  });
+
+  it('shows only this session’s logon diagnostics and keeps warnings connected', async () => {
+    const view = render(<DesktopViewer {...viewerProps()} />);
+    await measure(800, 450);
+    const ws = FakeWebSocket.instances[0];
+    const send = async (connection_id: string, info: unknown) => act(async () => {
+      ws.onmessage?.({ data: JSON.stringify({ type: 'DesktopSessionInfo', connection_id, info }) });
+    });
+    const warning = { logon_complete: false, session_id: null, notification: { code: 0xfffffff8, data: 1 } };
+    await send('another-connection', warning);
+    expect(screen.queryByRole('status')).toBeNull();
+    await send('conn-1', warning);
+    expect(screen.getByRole('status').textContent).toContain('This session is busy');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(view.container.querySelector('canvas')).not.toBeNull();
+    await send('conn-1', { ...warning, notification: { code: 0xc0000234, data: 0 } });
+    expect(screen.getByRole('alert').textContent).toContain('This Windows account is locked');
+    expect(screen.getByRole('alert').textContent).toContain('0xC0000234');
+    await send('conn-1', { logon_complete: true, session_id: 7, notification: null });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Signed in');
+    expect(screen.getByRole('status').textContent).toContain('Session 7');
+    expect(screen.getByRole('status').closest('[role="group"]')).not.toBeNull();
+    view.rerender(<DesktopViewer {...viewerProps({ isConnected: false })} />);
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('passes the display preference to a native window and keeps receiving its diagnostics', async () => {
+    const view = render(<DesktopViewer {...viewerProps({ rdpResolution: 'retina' })} />);
+    await measure(800, 450);
+    fireEvent.click(screen.getByRole('button', { name: 'Show remote desktop controls' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open in Separate Window' })));
+    expect(lifecycle.invoke).toHaveBeenCalledWith('rdp_open_native_window', {
+      connectionId: 'conn-1', title: 'UTM Win11', resolution: 'retina',
+    });
+    expect(view.container.querySelector('canvas')).toBeNull();
+    await act(async () => FakeWebSocket.instances[0].onmessage?.({ data: JSON.stringify({
+      type: 'DesktopSessionInfo', connection_id: 'conn-1',
+      info: { logon_complete: false, session_id: null, notification: { code: 0xc0000071, data: 0 } },
+    }) }));
+    expect(screen.getByRole('alert').textContent).toContain('The password has expired');
+  });
+
   it('attaches the ResizeObserver only once the connected render exists, then requests a matching remote resolution', async () => {
     // Mount while the tab is still connecting — the placeholder panel has
     // no container, so nothing may be observed yet (the old code bailed

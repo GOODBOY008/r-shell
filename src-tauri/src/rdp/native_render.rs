@@ -371,7 +371,7 @@ mod tests {
         assert_eq!((dx0, dy0, dw, dh), (25, 0, 25, 25));
         composite_scaled_into(&mut dst, 50, &f, dx0, dy0, dw, dh);
         // Sampled points inside the mapped rect carry the frame's color.
-        assert_eq!(dst[0 * 50 + 25], ((10 << 16) | (20 << 8) | 30));
+        assert_eq!(dst[25], ((10 << 16) | (20 << 8) | 30));
         assert_eq!(dst[24 * 50 + 49], ((10 << 16) | (20 << 8) | 30));
         // Outside stays untouched.
         assert_eq!(dst[0], 0);

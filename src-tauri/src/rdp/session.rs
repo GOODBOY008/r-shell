@@ -116,6 +116,13 @@ pub(super) async fn rdp_session_loop(
     } = state;
 
     let desktop_size = connection_result.desktop_size;
+    let mut session_info = super::diagnostics::SessionInfo::default();
+    // Keep the metadata route when pixels move to a native window. The tab
+    // remains a controller and must receive late logon failures and warnings.
+    let mut info_tx = match &mode {
+        RenderMode::Channel(tx) => Some(tx.clone()),
+        _ => None,
+    };
     // Slow-path input routing: the PDU rides the IO channel, is addressed
     // from the user channel, and must carry the CURRENT share id (updated
     // on every Deactivate-Reactivation below).
@@ -143,6 +150,7 @@ pub(super) async fn rdp_session_loop(
 
     // Notify the frontend of the actual negotiated size (channel mode only).
     if let RenderMode::Channel(ref tx) = mode {
+        let _ = tx.send(DesktopEvent::SessionInfo(session_info.clone()));
         let _ = tx.send(DesktopEvent::Resized {
             width: desktop_size.width,
             height: desktop_size.height,
@@ -337,8 +345,10 @@ pub(super) async fn rdp_session_loop(
             sig = signal_rx.recv() => {
                 match sig {
                     Some(SessionSignal::FrameLoop(event_tx, _)) => {
+                        info_tx = Some(event_tx.clone());
                         mode = RenderMode::Channel(event_tx);
                         if let RenderMode::Channel(ref tx) = mode {
+                            let _ = tx.send(DesktopEvent::SessionInfo(session_info.clone()));
                             let _ = tx.send(DesktopEvent::Resized {
                                 width: image.width(),
                                 height: image.height(),
@@ -357,6 +367,9 @@ pub(super) async fn rdp_session_loop(
                     }
                     Some(SessionSignal::NativeRender(handles, _)) => match handles.renderer {
                         Some(mut renderer) => {
+                            if let Some(ref tx) = info_tx {
+                                tx.release_framebuffer();
+                            }
                             renderer.set_remote_size(image.width(), image.height());
                             mode = RenderMode::Native(renderer);
                             if let Some(frame) = compact_frame(
@@ -416,6 +429,11 @@ pub(super) async fn rdp_session_loop(
             tracing::debug!("RDP: {} outputs from active_stage", outputs.len());
         }
         for output in outputs {
+            if session_info.observe(&output) {
+                if let Some(ref tx) = info_tx {
+                    let _ = tx.send(DesktopEvent::SessionInfo(session_info.clone()));
+                }
+            }
             match output {
                 ActiveStageOutput::ResponseFrame(frame) => {
                     if frame.is_empty() {
