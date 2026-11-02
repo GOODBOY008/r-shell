@@ -313,10 +313,17 @@ fn build_ironrdp_config(cfg: &RdpConfig, enable_credssp: bool, enable_tls: bool)
             height: cfg.height,
         },
         monitor_layout: None,
-        desktop_scale_factor: cfg.desktop_scale_factor,
+        desktop_scale_factor: cfg.desktop_scale_factor.clamp(100, 500),
         desktop_physical_size: None,
         desktop_orientation: None,
-        device_scale_factor: None,
+        // Match Display Control's mapping on subsequent resizes. Windows
+        // accepts only 100/140/180 here, independently of desktop text scale.
+        device_scale_factor: Some(
+            ironrdp_displaycontrol::pdu::DeviceScaleFactor::from_desktop_scale_factor(
+                cfg.desktop_scale_factor.clamp(100, 500),
+            )
+            .value(),
+        ),
         monitor_extended_layout: None,
         relative_mouse_input: false,
         enable_tls,
@@ -376,15 +383,182 @@ fn new_connector(config: &RdpConfig, client_addr: SocketAddr, enable_credssp: bo
 mod tests {
     use super::*;
 
+    #[test]
+    fn connection_device_scale_matches_dynamic_display_control() {
+        use ironrdp_displaycontrol::pdu::DisplayControlMonitorLayout;
+        for (scale, expected) in [
+            (100, 100),
+            (139, 100),
+            (140, 140),
+            (150, 140),
+            (179, 140),
+            (180, 180),
+            (200, 180),
+            (500, 180),
+        ] {
+            let cfg = RdpConfig {
+                host: "unused.test".into(),
+                port: 3389,
+                username: "test".into(),
+                password: String::new(),
+                domain: None,
+                width: 720,
+                height: 1280,
+                desktop_scale_factor: scale,
+            };
+            let config = build_ironrdp_config(&cfg, true, true);
+            let layout = DisplayControlMonitorLayout::new_single_primary_monitor(
+                720,
+                1280,
+                Some(scale),
+                None,
+            )
+            .unwrap();
+            assert_eq!(config.device_scale_factor, Some(expected));
+            assert_eq!(
+                layout.monitors()[0].device_scale_factor().unwrap().value(),
+                expected
+            );
+            assert_eq!(
+                layout.monitors()[0].orientation(),
+                Some(ironrdp_displaycontrol::pdu::MonitorOrientation::Portrait)
+            );
+            assert_eq!(
+                config.desktop_physical_size, None,
+                "do not fabricate physical monitor dimensions"
+            );
+            assert!(config.bitmap.is_none());
+            assert!(
+                !config.support_dyn_vc_gfx_protocol,
+                "no EGFX advertisement without a handler"
+            );
+        }
+    }
+
     #[tokio::test(start_paused = true)]
-    async fn idle_session_does_not_inject_keys_and_preserves_user_shift() {
-        use crate::rdp::input::{encode_slow_path_input_pdus, map_input};
-        use crate::rdp::session::{rdp_session_loop, RenderMode, SessionState};
-        use ironrdp_connector::connection_activation::ConnectionActivationFactory;
-        use tokio::io::{AsyncReadExt, DuplexStream};
+    async fn server_logon_pdus_reach_the_viewer_and_survive_reattach() {
+        use crate::desktop_protocol::DesktopEvent;
+        use crate::rdp::{
+            diagnostics::SessionInfo,
+            session::{rdp_session_loop, RenderMode, SessionState},
+            SessionSignal,
+        };
+        use ironrdp_core::encode_vec;
+        use ironrdp_pdu::rdp::{headers::*, session_info::*};
+        use ironrdp_pdu::{mcs::SendDataIndication, x224::X224};
+        use tokio::io::AsyncWriteExt;
         use tokio_util::sync::CancellationToken;
 
-        let config = build_ironrdp_config(
+        fn packet(info_data: InfoData) -> Vec<u8> {
+            let info_type = match &info_data {
+                InfoData::LogonInfoV1(_) => InfoType::Logon,
+                InfoData::LogonInfoV2(_) => InfoType::LogonLong,
+                InfoData::PlainNotify => InfoType::PlainNotify,
+                InfoData::LogonExtended(_) => InfoType::LogonExtended,
+            };
+            let payload = encode_vec(&ShareControlHeader {
+                pdu_source: 1002,
+                share_id: 1,
+                share_control_pdu: ShareControlPdu::Data(ShareDataHeader {
+                    share_data_pdu: ShareDataPdu::SaveSessionInfo(SaveSessionInfoPdu {
+                        info_type,
+                        info_data,
+                    }),
+                    stream_priority: StreamPriority::Medium,
+                    compression_flags: CompressionFlags::empty(),
+                    compression_type: ironrdp_pdu::rdp::client_info::CompressionType::K8,
+                }),
+            })
+            .unwrap();
+            encode_vec(&X224(SendDataIndication {
+                initiator_id: 1002,
+                channel_id: 1003,
+                user_data: payload.into(),
+            }))
+            .unwrap()
+        }
+
+        async fn wait_info(
+            rx: &mut crate::desktop_frames::DesktopEventReceiver,
+            predicate: impl Fn(&SessionInfo) -> bool,
+        ) -> SessionInfo {
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                loop {
+                    match rx.recv().await.expect("session stopped") {
+                        DesktopEvent::SessionInfo(info) if predicate(&info) => return info,
+                        _ => {}
+                    }
+                }
+            })
+            .await
+            .expect("server logon notification was lost")
+        }
+
+        let (client, mut server) = tokio::io::duplex(4096);
+        let (_input_tx, input_rx) = mpsc::unbounded_channel();
+        let (signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
+        let cancel = CancellationToken::new();
+        let state = SessionState {
+            framed: ironrdp_tokio::TokioFramed::new(Box::new(client) as ErasedStream),
+            connection_result: mock_connection_result(mock_config()),
+            input_rx,
+            enable_server_pointer: true,
+            desktop_scale_factor: 100,
+        };
+        let session = rdp_session_loop(
+            state,
+            RenderMode::Channel(event_tx),
+            signal_rx,
+            cancel.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new((640, 480))),
+        );
+        let scenario = async {
+            server
+                .write_all(&packet(InfoData::LogonExtended(LogonInfoExtended {
+                    present_fields_flags: LogonExFlags::LOGON_ERRORS,
+                    auto_reconnect: None,
+                    errors_info: Some(LogonErrorsInfo {
+                        error_type: LogonErrorNotificationType::NtStatus(0xc000_0234),
+                        error_data: LogonErrorNotificationData::ErrorCode(
+                            LogonErrorNotificationDataErrorCode::FailedOther,
+                        ),
+                    }),
+                })))
+                .await
+                .unwrap();
+            let error = wait_info(&mut event_rx, |info| info.notification.is_some()).await;
+            assert!(!error.logon_complete);
+            assert_eq!(error.notification.unwrap().code, 0xc000_0234);
+            server
+                .write_all(&packet(InfoData::LogonInfoV1(LogonInfoVersion1 {
+                    logon_info: LogonInfo {
+                        domain_name: "private-domain".into(),
+                        user_name: "private-user".into(),
+                        session_id: 7,
+                    },
+                })))
+                .await
+                .unwrap();
+            let logged_on = wait_info(&mut event_rx, |info| info.logon_complete).await;
+            assert_eq!(logged_on.session_id, Some(7));
+            assert!(logged_on.notification.is_none());
+            assert!(!serde_json::to_string(&logged_on)
+                .unwrap()
+                .contains("private-"));
+            let (reattach_tx, mut reattach_rx) = crate::desktop_frames::desktop_event_channel();
+            signal_tx
+                .send(SessionSignal::FrameLoop(reattach_tx, cancel.clone()))
+                .unwrap();
+            assert_eq!(wait_info(&mut reattach_rx, |_| true).await, logged_on);
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::join!(session, scenario);
+        result.unwrap();
+    }
+
+    fn mock_config() -> IronRdpConfig {
+        build_ironrdp_config(
             &RdpConfig {
                 host: "unused.test".into(),
                 port: 3389,
@@ -397,8 +571,12 @@ mod tests {
             },
             true,
             true,
-        );
-        let connection_result = ConnectionResult {
+        )
+    }
+
+    fn mock_connection_result(config: IronRdpConfig) -> ConnectionResult {
+        use ironrdp_connector::connection_activation::ConnectionActivationFactory;
+        ConnectionResult {
             io_channel_id: 1003,
             user_channel_id: 1001,
             message_channel_id: None,
@@ -414,7 +592,17 @@ mod tests {
             monitor_layout: None,
             activation_factory: ConnectionActivationFactory::new(config, 1003, 1001),
             compression_type: None,
-        };
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_session_does_not_inject_keys_and_preserves_user_shift() {
+        use crate::rdp::input::{encode_slow_path_input_pdus, map_input};
+        use crate::rdp::session::{rdp_session_loop, RenderMode, SessionState};
+        use tokio::io::{AsyncReadExt, DuplexStream};
+        use tokio_util::sync::CancellationToken;
+
+        let connection_result = mock_connection_result(mock_config());
         let (client, mut server) = tokio::io::duplex(4096);
         let (input_tx, input_rx) = mpsc::unbounded_channel();
         let (_signal_tx, signal_rx) = mpsc::unbounded_channel();

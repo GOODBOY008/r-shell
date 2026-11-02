@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from './ui/button';
 import { ChevronDown, ExternalLink, Maximize2, Minimize2, Monitor, Power, RectangleHorizontal } from 'lucide-react';
+import { RdpSessionStatus } from './rdp-session-status';
+import type { RdpSessionInfo } from '@/lib/rdp-session-info';
 
 interface DesktopToolbarProps {
   protocol: string;
@@ -13,6 +15,7 @@ interface DesktopToolbarProps {
   onDisconnect: () => void;
   /** Pop the session out into a standalone native window (RDP only). */
   onPopOut?: () => void;
+  sessionInfo?: RdpSessionInfo | null;
 }
 
 export function DesktopToolbar({
@@ -24,6 +27,7 @@ export function DesktopToolbar({
   onToggleFullScreen,
   onDisconnect,
   onPopOut,
+  sessionInfo,
 }: DesktopToolbarProps) {
   const { t } = useTranslation();
   const [visible, setVisible] = useState(true);
@@ -151,6 +155,10 @@ export function DesktopToolbar({
         )}
 
         <div className="w-px h-5 bg-border mx-1" />
+
+        {/* Routine status follows the auto-hiding controls; logon warnings
+            stay visible in the viewer's separate notification overlay. */}
+        {sessionInfo && !sessionInfo.notification && <RdpSessionStatus info={sessionInfo} compact />}
 
         <Button
           variant="ghost"

@@ -690,7 +690,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut sock, _) = listener.accept().await.unwrap();
             let mut buf = [0u8; 128];
-            sock.read(&mut buf).await.unwrap();
+            assert!(sock.read(&mut buf).await.unwrap() > 0, "missing SOCKS4 request");
             sock.write_all(&[0x00, 0x5b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
                 .await
                 .unwrap();

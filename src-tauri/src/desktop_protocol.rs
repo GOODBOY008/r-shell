@@ -47,6 +47,8 @@ pub enum DesktopEvent {
     Frame(FrameUpdate),
     /// The remote desktop size changed (initial mismatch, reactivation, or resize).
     Resized { width: u16, height: u16 },
+    /// Latest RDP logon state; replayed when the canvas reattaches.
+    SessionInfo(crate::rdp::diagnostics::SessionInfo),
 }
 
 /// Unified trait for RDP and VNC remote desktop protocol clients.

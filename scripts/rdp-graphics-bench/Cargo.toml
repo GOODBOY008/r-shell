@@ -1,0 +1,16 @@
+[package]
+name = "rshell-rdp-graphics-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Deliberately isolated from the desktop application's dependency graph.
+[dependencies]
+graphics_old = { package = "ironrdp-graphics", version = "=0.10.0" }
+graphics_new = { package = "ironrdp-graphics", version = "=0.11.0" }
+pdu_old = { package = "ironrdp-pdu", version = "=0.10.0" }
+pdu_new = { package = "ironrdp-pdu", version = "=0.11.0" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

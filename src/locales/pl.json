@@ -1586,5 +1586,27 @@
     "networkUnavailable": "Serwer jest nadal nieosiągalny. W przypadku serwera lokalnego lub maszyny wirtualnej sprawdź Ustawienia systemowe → Prywatność i ochrona → Sieć lokalna → r-shell, a następnie ponownie wybierz Połącz. Sprawdź też, czy serwer działa oraz czy adres, VPN i trasa sieciowa są poprawne.",
     "cancelled": "Anulowano połączenie.",
     "cancelFailed": "Nie udało się anulować połączenia."
+  },
+  "rdpSession": {
+    "loggedOn": "Zalogowano",
+    "awaitingLogon": "Oczekiwanie na potwierdzenie logowania przez serwer",
+    "sessionId": "Sesja {{id}}",
+    "sessionBusy": "Ta sesja jest zajęta. Wybierz opcję na ekranie logowania Windows.",
+    "disconnectRefused": "Windows odmówił rozłączenia innej sesji.",
+    "noPermission": "To konto nie ma uprawnień do korzystania z sesji zdalnej.",
+    "sessionContention": "Inny użytkownik korzysta z tej sesji. Sprawdź ekran logowania Windows.",
+    "reconnectOptions": "Wybierz sesję do ponownego połączenia na ekranie logowania Windows.",
+    "sessionTerminating": "Windows kończy sesję.",
+    "logonContinuing": "Windows kontynuuje logowanie.",
+    "accessDenied": "Windows odmówił logowania.",
+    "invalidCredentials": "Windows odrzucił nazwę użytkownika lub hasło.",
+    "passwordExpired": "Hasło wygasło. Zmień je na ekranie logowania Windows.",
+    "passwordChangeRequired": "Zmień hasło na ekranie logowania Windows, aby kontynuować.",
+    "accountDisabled": "To konto Windows jest wyłączone.",
+    "accountLocked": "To konto Windows jest zablokowane.",
+    "accountExpired": "To konto Windows wygasło.",
+    "logonFailed": "Logowanie nie powiodło się. Sprawdź ekran logowania Windows.",
+    "logonWarning": "Windows wyświetlił ostrzeżenie logowania. Sprawdź ekran zdalny.",
+    "serverNotification": "Windows zgłosił powiadomienie logowania. Sprawdź ekran zdalny."
   }
 }

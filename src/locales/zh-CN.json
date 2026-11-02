@@ -1534,5 +1534,27 @@
     "networkUnavailable": "仍无法访问服务器。如果连接的是本地服务器或虚拟机，请检查“系统设置 → 隐私与安全性 → 本地网络 → r-shell”，然后再次点击连接。同时请确认服务器已启动，地址、VPN 和网络路由正确。",
     "cancelled": "连接已取消。",
     "cancelFailed": "无法取消连接。"
+  },
+  "rdpSession": {
+    "loggedOn": "已登录",
+    "awaitingLogon": "等待服务器确认登录",
+    "sessionId": "会话 {{id}}",
+    "sessionBusy": "此会话正忙，请在 Windows 登录界面选择操作。",
+    "disconnectRefused": "Windows 拒绝断开另一个会话。",
+    "noPermission": "此账户没有使用远程会话的权限。",
+    "sessionContention": "其他用户正在使用此会话，请查看 Windows 登录界面。",
+    "reconnectOptions": "请在 Windows 登录界面选择要重新连接的会话。",
+    "sessionTerminating": "Windows 正在结束会话。",
+    "logonContinuing": "Windows 正在继续登录。",
+    "accessDenied": "Windows 拒绝了登录。",
+    "invalidCredentials": "Windows 拒绝了用户名或密码。",
+    "passwordExpired": "密码已过期，请在 Windows 登录界面修改密码。",
+    "passwordChangeRequired": "请在 Windows 登录界面修改密码后继续。",
+    "accountDisabled": "此 Windows 账户已被禁用。",
+    "accountLocked": "此 Windows 账户已被锁定。",
+    "accountExpired": "此 Windows 账户已过期。",
+    "logonFailed": "登录失败，请查看 Windows 登录界面。",
+    "logonWarning": "Windows 显示了登录警告，请查看远程画面。",
+    "serverNotification": "Windows 返回了登录通知，请查看远程画面。"
   }
 }

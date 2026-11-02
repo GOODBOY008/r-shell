@@ -1536,5 +1536,27 @@
     "networkUnavailable": "The server is still unreachable. For a local server or VM, check System Settings → Privacy & Security → Local Network → r-shell, then try Connect again. Also check that the server is running and the address, VPN, and network route are correct.",
     "cancelled": "Connection cancelled.",
     "cancelFailed": "Could not cancel the connection."
+  },
+  "rdpSession": {
+    "loggedOn": "Signed in",
+    "awaitingLogon": "Waiting for server logon confirmation",
+    "sessionId": "Session {{id}}",
+    "sessionBusy": "This session is busy. Choose an option on the Windows sign-in screen.",
+    "disconnectRefused": "Windows refused to disconnect the other session.",
+    "noPermission": "This account does not have permission to use the remote session.",
+    "sessionContention": "Another user is using this session. Check the Windows sign-in screen.",
+    "reconnectOptions": "Choose a session to reconnect to on the Windows sign-in screen.",
+    "sessionTerminating": "Windows is ending the session.",
+    "logonContinuing": "Windows is continuing sign-in.",
+    "accessDenied": "Windows denied sign-in.",
+    "invalidCredentials": "Windows rejected the username or password.",
+    "passwordExpired": "The password has expired. Change it on the Windows sign-in screen.",
+    "passwordChangeRequired": "Change the password on the Windows sign-in screen to continue.",
+    "accountDisabled": "This Windows account is disabled.",
+    "accountLocked": "This Windows account is locked.",
+    "accountExpired": "This Windows account has expired.",
+    "logonFailed": "Sign-in failed. Check the Windows sign-in screen.",
+    "logonWarning": "Windows displayed a sign-in warning. Check the remote screen.",
+    "serverNotification": "Windows reported a sign-in notification. Check the remote screen."
   }
 }

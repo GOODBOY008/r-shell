@@ -4149,6 +4149,7 @@ pub async fn list_socks_proxies(
 pub async fn rdp_open_native_window(
     connection_id: String,
     title: Option<String>,
+    resolution: Option<String>,
     app: tauri::AppHandle,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<String, String> {
@@ -4157,7 +4158,7 @@ pub async fn rdp_open_native_window(
     // unverified). Everywhere else the tab canvas keeps showing the session.
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (&connection_id, &title, &app, &state);
+        let _ = (&connection_id, &title, &resolution, &app, &state);
         return Err(
             "The standalone RDP window is currently supported on macOS; the in-tab canvas works on all platforms."
                 .to_string(),
@@ -4166,7 +4167,7 @@ pub async fn rdp_open_native_window(
 
     #[cfg(target_os = "macos")]
     {
-        open_rdp_native_window_macos(connection_id, title, app, state).await
+        open_rdp_native_window_macos(connection_id, title, resolution, app, state).await
     }
 }
 
@@ -4175,6 +4176,7 @@ pub async fn rdp_open_native_window(
 async fn open_rdp_native_window_macos(
     connection_id: String,
     title: Option<String>,
+    resolution: Option<String>,
     app: tauri::AppHandle,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<String, String> {
@@ -4273,6 +4275,13 @@ async fn open_rdp_native_window_macos(
         .start_desktop_native_render(&connection_id, handles, cancel.clone())
         .await
         .map_err(|e| format!("Failed to start native render: {}", e))?;
+
+    crate::rdp::display::follow_native_display(
+        &window,
+        state.inner().clone(),
+        connection_id.clone(),
+        resolution.unwrap_or_else(|| "fit".to_string()),
+    );
 
     // Set up native input monitoring (macOS: NSEvent local monitor). The
     // monitor handle is tracked under the connection id so the window

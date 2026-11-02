@@ -12,11 +12,13 @@ struct Framebuffer {
     pixels: Vec<u8>,
     dirty: Option<(u16, u16, u16, u16)>, // left, top, right, bottom (exclusive)
     resized: bool,
+    session_info: Option<crate::rdp::diagnostics::SessionInfo>,
 }
 
 impl Framebuffer {
     fn update(&mut self, event: DesktopEvent) {
         match event {
+            DesktopEvent::SessionInfo(info) => self.session_info = Some(info),
             DesktopEvent::Resized { width, height } => {
                 if width == 0 || height == 0 || width > 8192 || height > 8192 {
                     return;
@@ -61,6 +63,9 @@ impl Framebuffer {
     }
 
     fn take(&mut self) -> Option<DesktopEvent> {
+        if let Some(info) = self.session_info.take() {
+            return Some(DesktopEvent::SessionInfo(info));
+        }
         if self.resized {
             self.resized = false;
             return Some(DesktopEvent::Resized {
@@ -87,6 +92,7 @@ impl Framebuffer {
     }
 }
 
+#[derive(Clone)]
 pub struct DesktopEventSender {
     buffer: Arc<Mutex<Framebuffer>>,
     changed: watch::Sender<()>,
@@ -113,6 +119,14 @@ pub fn desktop_event_channel() -> (DesktopEventSender, DesktopEventReceiver) {
 }
 
 impl DesktopEventSender {
+    /// Native rendering keeps only the metadata mailbox alive. Release its
+    /// canvas framebuffer until a later Resized event starts pixel delivery.
+    pub fn release_framebuffer(&self) {
+        let mut buffer = self.buffer.lock().unwrap();
+        let session_info = buffer.session_info.take();
+        *buffer = Framebuffer { session_info, ..Default::default() };
+    }
+
     pub fn send(&self, event: DesktopEvent) -> Result<(), ()> {
         if self.changed.is_closed() {
             return Err(());
@@ -124,6 +138,19 @@ impl DesktopEventSender {
 }
 
 impl DesktopEventReceiver {
+    /// Status must still reach the viewer while a pixel frame is waiting for
+    /// paint acknowledgement (e.g. a background tab or native pop-out).
+    pub async fn recv_session_info(&mut self) -> Option<crate::rdp::diagnostics::SessionInfo> {
+        loop {
+            if let Some(info) = self.buffer.lock().unwrap().session_info.take() {
+                return Some(info);
+            }
+            if self.changed.changed().await.is_err() {
+                return self.buffer.lock().unwrap().session_info.take();
+            }
+        }
+    }
+
     pub async fn recv(&mut self) -> Option<DesktopEvent> {
         loop {
             if let Some(event) = self.buffer.lock().unwrap().take() {
@@ -140,6 +167,44 @@ impl DesktopEventReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_metadata_route_does_not_retain_the_canvas_framebuffer() {
+        let (tx, mut rx) = desktop_event_channel();
+        tx.send(DesktopEvent::Resized { width: 1000, height: 1000 }).unwrap();
+        tx.send(patch(0, 0, 42)).unwrap();
+        let metadata = tx.clone();
+        metadata.send(DesktopEvent::SessionInfo(Default::default())).unwrap();
+        metadata.release_framebuffer();
+        assert_eq!(metadata.buffer.lock().unwrap().pixels.capacity(), 0);
+        assert!(matches!(rx.recv().await, Some(DesktopEvent::SessionInfo(_))));
+        // The same channel can safely resume after an explicit new size.
+        tx.send(DesktopEvent::Resized { width: 1, height: 1 }).unwrap();
+        tx.send(patch(0, 0, 7)).unwrap();
+        assert!(matches!(rx.recv().await, Some(DesktopEvent::Resized { .. })));
+        assert!(matches!(rx.recv().await, Some(DesktopEvent::Frame(frame)) if frame.rgba_data == vec![7; 4]));
+    }
+
+    #[tokio::test]
+    async fn session_info_survives_resize_and_coalesces_without_losing_pixels() {
+        use crate::rdp::diagnostics::{LogonNotification, SessionInfo};
+        let (tx, mut rx) = desktop_event_channel();
+        let info = SessionInfo {
+            session_id: Some(7),
+            notification: Some(LogonNotification { code: 0xc000_006d, data: 0 }),
+            ..Default::default()
+        };
+        for _ in 0..10_000 {
+            tx.send(DesktopEvent::SessionInfo(info.clone())).unwrap();
+        }
+        tx.send(DesktopEvent::Resized { width: 1, height: 1 }).unwrap();
+        tx.send(patch(0, 0, 77)).unwrap();
+        drop(tx);
+        assert!(matches!(rx.recv().await, Some(DesktopEvent::SessionInfo(actual)) if actual == info));
+        assert!(matches!(rx.recv().await, Some(DesktopEvent::Resized { .. })));
+        assert!(matches!(rx.recv().await, Some(DesktopEvent::Frame(frame)) if frame.rgba_data == vec![77; 4]));
+        assert!(rx.recv().await.is_none());
+    }
 
     fn patch(x: u16, y: u16, value: u8) -> DesktopEvent {
         DesktopEvent::Frame(FrameUpdate {

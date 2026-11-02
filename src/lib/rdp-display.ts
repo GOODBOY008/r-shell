@@ -7,6 +7,27 @@ export function rdpScaleFactor(resolution = 'fit', dpr = window.devicePixelRatio
     : 100;
 }
 
+/** A window can move to another display without changing its CSS dimensions.
+ * Re-arm the resolution query each time its old density stops matching. */
+export function observeDevicePixelRatio(onChange: (dpr: number) => void): () => void {
+  let query: MediaQueryList | undefined;
+  const changed = () => {
+    query?.removeEventListener('change', changed);
+    onChange(window.devicePixelRatio);
+    query = typeof window.matchMedia === 'function'
+      ? window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+      : undefined;
+    query?.addEventListener('change', changed);
+  };
+  changed();
+  // Also covers WebViews that report a monitor transition as a window resize.
+  window.addEventListener('resize', changed);
+  return () => {
+    query?.removeEventListener('change', changed);
+    window.removeEventListener('resize', changed);
+  };
+}
+
 /** Logical pixels by default; Retina explicitly opts into physical pixels. */
 export function rdpDisplaySize(width: number, height: number, resolution = 'fit', dpr = window.devicePixelRatio) {
   if (!['fit', 'retina'].includes(resolution) || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;

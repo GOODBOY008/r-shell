@@ -1,0 +1,15 @@
+case,encoded_bytes,old_ns_per_tile,new_ns_per_tile,speedup
+rlgr1-flat,4,96.8,72.9,1.329
+rfx-rlgr1-flat,12,5051.0,4990.8,1.012
+rlgr3-flat,4,92.5,72.1,1.283
+rfx-rlgr3-flat,12,5075.6,5028.5,1.009
+rlgr1-sparse,176,2604.5,746.9,3.487
+rfx-rlgr1-sparse,528,12825.3,7169.3,1.789
+rlgr3-sparse,176,2579.1,760.4,3.392
+rfx-rlgr3-sparse,528,12810.7,7176.1,1.785
+rlgr1-dense,2804,49519.2,14923.3,3.318
+rfx-rlgr1-dense,8412,152486.9,49073.1,3.107
+rlgr3-dense,2988,49814.3,9994.8,4.984
+rfx-rlgr3-dense,8964,154540.1,35189.2,4.392
+rdp6-raw,12290,3087.1,2857.6,1.080
+rdp6-rle,1137,7533.7,7400.1,1.018

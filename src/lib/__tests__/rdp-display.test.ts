@@ -22,4 +22,8 @@ describe('RDP display policy', () => {
     expect(rdpScaleFactor('retina', 9)).toBe(500);
     expect(rdpConnectDisplay()).toEqual({ resolution: 'fit', desktop_scale_factor: 100 });
   });
+  it('adapts portrait windows without stretching or swapping the remote axes', () => {
+    expect(rdpDisplaySize(720, 1280, 'retina', 2)).toEqual({ width: 1440, height: 2560, scaleFactor: 200 });
+    expect(rdpDisplaySize(720, 1280, 'fit', 2)).toEqual({ width: 606, height: 1080, scaleFactor: 100 });
+  });
 });

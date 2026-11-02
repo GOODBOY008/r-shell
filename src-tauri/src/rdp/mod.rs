@@ -5,6 +5,8 @@ pub mod native_input;
 pub mod native_render;
 
 pub mod cert_store;
+pub mod diagnostics;
+pub(crate) mod display;
 mod connect;
 mod session;
 mod tcp;
@@ -562,6 +564,7 @@ mod e2e_tests {
                 Ok(Some(DesktopEvent::Resized { width, height })) => {
                     println!("Resized: {}x{}", width, height);
                 }
+                Ok(Some(DesktopEvent::SessionInfo(_))) => {}
                 Ok(None) => break,
                 Err(_) => break,
             }
