@@ -160,6 +160,7 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
         protocol={tab.protocol}
         rdpResolution={tab.rdpResolution ?? ConnectionStorageManager.getConnection(tab.originalConnectionId || tab.id)?.rdpResolution}
         isConnected={tab.connectionStatus === 'connected'}
+        isActive={isActive}
         onReconnect={handleReconnect}
         onDisconnected={() => handleConnectionStatusChange(tab.id, 'disconnected')}
       />

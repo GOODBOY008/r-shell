@@ -3967,6 +3967,11 @@ pub async fn desktop_disconnect(
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<(), String> {
     tracing::info!("Desktop disconnect: {}", connection_id);
+    #[cfg(target_os = "macos")]
+    {
+        let id = connection_id.clone();
+        let _ = app.run_on_main_thread(move || crate::rdp::keyboard_capture::release_connection(&id));
+    }
     // Tear down a native RDP window first — closing the connection cancels
     // the session and would leave the window showing a frozen last frame.
     close_rdp_native_window(&app, &state, &connection_id).await;
@@ -3974,6 +3979,70 @@ pub async fn desktop_disconnect(
         .close_desktop_connection(&connection_id)
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Capture a focused embedded RDP surface before native menu accelerators.
+/// The invoking window supplies its own identity; a stale focus cleanup can
+/// release only its own lease, never a different session's capture.
+#[tauri::command]
+pub async fn rdp_set_keyboard_capture(
+    connection_id: String,
+    owner: String,
+    capture: bool,
+    window: tauri::Window,
+    app: tauri::AppHandle,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<bool, String> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (connection_id, owner, capture, window, app, state);
+        Ok(false)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let input_tx = if capture {
+            let client = state
+                .get_desktop_connection(&connection_id)
+                .await
+                .ok_or_else(|| format!("Desktop connection not found: {}", connection_id))?;
+            let client = client.read().await;
+            if !client.is_connected() {
+                return Err("RDP session is disconnected".into());
+            }
+            Some(client.input_sender().ok_or_else(|| {
+                "Session does not support native keyboard input".to_string()
+            })?)
+        } else {
+            None
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let result = (|| {
+                if let Some(input_tx) = input_tx {
+                    if !window.is_focused().map_err(|e| e.to_string())? {
+                        return Ok(false);
+                    }
+                    let handles = extract_window_handles(&window)?;
+                    let window_id = get_macos_window_number(handles.window);
+                    crate::rdp::keyboard_capture::acquire(
+                        window.label(),
+                        &owner,
+                        &connection_id,
+                        window_id,
+                        input_tx,
+                    )?;
+                    Ok(true)
+                } else {
+                    crate::rdp::keyboard_capture::release_owner(window.label(), &owner);
+                    Ok(false)
+                }
+            })();
+            let _ = tx.send(result);
+        })
+        .map_err(|e| e.to_string())?;
+        rx.await
+            .map_err(|_| "RDP keyboard capture task was cancelled".to_string())?
+    }
 }
 
 /// Send a keyboard event to a remote desktop session
@@ -4292,8 +4361,21 @@ async fn open_rdp_native_window_macos(
 
         let prev_mask = Arc::new(AtomicU8::new(0));
 
-        // Install the NSEvent monitor on the main thread
-        let _ = app.run_on_main_thread(move || {
+        // Keyboard capture must precede native menus, including Command+W/Q.
+        let keyboard_label = label.clone();
+        let (input_ready_tx, input_ready_rx) = tokio::sync::oneshot::channel();
+        let scheduled = app.run_on_main_thread(move || {
+            let capture = crate::rdp::keyboard_capture::acquire(
+                &keyboard_label,
+                &keyboard_label,
+                &connection_id,
+                window_id,
+                input_tx.clone(),
+            );
+            if let Err(error) = capture {
+                let _ = input_ready_tx.send(Err(error));
+                return;
+            }
             let monitor = crate::rdp::native_input::install_native_input_monitor(
                 input_tx,
                 window_id,
@@ -4307,7 +4389,19 @@ async fn open_rdp_native_window_macos(
             );
             // Tracked in the registry; removed on window destroy.
             let _ = monitor;
+            let _ = input_ready_tx.send(Ok(()));
         });
+        if let Err(error) = scheduled {
+            let _ = window.destroy();
+            return Err(error.to_string());
+        }
+        if let Err(error) = input_ready_rx
+            .await
+            .unwrap_or_else(|_| Err("Native input task was cancelled".into()))
+        {
+            let _ = window.destroy();
+            return Err(error);
+        }
     }
 
     tracing::info!(

@@ -23,6 +23,7 @@ const lifecycle = vi.hoisted(() => ({
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
+  isTauri: () => false,
   invoke: (...args: unknown[]) => lifecycle.invoke(...args),
 }));
 vi.mock('@tauri-apps/api/event', () => ({
@@ -40,6 +41,7 @@ vi.mock('@/lib/notifications', () => ({
 }));
 
 import { DesktopViewer } from '../components/desktop-viewer';
+import { useKeyboardShortcuts } from '../lib/keyboard-shortcuts';
 
 interface ROEntry { contentRect: { width: number; height: number } }
 
@@ -94,6 +96,11 @@ function viewerProps(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function DesktopShortcutHarness({ onClose, onLocalKey }: { onClose: () => void; onLocalKey: () => void }) {
+  useKeyboardShortcuts([{ key: 'w', ctrlKey: true, handler: onClose, description: 'Close active tab' }]);
+  return <div onKeyDown={onLocalKey} onKeyUp={onLocalKey}><DesktopViewer {...viewerProps()} /></div>;
+}
+
 describe('DesktopViewer window-fit scaling', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -112,10 +119,116 @@ describe('DesktopViewer window-fit scaling', () => {
 
   afterEach(() => {
     cleanup();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
     Reflect.deleteProperty(document, 'fullscreenElement');
     Reflect.deleteProperty(document, 'exitFullscreen');
+  });
+
+  it.each(['Win32', 'MacIntel'])('sends Ctrl+W to RDP instead of closing its local tab on %s', async (platform) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
+    const onClose = vi.fn();
+    const onLocalKey = vi.fn();
+    const view = render(<DesktopShortcutHarness onClose={onClose} onLocalKey={onLocalKey} />);
+    await measure(800, 450);
+    const desktop = view.container.querySelector<HTMLElement>('[tabindex="0"]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.keyDown(desktop, { key: 'Control', keyCode: 17, ctrlKey: true });
+    fireEvent.keyDown(desktop, { key: 'w', keyCode: 87, ctrlKey: true });
+    fireEvent.keyUp(desktop, { key: 'w', keyCode: 87, ctrlKey: true });
+    fireEvent.keyUp(desktop, { key: 'Control', keyCode: 17 });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onLocalKey).not.toHaveBeenCalled();
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message)).filter(message => message.type === 'DesktopKeyEvent')).toEqual([
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 17, down: true },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 87, down: true },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 87, down: false },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 17, down: false },
+    ]);
+
+    const toolbarButton = screen.getByRole('button', { name: /disconnect/i });
+    act(() => toolbarButton.focus());
+    fireEvent.keyDown(toolbarButton, { key: 'w', keyCode: 87, ctrlKey: true });
+    expect(onClose).toHaveBeenCalledOnce();
+
+    fireEvent.mouseDown(view.container.querySelector('canvas')!, { button: 0 });
+    expect(document.activeElement).toBe(desktop);
+    fireEvent.keyDown(document.activeElement!, { key: 'w', keyCode: 87, ctrlKey: true });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { key: 'v', keyCode: 86, ctrlKey: true },
+    { key: 'c', keyCode: 67, ctrlKey: true },
+    { key: 'z', keyCode: 90, ctrlKey: true },
+    { key: 's', keyCode: 83, ctrlKey: true },
+    { key: 'Tab', keyCode: 9, ctrlKey: true },
+    { key: 'Tab', keyCode: 9, ctrlKey: true, shiftKey: true },
+    { key: 'w', keyCode: 87, metaKey: true },
+    { key: 'q', keyCode: 81, metaKey: true },
+    { key: 'F4', keyCode: 115, altKey: true },
+    { key: 'F5', keyCode: 116 },
+    { key: 'Escape', keyCode: 27 },
+  ])('forwards the complete RDP key event $key without a local action', async (chord) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    const onClose = vi.fn();
+    const onLocalKey = vi.fn();
+    const view = render(<DesktopShortcutHarness onClose={onClose} onLocalKey={onLocalKey} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+    ws.send.mockClear();
+    fireEvent.keyDown(surface, chord);
+    fireEvent.keyUp(surface, chord);
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: chord.keyCode, down: true },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: chord.keyCode, down: false },
+    ]);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onLocalKey).not.toHaveBeenCalled();
+    expect(lifecycle.invoke.mock.calls.some(([name]) => name === 'desktop_set_clipboard')).toBe(false);
+  });
+
+  it('does not steal focus from another tab and releases held keys on deactivation', async () => {
+    const view = render(<DesktopViewer {...viewerProps({ isActive: false })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[tabindex="0"]')!;
+    expect(document.activeElement).not.toBe(surface);
+    expect(surface.hasAttribute('data-remote-desktop-input')).toBe(false);
+    view.rerender(<DesktopViewer {...viewerProps({ isActive: true })} />);
+    expect(document.activeElement).toBe(surface);
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+    fireEvent.keyDown(surface, { key: 'Control', keyCode: 17 });
+    view.rerender(<DesktopViewer {...viewerProps({ isActive: false })} />);
+    expect(document.activeElement).not.toBe(surface);
+    expect(JSON.parse(ws.send.mock.lastCall![0])).toMatchObject({ type: 'DesktopKeyEvent', key_code: 17, down: false });
+  });
+
+  it('releases every held key on window blur and before the frame stream closes', async () => {
+    const view = render(<DesktopViewer {...viewerProps()} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+    fireEvent.keyDown(surface, { key: 'Control', keyCode: 17 });
+    fireEvent.keyDown(surface, { key: 'w', keyCode: 87, ctrlKey: true });
+    fireEvent(window, new Event('blur'));
+    expect(ws.send.mock.calls.slice(-2).map(([message]) => JSON.parse(message))).toEqual([
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 17, down: false },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 87, down: false },
+    ]);
+    fireEvent.keyDown(surface, { key: 'Shift', keyCode: 16 });
+    view.unmount();
+    expect(ws.send.mock.calls.slice(-2).map(([message]) => JSON.parse(message))).toEqual([
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 16, down: false },
+      { type: 'CloseDesktop', connection_id: 'conn-1' },
+    ]);
   });
 
   it('updates Retina pixels when moving between monitors without a CSS resize, then removes listeners', async () => {

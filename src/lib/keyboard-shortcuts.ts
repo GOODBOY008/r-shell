@@ -212,6 +212,12 @@ function isTerminalInputTarget(target: EventTarget | null): boolean {
   return target.closest('.xterm') !== null;
 }
 
+function isRemoteDesktopInputTarget(target: EventTarget | null): boolean {
+  // Only the focused remote surface owns these keys. Its toolbar buttons
+  // remain local controls even though they are descendants of the surface.
+  return target instanceof Element && target.matches('[data-remote-desktop-input]');
+}
+
 export function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
     return false;
@@ -473,7 +479,7 @@ const SIBLING_FOCUS_POLL_INTERVAL_MS = 2000;
 // let any same-instance serialized register/unregister chain drain first.
 const REGISTRATION_VERIFY_DELAY_MS = 600;
 
-type FocusContext = 'app' | 'terminal' | 'editable';
+type FocusContext = 'app' | 'terminal' | 'editable' | 'desktop';
 
 /**
  * True while a shortcut-recorder input in Settings owns the keyboard. The
@@ -527,6 +533,9 @@ export function isShortcutRecording(): boolean {
 
 function currentFocusContext(): FocusContext {
   const target = document.activeElement;
+  if (isRemoteDesktopInputTarget(target)) {
+    return 'desktop';
+  }
   if (isTerminalInputTarget(target)) {
     return 'terminal';
   }
@@ -684,7 +693,7 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     }
 
     const focus = currentFocusContext();
-    if (focus === 'editable') {
+    if (focus === 'editable' || focus === 'desktop') {
       return new Map();
     }
     if (focus === 'terminal') {
@@ -730,7 +739,9 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     void serializeOp(accel, async () => {
       try {
         await register(accel, (event) => {
-          if (event.state !== 'Pressed') {
+          // Unregistering is asynchronous: a queued event must not close a
+          // local tab after focus has already moved into the remote desktop.
+          if (event.state !== 'Pressed' || disposed || !desiredAccelerators().has(accel)) {
             return;
           }
           // Resolve the handler at event time so the OS registration survives
@@ -842,6 +853,9 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   // another application.
   const handleInWindowKeyDown = (event: KeyboardEvent) => {
     const target = event.target;
+    if (isRemoteDesktopInputTarget(target)) {
+      return;
+    }
     // Editable fields always keep their keystrokes. A terminal keeps the
     // keystroke for `ignoreInTerminal` bindings (matching the OS-registration
     // semantics); other bindings fire here.
@@ -940,6 +954,9 @@ function registerDomKeydown(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   const isMac = navigator.platform.toUpperCase().includes('MAC');
 
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (isRemoteDesktopInputTarget(event.target)) {
+      return;
+    }
     const shortcuts = shortcutsRef.current;
     const terminalInputTarget = isTerminalInputTarget(event.target);
     if (isEditableTarget(event.target) && !terminalInputTarget) {

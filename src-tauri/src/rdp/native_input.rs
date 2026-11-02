@@ -1,7 +1,8 @@
 //! Native input handling for the RDP bare window on macOS.
 //!
 //! Uses `NSEvent addLocalMonitorForEventsMatchingMask:handler:` to capture
-//! keyboard and mouse events directly from the OS event loop — no web layer.
+//! mouse events directly from the OS event loop — no web layer. Keyboard
+//! capture is shared with embedded RDP views in keyboard_capture.rs.
 
 use crate::rdp::input::InputCommand;
 use tokio::sync::mpsc;
@@ -63,6 +64,14 @@ pub fn macos_keycode_to_scancode(keycode: u16) -> Option<u16> {
         0x6D => Some(0x44), // F10
         0x67 => Some(0x57), // F11
         0x6F => Some(0x58), // F12
+        0x69 => Some(0x64), // F13
+        0x6B => Some(0x65), // F14
+        0x71 => Some(0x66), // F15
+        0x6A => Some(0x67), // F16
+        0x40 => Some(0x68), // F17
+        0x4F => Some(0x69), // F18
+        0x50 => Some(0x6A), // F19
+        0x5A => Some(0x6B), // F20
 
         // Modifiers
         0x38 => Some(0x2A), // Left Shift
@@ -106,18 +115,20 @@ pub fn macos_keycode_to_scancode(keycode: u16) -> Option<u16> {
         0x2A => Some(0x2B), // Backslash
         0x1E => Some(0x1B), // Right Bracket
         0x27 => Some(0x28), // Quote
+        0x0A => Some(0x56), // ISO Section (102nd key)
 
         // Numpad
-        0x50 => Some(0x52), // Numpad 0
-        0x51 => Some(0x4F), // Numpad 1
-        0x52 => Some(0x50), // Numpad 2
-        0x53 => Some(0x51), // Numpad 3
-        0x54 => Some(0x4B), // Numpad 4
-        0x55 => Some(0x4C), // Numpad 5
-        0x56 => Some(0x4D), // Numpad 6
-        0x57 => Some(0x47), // Numpad 7
-        0x58 => Some(0x48), // Numpad 8
-        0x59 => Some(0x49), // Numpad 9
+        0x52 => Some(0x52), // Numpad 0
+        0x53 => Some(0x4F), // Numpad 1
+        0x54 => Some(0x50), // Numpad 2
+        0x55 => Some(0x51), // Numpad 3
+        0x56 => Some(0x4B), // Numpad 4
+        0x57 => Some(0x4C), // Numpad 5
+        0x58 => Some(0x4D), // Numpad 6
+        0x59 => Some(0x47), // Numpad 7
+        0x5B => Some(0x48), // Numpad 8
+        0x5C => Some(0x49), // Numpad 9
+        0x47 => Some(0x45), // Keypad Clear / Num Lock
         0x43 => Some(0x37), // Numpad *
         0x45 => Some(0x4E), // Numpad +
         0x4E => Some(0x4A), // Numpad -
@@ -129,7 +140,7 @@ pub fn macos_keycode_to_scancode(keycode: u16) -> Option<u16> {
     }
 }
 
-/// Install an NSEvent local monitor that captures keyboard and mouse events
+/// Install an NSEvent local monitor that captures mouse events
 /// and forwards them to the RDP input channel.
 ///
 /// The monitor handle is tracked under `connection_id`; take it with
@@ -151,8 +162,6 @@ pub fn install_native_input_monitor(
     use std::sync::atomic::Ordering;
 
     // NSEventMask values
-    const NS_EVENT_MASK_KEY_DOWN: u64 = 1 << 10;
-    const NS_EVENT_MASK_KEY_UP: u64 = 1 << 11;
     const NS_EVENT_MASK_LEFT_MOUSE_DOWN: u64 = 1 << 1;
     const NS_EVENT_MASK_LEFT_MOUSE_UP: u64 = 1 << 2;
     const NS_EVENT_MASK_RIGHT_MOUSE_DOWN: u64 = 1 << 3;
@@ -162,9 +171,7 @@ pub fn install_native_input_monitor(
     const NS_EVENT_MASK_OTHER_MOUSE_DOWN: u64 = 1 << 25;
     const NS_EVENT_MASK_OTHER_MOUSE_UP: u64 = 1 << 26;
 
-    let mask = NS_EVENT_MASK_KEY_DOWN
-        | NS_EVENT_MASK_KEY_UP
-        | NS_EVENT_MASK_LEFT_MOUSE_DOWN
+    let mask = NS_EVENT_MASK_LEFT_MOUSE_DOWN
         | NS_EVENT_MASK_LEFT_MOUSE_UP
         | NS_EVENT_MASK_RIGHT_MOUSE_DOWN
         | NS_EVENT_MASK_RIGHT_MOUSE_UP
@@ -188,16 +195,6 @@ pub fn install_native_input_monitor(
             }
 
             match event_type {
-                // KeyDown / KeyUp
-                10 | 11 => {
-                    let keycode: u16 = msg_send![event, keyCode];
-                    let down = event_type == 10;
-                    if let Some(scancode) = macos_keycode_to_scancode(keycode) {
-                        let _ = input_tx.send(InputCommand::Key { scancode, down });
-                    }
-                    // Swallow key events (don't beep)
-                    std::ptr::null_mut()
-                }
                 // Mouse moved
                 5 => {
                     if let Some((xn, yn)) = get_event_location_normalized(event) {
