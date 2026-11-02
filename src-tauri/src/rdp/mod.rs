@@ -1,6 +1,10 @@
 //! RDP client built on the ironrdp crate ecosystem.
 
 pub mod input;
+#[cfg(target_os = "macos")]
+pub(crate) mod keyboard_capture;
+#[cfg(any(target_os = "macos", test))]
+pub(crate) mod keyboard_state;
 pub mod native_input;
 pub mod native_render;
 

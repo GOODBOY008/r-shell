@@ -58,6 +58,9 @@ function GlobalShortcutHarness({ shortcuts }: { shortcuts: KeyboardShortcut[] })
         {/* xterm.js renders its hidden helper textarea inside .xterm */}
         <textarea data-testid="terminal-textarea" />
       </div>
+      <div data-remote-desktop-input tabIndex={0} data-testid="desktop">
+        <button type="button" data-testid="desktop-toolbar">Desktop toolbar</button>
+      </div>
       <button data-testid="plain" type="button">
         plain
       </button>
@@ -158,6 +161,49 @@ describe('useKeyboardShortcuts in Tauri (global-shortcut plugin path)', () => {
 
     expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+B');
     expect(mockedUnregister).not.toHaveBeenCalledWith('CommandOrControl+W');
+  });
+
+  it.each(['Win32', 'Linux x86_64'])('yields Ctrl+W to the remote desktop on %s, including a late plugin event', async (platform) => {
+    platformSpy.mockReturnValue(platform);
+    const onClose = vi.fn();
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[splitCtrlW(onClose)]} />);
+    });
+    const handler = mockedRegister.mock.calls.find(([accel]) => accel === 'CommandOrControl+W')![1];
+    let finishUnregister!: () => void;
+    mockedUnregister.mockImplementationOnce(() => new Promise<void>(resolve => { finishUnregister = resolve; }));
+
+    focusElement(document.querySelector<HTMLElement>('[data-testid="desktop"]')!);
+    expect(mockedUnregister).toHaveBeenCalledWith('CommandOrControl+W');
+    handler({ state: 'Pressed', shortcut: 'CommandOrControl+W', id: 1 });
+    expect(onClose).not.toHaveBeenCalled();
+
+    await act(async () => { finishUnregister(); });
+    await act(async () => {
+      focusElement(document.querySelector<HTMLElement>('[data-testid="desktop-toolbar"]')!);
+    });
+    expect(mockedRegister.mock.calls.filter(([accel]) => accel === 'CommandOrControl+W')).toHaveLength(2);
+    handler({ state: 'Pressed', shortcut: 'CommandOrControl+W', id: 1 });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('yields macOS in-window shortcuts to the remote desktop, then restores toolbar shortcuts', async () => {
+    platformSpy.mockReturnValue('MacIntel');
+    const onNext = vi.fn();
+    await act(async () => {
+      render(<GlobalShortcutHarness shortcuts={[{ key: 'Tab', ctrlKey: true, handler: onNext, description: 'Next tab' }]} />);
+    });
+    const desktop = document.querySelector<HTMLElement>('[data-testid="desktop"]')!;
+    focusElement(desktop);
+    const event = new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, bubbles: true, cancelable: true });
+    desktop.dispatchEvent(event);
+    expect(onNext).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+
+    const toolbar = document.querySelector<HTMLElement>('[data-testid="desktop-toolbar"]')!;
+    focusElement(toolbar);
+    toolbar.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', ctrlKey: true, bubbles: true }));
+    expect(onNext).toHaveBeenCalledOnce();
   });
 
   it('re-registers terminal-critical shortcuts after leaving the terminal', async () => {

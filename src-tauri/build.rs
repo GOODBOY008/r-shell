@@ -63,6 +63,7 @@ fn main() {
             "open_in_os",
             "rdp_close_native_window",
             "rdp_open_native_window",
+            "rdp_set_keyboard_capture",
             "read_file_content",
             "read_log",
             "read_remote_file_base64",

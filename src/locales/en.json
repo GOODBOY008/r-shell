@@ -1417,6 +1417,7 @@
     "clipboardAccessDenied": "Clipboard access denied",
     "clipboardAccessDeniedDesc": "Allow clipboard permissions to paste into the remote desktop.",
     "clipboardPasteUnavailable": "Clipboard paste isn't available",
+    "keyboardCaptureFailed": "Couldn't capture the RDP keyboard",
     "failedToEnterFullScreen": "Failed to enter full screen",
     "failedToDisconnect": "Failed to disconnect",
     "desktopDisconnected": "Desktop Disconnected",

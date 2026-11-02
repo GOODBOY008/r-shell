@@ -1465,6 +1465,7 @@
     "clipboardAccessDenied": "Odmowa dostępu do schowka",
     "clipboardAccessDeniedDesc": "Zezwól na dostęp do schowka, aby wklejać na pulpicie zdalnym.",
     "clipboardPasteUnavailable": "Wklejanie ze schowka jest niedostępne",
+    "keyboardCaptureFailed": "Nie udało się przechwycić klawiatury RDP",
     "failedToEnterFullScreen": "Nie udało się przejść na pełny ekran",
     "failedToDisconnect": "Nie udało się rozłączyć",
     "desktopDisconnected": "Rozłączono pulpit zdalny",

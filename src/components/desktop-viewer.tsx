@@ -13,6 +13,7 @@ import { Monitor, RefreshCw, ExternalLink, Unplug, Undo2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { RdpSessionStatus } from './rdp-session-status';
 import { parseRdpSessionInfo, type RdpSessionInfo } from '@/lib/rdp-session-info';
+import { installRdpKeyboardCapture } from '@/lib/rdp-keyboard-capture';
 
 const POINTER_BUTTON_MASKS = [1, 4, 2, 8, 16];
 
@@ -24,6 +25,7 @@ interface DesktopViewerProps {
   /** Live session resolution; Balanced Auto and Retina adapt the remote desktop. */
   rdpResolution?: string;
   isConnected: boolean;
+  isActive?: boolean;
   onReconnect?: () => void;
   /** Fired after a successful explicit disconnect so the parent can flip
    * the tab out of its connected state (close the frame stream's tab). */
@@ -37,6 +39,7 @@ export function DesktopViewer({
   protocol = 'RDP',
   rdpResolution = 'fit',
   isConnected,
+  isActive = true,
   onReconnect,
   onDisconnected,
 }: DesktopViewerProps) {
@@ -136,6 +139,7 @@ export function DesktopViewer({
   useEffect(() => {
     if (!isConnected) return;
 
+    const pressedKeys = pressedKeysRef.current;
     setSessionInfo(null);
     let ws: WebSocket | null = null;
     let cancelled = false;
@@ -297,6 +301,10 @@ export function DesktopViewer({
         invoke('rdp_close_native_window', { connectionId }).catch(() => {});
       }
       if (ws && ws.readyState === WebSocket.OPEN) {
+        for (const keyCode of pressedKeys) {
+          ws.send(JSON.stringify({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: keyCode, down: false }));
+        }
+        pressedKeys.clear();
         ws.send(JSON.stringify({
           type: 'CloseDesktop',
           connection_id: connectionId,
@@ -385,6 +393,24 @@ export function DesktopViewer({
     pressedButtonsRef.current.clear();
   }, [connectionId, sendWsEvent]);
 
+  const releaseKeyboard = useCallback(() => {
+    for (const keyCode of pressedKeysRef.current) {
+      sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: keyCode, down: false });
+    }
+    pressedKeysRef.current.clear();
+  }, [connectionId, sendWsEvent]);
+
+  useEffect(() => {
+    const visibilityChanged = () => { if (document.hidden) releaseKeyboard(); };
+    window.addEventListener('blur', releaseKeyboard);
+    document.addEventListener('visibilitychange', visibilityChanged);
+    return () => {
+      window.removeEventListener('blur', releaseKeyboard);
+      document.removeEventListener('visibilitychange', visibilityChanged);
+      releaseKeyboard();
+    };
+  }, [releaseKeyboard]);
+
   useEffect(() => {
     window.addEventListener('blur', releasePointerButtons);
     return () => {
@@ -403,10 +429,12 @@ export function DesktopViewer({
   };
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (!isConnected || isFromInteractiveControl(e)) return;
+    if (!isConnected || !isActive || isFromInteractiveControl(e)) return;
+    e.stopPropagation();
 
-    // Intercept Ctrl+V for clipboard paste: read local clipboard and send to remote
-    if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    // VNC supports local clipboard sync. RDP owns the actual key chord: it
+    // must paste the remote clipboard instead of swallowing V locally.
+    if (protocol.toUpperCase() !== 'RDP' && (e.ctrlKey || e.metaKey) && e.key === 'v') {
       e.preventDefault();
       readClipboardText().then((text) => {
         if (text) {
@@ -429,34 +457,44 @@ export function DesktopViewer({
     e.preventDefault();
     pressedKeysRef.current.add(e.keyCode);
     sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: e.keyCode, down: true });
-  }, [connectionId, isConnected, sendWsEvent, t]);
+  }, [connectionId, isConnected, isActive, protocol, sendWsEvent, t]);
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent) => {
-    if (!isConnected || isFromInteractiveControl(e)) return;
+    if (!isConnected || !isActive || isFromInteractiveControl(e)) return;
     e.preventDefault();
+    e.stopPropagation();
     pressedKeysRef.current.delete(e.keyCode);
     sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: e.keyCode, down: false });
-  }, [connectionId, isConnected, sendWsEvent]);
+  }, [connectionId, isConnected, isActive, sendWsEvent]);
 
   // Release remote input when focus leaves the desktop.
   const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
-    for (const keyCode of pressedKeysRef.current) {
-      sendWsEvent({ type: 'DesktopKeyEvent', connection_id: connectionId, key_code: keyCode, down: false });
-    }
-    pressedKeysRef.current.clear();
+    releaseKeyboard();
     // Clicking back into the desktop can move focus from a toolbar button
     // after mousedown. That internal focus change must not cancel the new drag.
     if (!event.currentTarget.contains(event.relatedTarget)) releasePointerButtons();
-  }, [connectionId, sendWsEvent, releasePointerButtons]);
+  }, [releaseKeyboard, releasePointerButtons]);
 
   // Take keyboard focus as soon as the session is live (or restored after a
   // reconnect), like the PTY terminal does — otherwise every keystroke is
   // silently dropped until the user clicks into the canvas.
   useEffect(() => {
-    if (isConnected && !sessionMissing && !isPoppedOut) {
+    if (!isActive || !isConnected || sessionMissing || isPoppedOut) {
+      releaseKeyboard();
+      releasePointerButtons();
+      if (document.activeElement === containerRef.current) containerRef.current?.blur();
+    } else {
       containerRef.current?.focus();
     }
-  }, [isConnected, sessionMissing, isPoppedOut]);
+  }, [isActive, isConnected, sessionMissing, isPoppedOut, releaseKeyboard, releasePointerButtons]);
+
+  useEffect(() => {
+    const surface = containerRef.current;
+    if (!surface || !isActive || !isConnected || sessionMissing || isPoppedOut || protocol.toUpperCase() !== 'RDP') return;
+    return installRdpKeyboardCapture(surface, connectionId, error => {
+      notify.error(t('desktopViewer.keyboardCaptureFailed'), { description: String(error) });
+    });
+  }, [connectionId, isActive, isConnected, sessionMissing, isPoppedOut, protocol, t]);
 
   // Helper to get remote coords from any mouse event (works on container or canvas)
   const getRemoteCoordsFromEvent = useCallback((clientX: number, clientY: number) => {
@@ -477,6 +515,7 @@ export function DesktopViewer({
   // stay local, but their stopPropagation must not swallow an ongoing drag's release.
   const handleContainerMouseDown = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
+    containerRef.current?.focus();
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
     pressedButtonsRef.current.add(e.button);
     lastPointerPositionRef.current = { x, y };
@@ -684,6 +723,7 @@ export function DesktopViewer({
     <div
       ref={containerRef}
       className="h-full w-full relative bg-black focus:outline-hidden"
+      data-remote-desktop-input={isActive ? true : undefined}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}

@@ -64,6 +64,7 @@
     "allow-open-in-os",
     "allow-rdp-close-native-window",
     "allow-rdp-open-native-window",
+    "allow-rdp-set-keyboard-capture",
     "allow-read-file-content",
     "allow-read-log",
     "allow-read-remote-file-base64",

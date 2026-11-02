@@ -403,6 +403,10 @@ pub fn run() {
             let _ = app.emit("menu-action", event.id().0.as_str());
         })
         .on_window_event(|window, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::Focused(focused) = event {
+                crate::rdp::keyboard_capture::window_focus_changed(window.label(), *focused);
+            }
             // macOS close semantics: the red X (and any programmatic close of
             // the main window, e.g. Ctrl+W with no tabs left) hides the
             // window instead of destroying it. Clicking the Dock icon then
@@ -451,6 +455,13 @@ pub fn run() {
             // window labels (also resolves a pending quit when the last
             // dirty editor is discarded during quit confirmation).
             if matches!(event, tauri::WindowEvent::Destroyed { .. }) {
+                #[cfg(target_os = "macos")]
+                {
+                    let label = window.label().to_string();
+                    let _ = window.app_handle().run_on_main_thread(move || {
+                        crate::rdp::keyboard_capture::release_window(&label);
+                    });
+                }
                 quit_guard::window_destroyed(window.app_handle(), window.label());
 
                 // Native RDP windows: the softbuffer surface belongs to the
@@ -588,6 +599,7 @@ pub fn run() {
             commands::desktop_connect,
             commands::desktop_disconnect,
             commands::desktop_send_key,
+            commands::rdp_set_keyboard_capture,
             commands::desktop_send_pointer,
             commands::desktop_request_frame,
             commands::desktop_set_clipboard,
