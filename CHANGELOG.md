@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.2] - 2026-11-03
+
+### 🔖 R-Shell 3.1.2 — RDP Input & Connection Hardening
+
+This patch release keeps keyboard input in focused remote desktop sessions, improves RDP logon diagnostics and display scaling, and updates the IronRDP release family together. SSH host-key checks and default-key fallback are hardened, and downloads of server-named files stay inside the selected directory.
+
+### New Features 🎉
+
+- feat(rdp): expose logon diagnostics and adapt display scaling by @GOODBOY008 in #278
+
+### Bug Fixes 🐛
+
+- fix(rdp): give focused remote sessions exclusive keyboard input by @GOODBOY008 in #278
+- fix(rdp): use x509-cert 0.3 certificate accessors by @GOODBOY008 in #276
+- fix(deps): align IronRDP release family and connector config by @GOODBOY008 in #270
+- fix(ssh): make accept-new a one-shot for the confirmed host only by @twkrol in #266
+- fix(file-browser): confine downloads of server-named files to the chosen directory by @twkrol in #264
+- fix(ssh): refuse a host key of another type than the one recorded by @twkrol in #262
+- fix(ssh): try every default key in ~/.ssh when no key file is set by @twkrol in #260
+
+### Other Changes
+
+- chore(deps): bump x509-cert from 0.2.5 to 0.3.0 in /src-tauri by @dependabot[bot] in #276
+- chore(deps): bump png from 0.17.16 to 0.18.1 in /src-tauri by @dependabot[bot] in #277
+- chore(deps): bump russh from 0.64.1 to 0.65.0 in /src-tauri by @dependabot[bot] in #275
+- chore(deps): bump the npm-minor-patch group with 4 updates by @dependabot[bot] in #274
+- chore(deps): bump ironrdp-dvc from 0.9.0 to 0.10.0 in /src-tauri by @dependabot[bot] in #270
+- chore(deps): bump ironrdp-input from 0.8.0 to 0.9.0 in /src-tauri by @dependabot[bot] in #270
+- chore(deps): bump ironrdp-graphics from 0.10.0 to 0.11.0 in /src-tauri by @dependabot[bot] in #270
+- chore(deps): bump ironrdp-connector from 0.11.0 to 0.12.0 in /src-tauri by @dependabot[bot] in #270
+- chore(deps): bump the cargo-minor-patch group by @dependabot[bot] in #268
+- chore(deps): bump the npm-minor-patch group with 10 updates by @dependabot[bot] in #273
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008), [@twkrol](https://github.com/twkrol), and [@dependabot[bot]](https://github.com/apps/dependabot) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.1.1...v3.1.2
+
 ## [3.1.1] - 2026-10-29
 
 ### 🔖 R-Shell 3.1.1 — macOS RDP Recovery & Session Protection
