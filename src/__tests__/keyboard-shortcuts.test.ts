@@ -1,557 +1,159 @@
-import React from 'react';
-import { cleanup, render } from '@testing-library/react';
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
-  createLayoutShortcuts,
-  createSplitViewShortcuts,
-  formatKeyboardShortcut,
-  isShortcutRecording,
-  KeyboardShortcut,
-  parseKeyboardShortcut,
-  toAccelerator,
-  useKeyboardShortcuts,
-} from '../lib/keyboard-shortcuts';
-import {
-  DEFAULT_SHORTCUT_BINDINGS,
-  loadShortcutBindings,
-  loadShortcutOverrides,
-} from '../lib/shortcut-registry';
+  canonicalShortcut, formatKeyboardShortcut, matchesKeyboardShortcut,
+  parseKeyboardShortcut, shortcutFromEvent, getShortcutContext,
+} from '../lib/keyboard-shortcut-model';
+import { findConflicts, migrateLegacyShortcutBindings } from '../lib/shortcut-registry';
 
-function createMockActions() {
-  return {
-    splitRight: vi.fn(),
-    splitDown: vi.fn(),
-    focusGroup: vi.fn(),
-    closeTab: vi.fn(),
-    nextTab: vi.fn(),
-    prevTab: vi.fn(),
-    moveTabLeft: vi.fn(),
-    moveTabRight: vi.fn(),
-  };
-}
+const key = (init: KeyboardEventInit) => new KeyboardEvent('keydown', init);
 
-function findShortcut(
-  shortcuts: KeyboardShortcut[],
-  key: string,
-  opts: { ctrlKey?: boolean; shiftKey?: boolean } = {},
-): KeyboardShortcut | undefined {
-  return shortcuts.find(
-    (s) =>
-      s.key === key &&
-      (opts.ctrlKey === undefined || s.ctrlKey === opts.ctrlKey) &&
-      (opts.shiftKey === undefined || s.shiftKey === opts.shiftKey),
+describe('physical keys and platform modifier', () => {
+  it('distinguishes Control from Command and maps Mod only', () => {
+    const ctrl = parseKeyboardShortcut('Ctrl+W')!;
+    const mod = parseKeyboardShortcut('Mod+W')!;
+    expect(matchesKeyboardShortcut(key({ key: 'w', ctrlKey: true }), ctrl, true)).toBe(true);
+    expect(matchesKeyboardShortcut(key({ key: 'w', metaKey: true }), ctrl, true)).toBe(false);
+    expect(matchesKeyboardShortcut(key({ key: 'w', metaKey: true }), mod, true)).toBe(true);
+    expect(matchesKeyboardShortcut(key({ key: 'w', ctrlKey: true }), mod, false)).toBe(true);
+    expect(matchesKeyboardShortcut(key({ key: 'w', ctrlKey: true, shiftKey: true }), mod, false)).toBe(false);
+    expect(formatKeyboardShortcut('Ctrl+Shift+Z', true)).toBe('⌃⇧Z');
+    expect(formatKeyboardShortcut('Cmd+Shift+Z', true)).toBe('⇧⌘Z');
+    expect(formatKeyboardShortcut('Mod+N', true)).toBe('⌘N');
+    expect(formatKeyboardShortcut('Mod+N', false)).toBe('Ctrl+N');
+    expect(formatKeyboardShortcut('Cmd+Tab', true)).toBe('⌘Tab');
+  });
+
+  it.each(['', 'Ctrl+', 'Ctrl+one', 'Ctrl+A+B', 'Bogus+K', 'F25', 'Ctrl++A'])(
+    'rejects malformed combination %s', chord => expect(parseKeyboardShortcut(chord)).toBeNull(),
   );
-}
 
-describe('createSplitViewShortcuts', () => {
-  // Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7
+  it.each(['Mod+\\', 'Ctrl+Shift+PageUp', 'Alt+F24', 'Cmd+Plus', 'Shift+F3', 'Control+Comma'])(
+    'parses supported combination %s', chord => expect(parseKeyboardShortcut(chord)).not.toBeNull(),
+  );
 
-  it('returns 16 shortcuts total', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    // 1 splitRight + 1 splitDown + 9 focusGroup + 1 closeTab + 1 nextTab + 1 prevTab
-    // + 1 moveTabLeft + 1 moveTabRight
-    expect(shortcuts).toHaveLength(16);
+  it('compares aliases and modifier order canonically', () => {
+    expect(canonicalShortcut('Shift+Control+Comma', false)).toBe(canonicalShortcut('Mod+Shift+,', false));
+    expect(canonicalShortcut('CmdOrCtrl+W', true)).toBe(canonicalShortcut('Command+W', true));
+    expect(canonicalShortcut('Ctrl+W', true)).not.toBe(canonicalShortcut('Cmd+W', true));
   });
 
-  // Requirement 5.1: Ctrl+\ splits right
-  it('Ctrl+\\ triggers splitRight', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, '\\', { ctrlKey: true, shiftKey: false });
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.splitRight).toHaveBeenCalledOnce();
+  it.each([
+    ['Mod+Shift+\\', { key: '|', code: 'Backslash', ctrlKey: true, shiftKey: true }],
+    ['Mod+Shift+1', { key: '!', code: 'Digit1', ctrlKey: true, shiftKey: true }],
+    ['Cmd+Alt+G', { key: '©', code: 'KeyG', metaKey: true, altKey: true }],
+    ['Cmd+Alt+E', { key: 'Dead', code: 'KeyE', metaKey: true, altKey: true }],
+  ] as const)('matches the configured base key for %s', (chord, event) => {
+    expect(matchesKeyboardShortcut(key(event), parseKeyboardShortcut(chord)!, false)).toBe(true);
   });
 
-  // Requirement 5.7: Ctrl+Shift+\ splits down
-  it('Ctrl+Shift+\\ triggers splitDown', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, '\\', { ctrlKey: true, shiftKey: true });
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.splitDown).toHaveBeenCalledOnce();
+  it('uses one punctuation identity on non-US layouts even when the produced symbol is a base key', () => {
+    const event = key({ key: '/', code: 'Digit7', ctrlKey: true, shiftKey: true });
+    expect(matchesKeyboardShortcut(event, parseKeyboardShortcut('Mod+Shift+7')!, false)).toBe(true);
+    expect(matchesKeyboardShortcut(event, parseKeyboardShortcut('Mod+Shift+/')!, false)).toBe(false);
+    expect(shortcutFromEvent(event, false)).toBe('Mod+Shift+7');
   });
 
-  // Requirement 5.2: Ctrl+1~9 focuses group by index (0-based)
-  describe('Ctrl+1~9 focus group shortcuts', () => {
-    it('creates 9 focus group shortcuts for digits 1-9', () => {
-      const actions = createMockActions();
-      const shortcuts = createSplitViewShortcuts(actions);
+  it('does not remap normal letter layouts by physical scan code', () => {
+    expect(matchesKeyboardShortcut(key({ key: 'z', code: 'KeyY', ctrlKey: true }), parseKeyboardShortcut('Ctrl+Y')!, false)).toBe(false);
+  });
 
-      for (let digit = 1; digit <= 9; digit++) {
-        const shortcut = findShortcut(shortcuts, String(digit), { ctrlKey: true, shiftKey: false });
-        expect(shortcut).toBeDefined();
-      }
+  it('records Mac Control and Command separately and round-trips punctuation', () => {
+    expect(shortcutFromEvent(key({ key: 'w', ctrlKey: true }), true)).toBe('Ctrl+W');
+    expect(shortcutFromEvent(key({ key: 'w', metaKey: true }), true)).toBe('Mod+W');
+    expect(shortcutFromEvent(key({ key: 'w', ctrlKey: true }), false)).toBe('Mod+W');
+    const event = key({ key: '|', code: 'Backslash', ctrlKey: true, shiftKey: true });
+    const chord = shortcutFromEvent(event, false)!;
+    expect(chord).toBe('Mod+Shift+\\');
+    expect(matchesKeyboardShortcut(event, parseKeyboardShortcut(chord)!, false)).toBe(true);
+  });
+
+  it.each([
+    ['~', '`', 'Backquote'], ['!', '1', 'Digit1'], ['@', '2', 'Digit2'],
+    ['#', '3', 'Digit3'], ['$', '4', 'Digit4'], ['%', '5', 'Digit5'],
+    ['^', '6', 'Digit6'], ['&', '7', 'Digit7'], ['*', '8', 'Digit8'],
+    ['(', '9', 'Digit9'], [')', '0', 'Digit0'], ['_', '-', 'Minus'],
+    ['+', '=', 'Equal'], ['{', '[', 'BracketLeft'], ['}', ']', 'BracketRight'],
+    ['|', '\\', 'Backslash'], [':', ';', 'Semicolon'], ['"', "'", 'Quote'],
+    ['<', ',', 'Comma'], ['>', '.', 'Period'], ['?', '/', 'Slash'],
+  ])('normalizes shifted %s to %s across parsing, labels, recording, and matching', (symbol, base, code) => {
+    const legacy = `Mod+Shift+${symbol}`;
+    const normalized = `Mod+Shift+${base}`;
+    const event = key({ key: symbol, code, ctrlKey: true, shiftKey: true });
+    expect(parseKeyboardShortcut(legacy)?.key).toBe(base);
+    expect(canonicalShortcut(legacy, false)).toBe(canonicalShortcut(normalized, false));
+    expect(formatKeyboardShortcut(legacy, false)).toBe(formatKeyboardShortcut(normalized, false));
+    expect(shortcutFromEvent(event, false)).toBe(normalized);
+    expect(matchesKeyboardShortcut(event, parseKeyboardShortcut(legacy)!, false)).toBe(true);
+    expect(matchesKeyboardShortcut(event, parseKeyboardShortcut(normalized)!, false)).toBe(true);
+    // Missing modifier or a different physical source must not trigger it.
+    expect(matchesKeyboardShortcut(key({ key: symbol, code, ctrlKey: true }), parseKeyboardShortcut(legacy)!, false)).toBe(false);
+    expect(matchesKeyboardShortcut(key({ key: symbol, code: 'KeyQ', ctrlKey: true, shiftKey: true }), parseKeyboardShortcut(legacy)!, false)).toBe(false);
+  });
+
+  it.each(['Mod+Shift+Plus', 'Mod+Shift++', 'Shift+Mod+Plus', 'Mod+Plus+Shift'])(
+    'treats %s as Shift+Equal without losing the Plus key when Shift is absent', chord => {
+      expect(canonicalShortcut(chord, false)).toBe(canonicalShortcut('Mod+Shift+Equal', false));
+      expect(parseKeyboardShortcut('Mod+Plus')?.key).toBe('+');
+      expect(canonicalShortcut('Mod++', false)).toBe(canonicalShortcut('Mod+Plus', false));
+      expect(canonicalShortcut('Mod+Plus', false)).not.toBe(canonicalShortcut('Mod+Equal', false));
+    },
+  );
+
+  it('detects legacy shifted punctuation collisions with defaults and terminal alternatives', () => {
+    const settings: Record<string, unknown> = { shortcutBindings: { closeSession: 'Ctrl+Shift+|' } };
+    migrateLegacyShortcutBindings(settings);
+    expect(findConflicts(settings.shortcutBindings as { closeSession: string }, false)).toContainEqual({
+      kind: 'duplicate', commandId: 'splitDown', chord: 'Mod+Shift+\\', otherCommandId: 'closeSession',
     });
-
-    it.each([1, 2, 3, 4, 5, 6, 7, 8, 9])(
-      'Ctrl+%i calls focusGroup with 0-based index',
-      (digit) => {
-        const actions = createMockActions();
-        const shortcuts = createSplitViewShortcuts(actions);
-        const shortcut = findShortcut(shortcuts, String(digit), { ctrlKey: true, shiftKey: false });
-
-        shortcut!.handler();
-        expect(actions.focusGroup).toHaveBeenCalledWith(digit - 1);
-      },
-    );
-  });
-
-  // Requirement 5.3: Ctrl+W closes the active tab
-  it('Ctrl+W triggers closeTab by default', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'w', { ctrlKey: true, shiftKey: false });
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.closeTab).toHaveBeenCalledOnce();
-  });
-
-  it('does not bind Ctrl+Shift+W to closeTab by default', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'w', { ctrlKey: true, shiftKey: true });
-
-    expect(shortcut).toBeUndefined();
-  });
-
-  it('uses a custom closeSession shortcut when provided', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions, { closeSession: 'Alt+W' });
-    const shortcut = shortcuts.find(
-      (s) => s.key === 'w' && s.altKey === true && s.ctrlKey === false && s.shiftKey === false,
-    );
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.closeTab).toHaveBeenCalledOnce();
-  });
-
-  // Requirement 5.4: Ctrl+Tab switches to next tab
-  it('Ctrl+Tab triggers nextTab', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'Tab', { ctrlKey: true, shiftKey: false });
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.nextTab).toHaveBeenCalledOnce();
-  });
-
-  // Requirement 5.5: Ctrl+Shift+Tab switches to previous tab
-  it('Ctrl+Shift+Tab triggers prevTab', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'Tab', { ctrlKey: true, shiftKey: true });
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.prevTab).toHaveBeenCalledOnce();
-  });
-
-  // Browser convention: Ctrl+Shift+PageUp/PageDown reorder tabs
-  it('Ctrl+Shift+PageUp triggers moveTabLeft', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'PageUp', { ctrlKey: true, shiftKey: true });
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.moveTabLeft).toHaveBeenCalledOnce();
-  });
-
-  it('Ctrl+Shift+PageDown triggers moveTabRight', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'PageDown', { ctrlKey: true, shiftKey: true });
-
-    expect(shortcut).toBeDefined();
-    shortcut!.handler();
-    expect(actions.moveTabRight).toHaveBeenCalledOnce();
-  });
-
-  it('move tab shortcuts fire even while a terminal has focus', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, 'PageUp', { ctrlKey: true, shiftKey: true });
-
-    expect(shortcut!.ignoreInTerminal).toBeFalsy();
-  });
-
-  it('uses custom move-tab and split bindings when provided', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions, {
-      moveTabLeft: 'Alt+PageUp',
-      moveTabRight: 'Alt+PageDown',
-      splitRight: 'Alt+R',
-      splitDown: 'Alt+S',
+    expect(findConflicts({ closeSession: 'Mod+Shift+!' }, false)).toContainEqual({
+      kind: 'duplicate', commandId: 'focusGroup1', chord: 'Mod+Shift+1', otherCommandId: 'closeSession',
     });
-
-    const moveLeft = shortcuts.find(s => s.key === 'PageUp' && s.altKey === true);
-    expect(moveLeft).toBeDefined();
-    moveLeft!.handler();
-    expect(actions.moveTabLeft).toHaveBeenCalledOnce();
-
-    const moveRight = shortcuts.find(s => s.key === 'PageDown' && s.altKey === true);
-    moveRight!.handler();
-    expect(actions.moveTabRight).toHaveBeenCalledOnce();
-
-    const splitRight = shortcuts.find(s => s.key === 'r' && s.altKey === true);
-    splitRight!.handler();
-    expect(actions.splitRight).toHaveBeenCalledOnce();
-
-    const splitDown = shortcuts.find(s => s.key === 's' && s.altKey === true);
-    splitDown!.handler();
-    expect(actions.splitDown).toHaveBeenCalledOnce();
-  });
-
-  // Requirement 5.6: Non-existent group index is a no-op (caller responsibility)
-  // The shortcuts always call focusGroup — the caller decides whether the index is valid.
-  // We verify the shortcut simply passes the index through without side effects on other actions.
-  it('focusGroup shortcut for index 8 (Ctrl+9) does not trigger other actions', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    const shortcut = findShortcut(shortcuts, '9', { ctrlKey: true, shiftKey: false });
-
-    shortcut!.handler();
-    expect(actions.focusGroup).toHaveBeenCalledWith(8);
-    expect(actions.splitRight).not.toHaveBeenCalled();
-    expect(actions.splitDown).not.toHaveBeenCalled();
-    expect(actions.closeTab).not.toHaveBeenCalled();
-    expect(actions.nextTab).not.toHaveBeenCalled();
-    expect(actions.prevTab).not.toHaveBeenCalled();
-  });
-
-  it('all shortcuts have ctrlKey set to true', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    for (const shortcut of shortcuts) {
-      expect(shortcut.ctrlKey).toBe(true);
+    for (const plus of ['Mod+Shift+Plus', 'Mod+Shift++']) {
+      expect(findConflicts({ closeSession: plus, duplicateSession: 'Mod+Shift+Equal' }, false)).toContainEqual({
+        kind: 'duplicate', commandId: 'duplicateSession', chord: 'Mod+Shift+Equal', otherCommandId: 'closeSession',
+      });
     }
   });
 
-  it('all shortcuts have a non-empty description', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    for (const shortcut of shortcuts) {
-      expect(shortcut.description).toBeTruthy();
+  it('normalizes shifted events without a code and direct shortcut objects consistently', () => {
+    const event = key({ key: '|', ctrlKey: true, shiftKey: true });
+    expect(shortcutFromEvent(event, false)).toBe('Mod+Shift+\\');
+    expect(matchesKeyboardShortcut(event, { key: '|', modKey: true, shiftKey: true }, false)).toBe(true);
+    expect(matchesKeyboardShortcut(event, parseKeyboardShortcut('Mod+Shift+\\')!, false)).toBe(true);
+  });
+
+  it('keeps unshifted symbols and non-US normal letters distinct from US aliases', () => {
+    for (const symbol of ['|', '!', ':', '+']) {
+      expect(parseKeyboardShortcut(`Mod+${symbol}`)?.key).toBe(symbol);
+      const event = key({ key: symbol, ctrlKey: true });
+      expect(shortcutFromEvent(event, false)).toBe(`Mod+${symbol === '+' ? 'Plus' : symbol}`);
+      expect(matchesKeyboardShortcut(event, parseKeyboardShortcut(`Mod+${symbol}`)!, false)).toBe(true);
     }
-  });
-});
-
-describe('useKeyboardShortcuts', () => {
-  afterEach(() => {
-    cleanup();
-  });
-
-  function ShortcutHarness({ shortcuts }: { shortcuts: KeyboardShortcut[] }) {
-    useKeyboardShortcuts(shortcuts);
-    return null;
-  }
-
-  it('does not intercept terminal Ctrl+B for layout shortcuts', () => {
-    const actions = {
-      toggleLeftSidebar: vi.fn(),
-      toggleRightSidebar: vi.fn(),
-      toggleBottomPanel: vi.fn(),
-      toggleZenMode: vi.fn(),
-    };
-    const shortcuts = createLayoutShortcuts(actions);
-    render(React.createElement(ShortcutHarness, { shortcuts }));
-
-    const xterm = document.createElement('div');
-    xterm.className = 'xterm';
-    const textarea = document.createElement('textarea');
-    xterm.appendChild(textarea);
-    document.body.appendChild(xterm);
-
-    const event = new KeyboardEvent('keydown', {
-      key: 'b',
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    const wasNotPrevented = textarea.dispatchEvent(event);
-
-    expect(wasNotPrevented).toBe(true);
-    expect(actions.toggleLeftSidebar).not.toHaveBeenCalled();
+    const letter = key({ key: 'Z', code: 'KeyY', ctrlKey: true, shiftKey: true });
+    expect(shortcutFromEvent(letter, false)).toBe('Mod+Shift+Z');
+    expect(matchesKeyboardShortcut(letter, parseKeyboardShortcut('Mod+Shift+Y')!, false)).toBe(false);
+    // Shifted punctuation from a non-US letter key keeps its actual code,
+    // rather than pretending that ':' came from the US Semicolon key.
+    const punctuation = key({ key: ':', code: 'KeyM', ctrlKey: true, shiftKey: true });
+    expect(shortcutFromEvent(punctuation, false)).toBe('Mod+Shift+M');
+    expect(matchesKeyboardShortcut(punctuation, parseKeyboardShortcut('Mod+Shift+M')!, false)).toBe(true);
+    expect(matchesKeyboardShortcut(punctuation, parseKeyboardShortcut('Mod+Shift+;')!, false)).toBe(false);
   });
 
-  it('still handles layout Ctrl+B outside the terminal', () => {
-    const actions = {
-      toggleLeftSidebar: vi.fn(),
-      toggleRightSidebar: vi.fn(),
-      toggleBottomPanel: vi.fn(),
-      toggleZenMode: vi.fn(),
-    };
-    const shortcuts = createLayoutShortcuts(actions);
-    render(React.createElement(ShortcutHarness, { shortcuts }));
-
-    const button = document.createElement('button');
-    document.body.appendChild(button);
-
-    const event = new KeyboardEvent('keydown', {
-      key: 'b',
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    const wasNotPrevented = button.dispatchEvent(event);
-
-    expect(wasNotPrevented).toBe(false);
-    expect(actions.toggleLeftSidebar).toHaveBeenCalledOnce();
-  });
-
-  it('handles terminal Ctrl+W to close the active tab', () => {
-    const actions = createMockActions();
-    const shortcuts = createSplitViewShortcuts(actions);
-    render(React.createElement(ShortcutHarness, { shortcuts }));
-
-    const xterm = document.createElement('div');
-    xterm.className = 'xterm';
-    const textarea = document.createElement('textarea');
-    xterm.appendChild(textarea);
-    document.body.appendChild(xterm);
-
-    const event = new KeyboardEvent('keydown', {
-      key: 'w',
-      ctrlKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    const wasNotPrevented = textarea.dispatchEvent(event);
-
-    expect(wasNotPrevented).toBe(false);
-    expect(actions.closeTab).toHaveBeenCalledOnce();
-  });
-});
-
-describe('keyboard shortcut settings', () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
-
-  it('parses shortcut strings with modifiers', () => {
-    expect(parseKeyboardShortcut('Ctrl+Shift+W')).toEqual({
-      key: 'w',
-      ctrlKey: true,
-      shiftKey: true,
-      altKey: false,
-      metaKey: false,
-    });
-  });
-
-  it('reads the sparse shortcutBindings map as overrides only', () => {
-    localStorage.setItem('sshClientSettings', JSON.stringify({
-      shortcutBindings: { newSession: 'Alt+N' },
-    }));
-
-    expect(loadShortcutOverrides()).toEqual({ newSession: 'Alt+N' });
-    // Everything else resolves to the registry default.
-    expect(loadShortcutBindings().closeSession).toBe(DEFAULT_SHORTCUT_BINDINGS.closeSession);
-    expect(loadShortcutBindings().newSession).toBe('Alt+N');
-  });
-
-  it('falls back to the legacy flat keys when shortcutBindings is absent', () => {
-    localStorage.setItem('sshClientSettings', JSON.stringify({
-      closeSession: 'Alt+W',
-      nextTab: 'Ctrl+PageDown',
-      previousTab: 'Ctrl+PageUp',
-    }));
-
-    expect(loadShortcutOverrides()).toEqual({
-      closeSession: 'Alt+W',
-      nextTab: 'Ctrl+PageDown',
-      previousTab: 'Ctrl+PageUp',
-    });
-  });
-
-  it('drops unparseable overrides and falls back to the default', () => {
-    localStorage.setItem('sshClientSettings', JSON.stringify({
-      shortcutBindings: { newSession: 'Ctrl+', closeSession: 42 },
-    }));
-
-    expect(loadShortcutOverrides()).toEqual({});
-    expect(loadShortcutBindings().newSession).toBe(DEFAULT_SHORTCUT_BINDINGS.newSession);
-  });
-
-  it('migrates the former Ctrl+Shift+W close shortcut to the new default', () => {
-    localStorage.setItem('sshClientSettings', JSON.stringify({
-      closeSession: 'Ctrl+Shift+W',
-    }));
-
-    expect(loadShortcutOverrides().closeSession).toBeUndefined();
-    expect(loadShortcutBindings().closeSession).toBe(DEFAULT_SHORTCUT_BINDINGS.closeSession);
-  });
-});
-
-describe('isShortcutRecording', () => {
-  afterEach(() => {
-    // Detach whatever the test focused so later suites start clean.
-    (document.activeElement as HTMLElement | null)?.blur?.();
-  });
-
-  it('is true only while focus sits inside a shortcut-recorder input', () => {
-    expect(isShortcutRecording()).toBe(false);
-
-    const host = document.createElement('div');
-    host.innerHTML = '<input data-shortcut-recorder="" />';
-    const recorder = host.firstElementChild as HTMLElement;
-    document.body.appendChild(host);
-    recorder.focus();
-    expect(isShortcutRecording()).toBe(true);
-
-    recorder.blur();
-    expect(isShortcutRecording()).toBe(false);
-    host.remove();
-  });
-
-  it('is false for ordinary inputs and the document body', () => {
-    const host = document.createElement('div');
-    host.innerHTML = '<input />';
-    const plain = host.firstElementChild as HTMLElement;
-    document.body.appendChild(host);
-    plain.focus();
-    expect(isShortcutRecording()).toBe(false);
-    host.remove();
-  });
-});
-
-describe('formatKeyboardShortcut', () => {
-  it('uses platform-appropriate modifier labels', () => {
-    expect(formatKeyboardShortcut(DEFAULT_SHORTCUT_BINDINGS.toggleLeftSidebar, false)).toBe('Ctrl+B');
-    // macOS chains modifiers without separators (⌘⇧→).
-    expect(formatKeyboardShortcut('Ctrl+Shift+ArrowRight', true)).toBe('⌘⇧→');
-    expect(formatKeyboardShortcut('Alt+W', true)).toBe('⌥W');
-  });
-
-  it('shows ⌃ for macOS menu-degraded chords (Zen/sidebar and explicit-Cmd spellings)', () => {
-    const platformSpy = vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
-    try {
-      // The degraded branch (new in this PR): ⌘Z/⌘M belong to the native menu,
-      // the binding fires as the physical-Control variant — labels show ⌃.
-      expect(formatKeyboardShortcut('Ctrl+Z', true)).toBe('⌃Z');
-      expect(formatKeyboardShortcut('Ctrl+Shift+Z', true)).toBe('⌃⇧Z');
-      expect(formatKeyboardShortcut('Ctrl+M', true)).toBe('⌃M');
-      // An explicit-Cmd spelling of the same chords degrades identically.
-      expect(formatKeyboardShortcut('Cmd+Z', true)).toBe('⌃Z');
-      expect(formatKeyboardShortcut('Cmd+Shift+Z', true)).toBe('⌃⇧Z');
-      expect(formatKeyboardShortcut('Super+Z', true)).toBe('⌃Z');
-      // Non-degraded chords keep their ⌘ labels, explicit-Cmd included.
-      expect(formatKeyboardShortcut('Ctrl+B', true)).toBe('⌘B');
-      expect(formatKeyboardShortcut('Cmd+W', true)).toBe('⌘W');
-    } finally {
-      platformSpy.mockRestore();
-    }
-  });
-});
-
-describe('toAccelerator', () => {
-  it('converts ctrl to CommandOrControl', () => {
-    expect(toAccelerator('Ctrl+N')).toBe('CommandOrControl+N');
-    expect(toAccelerator('ctrl+n')).toBe('CommandOrControl+N');
-  });
-
-  it('converts every default shortcut to a plugin accelerator', () => {
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.newSession)).toBe('CommandOrControl+N');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.closeSession)).toBe('CommandOrControl+W');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.nextTab)).toBe('CommandOrControl+Tab');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.previousTab)).toBe('CommandOrControl+Shift+Tab');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleLeftSidebar)).toBe('CommandOrControl+B');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleBottomPanel)).toBe('CommandOrControl+J');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleRightSidebar)).toBe('CommandOrControl+M');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.toggleZenMode)).toBe('CommandOrControl+Z');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.splitRight)).toBe('CommandOrControl+Backslash');
-    expect(toAccelerator(DEFAULT_SHORTCUT_BINDINGS.splitDown)).toBe('CommandOrControl+Shift+Backslash');
-  });
-
-  it('maps symbol keys to their accelerator names', () => {
-    expect(toAccelerator('Ctrl+\\')).toBe('CommandOrControl+Backslash');
-    expect(toAccelerator('Ctrl+Space')).toBe('CommandOrControl+Space');
-    expect(toAccelerator('Alt+`')).toBe('Option+Backquote');
-    expect(toAccelerator('Ctrl+-')).toBe('CommandOrControl+Minus');
-    expect(toAccelerator('Ctrl+=')).toBe('CommandOrControl+Equal');
-    expect(toAccelerator('Ctrl+,')).toBe('CommandOrControl+Comma');
-    expect(toAccelerator('Ctrl+.')).toBe('CommandOrControl+Period');
-    expect(toAccelerator('Ctrl+/')).toBe('CommandOrControl+Slash');
-    expect(toAccelerator('Ctrl+;')).toBe('CommandOrControl+Semicolon');
-    expect(toAccelerator('Ctrl+\'')).toBe('CommandOrControl+Quote');
-    expect(toAccelerator('Ctrl+[')).toBe('CommandOrControl+BracketLeft');
-    expect(toAccelerator('Ctrl+]')).toBe('CommandOrControl+BracketRight');
-  });
-
-  it('maps digits and named keys verbatim (uppercased)', () => {
-    expect(toAccelerator('Ctrl+1')).toBe('CommandOrControl+1');
-    expect(toAccelerator('Ctrl+9')).toBe('CommandOrControl+9');
-    expect(toAccelerator('Ctrl+Enter')).toBe('CommandOrControl+Enter');
-    expect(toAccelerator('Ctrl+Escape')).toBe('CommandOrControl+Escape');
-    expect(toAccelerator('Ctrl+PageUp')).toBe('CommandOrControl+PageUp');
-    expect(toAccelerator('Ctrl+ArrowDown')).toBe('CommandOrControl+ArrowDown');
-    expect(toAccelerator('Ctrl+F13')).toBe('CommandOrControl+F13');
-    expect(toAccelerator('Ctrl+Backspace')).toBe('CommandOrControl+Backspace');
-  });
-
-  it('converts global (Meta/Cmd) to Command', () => {
-    expect(toAccelerator('Cmd+X')).toBe('Command+X');
-    expect(toAccelerator('Meta+Shift+X')).toBe('Shift+Command+X');
-  });
-
-  it('keeps modifier order fixed regardless of input order', () => {
-    expect(toAccelerator('Shift+Ctrl+Alt+X')).toBe('CommandOrControl+Shift+Option+X');
-  });
-
-  it('returns null for shortcuts without any modifier', () => {
-    expect(toAccelerator('N')).toBeNull();
-    expect(toAccelerator('F5')).toBeNull();
-    expect(toAccelerator('')).toBeNull();
-    expect(toAccelerator('Nonsense+Input')).toBeNull();
-  });
-});
-
-describe('formatKeyboardShortcut (macOS degrade display)', () => {
-  const originalPlatform = Object.getOwnPropertyDescriptor(Navigator.prototype, 'platform');
-
-  afterEach(() => {
-    if (originalPlatform) {
-      Object.defineProperty(Navigator.prototype, 'platform', originalPlatform);
+  it('records function keys but never bare typing, Shift typing or IME Process', () => {
+    expect(shortcutFromEvent(key({ key: 'F5' }))).toBe('F5');
+    expect(shortcutFromEvent(key({ key: 'F3', shiftKey: true }))).toBe('Shift+F3');
+    for (const value of [{ key: 'a' }, { key: 'A', shiftKey: true }, { key: 'Process', ctrlKey: true }, { key: 'Control', ctrlKey: true }]) {
+      expect(shortcutFromEvent(key(value))).toBeNull();
     }
   });
 
-  function pinPlatform(platform: string) {
-    Object.defineProperty(Navigator.prototype, 'platform', {
-      configurable: true,
-      get: () => platform,
-    });
-  }
-
-  it('shows ⌃ for chords whose Cmd form the OS rejects on macOS (⌃Tab)', () => {
-    // ⌘Tab is the macOS app switcher — the binding fires as the physical
-    // ⌃Tab chord (in-window), so the label must advertise ⌃, not ⌘ (#161).
-    pinPlatform('MacIntel');
-    expect(formatKeyboardShortcut('Ctrl+Tab', true)).toBe('⌃Tab');
-    expect(formatKeyboardShortcut('Ctrl+Shift+Tab', true)).toBe('⌃⇧Tab');
-    // An explicit-Cmd spelling of the same physical chord degrades too.
-    expect(formatKeyboardShortcut('Cmd+Tab', true)).toBe('⌃Tab');
-  });
-
-  it('keeps ⌘ for bindings whose Cmd form works on macOS', () => {
-    pinPlatform('MacIntel');
-    expect(formatKeyboardShortcut('Ctrl+N', true)).toBe('⌘N');
-    expect(formatKeyboardShortcut('Ctrl+W', true)).toBe('⌘W');
-    // Non-mac stays plain Ctrl regardless.
-    pinPlatform('Linux x86_64');
-    expect(formatKeyboardShortcut('Ctrl+N', false)).toBe('Ctrl+N');
-    expect(formatKeyboardShortcut('Ctrl+Tab', false)).toBe('Ctrl+Tab');
-  });
-
-  it('still shows ⌃Z/⌃M for the menu-degraded chords on macOS', () => {
-    pinPlatform('MacIntel');
-    expect(formatKeyboardShortcut('Ctrl+Z', true)).toBe('⌃Z');
-    expect(formatKeyboardShortcut('Ctrl+M', true)).toBe('⌃M');
+  it('identifies controls inside the editor and terminal before generic input', () => {
+    const editor = document.createElement('div');
+    editor.dataset.shortcutScope = 'editor';
+    editor.innerHTML = '<input />';
+    expect(getShortcutContext(editor.firstElementChild)).toBe('editor');
+    editor.className = 'xterm';
+    expect(getShortcutContext(editor.firstElementChild)).toBe('terminal');
   });
 });

@@ -27,8 +27,8 @@ import {
 } from './ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
 import { ConnectionStorageManager, type ConnectionData } from '@/lib/connection-storage';
-import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
-import { useShortcutBindings } from '@/lib/shortcut-registry';
+import { formatKeyboardShortcut, focusedFindCommand, terminalShortcutBinding } from '@/lib/keyboard-shortcuts';
+import { useShortcutBindings, type ShortcutCommandId } from '@/lib/shortcut-registry';
 import type { UpdateAnnouncement } from './update-checker';
 import rShellLogo from '@/assets/r-shell-logo.svg';
 import rShellIcon from '@/assets/r-shell-icon.svg';
@@ -80,6 +80,9 @@ interface MenuBarProps {
   onOpenUpdateDialog?: () => void;
   onNewTab?: () => void;
   onCloneTab?: () => void;
+  onReconnect?: () => void;
+  hasActiveEditor?: boolean;
+  findCommand?: ShortcutCommandId;
   onNextTab?: () => void;
   onPreviousTab?: () => void;
   onRecentConnectionSelect?: (connection: ConnectionData) => void;
@@ -120,6 +123,9 @@ export function MenuBar({
   onOpenUpdateDialog,
   onNewTab,
   onCloneTab,
+  onReconnect,
+  hasActiveEditor = false,
+  findCommand = 'findInTerminal',
   onNextTab,
   onPreviousTab,
   onRecentConnectionSelect,
@@ -142,6 +148,8 @@ export function MenuBar({
   // Menu shortcut hints follow the customizable bindings (shortcut registry)
   // so they can never drift from what the engine registers.
   const shortcutBindings = useShortcutBindings();
+  const bindingHint = (id: ShortcutCommandId) => formatShortcut(hasActiveTerminal ? terminalShortcutBinding(id, shortcutBindings, isMac) : shortcutBindings[id]);
+  const [menuFindCommand, setMenuFindCommand] = useState(findCommand);
   const terminalActionsAvailable = hasActiveTerminal ?? hasActiveConnection;
 
   // Load recent connections
@@ -186,6 +194,7 @@ export function MenuBar({
   return (
     <div
       className="border-b border-border bg-sidebar min-h-11 py-1.5 flex items-center gap-1"
+      data-shortcut-menu
       style={{ paddingLeft: isMac ? '80px' : '8px' }}
     >
       <div className="mr-3 flex shrink-0 items-center gap-2 px-2" data-tauri-drag-region>
@@ -204,12 +213,11 @@ export function MenuBar({
           <DropdownMenuItem onClick={onNewConnection}>
             <Plus className="mr-2 h-4 w-4" />
             {t('menuBar.newConnection')}
-            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.newSession)}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{bindingHint('newSession')}</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={onOpenConnection}>
+          <DropdownMenuItem onClick={onOpenConnection} disabled={!onOpenConnection}>
             <FolderOpen className="mr-2 h-4 w-4" />
             {t('menuBar.openConnection')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+O')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuSub>
@@ -238,34 +246,28 @@ export function MenuBar({
             </DropdownMenuSubContent>
           </DropdownMenuSub>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onSaveConnection} disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onSaveConnection} disabled={!hasActiveEditor}>
             <Save className="mr-2 h-4 w-4" />
-            {t('menuBar.saveConnection')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+S')}</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveConnection}>
-            <Save className="mr-2 h-4 w-4" />
-            {t('menuBar.saveConnectionAs')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+Shift+S')}</DropdownMenuShortcut>
+            {t('menuBar.saveFile')}
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.saveFile)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onCloseConnection} disabled={!hasActiveConnection}>
             <X className="mr-2 h-4 w-4" />
             {t('menuBar.closeConnection')}
-            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.closeSession)}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{bindingHint('closeSession')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           {/* Route Exit through the backend quit guard so dirty file-editor
               windows are prompted before the app quits (quit_guard.rs). */}
           <DropdownMenuItem onClick={() => { void invoke('request_app_quit').catch(() => {}); }}>
             <X className="mr-2 h-4 w-4" />
             {t('menuBar.exit')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+Q')}</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
 
       {/* Edit Menu */}
-      <DropdownMenu>
+      <DropdownMenu onOpenChange={open => { if (open) setMenuFindCommand(focusedFindCommand(findCommand)); }}>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm">{t('menuBar.edit')}</Button>
         </DropdownMenuTrigger>
@@ -273,28 +275,28 @@ export function MenuBar({
           <DropdownMenuItem onClick={onCopy} disabled={!terminalActionsAvailable || !onCopy}>
             <Copy className="mr-2 h-4 w-4" />
             {t('menuBar.copy')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+C')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Mod+C')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onPaste} disabled={!terminalActionsAvailable || !canPaste || !onPaste}>
             <Clipboard className="mr-2 h-4 w-4" />
             {t('menuBar.paste')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+V')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Mod+V')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem disabled>
             <Scissors className="mr-2 h-4 w-4" />
             {t('menuBar.cut')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+X')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Mod+X')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onSelectAll} disabled={!terminalActionsAvailable || !onSelectAll}>
             {t('menuBar.selectAll')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+A')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut('Mod+A')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onFind} disabled={!terminalActionsAvailable || !onFind}>
+          <DropdownMenuItem onClick={onFind} disabled={!(menuFindCommand === 'findInTerminal' ? terminalActionsAvailable : hasActiveConnection) || !onFind}>
             <Search className="mr-2 h-4 w-4" />
             {t('menuBar.find')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+F')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings[menuFindCommand])}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onFindNext} disabled={!terminalActionsAvailable || !onFindNext}>
             <Search className="mr-2 h-4 w-4" />
@@ -310,7 +312,7 @@ export function MenuBar({
           <DropdownMenuItem onClick={onClearScreen} disabled={!terminalActionsAvailable || !onClearScreen}>
             <RefreshCw className="mr-2 h-4 w-4" />
             {t('menuBar.clearScreen')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+L')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.clearTerminal)}</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -415,12 +417,12 @@ export function MenuBar({
           <DropdownMenuItem onClick={onNewTab}>
             <Plus className="mr-2 h-4 w-4" />
             {t('menuBar.newTab')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+T')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{bindingHint('newSession')}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onCloneTab} disabled={!hasActiveConnection}>
             <Copy className="mr-2 h-4 w-4" />
             {t('menuBar.duplicateTab')}
-            <DropdownMenuShortcut>{formatShortcut('Ctrl+D')}</DropdownMenuShortcut>
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.duplicateSession)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onNextTab} disabled={!hasActiveConnection}>
@@ -434,14 +436,10 @@ export function MenuBar({
             <DropdownMenuShortcut>{formatShortcut(shortcutBindings.previousTab)}</DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem disabled={!hasActiveConnection}>
+          <DropdownMenuItem onClick={onReconnect} disabled={!hasActiveConnection || hasActiveEditor || !onReconnect}>
             <RefreshCw className="mr-2 h-4 w-4" />
             {t('menuBar.reconnect')}
-            <DropdownMenuShortcut>F5</DropdownMenuShortcut>
-          </DropdownMenuItem>
-          <DropdownMenuItem disabled={!hasActiveConnection}>
-            <X className="mr-2 h-4 w-4" />
-            {t('menuBar.disconnect')}
+            <DropdownMenuShortcut>{formatShortcut(shortcutBindings.reconnect)}</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -520,7 +518,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t(leftSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleConnectionManager')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(shortcutBindings.toggleLeftSidebar)}
+                {bindingHint('toggleLeftSidebar')}
               </kbd>
             </TooltipContent>
           </Tooltip>
@@ -536,7 +534,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t(bottomPanelVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleFileBrowser')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(shortcutBindings.toggleBottomPanel)}
+                {bindingHint('toggleBottomPanel')}
               </kbd>
             </TooltipContent>
           </Tooltip>
@@ -552,7 +550,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t(rightSidebarVisible ? 'common.hide' : 'common.show')} {t('menuBar.toggleMonitorPanel')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(shortcutBindings.toggleRightSidebar)}
+                {bindingHint('toggleRightSidebar')}
               </kbd>
             </TooltipContent>
           </Tooltip>
@@ -573,7 +571,7 @@ export function MenuBar({
             <TooltipContent className="flex items-center gap-2">
               <span>{t('menuBar.toggleZenMode')}</span>
               <kbd className="rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground">
-                {formatShortcut(shortcutBindings.toggleZenMode)}
+                {bindingHint('toggleZenMode')}
               </kbd>
             </TooltipContent>
           </Tooltip>

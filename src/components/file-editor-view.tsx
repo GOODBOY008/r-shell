@@ -1,3 +1,5 @@
+import { useShortcutBindings } from '@/lib/shortcut-registry';
+import { formatKeyboardShortcut } from '@/lib/keyboard-shortcut-model';
 import {
   useState,
   useEffect,
@@ -8,8 +10,7 @@ import {
 } from "react";
 import { parentPath } from "@/lib/file-entry-types";
 import { useEditorTab } from "@/lib/editor-tabs-context";
-import { useShortcutBindings } from "@/lib/shortcut-registry";
-import { isEditableTarget, isShortcutRecording, matchesKeyboardShortcut, parseKeyboardShortcut } from "@/lib/keyboard-shortcuts";
+import { useCommandShortcuts } from "@/lib/keyboard-shortcuts";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -100,7 +101,7 @@ export function FileEditorView({
   backTarget = 'terminal',
 }: FileEditorViewProps) {
   const { t } = useTranslation();
-  const { closeSession } = useShortcutBindings();
+  const shortcutBindings = useShortcutBindings();
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [loading, setLoading] = useState(true);
@@ -391,44 +392,10 @@ export function FileEditorView({
     }
   };
 
-  // App shortcuts deliberately leave editable focus alone. Capture this
-  // editor's configured close chord before CodeMirror consumes it, then use
-  // the same tab-close guard as the tab bar. Other focus stays with App.
-  useEffect(() => {
-    if (!isActive || guardWindowClose || !onClose) return;
-    const shortcut = parseKeyboardShortcut(closeSession);
-    if (!shortcut) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || isShortcutRecording()) return;
-      if (!(event.target instanceof Node) || !rootRef.current?.contains(event.target) || !isEditableTarget(event.target)) return;
-      if (!matchesKeyboardShortcut(event, shortcut)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (!event.repeat) void onClose();
-    };
-    window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
-  }, [closeSession, guardWindowClose, isActive, onClose]);
-
-  // Ctrl+S / Cmd+S to save (only for text files)
-  useEffect(() => {
-    if (fileKind !== "text" || !isActive) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.isComposing || e.keyCode === 229) return;
-      if (
-        !guardWindowClose &&
-        !tabId &&
-        !rootRef.current?.contains(document.activeElement)
-      )
-        return;
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        void handleSave();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleSave, fileKind, guardWindowClose, isActive, tabId]);
+  useCommandShortcuts({
+    ...(fileKind === 'text' ? { saveFile: () => { void handleSave(); } } : {}),
+    ...(!guardWindowClose && onClose ? { closeSession: () => { void onClose(); } } : {}),
+  }, { enabled: isActive, element: () => rootRef.current });
 
   // Report this editor to the main window (for tracking/restore).
   const emitWindowEvent = useCallback(
@@ -665,7 +632,7 @@ export function FileEditorView({
             className="file-editor-save"
             onClick={() => void handleSave()}
             disabled={!isConnected || loading || saving || !dirty}
-            title={t("fileEditorView.saveTooltip")}
+            title={[t("fileEditorView.saveTooltip"), formatKeyboardShortcut(shortcutBindings.saveFile)].filter(Boolean).join(" · ")}
           >
             {saving ? (
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
@@ -788,6 +755,7 @@ export function FileEditorView({
   return (
     <div
       ref={rootRef}
+      data-shortcut-scope="editor"
       className="file-editor h-full min-h-0 flex flex-col bg-background"
     >
       {renderToolbar(true)}
@@ -823,6 +791,7 @@ export function FileEditorView({
             filename={filePath}
             readOnly={loading}
             autoFocus={isActive}
+            isActive={isActive}
           />
         </div>
       ) : (

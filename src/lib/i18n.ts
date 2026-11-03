@@ -9,7 +9,7 @@ import pl from '@/locales/pl.json';
 const NATIVE_MENU_KEYS = [
   'menuBar.file', 'menuBar.edit', 'menuBar.tools', 'menuBar.connection', 'menuBar.window',
   'menuBar.about', 'menuBar.services', 'menuBar.hide', 'menuBar.hideOthers', 'menuBar.showAll', 'menuBar.quit',
-  'menuBar.newConnection', 'menuBar.saveConnection', 'menuBar.closeTab',
+  'menuBar.newConnection', 'menuBar.saveFile', 'menuBar.closeTab',
   'menuBar.find', 'menuBar.clearScreen',
   'menuBar.options', 'menuBar.checkForUpdates',
   'menuBar.newTab', 'menuBar.duplicateTab', 'menuBar.nextTab', 'menuBar.previousTab',

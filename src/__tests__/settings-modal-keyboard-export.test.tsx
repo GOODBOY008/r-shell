@@ -70,7 +70,7 @@ describe('SettingsModal keyboard section (keybinding editor)', () => {
 
     const rows = document.querySelectorAll('[data-command]');
     expect(rows).toHaveLength(SHORTCUT_DEFINITIONS.length);
-    expect(SHORTCUT_DEFINITIONS).toHaveLength(13);
+    expect(SHORTCUT_DEFINITIONS.length).toBeGreaterThan(30);
 
     // Defaults surface as the recorder's value; bindings the user has not
     // touched show no Custom badge and a disabled per-row reset.
@@ -85,8 +85,7 @@ describe('SettingsModal keyboard section (keybinding editor)', () => {
     expect(screen.queryByText('Custom')).toBeNull();
     expect(screen.getByRole('button', { name: 'Reset New Session to default' })).toHaveProperty('disabled', true);
 
-    // The macOS menu note stays hidden off macOS (those platforms' defaults
-    // are real OS-registered chords, no app menu involved).
+    // The ownership rules replace the obsolete native-menu exception.
     expect(screen.queryByText(/handled by the app menu on macOS/)).toBeNull();
   });
 
@@ -160,12 +159,105 @@ describe('SettingsModal keyboard section (keybinding editor)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
 
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}') as Record<string, unknown>;
-    expect(saved.shortcutBindings).toEqual({ newSession: 'Alt+M', closeSession: 'Ctrl+Alt+K' });
+    expect(saved.shortcutBindings).toEqual({ newSession: 'Alt+M', closeSession: 'Mod+Alt+K' });
+    expect(saved.shortcutBindingsVersion).toBe(2);
     expect('newSession' in saved).toBe(false);
     expect(saved.theme).toBe('dark');
   });
 
-  it('shows macOS chord labels and menu notes on a Mac', () => {
+  it('combines action and chord search with the selected context', () => {
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
+
+    const search = screen.getByRole('textbox', { name: 'Search actions or shortcuts' });
+    const scope = screen.getByRole('combobox', { name: 'Context' });
+    fireEvent.change(scope, { target: { value: 'editor' } });
+    fireEvent.change(search, { target: { value: 'find' } });
+    expect(document.querySelectorAll('[data-command]')).toHaveLength(1);
+    expect(getRecorderInput('findInEditor').value).toBe('Ctrl+F');
+    expect(document.querySelector('[data-command="findInTerminal"]')).toBeNull();
+
+    fireEvent.change(scope, { target: { value: 'files' } });
+    expect(screen.getByText('No matching shortcuts')).toBeTruthy();
+    fireEvent.change(search, { target: { value: 'Ctrl+F' } });
+    expect(document.querySelectorAll('[data-command]')).toHaveLength(1);
+    expect(getRecorderInput('filterFiles').value).toBe('Ctrl+F');
+
+    fireEvent.change(search, { target: { value: '' } });
+    expect(getRecorderInput('refreshFiles').value).toBe('F5');
+    expect(document.querySelector('[data-command="saveFile"]')).toBeNull();
+  });
+
+  it('preserves disabled bindings across save and reload, and resets only shortcuts', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      theme: 'dark',
+      shortcutBindingsVersion: 2,
+      shortcutBindings: { closeSession: 'Alt+W' },
+    }));
+    const onOpenChange = vi.fn();
+    const first = render(<SettingsModal open onOpenChange={onOpenChange} />);
+    openSection('Keyboard');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Disable shortcut: New Session' }));
+    expect(getRecorderInput('newSession').value).toBe('Disabled');
+    // Edits remain a draft until Save Settings is pressed.
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY)!).shortcutBindings).toEqual({ closeSession: 'Alt+W' });
+    fireEvent.click(screen.getByRole('button', { name: 'Modified only' }));
+    expect(screen.getByRole('button', { name: 'Modified only' }).getAttribute('aria-pressed')).toBe('true');
+    expect(Array.from(document.querySelectorAll('[data-command]'), row => row.getAttribute('data-command')))
+      .toEqual(['newSession', 'closeSession']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY)!).shortcutBindings)
+      .toEqual({ newSession: '', closeSession: 'Alt+W' });
+    first.unmount();
+
+    const second = render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
+    expect(getRecorderInput('newSession').value).toBe('Disabled');
+    expect(getRecorderInput('closeSession').value).toBe('Alt+W');
+    expect(screen.getByRole('button', { name: 'Disable shortcut: New Session' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Reset New Session to default' })).toHaveProperty('disabled', false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all', exact: true }));
+    expect(getRecorderInput('newSession').value).toBe('Ctrl+N');
+    expect(getRecorderInput('closeSession').value).toBe('Ctrl+W');
+    expect(screen.getByRole('button', { name: 'Reset all', exact: true })).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY)!)).toMatchObject({
+      theme: 'dark', shortcutBindingsVersion: 2, shortcutBindings: {},
+    });
+    second.unmount();
+
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
+    expect(getRecorderInput('newSession').value).toBe('Ctrl+N');
+    expect(getRecorderInput('closeSession').value).toBe('Ctrl+W');
+    expect(screen.queryByText('Custom')).toBeNull();
+  });
+
+  it.each(['q', 'c'])('blocks a recorded macOS reserved Command+%s binding until reset', key => {
+    pinPlatform('MacIntel');
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+    openSection('Keyboard');
+
+    const recorder = getRecorderInput('newSession');
+    fireEvent.focus(recorder);
+    fireEvent.keyDown(recorder, { key, metaKey: true });
+    const row = document.querySelector('[data-command="newSession"]') as HTMLElement;
+    expect(within(row).getByText(/is reserved for the system or text editing/)).toBeTruthy();
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save Settings' })).toHaveProperty('disabled', true);
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset New Session to default' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save Settings' })).toHaveProperty('disabled', false);
+    expect(getRecorderInput('newSession').value).toBe('⌘N');
+  });
+
+  it('shows distinct macOS Command and Control labels and ownership rules', () => {
     pinPlatform('MacIntel');
     render(<SettingsModal open onOpenChange={vi.fn()} />);
     openSection('Keyboard');
@@ -177,9 +269,10 @@ describe('SettingsModal keyboard section (keybinding editor)', () => {
     expect(getRecorderInput('nextTab').value).toBe('⌃Tab');
     expect(getRecorderInput('previousTab').value).toBe('⌃⇧Tab');
 
-    // On macOS the ⌘-default note IS shown for the menu-routed commands
-    // (new session, close session, settings).
-    expect(screen.getAllByText(/handled by the app menu on macOS/)).toHaveLength(3);
+    // No native menu exceptions or silent Command-to-Control fallback.
+    expect(screen.queryByText(/handled by the app menu on macOS/)).toBeNull();
+    expect(screen.getByText('Shell first')).toBeTruthy();
+    expect(screen.getByText('Focused window')).toBeTruthy();
   });
 });
 

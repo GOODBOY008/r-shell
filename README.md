@@ -100,7 +100,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Terminal search** — Regex and case-sensitive search with F3 navigation
 - **Context menu** — Copy, paste, select all, clear, save to file, reconnect
 - **IME / CJK input** — Full support for Chinese, Japanese, Korean input methods
-- **Session detach** — Xshell-style `Ctrl+A, D` parks a session in the background with keep-alive; reattach anytime
+- **Session detach** — `Cmd/Ctrl+Shift+H` parks a session in the background with keep-alive; reattach anytime
 - **Working-directory follow** — Keep the remote file browser aligned with the active Bash terminal
 
 ### 🪟 Split Panes & Tab Groups
@@ -109,7 +109,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Recursive grid layout** — Unlimited nested splits with resizable panels
 - **Tab management** — Add, close, close all, duplicate, reorder (drag-and-drop), move between groups
 - **Drop zone overlay** — Drag tabs onto 5 drop zones (up/down/left/right/center)
-- **Keyboard shortcuts** — `Ctrl+\` split, `Ctrl+1-9` focus group, `Ctrl+Tab` cycle tabs
+- **Keyboard shortcuts** — Remappable split, group-focus, and tab commands with [terminal alternatives that preserve shell input](docs/keyboard-shortcuts.md)
 
 ### 📁 Dual-Panel File Manager (FileZilla-style)
 
@@ -179,25 +179,37 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 
 ### ⌨️ Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+B` | Toggle Connection Manager |
-| `Ctrl+J` | Toggle File Browser |
-| `Ctrl+M` | Toggle Monitor Panel |
-| `Ctrl+Z` | Toggle Zen Mode |
-| `Ctrl+\` | Split terminal right |
-| `Ctrl+Shift+\` | Split terminal down |
-| `Ctrl+1` – `Ctrl+9` | Focus terminal group |
-| `Ctrl+W` | Close active tab |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
-| `Ctrl+A, D` | Detach session to background (Xshell-style) |
-| `Cmd/Ctrl+V` | Paste into terminal |
-| `Cmd/Ctrl+F` | Search in terminal |
-| `F3` / `Shift+F3` | Find next / previous |
+`Mod` means Command on macOS and Control on Windows/Linux. `Ctrl` always means
+physical Control, including on macOS. Application shortcuts run in the focused
+R-Shell window and follow the focused area; dialogs and menus keep their own keys.
 
-> Layout shortcuts are registered at the OS level but ignored while terminal input is focused, so terminal-native bindings (e.g. tmux `Ctrl+B`) still reach the shell.
+| Action | Default | Windows/Linux terminal alternative |
+|--------|---------|------------------------------------|
+| Toggle Connection Manager | `Mod+B` | `Ctrl+Shift+B` |
+| Toggle File Browser | `Mod+J` | `Ctrl+Shift+J` |
+| Toggle Monitor Panel | `Mod+Shift+M` | Same |
+| Toggle Zen Mode | `Mod+Shift+Enter` | Same |
+| Split terminal right | `Mod+Backslash` | `Ctrl+Shift+E` |
+| Split terminal down | `Mod+Shift+Backslash` | Same |
+| Focus terminal group | `Mod+1` – `Mod+9` | `Ctrl+Shift+1` – `Ctrl+Shift+9` |
+| New session / close active tab | `Mod+N` / `Mod+W` | `Ctrl+Shift+N` / `Ctrl+Shift+W` |
+| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Same |
+| Detach session to background | `Mod+Shift+H` | Same |
+| Open Settings | `Mod+Comma` | `Ctrl+Shift+Comma` |
+| Search in terminal | macOS `Cmd+F`; others `Ctrl+Shift+F` | Same |
+| Clear terminal | macOS `Cmd+K`; others `Ctrl+Shift+K` | Same |
+| Paste into terminal | `Mod+V` | Same; local terminal behavior |
+| Find next / previous | `F3` / `Shift+F3` | Only while terminal search is open |
 
-Every shortcut can be remapped in **Settings → Keyboard**.
+The terminal is **shell first**: unshifted Control/Alt combinations without
+Command/Meta stay with the shell, except Tab combinations and explicit terminal
+commands. For example, tmux still receives `Ctrl+B`; use the terminal alternative
+to toggle the sidebar. macOS Command defaults work directly in the terminal.
+
+Application commands can be remapped, disabled, or reset in **Settings → Keyboard**.
+Local widget keys and system editing shortcuts retain their own behavior.
+See the [keyboard shortcut guide](docs/keyboard-shortcuts.md) for all defaults,
+contexts, conflict rules, and saved-binding migration.
 
 ### 🔧 Additional Features
 

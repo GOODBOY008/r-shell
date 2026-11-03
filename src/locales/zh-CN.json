@@ -378,9 +378,7 @@
     "keyboard": {
       "title": "键盘快捷键",
       "desc": "自定义常用操作的键盘快捷键。",
-      "newSessionNote": "该默认键的 ⌘ 形式由 macOS 应用菜单处理；自定义绑定按配置生效，除非该组合键已被其他应用功能或绑定占用。",
       "note": "键盘快捷键更改将在保存后生效。",
-      "registerFailed": "快捷键 {{shortcut}} 注册失败",
       "recorderHint": "按下组合键（Esc 取消）"
     },
     "advanced": {
@@ -467,16 +465,15 @@
         "tabs": "标签页",
         "layout": "布局",
         "split": "分屏",
-        "app": "应用"
+        "app": "应用",
+        "editor": "编辑器",
+        "terminal": "终端",
+        "files": "文件"
       },
       "resetBinding": "将{{action}}重置为默认",
-      "conflictDuplicate": "“{{chord}}”已被{{other}}占用——快捷键按先匹配先生效，其中一个会失效",
-      "conflictReserved": "“{{chord}}”保留给终端组切换（Ctrl+1–9）",
-      "conflictMenuOwned": "“{{chord}}”在 macOS 上由原生应用菜单占用，永远不会触发此命令",
       "conflictSummary_one": "保存前请先解决 {{count}} 个快捷键冲突",
       "conflictSummary_other": "保存前请先解决 {{count}} 个快捷键冲突",
       "conflictSaveBlocked": "所有冲突解决后才能保存。",
-      "fixedNote": "Ctrl+1–9（切换终端组）不可重新映射。",
       "command": {
         "newSession": "新建会话",
         "closeSession": "关闭会话",
@@ -490,7 +487,61 @@
         "toggleZenMode": "切换禅模式",
         "splitRight": "向右分屏",
         "splitDown": "向下分屏",
-        "openSettings": "打开设置"
+        "openSettings": "打开设置",
+        "duplicateSession": "复制会话",
+        "reconnect": "重新连接",
+        "saveFile": "保存文件",
+        "findInEditor": "在编辑器中查找",
+        "replaceInEditor": "在编辑器中替换",
+        "goToLine": "跳转到行",
+        "findInTerminal": "在终端中查找",
+        "clearTerminal": "清空终端",
+        "detachSession": "挂起会话",
+        "filterFiles": "筛选文件",
+        "refreshFiles": "刷新目录",
+        "transferFiles": "传输选中文件",
+        "syncFiles": "同步目录",
+        "focusGroup1": "切换到第 1 组",
+        "focusGroup2": "切换到第 2 组",
+        "focusGroup3": "切换到第 3 组",
+        "focusGroup4": "切换到第 4 组",
+        "focusGroup5": "切换到第 5 组",
+        "focusGroup6": "切换到第 6 组",
+        "focusGroup7": "切换到第 7 组",
+        "focusGroup8": "切换到第 8 组",
+        "focusGroup9": "切换到第 9 组"
+      },
+      "resetAll": "全部恢复默认",
+      "routingDescription": "快捷键随焦点所在区域生效，可按操作、按键或场景搜索。",
+      "search": "搜索操作或快捷键",
+      "scopeColumn": "适用场景",
+      "modifiedOnly": "仅显示已修改",
+      "disabled": "已停用",
+      "disableBinding": "停用快捷键：{{action}}",
+      "shellOwns": "此组合键将发送给 Shell。",
+      "terminalAlternative": "终端内：{{chord}}",
+      "noMatches": "没有匹配的快捷键",
+      "recordingHelp": "点击快捷键后按下组合键。Esc 取消录入，Tab 移至下一项。停用可移除绑定，重置可恢复默认。更改在保存后生效。",
+      "rules": {
+        "foregroundTitle": "当前窗口",
+        "foreground": "应用快捷键仅在当前 R-Shell 窗口内生效。弹窗和菜单优先处理自己的按键。",
+        "shellTitle": "Shell 优先",
+        "shell": "Control 和 Alt 组合键优先发送给 Shell。应用操作请使用下方标注的终端替代组合。",
+        "desktopTitle": "远程桌面",
+        "desktop": "捕获远程输入时，按键发送给远程会话。释放捕获后可使用应用快捷键。"
+      },
+      "scope": {
+        "all": "全部场景",
+        "workspace": "工作区",
+        "terminal": "终端",
+        "editor": "编辑器",
+        "files": "文件",
+        "input": "输入框"
+      },
+      "conflict": {
+        "duplicate": "{{chord}} 与{{other}}在同一场景下冲突。",
+        "reserved": "{{chord}} 保留给系统或文本编辑。",
+        "invalid": "请使用修饰键加按键，或功能键（F1–F24）。"
       }
     }
   },
@@ -620,7 +671,8 @@
     "toggleMonitorPanel": "切换监视器面板",
     "toggleZenMode": "切换禅定模式",
     "closeTab": "关闭标签页",
-    "window": "窗口"
+    "window": "窗口",
+    "saveFile": "保存文件"
   },
   "aboutDialog": {
     "version": "版本"
@@ -756,7 +808,7 @@
       "uploadFolder": "上传文件夹",
       "download": "下载",
       "delete": "删除",
-      "syncDirectories": "同步目录（Ctrl+Shift+S）"
+      "syncDirectories": "同步目录"
     },
     "selected": "已选择 {{count}} 项",
     "loading": "加载中…",
@@ -1512,7 +1564,7 @@
     "retry": "重试",
     "modified": "已修改",
     "reload": "从服务器重新加载",
-    "saveTooltip": "保存（⌘/Ctrl+S）",
+    "saveTooltip": "保存",
     "save": "保存",
     "imagePreviewFailed": "无法预览图片",
     "binaryFileTitle": "二进制文件",

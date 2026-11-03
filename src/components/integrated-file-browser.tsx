@@ -73,7 +73,7 @@ import {
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from './ui/context-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
 import { notify } from '@/lib/notifications';
-import { isEditableTarget } from '@/lib/keyboard-shortcuts';
+import { isEditableTarget, getShortcutContext, useCommandShortcuts } from '@/lib/keyboard-shortcuts';
 
 interface FileItem {
   name: string;
@@ -305,10 +305,15 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   // eslint-disable-next-line react-hooks/exhaustive-deps -- sequence intentionally re-runs follow after every completed prompt
   }, [connectionId, isConnected, followTerminalDirectory, terminalWorkingDirectory?.path, terminalWorkingDirectory?.sequence]);
 
+  useCommandShortcuts({
+    refreshFiles: () => { void loadFiles(); },
+    filterFiles: () => browserRef.current?.querySelector<HTMLInputElement>('[data-file-filter]')?.focus(),
+  }, { enabled: isConnected, element: () => browserRef.current });
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229 || isEditableTarget(event.target)) {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.getModifierState('AltGraph') || isEditableTarget(event.target) || getShortcutContext(event.target) !== 'files' || !(event.target instanceof Node) || !browserRef.current?.contains(event.target)) {
         return;
       }
 
@@ -339,12 +344,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             // Select all real entries, never the ".." parent row.
             setSelectedFiles(new Set(files.filter(f => f.name !== '..').map(f => f.name)));
             break;
-          case 'r':
-            event.preventDefault();
-            void loadFiles();
-            break;
         }
-      } else if (event.key === 'Enter' && selectedFiles.size === 1 && browserRef.current?.contains(event.target as Node) && !(event.target instanceof Element && event.target.closest('button, [role=menuitem]'))) {
+      } else if (event.key === 'Enter' && selectedFiles.size === 1 && !(event.target instanceof Element && event.target.closest('button, [role=menuitem]'))) {
         event.preventDefault();
         const selected = files.find(file => selectedFiles.has(file.name));
         if (selected) void handleFileDoubleClick(selected);
@@ -1493,7 +1494,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   }
 
   return (
-    <div ref={browserRef} className={`h-full flex flex-col bg-background border-t border-border ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
+    <div ref={browserRef} data-shortcut-scope="files" className={`h-full flex flex-col bg-background border-t border-border ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
       {/* File Browser Toolbar */}
       <div className="relative z-10 py-2">
         <div className="flex flex-wrap items-center gap-1 border-b border-border bg-sidebar px-2 py-1.5 text-xs">
@@ -1636,7 +1637,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             <Input
               placeholder={t('fileBrowser.searchFiles')}
               aria-label={t('fileBrowser.searchFiles')}
-              value={searchTerm}
+              data-file-filter
+                  value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="h-7 border-input bg-background text-xs shadow-none placeholder:text-muted-foreground/70 focus-visible:bg-background"
             />

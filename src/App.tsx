@@ -37,15 +37,16 @@ import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
 import {
   APP_SETTINGS_CHANGED_EVENT,
-  createConfiguredShortcut,
+  createCommandShortcuts,
+  dispatchShortcutCommand,
+  focusedFindCommand,
   createLayoutShortcuts,
   createSplitViewShortcuts,
   isShortcutRecording,
   useKeyboardShortcuts,
 } from './lib/keyboard-shortcuts';
-import type { KeyboardShortcut } from './lib/keyboard-shortcuts';
 import { loadShortcutBindings } from './lib/shortcut-registry';
-import type { ShortcutBindings } from './lib/shortcut-registry';
+import type { ShortcutBindings, ShortcutCommandId } from './lib/shortcut-registry';
 import { announce } from './lib/live-announcer';
 import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-context';
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
@@ -194,7 +195,7 @@ function AppContent() {
   );
 
   // Xshell-style detached (background) sessions. Tabs that were detached via
-  // Ctrl+A+D keep their SSH connection + PTY alive in the backend; this list
+  // the detach command keep their SSH connection + PTY alive in the backend; this list
   // lets the user re-attach or terminate them.
   const [detachedSessions, setDetachedSessions] = useState<DetachedSession[]>([]);
 
@@ -422,8 +423,8 @@ function AppContent() {
       // On macOS the CloseRequested handler in lib.rs turns this into a
       // hide: the app keeps running and the Dock reopens the same webview;
       // on Windows/Linux the process exits with the last window per
-      // platform convention. Every Ctrl+W entry point (DOM shortcut, global
-      // shortcut, macOS menu close_connection) converges here.
+      // platform convention. Every close entry point (keyboard shortcut,
+      // web menu and macOS menu close_connection) converges here.
       import('@tauri-apps/api/window')
         .then(({ getCurrentWindow }) => getCurrentWindow().close())
         .catch(() => {});
@@ -1099,24 +1100,6 @@ function AppContent() {
     setPendingReconnectTabId(null);
   }, []);
 
-  // Customizable new-session binding (Settings → Keyboard). Kept in its own
-  // memo below handleNewTab so the factory can reference it; the shortcut is
-  // ignored while a terminal owns the keystroke (Ctrl+N is readline
-  // next-history) and the macOS registration layer separately skips chords
-  // owned by the native menu (⌘N).
-  const newSessionShortcut = useMemo(
-    () => ({
-      ...createConfiguredShortcut(
-        shortcutBindings.newSession,
-        'Ctrl+N',
-        () => handleNewTab(),
-        'New session',
-      ),
-      ignoreInTerminal: true,
-    }),
-    [shortcutBindings.newSession, handleNewTab],
-  );
-
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
     if (!tabToDuplicate || tabToDuplicate.tabType === 'editor') return;
@@ -1463,7 +1446,7 @@ function AppContent() {
     handleReconnectRef.current = handleReconnect;
   }, [handleReconnect]);
 
-  // Handler: Xshell-style detach (Ctrl+A+D). The PtyTerminal already sent the
+  // Handle a detached session. PtyTerminal has already sent the
   // Detach WS message to the backend; here we remove the tab and record the
   // session so the user can re-attach to it later.
   const handleDetachTab = useCallback((tabId: string) => {
@@ -1799,36 +1782,16 @@ function AppContent() {
     setSettingsModalOpen(true);
   }, []);
 
-  // All app shortcuts register through ONE useKeyboardShortcuts instance.
-  // Multiple instances of the hook must not coexist in a window: each
-  // instance's cleanup calls the plugin's app-wide unregisterAll(), so a
-  // sibling instance's effect re-run would wipe the other's registrations
-  // without restoring them (its sync() then sees them as already-registered).
-  // This hook sits below the handler definitions it binds (handleNewTab,
-  // handleOpenSettings); hooks run unconditionally, so the position is legal.
-  //
-  // macOS: ⌘N (new session) and ⌘, (settings) are owned by the native menu —
-  // CommandOrControl+N and CommandOrControl+Comma sit in
-  // MACOS_MENU_OWNED_ACCELERATORS, so those two bindings never OS-register
-  // here and the menu's menu-action routing handles them. Windows/Linux have
-  // no native menu, so the same bindings register as real global shortcuts.
-  // The customizable Settings binding (shortcut registry), kept in its own
-  // memo next to the single registration below.
-  const settingsShortcut = useMemo<KeyboardShortcut>(
-    () => ({
-      ...createConfiguredShortcut(
-        shortcutBindings.openSettings,
-        'Ctrl+,',
-        handleOpenSettings,
-        'Open Settings',
-      ),
-    }),
-    [shortcutBindings.openSettings, handleOpenSettings],
-  );
-  useKeyboardShortcuts(
-    [...layoutShortcuts, ...splitViewShortcuts, settingsShortcut, newSessionShortcut],
-    true,
-  );
+  useKeyboardShortcuts([
+    ...layoutShortcuts,
+    ...splitViewShortcuts,
+    ...createCommandShortcuts({
+      newSession: () => handleNewTab(),
+      openSettings: handleOpenSettings,
+      duplicateSession: () => { if (activeTab) void handleDuplicateTab(activeTab.id); },
+      reconnect: () => { if (activeTab && activeTab.tabType !== 'editor') void handleReconnect(activeTab.id); },
+    }, shortcutBindings),
+  ]);
 
   // App quit with live remote sessions: the backend quit guard (quit_guard.rs)
   // emits `confirm-quit-sessions` with the connection count — Terminal.app
@@ -1861,60 +1824,19 @@ function AppContent() {
   // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
   useEffect(() => {
     const unlistenPromise = listen<string>('menu-action', (event) => {
-      // The native macOS menu belongs to the whole app: its key equivalents
-      // (Cmd+W → "Close Tab", Cmd+N, ...) fire even while a secondary window
-      // of this app — such as the file-viewer editor — has focus. Only act on
-      // main-window state when this window actually has focus, otherwise the
-      // shortcut closes a tab here instead of acting on the focused window.
-      if (!document.hasFocus()) {
-        return;
-      }
-      // While the user records a shortcut in Settings, the native menu's key
-      // equivalents must not fire their actions — the recorder owns the
-      // keystroke (otherwise ⌘N in the recorder opens a new session).
-      if (isShortcutRecording()) {
-        return;
-      }
-      switch (event.payload) {
-        case 'new_connection':
-        case 'new_tab':
-          handleNewTab();
-          break;
-        case 'close_connection':
-          handleCloseActiveTab();
-          break;
-        case 'clone_tab':
-          if (activeTab) { handleDuplicateTab(activeTab.id); }
-          break;
-        case 'find':
-          runActiveTerminalCommand('find');
-          break;
-        case 'clear_screen':
-          runActiveTerminalCommand('clear-screen');
-          break;
-        case 'next_tab':
-          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
-            const idx = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-            if (idx < activeGroup.tabs.length - 1) {
-              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[idx + 1].id });
-            }
-          }
-          break;
-        case 'prev_tab':
-          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
-            const idx = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-            if (idx > 0) {
-              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[idx - 1].id });
-            }
-          }
-          break;
-        case 'settings':
-          handleOpenSettings();
-          break;
-        case 'check_updates':
-          setUpdateCheckSignal(c => c + 1);
-          break;
-      }
+      // Native menu clicks are broadcast; only the focused window handles
+      // them. The command router applies the same dialog/recording guards.
+      if (!document.hasFocus() || isShortcutRecording()) return;
+      const commands: Partial<Record<string, ShortcutCommandId>> = {
+        new_connection: 'newSession', new_tab: 'newSession', close_connection: 'closeSession',
+        clone_tab: 'duplicateSession', save_connection: 'saveFile',
+        next_tab: 'nextTab', prev_tab: 'previousTab', settings: 'openSettings', reconnect: 'reconnect',
+        find: focusedFindCommand(activeTab?.tabType === 'editor' ? 'findInEditor' : activeTab?.tabType === 'file-browser' ? 'filterFiles' : 'findInTerminal'),
+        clear_screen: 'clearTerminal',
+      };
+      const command = commands[event.payload];
+      if (command) dispatchShortcutCommand(command);
+      else if (event.payload === 'check_updates') setUpdateCheckSignal(c => c + 1);
     });
     return () => { unlistenPromise.then(fn => fn()); };
   }, [activeGroup, activeTab, handleNewTab, handleOpenSettings, handleDuplicateTab, handleCloseActiveTab, runActiveTerminalCommand, dispatch]);
@@ -2267,37 +2189,23 @@ function AppContent() {
 
       {/* Web menu bar – on macOS shows only layout controls (native system menu handles File/Edit); on Windows/Linux shows full menus */}
       <MenuBar
-        onNewConnection={handleNewTab}
-        onNewTab={handleNewTab}
-        onCloseConnection={handleCloseActiveTab}
-        onNextTab={() => {
-          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
-            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-            if (currentIndex < activeGroup.tabs.length - 1) {
-              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[currentIndex + 1].id });
-            }
-          }
-        }}
-        onPreviousTab={() => {
-          if (activeGroup && activeGroup.tabs.length > 1 && activeGroup.activeTabId) {
-            const currentIndex = activeGroup.tabs.findIndex(t => t.id === activeGroup.activeTabId);
-            if (currentIndex > 0) {
-              dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[currentIndex - 1].id });
-            }
-          }
-        }}
-        onCloneTab={() => {
-          if (activeTab) {
-            void handleDuplicateTab(activeTab.id);
-          }
-        }}
+        onNewConnection={() => { dispatchShortcutCommand('newSession'); }}
+        onNewTab={() => { dispatchShortcutCommand('newSession'); }}
+        onCloseConnection={() => { dispatchShortcutCommand('closeSession'); }}
+        onNextTab={() => { dispatchShortcutCommand('nextTab'); }}
+        onPreviousTab={() => { dispatchShortcutCommand('previousTab'); }}
+        onCloneTab={() => { dispatchShortcutCommand('duplicateSession'); }}
+        onReconnect={() => { dispatchShortcutCommand('reconnect'); }}
+        hasActiveEditor={activeTab?.tabType === 'editor'}
+        findCommand={activeTab?.tabType === 'editor' ? 'findInEditor' : activeTab?.tabType === 'file-browser' ? 'filterFiles' : 'findInTerminal'}
+        onSaveConnection={() => { dispatchShortcutCommand('saveFile'); }}
         onCopy={() => runActiveTerminalCommand('copy')}
         onPaste={() => runActiveTerminalCommand('paste')}
         onSelectAll={() => runActiveTerminalCommand('select-all')}
-        onFind={() => runActiveTerminalCommand('find')}
+        onFind={() => { dispatchShortcutCommand(focusedFindCommand(activeTab?.tabType === 'editor' ? 'findInEditor' : activeTab?.tabType === 'file-browser' ? 'filterFiles' : 'findInTerminal')); }}
         onFindNext={() => runActiveTerminalCommand('find-next')}
         onFindPrevious={() => runActiveTerminalCommand('find-previous')}
-        onClearScreen={() => runActiveTerminalCommand('clear-screen')}
+        onClearScreen={() => { dispatchShortcutCommand('clearTerminal'); }}
         onOpenSettings={handleOpenSettings}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
         updateAnnouncement={updateAnnouncement}

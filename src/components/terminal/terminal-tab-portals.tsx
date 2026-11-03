@@ -182,6 +182,7 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
         host={tab.host}
         protocol={tab.protocol}
         isConnected={tab.connectionStatus === 'connected'}
+        isActive={isActive}
         onReconnect={handleReconnect}
       />
     );

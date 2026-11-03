@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest';
-import React from 'react';
+import React, { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileBrowserView } from '../components/file-browser-view';
 import { EDITOR_FILE_SAVED_EVENT } from '../lib/editor-windows-store';
+import { dispatchShortcutCommand, useCommandShortcuts } from '../lib/keyboard-shortcuts';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(), dispatch: vi.fn(),
@@ -39,11 +40,70 @@ const files = [
 const props = { connectionId: 'one', connectionName: 'One', host: 'one.example', protocol: 'SFTP', isConnected: true };
 beforeEach(() => {
   vi.clearAllMocks(); mocks.listeners.clear();
+  localStorage.clear();
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32');
   mocks.invoke.mockImplementation(async (command: string) => command === 'get_home_directory' ? '/home/local' : files);
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+function FileTabs({ isConnected = true }: { isConnected?: boolean }) {
+  const [active, setActive] = useState('one');
+  useCommandShortcuts({ nextTab: () => setActive(value => value === 'one' ? 'two' : 'one') });
+  return <>
+    {['one', 'two'].map(id => <div key={id} data-testid={id} hidden={active !== id}>
+      <FileBrowserView {...props} connectionId={id} host={`${id}.example`} isConnected={isConnected} isActive={active === id} />
+    </div>)}
+    <button data-shortcut-menu>Menu</button>
+  </>;
+}
 
 describe('SFTP and FTP workspace interactions', () => {
+  it('restores the selected pane after tab navigation and routes menu Find to the active tab', async () => {
+    render(<FileTabs />);
+    const first = within(screen.getByTestId('one'));
+    const local = first.getByLabelText('Local');
+    fireEvent.click(await within(local).findByText('app.conf'));
+    expect(local).toHaveFocus();
+
+    fireEvent.keyDown(local, { key: 'Tab', ctrlKey: true });
+    const remote = within(screen.getByTestId('two')).getByLabelText('two.example');
+    expect(remote).toHaveFocus();
+    act(() => { screen.getByRole('button', { name: 'Menu' }).focus(); });
+    act(() => { expect(dispatchShortcutCommand('filterFiles')).toBe(true); });
+    const filter = within(remote).getByRole('textbox', { name: 'Filter…' });
+    expect(filter).toHaveFocus();
+
+    fireEvent.keyDown(filter, { key: 'Tab', ctrlKey: true });
+    expect(local).toHaveFocus();
+    mocks.invoke.mockClear();
+    await act(async () => { fireEvent.keyDown(local, { key: 'F5' }); });
+    expect(mocks.invoke.mock.calls).toEqual([['list_local_files', { path: '/home/local' }]]);
+  });
+
+  it('focuses and refreshes the local pane when an offline file tab is activated', async () => {
+    render(<FileTabs isConnected={false} />);
+    const firstLocal = within(screen.getByTestId('one')).getByLabelText('Local');
+    await within(firstLocal).findByText('app.conf');
+    expect(firstLocal).toHaveFocus();
+    fireEvent.keyDown(firstLocal, { key: 'Tab', ctrlKey: true });
+    const secondLocal = within(screen.getByTestId('two')).getByLabelText('Local');
+    expect(secondLocal).toHaveFocus();
+    mocks.invoke.mockClear();
+    await act(async () => { fireEvent.keyDown(secondLocal, { key: 'F5' }); });
+    expect(mocks.invoke.mock.calls).toEqual([['list_local_files', { path: '/home/local' }]]);
+  });
+
+  it('leaves AltGraph input alone in both the pane and enclosing browser', async () => {
+    render(<FileBrowserView {...props} />);
+    const local = screen.getByLabelText('Local');
+    fireEvent.click(await within(local).findByText('app.conf'));
+    const event = new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, altKey: true, bubbles: true, cancelable: true });
+    vi.spyOn(event, 'getModifierState').mockImplementation(value => value === 'AltGraph');
+    act(() => { local.dispatchEvent(event); });
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByRole('button', { name: /^Upload\s*1$/ })).toBeEnabled();
+  });
+
   it.each(['SFTP', 'FTP'])('shows current selections and enqueues %s files with the displayed destinations', async protocol => {
     const open = vi.fn();
     render(<FileBrowserView {...props} protocol={protocol} onOpenInEditor={open} />);

@@ -38,6 +38,8 @@ import {
 import {
   search,
   searchKeymap,
+  openSearchPanel,
+  gotoLine,
   highlightSelectionMatches,
 } from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -54,6 +56,7 @@ import {
   type EditorLanguageId,
 } from "@/lib/editor-languages";
 import { notify } from "@/lib/notifications";
+import { useCommandShortcuts } from "@/lib/keyboard-shortcuts";
 import { EditorSearchPanel } from "./editor-search-panel";
 import { EditorToolbar, EditorStatusBar } from "./editor-controls";
 import "@/styles/editor.css";
@@ -93,6 +96,7 @@ interface CodeEditorProps {
   /** Read-only mode */
   readOnly?: boolean;
   autoFocus?: boolean;
+  isActive?: boolean;
   /** Use dark theme (defaults to true). Ignored when the user has chosen a theme via editor settings. */
   dark?: boolean;
   /** Additional CSS class for the wrapper */
@@ -105,6 +109,7 @@ export function CodeEditor({
   filename = "",
   readOnly = false,
   autoFocus = false,
+  isActive = true,
   dark = true,
   className = "",
 }: CodeEditorProps) {
@@ -119,6 +124,17 @@ export function CodeEditor({
     view: EditorView;
   } | null>(null);
   const [goToLineOpen, setGoToLineOpen] = useState(false);
+  const [replaceRequest, setReplaceRequest] = useState(0);
+  useCommandShortcuts({
+    findInEditor: () => { if (viewRef.current) openSearchPanel(viewRef.current); },
+    replaceInEditor: () => {
+      if (viewRef.current && !viewRef.current.state.readOnly) {
+        setReplaceRequest(value => value + 1);
+        openSearchPanel(viewRef.current);
+      }
+    },
+    goToLine: () => setGoToLineOpen(true),
+  }, { enabled: isActive, element: () => containerRef.current?.parentElement ?? null });
   const [editorConfig, setEditorConfig] = useState<EditorConfig>(() =>
     loadEditorConfig(),
   );
@@ -199,17 +215,12 @@ export function CodeEditor({
             },
           }),
           keymap.of([
-            {
-              key: "Mod-Alt-g",
-              run: () => {
-                setGoToLineOpen(true);
-                return true;
-              },
-            },
             ...defaultKeymap,
             ...historyKeymap,
             ...foldKeymap,
-            ...searchKeymap,
+            // Opening search is routed through the command registry. Keep
+            // match navigation while allowing opening bindings to be disabled.
+            ...searchKeymap.filter(binding => binding.run !== openSearchPanel && binding.run !== gotoLine),
             indentWithTab,
           ]),
           EditorView.updateListener.of((update) => {
@@ -307,6 +318,7 @@ export function CodeEditor({
     <div
       className={`code-editor h-full min-h-0 flex flex-col overflow-hidden ${className}`}
       data-editor-theme={isDark ? "dark" : "light"}
+      data-shortcut-scope="editor"
     >
       <EditorToolbar
         view={editorView}
@@ -340,7 +352,7 @@ export function CodeEditor({
       {searchHost &&
         editorState &&
         createPortal(
-          <EditorSearchPanel view={searchHost.view} state={editorState} />,
+          <EditorSearchPanel view={searchHost.view} state={editorState} replaceRequest={replaceRequest} />,
           searchHost.dom,
         )}
     </div>

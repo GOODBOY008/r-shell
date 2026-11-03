@@ -121,6 +121,9 @@ fn build_app_menu<F: Fn(&str) -> String>(
         ],
     )?;
 
+    // Custom actions are click adapters. Their keyboard bindings belong to
+    // the focused webview router; native accelerators would bypass contexts,
+    // remapping and the shortcut recorder. Standard OS/editing roles remain.
     // ── File menu ─────────────────────────────────────────────────────────────
     let file_menu = Submenu::with_id_and_items(
         app,
@@ -133,22 +136,22 @@ fn build_app_menu<F: Fn(&str) -> String>(
                 "new_connection",
                 &t("menuBar.newConnection"),
                 true,
-                Some("CmdOrCtrl+N"),
+                None::<&str>,
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
                 app,
                 "save_connection",
-                &t("menuBar.saveConnection"),
+                &t("menuBar.saveFile"),
                 true,
-                Some("CmdOrCtrl+S"),
+                None::<&str>,
             )?,
             &MenuItem::with_id(
                 app,
                 "close_connection",
                 &t("menuBar.closeTab"),
                 true,
-                Some("CmdOrCtrl+W"),
+                None::<&str>,
             )?,
         ],
     )?;
@@ -175,13 +178,13 @@ fn build_app_menu<F: Fn(&str) -> String>(
             &PredefinedMenuItem::separator(app)?,
             &PredefinedMenuItem::select_all(app, Some(&t("menuBar.selectAll")))?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "find", &t("menuBar.find"), true, Some("CmdOrCtrl+F"))?,
+            &MenuItem::with_id(app, "find", &t("menuBar.find"), true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 "clear_screen",
                 &t("menuBar.clearScreen"),
                 true,
-                Some("CmdOrCtrl+L"),
+                None::<&str>,
             )?,
         ],
     )?;
@@ -198,7 +201,7 @@ fn build_app_menu<F: Fn(&str) -> String>(
                 "settings",
                 &t("menuBar.options"),
                 true,
-                Some("CmdOrCtrl+,"),
+                None::<&str>,
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
@@ -223,14 +226,14 @@ fn build_app_menu<F: Fn(&str) -> String>(
                 "new_tab",
                 &t("menuBar.newTab"),
                 true,
-                Some("CmdOrCtrl+T"),
+                None::<&str>,
             )?,
             &MenuItem::with_id(
                 app,
                 "clone_tab",
                 &t("menuBar.duplicateTab"),
                 true,
-                Some("CmdOrCtrl+D"),
+                None::<&str>,
             )?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "next_tab", &t("menuBar.nextTab"), true, None::<&str>)?,
@@ -242,7 +245,7 @@ fn build_app_menu<F: Fn(&str) -> String>(
                 None::<&str>,
             )?,
             &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "reconnect", &t("menuBar.reconnect"), true, Some("F5"))?,
+            &MenuItem::with_id(app, "reconnect", &t("menuBar.reconnect"), true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 "disconnect",
@@ -295,7 +298,7 @@ fn default_menu_text(key: &str) -> String {
         "menuBar.showAll" => "Show All",
         "menuBar.quit" => "Quit R-Shell",
         "menuBar.newConnection" => "New Connection...",
-        "menuBar.saveConnection" => "Save Connection",
+        "menuBar.saveFile" => "Save File",
         "menuBar.closeTab" => "Close Tab",
         "menuBar.find" => "Find...",
         "menuBar.clearScreen" => "Clear Screen",
@@ -340,9 +343,6 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        // Global shortcuts are registered at runtime from the frontend
-        // (src/lib/keyboard-shortcuts.ts) via the plugin's JS API.
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_positioner::init())
         .setup({
@@ -508,24 +508,7 @@ pub fn run() {
                     });
                 }
 
-                // Global shortcuts are registered from the main window's JS
-                // runtime; when that webview is torn down with the window,
-                // its unregisterAll cleanup never runs. The OS hotkeys would
-                // stay registered with handlers pointing at the dead webview
-                // (keystrokes swallowed while the app runs window-less), and
-                // the window recreated by RunEvent::Reopen would then fail
-                // to re-register every accelerator ("already registered"
-                // toast). Unregister everything here so the recreated
-                // window starts from a clean slate. Only the main window
-                // registers global shortcuts today.
-                if window.label() == "main" {
-                    use tauri_plugin_global_shortcut::GlobalShortcutExt;
-                    if let Err(e) = window.app_handle().global_shortcut().unregister_all() {
-                        tracing::warn!(
-                            "Failed to unregister global shortcuts on window destroy: {e}"
-                        );
-                    }
-                }
+
             }
         })
         .manage(connection_manager)
@@ -671,84 +654,4 @@ pub fn run() {
             }
             _ => {}
         });
-}
-
-#[cfg(test)]
-mod shortcut_accelerator_tests {
-    use std::str::FromStr;
-    use tauri_plugin_global_shortcut::Shortcut;
-
-    /// Every accelerator string the frontend can emit (toAccelerator in
-    /// src/lib/keyboard-shortcuts.ts) must parse on all platforms; the plugin
-    /// rejects unparseable registrations at runtime.
-    #[test]
-    fn frontend_accelerators_parse() {
-        let mut accelerators: Vec<String> = vec![
-            // Default app/layout/split shortcuts
-            "CommandOrControl+N".to_string(),
-            "CommandOrControl+W".to_string(),
-            "CommandOrControl+Tab".to_string(),
-            "CommandOrControl+Shift+Tab".to_string(),
-            "CommandOrControl+B".to_string(),
-            "CommandOrControl+J".to_string(),
-            "CommandOrControl+M".to_string(),
-            "CommandOrControl+Z".to_string(),
-            "CommandOrControl+Backslash".to_string(),
-            "CommandOrControl+Shift+Backslash".to_string(),
-        ];
-        for i in 1..=9 {
-            accelerators.push(format!("CommandOrControl+{i}"));
-        }
-
-        // Named keys and symbols that customizable bindings can produce
-        let keys = [
-            "Escape",
-            "Enter",
-            "Space",
-            "Backspace",
-            "Delete",
-            "Insert",
-            "PageUp",
-            "PageDown",
-            "Home",
-            "End",
-            "ArrowUp",
-            "ArrowDown",
-            "ArrowLeft",
-            "ArrowRight",
-            "Pause",
-            "CapsLock",
-            "PrintScreen",
-            "ScrollLock",
-            "NumLock",
-            "F1",
-            "F5",
-            "F13",
-            "F24",
-            "Backquote",
-            "BracketLeft",
-            "BracketRight",
-            "Comma",
-            "Equal",
-            "Minus",
-            "Period",
-            "Quote",
-            "Semicolon",
-            "Slash",
-            "1",
-            "9",
-            "0",
-        ];
-        for key in keys {
-            accelerators.push(format!("CommandOrControl+{key}"));
-            accelerators.push(format!("Option+Shift+{key}"));
-        }
-
-        for accelerator in accelerators {
-            assert!(
-                Shortcut::from_str(&accelerator).is_ok(),
-                "accelerator failed to parse: {accelerator}"
-            );
-        }
-    }
 }
