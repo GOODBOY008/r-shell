@@ -90,7 +90,7 @@ x11-e2e = []
 tokio = { version = "1", features = ["test-util"] }
 tempfile = "3"
 env_logger = "0.11"
-png = "0.17"
+png = "0.18"
 rand = "0.10"
 
 
