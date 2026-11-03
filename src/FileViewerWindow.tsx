@@ -13,59 +13,41 @@ import type { SessionHealth } from "@/lib/session-health";
 export function FileViewerWindow() {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
   const connectionId = params.get("connectionId") ?? "";
-  const filePath = decodeURIComponent(params.get("filePath") ?? "");
-  const fileName = decodeURIComponent(params.get("fileName") ?? "Untitled");
+  const filePath = params.get("filePath") ?? "";
+  const fileName = params.get("fileName") ?? "Untitled";
 
-  // Bump to remount FileEditorView so the file loads once the SSH session is
-  // available (relevant when this window was restored after an app restart:
-  // the backend reconnects sessions asynchronously).
-  const [loadKey, setLoadKey] = useState(0);
+  const host = params.get("host") ?? "";
+  const [isConnected, setIsConnected] = useState(true);
 
+  // Keep the same editor across disconnects: re-mounting would discard edits.
   useEffect(() => {
-    const SESSION_POLL_DELAY_MS = 500;
-    const SESSION_POLL_INTERVAL_MS = 2000;
-    const SESSION_POLL_MAX_ATTEMPTS = 30; // ~60s
-
     let cancelled = false;
-    let timer: number | undefined;
-    let sessionWasMissing = false;
-    let attempts = 0;
-
+    let timer: ReturnType<typeof setTimeout>;
     const check = async () => {
-      if (cancelled) return;
-      let sessionUp = false;
+      let connected = false;
       try {
-        const health = await invoke<SessionHealth>("get_session_health", { connectionId });
-        sessionUp = health.sshConnected === true;
+        const health = await invoke<SessionHealth>("get_session_health", {
+          connectionId,
+        });
+        connected = health.sshConnected === true;
       } catch {
-        // Backend not reachable (no session for this id yet / dev browser).
+        /* A restored session may not exist yet. */
       }
       if (cancelled) return;
-      if (sessionUp) {
-        // The session came up after the initial load failed — reload the file.
-        if (sessionWasMissing) {
-          setLoadKey((key) => key + 1);
-        }
-        return;
-      }
-      sessionWasMissing = true;
-      attempts += 1;
-      if (attempts < SESSION_POLL_MAX_ATTEMPTS) {
-        timer = window.setTimeout(() => {
+      setIsConnected(connected);
+      timer = setTimeout(
+        () => {
           void check();
-        }, SESSION_POLL_INTERVAL_MS);
-      }
+        },
+        connected ? 5000 : 2000,
+      );
     };
-
-    timer = window.setTimeout(() => {
+    timer = setTimeout(() => {
       void check();
-    }, SESSION_POLL_DELAY_MS);
-
+    }, 500);
     return () => {
       cancelled = true;
-      if (timer !== undefined) {
-        window.clearTimeout(timer);
-      }
+      clearTimeout(timer);
     };
   }, [connectionId]);
 
@@ -78,14 +60,18 @@ export function FileViewerWindow() {
   // This covers Windows/Linux (Ctrl+W with no native menu in between).
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.isComposing || e.keyCode === 229) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "w") {
         e.preventDefault();
         e.stopPropagation();
-        void getCurrentWindow().close().catch(() => {});
+        void getCurrentWindow()
+          .close()
+          .catch(() => {});
       }
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
-    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", onKeyDown, { capture: true });
   }, []);
 
   // On macOS the shared native menu's "Close Tab" key equivalent (Cmd+W)
@@ -98,7 +84,9 @@ export function FileViewerWindow() {
   useEffect(() => {
     const unlistenPromise = listen<string>("menu-action", (event) => {
       if (event.payload === "close_connection" && document.hasFocus()) {
-        void getCurrentWindow().close().catch(() => {});
+        void getCurrentWindow()
+          .close()
+          .catch(() => {});
       }
     });
     return () => {
@@ -109,11 +97,11 @@ export function FileViewerWindow() {
   return (
     <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden">
       <FileEditorView
-        key={loadKey}
         connectionId={connectionId}
         filePath={filePath}
         fileName={fileName}
-        isConnected={true}
+        isConnected={isConnected}
+        host={host}
         guardWindowClose
       />
     </div>

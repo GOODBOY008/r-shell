@@ -1,11 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from 'react-i18next';
+import { emit, listen } from "@tauri-apps/api/event";
+import { EDITOR_FILE_SAVED_EVENT, EDITOR_FILE_STATE_EVENT, EDITOR_FILE_STATE_REQUEST_EVENT, type EditorFileSavedEvent, type EditorFileStateEvent } from "@/lib/editor-windows-store";
 import { invoke } from "@tauri-apps/api/core";
 import { notify } from '@/lib/notifications';
 import {
   WifiOff,
   RotateCcw,
   ArrowRightLeft,
+  Upload,
+  Download,
+  Server,
 } from "lucide-react";
 import { SyncDialog } from "./sync-dialog";
 import { DirectoryTransferDialog } from "./directory-transfer-dialog";
@@ -17,7 +22,6 @@ import {
 } from "./ui/resizable";
 import { FilePanel } from "./file-panel";
 import type { FilePanelRef } from "./file-panel";
-import { TransferControls } from "./transfer-controls";
 import { TransferQueue } from "./transfer-queue";
 import type { FileEntry } from "@/lib/file-entry-types";
 import { pathJoin } from "@/lib/file-entry-types";
@@ -42,6 +46,7 @@ export interface FileBrowserViewProps {
   protocol?: string;
   isConnected: boolean;
   onReconnect?: () => void;
+  onOpenInEditor?: (path: string, name: string) => void | Promise<void>;
 }
 
 // ---------- Component ----------
@@ -50,12 +55,13 @@ export function FileBrowserView({
   connectionId,
   connectionName,
   host,
-  protocol: _protocol,
+  protocol = "SFTP",
   isConnected,
   onReconnect,
+  onOpenInEditor,
 }: FileBrowserViewProps) {
   const { t } = useTranslation();
-  const [activePanel, setActivePanel] = useState<"local" | "remote">("local");
+  const [activePanel, setActivePanel] = useState<"local" | "remote">("remote");
   // Global transfer queue — the transfer-queue-service owns the execution
   // loop; this component only enqueues and reacts to settled items.
   const { transfers, dispatch: dispatchTransfer } = useTransferQueue();
@@ -72,12 +78,16 @@ export function FileBrowserView({
     undefined,
   );
 
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [localPath, setLocalPath] = useState("/");
+  const [remotePath, setRemotePath] = useState("/");
   const localPanelRef = useRef<FilePanelRef>(null);
   const remotePanelRef = useRef<FilePanelRef>(null);
 
   // Selection counts for transfer controls
   const [localSelCount, setLocalSelCount] = useState(0);
   const [remoteSelCount, setRemoteSelCount] = useState(0);
+  const [editorStates, setEditorStates] = useState<Record<string, EditorFileStateEvent['state']>>({});
 
   // Fetch local home directory on mount
   useEffect(() => {
@@ -127,9 +137,9 @@ export function FileBrowserView({
         "delete_remote_item",
         { connectionId, path, isDirectory },
       );
-      if (!result.success) throw new Error(result.error ?? "Delete failed");
+      if (!result.success) throw new Error(result.error ?? t('filePanel.toast.deleteFailed'));
     },
-    [connectionId],
+    [connectionId, t],
   );
 
   const renameRemoteItem = useCallback(
@@ -138,9 +148,9 @@ export function FileBrowserView({
         "rename_remote_item",
         { connectionId, oldPath, newPath },
       );
-      if (!result.success) throw new Error(result.error ?? "Rename failed");
+      if (!result.success) throw new Error(result.error ?? t('filePanel.toast.renameFailed'));
     },
-    [connectionId],
+    [connectionId, t],
   );
 
   const createRemoteDirectory = useCallback(
@@ -150,9 +160,9 @@ export function FileBrowserView({
         { connectionId, path },
       );
       if (!result.success)
-        throw new Error(result.error ?? "Create directory failed");
+        throw new Error(result.error ?? t('filePanel.toast.createDirectoryFailed'));
     },
-    [connectionId],
+    [connectionId, t],
   );
 
   // ------ Transfer completion reactions ------
@@ -161,6 +171,7 @@ export function FileBrowserView({
   useEffect(() => {
     return onItemSettled((item) => {
       if (item.connectionId !== connectionId) return;
+      if (item.status === "failed") { setQueueExpanded(true); return; }
       if (item.status !== "completed") return;
       if (item.direction === "upload") {
         remotePanelRef.current?.refresh();
@@ -187,7 +198,13 @@ export function FileBrowserView({
   // ------ Transfer initiation helpers ------
   const enqueueUpload = useCallback(
     (files: FileEntry[], localDir: string) => {
+      if (!isConnected) return;
       const remotePath = remotePanelRef.current?.getCurrentPath() ?? "/";
+      if (files.some(file => file.file_type !== 'File')) {
+        if (files.length === 1 && files[0].file_type === 'Directory') setDirTransfer({ open: true, direction: 'upload', sourcePath: pathJoin(localDir, files[0].name), destPath: pathJoin(remotePath, files[0].name) });
+        else notify.info(t('fileBrowser.directorySelectionHint'));
+        return;
+      }
       const fileItems = files.filter((f) => f.file_type === "File");
       if (fileItems.length === 0) return;
       dispatchTransfer({
@@ -203,7 +220,7 @@ export function FileBrowserView({
       });
       notify.info(t('fileBrowser.toast.queuedUpload', { count: fileItems.length }));
     },
-    [connectionId],
+    [connectionId, isConnected, dispatchTransfer, t],
   );
 
   // ------ OS-native file drop onto the remote panel ------
@@ -316,12 +333,18 @@ export function FileBrowserView({
         });
       }
     },
-    [connectionId, isConnected],
+    [connectionId, isConnected, dispatchTransfer, t],
   );
 
   const enqueueDownload = useCallback(
     (files: FileEntry[], remoteDir: string) => {
+      if (!isConnected) return;
       const localPath = localPanelRef.current?.getCurrentPath() ?? "/";
+      if (files.some(file => file.file_type !== 'File')) {
+        if (files.length === 1 && files[0].file_type === 'Directory') setDirTransfer({ open: true, direction: 'download', sourcePath: pathJoin(remoteDir, files[0].name), destPath: localPath, destinationDirectoryName: files[0].name });
+        else notify.info(t('fileBrowser.directorySelectionHint'));
+        return;
+      }
       const fileItems = files.filter((f) => f.file_type === "File");
       if (fileItems.length === 0) return;
       dispatchTransfer({
@@ -332,7 +355,7 @@ export function FileBrowserView({
       });
       notify.info(t('fileBrowser.toast.queuedDownload', { count: fileItems.length }));
     },
-    [connectionId],
+    [connectionId, isConnected, dispatchTransfer, t],
   );
 
   const handleUploadButton = useCallback(() => {
@@ -354,9 +377,20 @@ export function FileBrowserView({
   // ------ Drop transfer handler ------
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
+      if (!isConnected || !(e.target instanceof Node) || !rootRef.current?.contains(e.target)) return;
+      const detail = (e as CustomEvent<{ targetMode: "local" | "remote"; targetPath: string; sourcePath: string; files: FileEntry[] }>).detail;
       if (!detail) return;
       const { targetMode, targetPath, sourcePath, files } = detail;
+      if (files.some(file => file.file_type !== 'File')) {
+        if (files.length === 1 && files[0].file_type === 'Directory') setDirTransfer({
+          open: true, direction: targetMode === 'remote' ? 'upload' : 'download',
+          sourcePath: pathJoin(sourcePath, files[0].name),
+          destPath: targetMode === 'remote' ? pathJoin(targetPath, files[0].name) : targetPath,
+          ...(targetMode === 'local' ? { destinationDirectoryName: files[0].name } : {}),
+        });
+        else notify.info(t('fileBrowser.directorySelectionHint'));
+        return;
+      }
 
       if (targetMode === "remote") {
         // Files dropped onto remote panel → upload
@@ -388,11 +422,12 @@ export function FileBrowserView({
 
     document.addEventListener("rshell-drop-transfer", handler);
     return () => document.removeEventListener("rshell-drop-transfer", handler);
-  }, [connectionId]);
+  }, [connectionId, isConnected, dispatchTransfer, t]);
 
   // ------ Directory transfer callbacks ------
   const handleUploadDirectory = useCallback(
     (dirName: string, sourceDirPath: string) => {
+      if (!isConnected) return;
       const remotePath = remotePanelRef.current?.getCurrentPath() ?? "/";
       setDirTransfer({
         open: true,
@@ -401,11 +436,12 @@ export function FileBrowserView({
         destPath: pathJoin(remotePath, dirName),
       });
     },
-    [],
+    [isConnected],
   );
 
   const handleDownloadDirectory = useCallback(
     (dirName: string, sourceDirPath: string) => {
+      if (!isConnected) return;
       const localPath = localPanelRef.current?.getCurrentPath() ?? "/";
       setDirTransfer({
         open: true,
@@ -415,7 +451,7 @@ export function FileBrowserView({
         destinationDirectoryName: dirName,
       });
     },
-    [],
+    [isConnected],
   );
 
   const handleDirTransferComplete = useCallback(() => {
@@ -432,10 +468,10 @@ export function FileBrowserView({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        setActivePanel((prev) => (prev === "local" ? "remote" : "local"));
-      }
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      const target = e.target as HTMLElement;
+      if (target.closest('input, textarea, button, [contenteditable="true"], [role="dialog"]')) return;
+      if (!isConnected) return;
       if (e.key === "F5") {
         e.preventDefault();
         if (activePanel === "local") {
@@ -458,47 +494,51 @@ export function FileBrowserView({
         setSyncDialogOpen(true);
       }
     },
-    [activePanel, handleUploadButton, handleDownloadButton],
+    [activePanel, handleUploadButton, handleDownloadButton, isConnected],
   );
 
-  // ------ Selection tracking ------
-  // Update selection counts periodically (via a simple interval)
   useEffect(() => {
-    const interval = setInterval(() => {
-      setLocalSelCount(
-        localPanelRef.current?.getSelectedEntries().length ?? 0,
-      );
-      setRemoteSelCount(
-        remotePanelRef.current?.getSelectedEntries().length ?? 0,
-      );
-    }, 200);
-    return () => clearInterval(interval);
-  }, []);
-
-  // ------ Disconnected overlay ------
-  if (!isConnected) {
-    return (
-      <div className="h-full w-full flex flex-col items-center justify-center bg-muted/30 gap-3">
-        <WifiOff className="h-10 w-10 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">
-          {t('fileBrowser.disconnected', { name: connectionName })}
-        </p>
-        {onReconnect && (
-          <Button variant="outline" size="sm" onClick={onReconnect}>
-            <RotateCcw className="h-4 w-4 mr-1" /> {t('common.reconnect')}
-          </Button>
-        )}
-      </div>
-    );
-  }
+    let disposed = false;
+    const unlistenState = listen<EditorFileStateEvent>(EDITOR_FILE_STATE_EVENT, ({ payload }) => {
+      if (!disposed && payload.connectionId === connectionId) setEditorStates(previous => ({ ...previous, [payload.filePath]: payload.state }));
+    });
+    void unlistenState.then(() => { if (!disposed) return emit(EDITOR_FILE_STATE_REQUEST_EVENT, { connectionId }); }).catch(() => {});
+    const unlisten = listen<EditorFileSavedEvent>(EDITOR_FILE_SAVED_EVENT, ({ payload }) => {
+      if (disposed || payload.connectionId !== connectionId) return;
+      const parent = payload.filePath.slice(0, payload.filePath.lastIndexOf('/')) || '/';
+      if (remotePanelRef.current?.getCurrentPath() === parent) remotePanelRef.current.refresh();
+    });
+    return () => {
+      disposed = true;
+      void unlisten.then(fn => fn()).catch(() => {});
+      void unlistenState.then(fn => fn()).catch(() => {});
+    };
+  }, [connectionId]);
 
   // ------ Render ------
   return (
     <div
+      ref={rootRef}
       className="h-full w-full flex flex-col bg-background text-foreground"
       onKeyDown={handleKeyDown}
       tabIndex={-1}
     >
+      <header className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-2 border-b border-border bg-muted/20">
+        <Server className="size-4 text-muted-foreground" />
+        <span className="text-sm font-medium truncate">{connectionName}</span>
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">{protocol}</span>
+        <span className="text-xs text-muted-foreground truncate mr-auto">{host}</span>
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleUploadButton} disabled={!isConnected || !localSelCount}
+          title={t('fileBrowser.uploadDestination', { path: remotePath })}><Upload className="size-3.5" />{t('fileBrowser.transfer.upload')}{localSelCount > 0 && <span className="tabular-nums text-muted-foreground"> {localSelCount}</span>}</Button>
+        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleDownloadButton} disabled={!isConnected || !remoteSelCount}
+          title={t('fileBrowser.downloadDestination', { path: localPath })}><Download className="size-3.5" />{t('fileBrowser.transfer.download')}{remoteSelCount > 0 && <span className="tabular-nums text-muted-foreground"> {remoteSelCount}</span>}</Button>
+        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSyncDialogOpen(true)} disabled={!isConnected}
+          title={t('fileBrowser.toolbar.syncDirectories')}><ArrowRightLeft className="size-3.5" />{t('fileBrowser.contextMenu.syncDirectories')}</Button>
+      </header>
+      {!isConnected && <div role="status" className="flex shrink-0 items-center gap-2 px-3 py-2 text-xs bg-muted/50 border-b border-border">
+        <WifiOff className="size-3.5" /><span className="flex-1">{t('fileBrowser.disconnected', { name: connectionName })}</span>
+        {onReconnect && <Button variant="outline" size="sm" className="h-7" onClick={onReconnect}><RotateCcw className="size-3.5" />{t('common.reconnect')}</Button>}
+      </div>}
       {/* Dual-pane layout */}
       <div className="flex-1 flex flex-col min-h-0">
         <ResizablePanelGroup
@@ -524,32 +564,14 @@ export function FileBrowserView({
               onRename={renameLocalItem}
               onCreateDirectory={createLocalDirectory}
               onOpenInOS={openInOS}
-              onTransferToOther={enqueueUpload}
-              onTransferDirectoryToOther={handleUploadDirectory}
+              onSelectionChange={setLocalSelCount}
+              onPathChange={setLocalPath}
+              onTransferToOther={isConnected ? enqueueUpload : undefined}
+              onTransferDirectoryToOther={isConnected ? handleUploadDirectory : undefined}
               onFocus={() => setActivePanel("local")}
               showPermissions={false}
             />
           </ResizablePanel>
-
-          {/* Transfer Controls */}
-          <TransferControls
-            localSelectionCount={localSelCount}
-            remoteSelectionCount={remoteSelCount}
-            onUpload={handleUploadButton}
-            onDownload={handleDownloadButton}
-            disabled={!isConnected}
-          >
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              title={t('fileBrowser.toolbar.syncDirectories')}
-              onClick={() => setSyncDialogOpen(true)}
-              disabled={!isConnected}
-            >
-              <ArrowRightLeft className="h-4 w-4" />
-            </Button>
-          </TransferControls>
 
           <ResizableHandle />
 
@@ -567,6 +589,10 @@ export function FileBrowserView({
               isActive={activePanel === "remote"}
               initialPath="/"
               onLoadDirectory={loadRemoteDirectory}
+              onOpenFile={onOpenInEditor}
+              editorStates={editorStates}
+              onSelectionChange={setRemoteSelCount}
+              onPathChange={setRemotePath}
               onDelete={deleteRemoteItem}
               onRename={renameRemoteItem}
               onCreateDirectory={createRemoteDirectory}
@@ -594,8 +620,8 @@ export function FileBrowserView({
         open={syncDialogOpen}
         onOpenChange={setSyncDialogOpen}
         connectionId={connectionId}
-        localPath={localPanelRef.current?.getCurrentPath() ?? localHomePath ?? "/"}
-        remotePath={remotePanelRef.current?.getCurrentPath() ?? "/"}
+        localPath={localPath}
+        remotePath={remotePath}
         onLoadLocalDir={loadLocalDirectory}
         onLoadRemoteDir={loadRemoteDirectory}
         onCreateRemoteDir={createRemoteDirectory}

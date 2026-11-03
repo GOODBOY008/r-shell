@@ -1,113 +1,98 @@
-import React, { useRef, useEffect, useCallback, useState } from "react";
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection, crosshairCursor, highlightSpecialChars, dropCursor } from "@codemirror/view";
-import { EditorState, type Extension } from "@codemirror/state";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { syntaxHighlighting, defaultHighlightStyle, indentOnInput, bracketMatching, foldGutter, foldKeymap } from "@codemirror/language";
-import { searchKeymap, highlightSelectionMatches } from "@codemirror/search";
+import { useRef, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import {
+  EditorView,
+  keymap,
+  lineNumbers,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  drawSelection,
+  rectangularSelection,
+  crosshairCursor,
+  highlightSpecialChars,
+  dropCursor,
+} from "@codemirror/view";
+import {
+  Annotation,
+  Compartment,
+  EditorState,
+  Transaction,
+  type Extension,
+} from "@codemirror/state";
+import {
+  defaultKeymap,
+  history,
+  historyKeymap,
+  indentWithTab,
+} from "@codemirror/commands";
+import {
+  syntaxHighlighting,
+  defaultHighlightStyle,
+  indentOnInput,
+  indentUnit,
+  bracketMatching,
+  foldGutter,
+  foldKeymap,
+} from "@codemirror/language";
+import {
+  search,
+  searchKeymap,
+  highlightSelectionMatches,
+} from "@codemirror/search";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { loadEditorConfig, EDITOR_CONFIG_CHANGED_EVENT, type EditorConfig } from "@/lib/editor-config";
+import {
+  loadEditorConfig,
+  saveEditorConfig,
+  dispatchEditorConfigChanged,
+  EDITOR_CONFIG_CHANGED_EVENT,
+  type EditorConfig,
+} from "@/lib/editor-config";
+import {
+  detectEditorLanguage,
+  loadEditorLanguage,
+  type EditorLanguageId,
+} from "@/lib/editor-languages";
+import { notify } from "@/lib/notifications";
+import { EditorSearchPanel } from "./editor-search-panel";
+import { EditorToolbar, EditorStatusBar } from "./editor-controls";
+import "@/styles/editor.css";
 
-// Language imports
-import { javascript } from "@codemirror/lang-javascript";
-import { json } from "@codemirror/lang-json";
-import { python } from "@codemirror/lang-python";
-import { html } from "@codemirror/lang-html";
-import { css } from "@codemirror/lang-css";
-import { markdown } from "@codemirror/lang-markdown";
-import { xml } from "@codemirror/lang-xml";
-import { yaml } from "@codemirror/lang-yaml";
-import { rust } from "@codemirror/lang-rust";
-import { cpp } from "@codemirror/lang-cpp";
-import { java } from "@codemirror/lang-java";
-import { sql } from "@codemirror/lang-sql";
-import { php } from "@codemirror/lang-php";
-
-/** Map file extension to a CodeMirror language extension */
-function getLanguageExtension(filename: string): Extension | null {
-  const ext = filename.split(".").pop()?.toLowerCase();
-  switch (ext) {
-    case "js":
-    case "mjs":
-    case "cjs":
-      return javascript();
-    case "ts":
-    case "mts":
-    case "cts":
-      return javascript({ typescript: true });
-    case "jsx":
-      return javascript({ jsx: true });
-    case "tsx":
-      return javascript({ jsx: true, typescript: true });
-    case "json":
-    case "jsonc":
-      return json();
-    case "py":
-    case "pyw":
-      return python();
-    case "html":
-    case "htm":
-    case "svelte":
-    case "vue":
-      return html();
-    case "css":
-    case "scss":
-    case "less":
-      return css();
-    case "md":
-    case "mdx":
-    case "markdown":
-      return markdown();
-    case "xml":
-    case "svg":
-    case "xsl":
-    case "xslt":
-      return xml();
-    case "yml":
-    case "yaml":
-      return yaml();
-    case "rs":
-      return rust();
-    case "c":
-    case "h":
-    case "cpp":
-    case "cxx":
-    case "cc":
-    case "hpp":
-    case "hxx":
-      return cpp();
-    case "java":
-    case "kt":
-    case "kts":
-      return java();
-    case "sql":
-      return sql();
-    case "php":
-      return php();
-    case "sh":
-    case "bash":
-    case "zsh":
-    case "fish":
-    case "conf":
-    case "ini":
-    case "toml":
-    case "cfg":
-    case "env":
-    case "log":
-    case "txt":
-    default:
-      return null;
-  }
-}
+const externalValueChange = Annotation.define<boolean>();
+const editorTypography = EditorView.theme({
+  ".cm-scroller": { fontFamily: "inherit", lineHeight: "1.55" },
+  ".cm-content": { padding: "12px 0" },
+  ".cm-line": { padding: "0 16px 0 8px" },
+  ".cm-lineNumbers .cm-gutterElement": {
+    padding: "0 12px 0 12px",
+    minWidth: "40px",
+  },
+  ".cm-foldGutter .cm-gutterElement": { padding: "0 4px" },
+  "&.cm-focused": { outline: "none" },
+});
+// The app and editor themes are independent. An explicit background prevents
+// light syntax colors from falling onto the app's dark workspace background.
+const lightTheme = EditorView.theme({
+  "&": { color: "#24292e", backgroundColor: "#ffffff" },
+  ".cm-gutters": {
+    color: "#6e7781",
+    backgroundColor: "#f6f8fa",
+    borderColor: "#d0d7de",
+  },
+  ".cm-activeLine": { backgroundColor: "#f6f8fa" },
+  ".cm-activeLineGutter": { backgroundColor: "#eaeef2" },
+});
 
 interface CodeEditorProps {
-  /** Initial document content */
+  /** Document content */
   value: string;
-  /** Called whenever the document changes */
+  /** Called whenever the user changes the document */
   onChange?: (value: string) => void;
-  /** Filename used for language detection */
+  /** Filename or full remote path used for language detection */
   filename?: string;
   /** Read-only mode */
   readOnly?: boolean;
+  autoFocus?: boolean;
   /** Use dark theme (defaults to true). Ignored when the user has chosen a theme via editor settings. */
   dark?: boolean;
   /** Additional CSS class for the wrapper */
@@ -119,139 +104,245 @@ export function CodeEditor({
   onChange,
   filename = "",
   readOnly = false,
+  autoFocus = false,
   dark = true,
   className = "",
 }: CodeEditorProps) {
+  const { t } = useTranslation();
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const onChangeRef = useRef(onChange);
-  const [editorConfig, setEditorConfig] = useState<EditorConfig>(() => loadEditorConfig());
+  const [editorView, setEditorView] = useState<EditorView | null>(null);
+  const [editorState, setEditorState] = useState<EditorState | null>(null);
+  const [searchHost, setSearchHost] = useState<{
+    dom: HTMLElement;
+    view: EditorView;
+  } | null>(null);
+  const [goToLineOpen, setGoToLineOpen] = useState(false);
+  const [editorConfig, setEditorConfig] = useState<EditorConfig>(() =>
+    loadEditorConfig(),
+  );
+  const [compartments] = useState(() => ({
+    options: new Compartment(),
+    language: new Compartment(),
+  }));
+  const [languageOverride, setLanguageOverride] = useState<{
+    filename: string;
+    language: EditorLanguageId | "auto";
+  } | null>(null);
+  const detectedLanguage = useMemo(
+    () => detectEditorLanguage(filename, value),
+    [filename, value],
+  );
+  const languageChoice =
+    languageOverride?.filename === filename
+      ? languageOverride.language
+      : "auto";
+  const language =
+    languageChoice === "auto" ? detectedLanguage : languageChoice;
+  const isDark =
+    editorConfig.theme === "oneDark" ||
+    (editorConfig.theme !== "light" && dark);
+  const lineBreak = value.includes("\r\n") ? "\r\n" : "\n";
 
-  // Reload config whenever it changes in settings
+  const updateConfig = (patch: Partial<EditorConfig>) => {
+    const next = { ...editorConfig, ...patch };
+    setEditorConfig(next);
+    try {
+      saveEditorConfig(next);
+      dispatchEditorConfigChanged();
+    } catch {
+      notify.error(t("codeEditor.settingsSaveFailed"));
+    }
+  };
+
   useEffect(() => {
     const handler = () => setEditorConfig(loadEditorConfig());
     window.addEventListener(EDITOR_CONFIG_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(EDITOR_CONFIG_CHANGED_EVENT, handler);
+    return () =>
+      window.removeEventListener(EDITOR_CONFIG_CHANGED_EVENT, handler);
   }, []);
 
-  // Keep callback ref fresh without recreating the editor
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
 
-  const buildExtensions = useCallback((): Extension[] => {
-    const exts: Extension[] = [
-      highlightSpecialChars(),
-      history(),
-      drawSelection(),
-      dropCursor(),
-      indentOnInput(),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      rectangularSelection(),
-      crosshairCursor(),
-      highlightSelectionMatches(),
-      keymap.of([
-        ...defaultKeymap,
-        ...historyKeymap,
-        ...foldKeymap,
-        ...searchKeymap,
-        indentWithTab,
-      ]),
-      // Dispatch listener for onChange
-      EditorView.updateListener.of((update) => {
-        if (update.docChanged && onChangeRef.current) {
-          onChangeRef.current(update.state.doc.toString());
-        }
-      }),
-      // Tab size from config
-      EditorState.tabSize.of(editorConfig.tabSize),
-    ];
-
-    // Conditional extensions based on user config
-    if (editorConfig.lineNumbers) {
-      exts.push(lineNumbers());
-      exts.push(highlightActiveLineGutter());
-    }
-    if (editorConfig.highlightActiveLine) {
-      exts.push(highlightActiveLine());
-    }
-    if (editorConfig.foldGutter) {
-      exts.push(foldGutter());
-    }
-    if (editorConfig.bracketMatching || editorConfig.matchBrackets) {
-      exts.push(bracketMatching());
-    }
-    if (editorConfig.wordWrap) {
-      exts.push(EditorView.lineWrapping);
-    }
-
-    // Theme: user-configured theme takes precedence over the `dark` prop
-    const themeId = editorConfig.theme;
-    if (themeId === "oneDark") {
-      exts.push(oneDark);
-    } else if (themeId === "light") {
-      // No extra extension needed — CodeMirror's base chrome is light
-    } else if (dark) {
-      exts.push(oneDark);
-    }
-
-    if (readOnly) {
-      exts.push(EditorState.readOnly.of(true));
-    }
-
-    const lang = getLanguageExtension(filename);
-    if (lang) {
-      exts.push(lang);
-    }
-
-    return exts;
-  }, [filename, readOnly, dark, editorConfig]);
-
-  // Create editor on mount
+  // History and the EditorView live for the whole mount. Reconfiguring options
+  // or a lazily loaded parser must not reset edits, selection, scroll, or undo.
   useEffect(() => {
     if (!containerRef.current) return;
-
-    const state = EditorState.create({
-      doc: value,
-      extensions: buildExtensions(),
-    });
-
     const view = new EditorView({
-      state,
       parent: containerRef.current,
+      state: EditorState.create({
+        doc: value,
+        extensions: [
+          highlightSpecialChars(),
+          history(),
+          editorTypography,
+          drawSelection(),
+          dropCursor(),
+          indentOnInput(),
+          syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+          rectangularSelection(),
+          crosshairCursor(),
+          highlightSelectionMatches(),
+          search({
+            top: true,
+            createPanel: (panelView) => {
+              const dom = document.createElement("div");
+              return {
+                dom,
+                top: true,
+                mount: () => setSearchHost({ dom, view: panelView }),
+                destroy: () => setSearchHost(null),
+              };
+            },
+          }),
+          keymap.of([
+            {
+              key: "Mod-Alt-g",
+              run: () => {
+                setGoToLineOpen(true);
+                return true;
+              },
+            },
+            ...defaultKeymap,
+            ...historyKeymap,
+            ...foldKeymap,
+            ...searchKeymap,
+            indentWithTab,
+          ]),
+          EditorView.updateListener.of((update) => {
+            setEditorState(update.state);
+            if (
+              update.transactions.some(
+                (transaction) =>
+                  transaction.docChanged &&
+                  !transaction.annotation(externalValueChange),
+              )
+            ) {
+              onChangeRef.current?.(update.state.sliceDoc());
+            }
+          }),
+          compartments.options.of([]),
+          compartments.language.of([]),
+        ],
+      }),
     });
-
+    if (autoFocus && document.hasFocus()) view.focus();
     viewRef.current = view;
-
+    setEditorView(view);
+    setEditorState(view.state);
     return () => {
       view.destroy();
       viewRef.current = null;
     };
-    // Only recreate when language/readOnly/dark changes, not on every value change
+    // `value` is only the initial document here; external updates are synced below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildExtensions]);
+  }, [compartments]);
 
-  // Sync external value changes (e.g. loading a new file) without recreating the editor
+  useEffect(() => {
+    if (autoFocus && document.hasFocus()) editorView?.focus();
+  }, [autoFocus, editorView]);
+
+  useEffect(() => {
+    const options: Extension[] = [
+      EditorState.tabSize.of(editorConfig.tabSize),
+      indentUnit.of(" ".repeat(editorConfig.tabSize)),
+      EditorState.lineSeparator.of(lineBreak),
+      EditorState.readOnly.of(readOnly),
+      EditorView.editable.of(!readOnly),
+      EditorView.contentAttributes.of({
+        "aria-label": t("codeEditor.content"),
+      }),
+    ];
+    if (editorConfig.lineNumbers)
+      options.push(lineNumbers(), highlightActiveLineGutter());
+    if (editorConfig.highlightActiveLine) options.push(highlightActiveLine());
+    if (editorConfig.foldGutter) options.push(foldGutter());
+    if (editorConfig.bracketMatching || editorConfig.matchBrackets)
+      options.push(bracketMatching());
+    if (editorConfig.wordWrap) options.push(EditorView.lineWrapping);
+    options.push(isDark ? oneDark : lightTheme);
+    viewRef.current?.dispatch({
+      effects: compartments.options.reconfigure(options),
+    });
+  }, [compartments, editorConfig, readOnly, isDark, lineBreak, t]);
+
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    const currentDoc = view.state.doc.toString();
-    if (currentDoc !== value) {
+    let cancelled = false;
+    // Clear the previous file's parser immediately while the next chunk loads.
+    view.dispatch({ effects: compartments.language.reconfigure([]) });
+    void loadEditorLanguage(language)
+      .then((extension) => {
+        if (!cancelled)
+          view.dispatch({
+            effects: compartments.language.reconfigure(extension),
+          });
+      })
+      .catch(() => {
+        if (!cancelled) notify.error(t("codeEditor.languageLoadFailed"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [compartments, filename, language, t]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view && view.state.sliceDoc() !== value) {
       view.dispatch({
-        changes: { from: 0, to: currentDoc.length, insert: value },
+        changes: { from: 0, to: view.state.doc.length, insert: value },
+        annotations: [
+          externalValueChange.of(true),
+          Transaction.addToHistory.of(false),
+        ],
       });
     }
   }, [value]);
 
   return (
     <div
-      ref={containerRef}
-      className={`overflow-auto border border-border rounded-md ${className}`}
-      style={{
-        height: "100%",
-        fontSize: `${editorConfig.fontSize}px`,
-        fontFamily: editorConfig.fontFamily,
-      }}
-    />
+      className={`code-editor h-full min-h-0 flex flex-col overflow-hidden ${className}`}
+      data-editor-theme={isDark ? "dark" : "light"}
+    >
+      <EditorToolbar
+        view={editorView}
+        state={editorState}
+        config={editorConfig}
+        onConfigChange={updateConfig}
+        dark={isDark}
+      />
+      <div
+        ref={containerRef}
+        className="flex-1 min-h-0 overflow-hidden"
+        style={{
+          fontSize: `${editorConfig.fontSize}px`,
+          fontFamily: editorConfig.fontFamily,
+        }}
+      />
+      <EditorStatusBar
+        view={editorView}
+        state={editorState}
+        config={editorConfig}
+        onConfigChange={updateConfig}
+        dark={isDark}
+        languageChoice={languageChoice}
+        detectedLanguage={detectedLanguage}
+        onLanguageChange={(id) =>
+          setLanguageOverride({ filename, language: id })
+        }
+        goToLineOpen={goToLineOpen}
+        onGoToLineOpenChange={setGoToLineOpen}
+      />
+      {searchHost &&
+        editorState &&
+        createPortal(
+          <EditorSearchPanel view={searchHost.view} state={editorState} />,
+          searchHost.dom,
+        )}
+    </div>
   );
 }

@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { emit, listen } from '@tauri-apps/api/event';
+import { classifyFileByExtension } from '@/lib/editor-config';
+import { EDITOR_FILE_STATE_EVENT, EDITOR_FILE_SAVED_EVENT, EDITOR_FILE_STATE_REQUEST_EVENT, type EditorFileStateEvent, type EditorFileSavedEvent } from '@/lib/editor-windows-store';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { withRetry, CancelledError } from '@/lib/async-retry';
@@ -91,8 +94,8 @@ interface IntegratedFileBrowserProps {
   onClose: () => void;
   /** Called when user wants to open a file in the Log Monitor */
   onOpenInLogMonitor?: (filePath: string) => void;
-  /** Called when user wants to open a file in the editor tab */
-  onOpenInEditor?: (filePath: string, fileName: string) => void;
+  /** Opens or focuses the remote file editor tab. */
+  onOpenInEditor?: (filePath: string, fileName: string) => void | Promise<void>;
 }
 
 // Cache to store state per session
@@ -120,6 +123,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [currentPath, setCurrentPath] = useState('/home');
   const [files, setFiles] = useState<FileItem[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [openingFiles, setOpeningFiles] = useState<Set<string>>(new Set());
+  const openingRef = useRef(new Set<string>());
+  const browserRef = useRef<HTMLDivElement>(null);
+  const [editorStates, setEditorStates] = useState<Record<string, EditorFileStateEvent['state']>>({});
+  const [lastSavedFile, setLastSavedFile] = useState<{ connectionId: string; name: string } | null>(null);
+
   // Global transfer queue — the transfer-queue-service owns the execution
   // loop; this component only enqueues and reacts to settled items.
   const { transfers, dispatch: dispatchTransfer } = useTransferQueue();
@@ -299,7 +308,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) {
+      if (event.isComposing || event.keyCode === 229 || isEditableTarget(event.target)) {
         return;
       }
 
@@ -335,6 +344,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
             void loadFiles();
             break;
         }
+      } else if (event.key === 'Enter' && selectedFiles.size === 1 && browserRef.current?.contains(event.target as Node) && !(event.target instanceof Element && event.target.closest('button, [role=menuitem]'))) {
+        event.preventDefault();
+        const selected = files.find(file => selectedFiles.has(file.name));
+        if (selected) void handleFileDoubleClick(selected);
       } else if (event.key === 'Delete' && selectedFiles.size > 0) {
         event.preventDefault();
         handleDeleteSelected();
@@ -355,7 +368,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles/handlePasteFiles are stable inline fns; adding them would cause infinite re-renders
-  }, [selectedFiles, files, clipboard, renamingFile]);
+  }, [selectedFiles, files, clipboard, renamingFile, isConnected, onOpenInEditor, connectionId]);
 
   // Column resize effect
   useEffect(() => {
@@ -499,7 +512,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     [connectionId],
   );
 
-  async function loadFiles(pathOverride?: string, preservePathOnError = false) {
+  async function loadFiles(pathOverride?: string, preservePathOnError = false, afterSave = false) {
     if (!connectionId || !isConnected) {
       // Don't clear files on disconnect — preserve the cached file list so
       // the user still sees their directory contents when reconnecting or
@@ -617,6 +630,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       // CancelledError means a newer load superseded this one — discard silently.
       if (error instanceof CancelledError || gen !== loadGenRef.current) return;
 
+      if (afterSave) {
+        notify.warning(t('fileBrowser.editor.refreshFailed'));
+        return;
+      }
       if (preservePathOnError) {
         const failedPath = `${connectionId}:${targetPath}`;
         if (lastFailedFollowPathRef.current !== failedPath) {
@@ -770,21 +787,40 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
+  const openActionLabel = (file: FileItem) => t(`fileBrowser.editor.${classifyFileByExtension(file.name) === 'text' ? 'edit' : classifyFileByExtension(file.name) === 'image' ? 'preview' : 'open'}`);
   const handleFileDoubleClick = async (file: FileItem) => {
-    console.log('handleFileDoubleClick called', { file, currentPath, connectionId });
-    
-    if (file.type === 'directory') {
-      console.log('Navigating to directory:', file.path);
-      navigateTo(file.path);
-    } else {
-      // Open file in editor tab
-      if (onOpenInEditor) {
-        onOpenInEditor(file.path, file.name);
-      } else {
-        notify.info(t('app.noEditorHandler', { name: file.name }));
-      }
-    }
+    if (!isConnected) return;
+    if (file.type === 'directory') { navigateTo(file.path); return; }
+    const key = `${connectionId}\0${file.path}`;
+    if (openingRef.current.has(key)) return;
+    if (!onOpenInEditor) { notify.info(t('app.noEditorHandler', { name: file.name })); return; }
+    openingRef.current.add(key);
+    setOpeningFiles(new Set(openingRef.current));
+    try { await onOpenInEditor(file.path, file.name); }
+    catch (error) { notify.error(t('app.couldNotOpenWindow'), { description: String(error) }); }
+    finally { openingRef.current.delete(key); setOpeningFiles(new Set(openingRef.current)); }
   };
+
+  useEffect(() => {
+    let disposed = false;
+    const off: Array<() => void> = [];
+    const register = (subscription: Promise<() => void>) => {
+      void subscription.then(fn => { if (disposed) fn(); else { off.push(fn); void emit(EDITOR_FILE_STATE_REQUEST_EVENT, { connectionId }).catch(() => {}); } }).catch(() => {});
+    };
+    register(listen<EditorFileStateEvent>(EDITOR_FILE_STATE_EVENT, ({ payload }) => {
+      if (disposed || payload.connectionId !== connectionId) return;
+      setEditorStates(previous => ({ ...previous, [`${connectionId}\0${payload.filePath}`]: payload.state }));
+    }));
+    register(listen<EditorFileSavedEvent>(EDITOR_FILE_SAVED_EVENT, ({ payload }) => {
+      if (disposed || payload.connectionId !== connectionId) return;
+      setLastSavedFile({ connectionId, name: payload.fileName });
+      // Re-read server metadata while keeping the current selection and scroll.
+      if (parentPath(payload.filePath) === committedPathRef.current) void loadFiles(committedPathRef.current, false, true);
+    }));
+    return () => { disposed = true; off.forEach(fn => fn()); };
+  // loadFiles is an inline handler; subscribe again when its connection/path changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectionId, currentPath, isConnected]);
 
   // Index (within the current sorted list) of the last plain click, used as
   // the anchor for Shift+Click range selection. Reset when the list changes.
@@ -1059,8 +1095,18 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     setDeletingFiles(selectedItems);
   }
 
+  const hasOpenEditor = (file: FileItem) => {
+    const key = `${connectionId}\0${file.path}`;
+    return Object.entries(editorStates).some(([path, state]) => state !== 'closed'
+      && (path === key || (file.type === 'directory' && path.startsWith(`${key}/`))));
+  };
+
   const confirmDeleteFile = async () => {
     if (!deletingFiles || deletingFiles.length === 0) return;
+    if (deletingFiles.some(hasOpenEditor)) {
+      notify.warning(t('filePanel.dialog.closeEditorFirst'));
+      return;
+    }
 
     console.log('[FileBrowser] Confirming delete for', deletingFiles.length, 'items:', deletingFiles.map(f => f.name));
     const failed: string[] = [];
@@ -1117,6 +1163,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   async function handlePasteFiles() {
     if (clipboard) {
+      if (clipboard.operation === 'cut' && clipboard.files.some(hasOpenEditor)) {
+        notify.warning(t('filePanel.dialog.closeEditorFirst'));
+        return;
+      }
       try {
         for (const file of clipboard.files) {
           const destPath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`;
@@ -1156,6 +1206,10 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
   const handleRenameConfirm = async () => {
     if (renamingFile && newFileName.trim()) {
+      if (hasOpenEditor(renamingFile)) {
+        notify.warning(t('filePanel.dialog.closeEditorFirst'));
+        return;
+      }
       try {
         const oldPath = currentPath === '/' ? `/${renamingFile.name}` : `${currentPath}/${renamingFile.name}`;
         const newPath = currentPath === '/' ? `/${newFileName}` : `${currentPath}/${newFileName}`;
@@ -1439,7 +1493,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   }
 
   return (
-    <div className={`h-full flex flex-col bg-background border-t border-border ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
+    <div ref={browserRef} className={`h-full flex flex-col bg-background border-t border-border ${resizingColumn ? 'cursor-col-resize select-none' : ''}`}>
       {/* File Browser Toolbar */}
       <div className="relative z-10 py-2">
         <div className="flex flex-wrap items-center gap-1 border-b border-border bg-sidebar px-2 py-1.5 text-xs">
@@ -1779,16 +1833,17 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                         const isParent = file.name === '..';
                         const isDir = file.type === 'directory' && !isParent;
                         const isSel = selectedFiles.has(file.name);
+                        const opening = openingFiles.has(`${connectionId}\0${file.path}`);
+                        const editorState = editorStates[`${connectionId}\0${file.path}`];
                         return (
-                        <ContextMenu key={index} onOpenChange={(open) => {
-                          // Clear the right-click selection when the context menu closes (loses focus)
-                          if (!open) {
-                            setSelectedFiles(new Set());
-                          }
-                        }}>
+                        <ContextMenu key={file.path}>
                           <ContextMenuTrigger asChild>
                             <div
-                              className={`select-none flex items-center px-2 py-1 cursor-pointer transition-colors duration-100 rounded-md mx-1 my-px ${
+                              data-file-path={file.path}
+                              tabIndex={0}
+                              aria-label={file.name}
+                              aria-busy={opening}
+                              className={`group/file select-none flex items-center px-2 py-1 cursor-pointer focus-visible:outline-2 focus-visible:outline-ring transition-colors duration-100 rounded-md mx-1 my-px ${
                                 isSel
                                   ? 'bg-accent/80 ring-1 ring-inset ring-accent-foreground/10'
                                   : isParent
@@ -1797,7 +1852,13 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                                       ? 'hover:bg-muted/60'
                                       : 'bg-muted/15 hover:bg-muted/60'
                               }`}
-                              onClick={(e) => handleFileClick(file, e)}
+                              onClick={(e) => { e.currentTarget.focus(); handleFileClick(file, e); }}
+                              onKeyDown={event => {
+                                if (event.target !== event.currentTarget || event.nativeEvent.isComposing || event.keyCode === 229 || event.key !== 'Enter') return;
+                                event.preventDefault(); event.stopPropagation();
+                                if (file.name !== '..') setSelectedFiles(new Set([file.name]));
+                                void handleFileDoubleClick(file);
+                              }}
                               onDoubleClick={() => handleFileDoubleClick(file)}
                               onContextMenu={() => {
                                 // Right-clicking a non-selected row singles it out,
@@ -1822,7 +1883,14 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                           autoFocus
                         />
                       ) : (
-                        <span className={`text-[13px] truncate ${isDir ? 'font-medium' : ''}`}>{file.name}</span>
+                        <span className={`text-[13px] truncate ${isDir ? 'font-medium' : ''}`} title={file.name}>{file.name}</span>
+                      )}
+                      {file.type === 'file' && !renamingFile && (<>
+                        {editorState && editorState !== 'closed' && <span className={`shrink-0 text-[10px] ${editorState === 'modified' || editorState === 'error' ? 'text-warning' : 'text-muted-foreground'}`} title={t(`fileBrowser.editor.state.${editorState}`)} aria-label={t(`fileBrowser.editor.state.${editorState}`)}>{editorState === 'modified' ? '●' : editorState === 'saving' ? <Loader2 className="h-3 w-3 animate-spin" /> : editorState === 'error' ? '!' : '↗'}</span>}
+                        <button type="button" className="ml-auto mr-1 shrink-0 rounded px-1.5 py-0.5 text-[11px] text-primary hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring" aria-label={`${openActionLabel(file)}: ${file.name}`} disabled={opening} onClick={event => { event.stopPropagation(); setSelectedFiles(new Set([file.name])); void handleFileDoubleClick(file); }} onDoubleClick={event => event.stopPropagation()}>
+                          {opening ? <Loader2 className="h-3 w-3 animate-spin" /> : openActionLabel(file)}
+                        </button>
+                      </>
                       )}
                     </div>
                     <div className="text-[11px] font-mono text-muted-foreground truncate text-right pr-2" style={{ width: `${columnWidths.size}px` }}>
@@ -1845,12 +1913,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                   {file.type === 'file' && (
                     <>
                       <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
-                        <Eye className="mr-2 h-4 w-4" />
-                        {t('fileBrowser.contextMenu.open')}
-                      </ContextMenuItem>
-                      <ContextMenuItem onClick={() => handleFileDoubleClick(file)}>
-                        <Edit className="mr-2 h-4 w-4" />
-                        {t('fileBrowser.contextMenu.edit')}
+                        {classifyFileByExtension(file.name) === 'text' ? <Edit className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
+                        {openActionLabel(file)}
                       </ContextMenuItem>
                       {onOpenInLogMonitor && (
                         <ContextMenuItem onClick={() => {
@@ -2010,6 +2074,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               <div className="flex items-center justify-between px-3 py-1 text-[11px] text-muted-foreground border-t border-border bg-muted/20 shrink-0">
                 <span>
                   {t('fileBrowser.status.items', { dirs: statusStats.dirs, files: statusStats.fileCount })}
+                  <span className="ml-3" role="status">{lastSavedFile?.connectionId === connectionId ? t('fileBrowser.editor.saved', { name: lastSavedFile.name }) : t('fileBrowser.editor.openHint')}</span>
                 </span>
                 {selectedFiles.size > 0 && statusStats.selectedSize > 0 && (
                   <span className="text-primary/80">

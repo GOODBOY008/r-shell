@@ -204,6 +204,32 @@ impl FtpClient {
 
     // ===== File Operations =====
 
+    pub async fn read_editor_file(&mut self, path: &str, limit: usize) -> Result<Vec<u8>> {
+        ftp_stream!(self, s => {
+            if s.size(path).await.is_ok_and(|size| size > limit) {
+                anyhow::bail!("File too large for the editor. Download it to open locally.");
+            }
+            let mut stream = s.retr_as_stream(path).await?;
+            let bytes = crate::remote_editor::read_bounded(&mut stream, limit).await;
+            if bytes.is_err() {
+                // Consume the abort replies so the next list/save can reuse FTP.
+                let _ = s.abort(stream).await;
+            } else {
+                stream.finish().await?;
+            }
+            bytes
+        })
+    }
+
+    pub async fn write_editor_file(&mut self, path: &str, bytes: &[u8]) -> Result<()> {
+        ftp_stream!(self, s => {
+            let mut stream = s.put_with_stream(path).await?;
+            stream.write_all(bytes).await?;
+            stream.finish().await?;
+        });
+        Ok(())
+    }
+
     /// List directory contents at `path`.
     pub async fn list_dir(&mut self, path: &str) -> Result<Vec<FileEntry>> {
         let entries: Vec<String> = ftp_stream!(self, s => {

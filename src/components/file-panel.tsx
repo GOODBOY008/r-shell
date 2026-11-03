@@ -10,6 +10,10 @@ import { useTranslation } from 'react-i18next';
 import { notify } from '@/lib/notifications';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
 import { Button } from "./ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "./ui/dialog";
+import { Input } from "./ui/input";
+import { classifyFileByExtension } from "@/lib/editor-config";
+import type { EditorFileStateEvent } from "@/lib/editor-windows-store";
 import { Badge } from "./ui/badge";
 import {
   ContextMenu,
@@ -37,6 +41,9 @@ import {
   ArrowUpDown,
   ArrowDownAZ,
   ArrowUpAZ,
+  FilePenLine,
+  X,
+  AlertCircle,
 } from "lucide-react";
 import type { FileEntry } from "@/lib/file-entry-types";
 import {
@@ -64,6 +71,9 @@ export interface FilePanelProps {
   onRename?: (oldPath: string, newPath: string) => Promise<void>;
   onCreateDirectory?: (path: string) => Promise<void>;
   onOpenInOS?: (path: string) => Promise<void>;
+  onOpenFile?: (path: string, name: string) => void | Promise<void>;
+  onSelectionChange?: (count: number) => void;
+  editorStates?: Record<string, EditorFileStateEvent['state']>;
 
   // Transfer callbacks
   onTransferToOther?: (entries: FileEntry[], sourcePath: string) => void;
@@ -110,6 +120,9 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       onRename,
       onCreateDirectory,
       onOpenInOS,
+      onOpenFile,
+      onSelectionChange,
+      editorStates = {},
       onTransferToOther,
       onTransferDirectoryToOther,
       onFocus,
@@ -124,8 +137,16 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     const [currentPath, setCurrentPath] = useState(initialPath ?? "/");
     const [entries, setEntries] = useState<FileEntry[]>([]);
     const [loading, setLoading] = useState(false);
-    const [showOverlay, setShowOverlay] = useState(false);
-    const overlayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [loadError, setLoadError] = useState<{ path: string; message: string } | null>(null);
+    const requestId = useRef(0);
+    const currentPathRef = useRef(currentPath);
+    const initialPathRef = useRef(initialPath);
+    const [pathEditing, setPathEditing] = useState(false);
+    const [pathDraft, setPathDraft] = useState(currentPath);
+    const [operation, setOperation] = useState<{ type: 'rename' | 'create' | 'delete'; name: string; path: string; isDirectory?: boolean } | null>(null);
+    const [nameDraft, setNameDraft] = useState('');
+    const [operationError, setOperationError] = useState<string | null>(null);
+    const [operationBusy, setOperationBusy] = useState(false);
     const [filter, setFilter] = useState("");
     const [selectedNames, setSelectedNames] = useState<Set<string>>(new Set());
     const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(
@@ -161,58 +182,41 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     const getSegments =
       mode === "local" ? localBreadcrumbSegments : breadcrumbSegments;
 
-    // ------ Expose ref handle ------
-    useImperativeHandle(
-      ref,
-      () => ({
-        getCurrentPath: () => currentPath,
-        getSelectedEntries: () =>
-          entries.filter((e) => selectedNames.has(e.name)),
-        refresh: () => {
-          loadDirectory(currentPath);
-        },
-        selectAll: () => {
-          setSelectedNames(new Set(filteredEntries.map((e) => e.name)));
-        },
-        navigateTo: (path: string) => {
-          loadDirectory(path);
-        },
-      }),
-      [currentPath, entries, selectedNames],
-    );
-
-    // ------ Data loading ------
-    const loadDirectory = useCallback(
-      async (path: string) => {
-        if (disabled) return;
-        setLoading(true);
-        // Show overlay immediately and keep it visible for at least 300ms
-        if (overlayTimerRef.current) clearTimeout(overlayTimerRef.current);
-        setShowOverlay(true);
-        try {
-          const result = await onLoadDirectory(path);
-          setEntries(result);
-          setCurrentPath(path);
-          onPathChange?.(path);
-          setSelectedNames(new Set());
-          setLastSelectedIndex(null);
-        } catch (err) {
-          notify.error(t('filePanel.toast.loadFailed'), {
-            description: err instanceof Error ? err.message : String(err),
-          });
-        } finally {
-          setLoading(false);
-          overlayTimerRef.current = setTimeout(() => setShowOverlay(false), 300);
-        }
-      },
-      [onLoadDirectory, disabled, onPathChange],
-    );
+    // Refresh preserves selection; navigation only commits when its request is
+    // still current. A slow directory cannot replace a newer one.
+    const loadDirectory = useCallback(async (path: string) => {
+      if (disabled) return;
+      const request = ++requestId.current;
+      const sameDirectory = path === currentPathRef.current;
+      setLoading(true);
+      setLoadError(null);
+      try {
+        const result = await onLoadDirectory(path);
+        if (request !== requestId.current) return;
+        setEntries(result);
+        currentPathRef.current = path;
+        setCurrentPath(path);
+        setPathDraft(path);
+        onPathChange?.(path);
+        setSelectedNames(previous => sameDirectory
+          ? new Set(result.filter(entry => previous.has(entry.name)).map(entry => entry.name))
+          : new Set());
+        if (!sameDirectory) setLastSelectedIndex(null);
+      } catch (error) {
+        if (request === requestId.current) setLoadError({ path, message: error instanceof Error ? error.message : String(error) });
+      } finally {
+        if (request === requestId.current) setLoading(false);
+      }
+    }, [onLoadDirectory, disabled, onPathChange]);
 
     useEffect(() => {
-      if (!disabled && initialPath) {
-        loadDirectory(initialPath);
-      }
-    }, [disabled, initialPath]);
+      const changed = initialPath !== initialPathRef.current;
+      initialPathRef.current = initialPath;
+      if (!disabled && initialPath) void loadDirectory(changed ? initialPath : currentPathRef.current);
+      return () => { requestId.current += 1; };
+    }, [disabled, initialPath, loadDirectory]);
+
+    useEffect(() => { onSelectionChange?.(selectedNames.size); }, [selectedNames, onSelectionChange]);
 
     // ------ Filtering & Sorting ------
     const filteredEntries = (() => {
@@ -254,6 +258,26 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
       return result;
     })();
+
+    // ------ Expose ref handle ------
+    useImperativeHandle(
+      ref,
+      () => ({
+        getCurrentPath: () => currentPath,
+        getSelectedEntries: () =>
+          entries.filter((e) => selectedNames.has(e.name)),
+        refresh: () => {
+          void loadDirectory(currentPath);
+        },
+        selectAll: () => {
+          setSelectedNames(new Set(filteredEntries.map((e) => e.name)));
+        },
+        navigateTo: (path: string) => {
+          void loadDirectory(path);
+        },
+      }),
+      [currentPath, entries, selectedNames, filteredEntries, loadDirectory],
+    );
 
     const handleSortClick = (column: "name" | "size" | "modified") => {
       if (sortColumn === column) {
@@ -340,74 +364,76 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       }
     };
 
+    const openLabel = (entry: FileEntry) => t(classifyFileByExtension(entry.name) === 'text'
+      ? 'fileBrowser.editor.edit' : 'fileBrowser.editor.preview');
     const handleDoubleClick = (entry: FileEntry) => {
+      if (disabled || loading) return;
       if (entry.file_type === "Directory" || entry.file_type === "Symlink") {
-        loadDirectory(pathJoin(currentPath, entry.name));
+        void loadDirectory(pathJoin(currentPath, entry.name));
+      } else {
+        const path = pathJoin(currentPath, entry.name);
+        void Promise.resolve(onOpenFile ? onOpenFile(path, entry.name) : onOpenInOS?.(path))
+          .catch(error => notify.error(t('fileEditorView.failedToOpenWithOs'), { description: String(error) }));
       }
     };
 
-    // ------ File operations ------
-    const handleDelete = async (name: string, isDirectory: boolean) => {
-      if (!onDelete) return;
-      const fullPath = pathJoin(currentPath, name);
-      try {
-        await onDelete(fullPath, isDirectory);
-        notify.success(t('filePanel.toast.deleted'), { description: name });
-        loadDirectory(currentPath);
-      } catch (err) {
-        notify.error(t('filePanel.toast.deleteFailed'), {
-          description: err instanceof Error ? err.message : String(err),
-        });
-      }
+    const beginOperation = (type: 'rename' | 'create' | 'delete', name = '', isDirectory = false) => {
+      if (disabled || loading) return;
+      setOperation({ type, name, isDirectory, path: currentPath });
+      setNameDraft(name);
+      setOperationError(null);
     };
-
-    const handleRename = async (oldName: string) => {
-      if (!onRename) return;
-      const newName = prompt(t('filePanel.prompt.rename'), oldName);
-      if (!newName || newName === oldName) return;
-      try {
-        await onRename(
-          pathJoin(currentPath, oldName),
-          pathJoin(currentPath, newName),
-        );
-        notify.success(t('filePanel.toast.renamed'), { description: `${oldName} → ${newName}` });
-        loadDirectory(currentPath);
-      } catch (err) {
-        notify.error(t('filePanel.toast.renameFailed'), {
-          description: err instanceof Error ? err.message : String(err),
-        });
+    const handleDelete = (name: string, isDirectory: boolean) => beginOperation('delete', name, isDirectory);
+    const handleRename = (name: string) => beginOperation('rename', name, entries.find(entry => entry.name === name)?.file_type === 'Directory');
+    const handleCreateDir = () => beginOperation('create');
+    const confirmOperation = async (event: React.FormEvent) => {
+      event.preventDefault();
+      if (!operation || operationBusy || disabled) return;
+      const targetPath = pathJoin(operation.path, operation.name);
+      if (operation.type !== 'create' && Object.entries(editorStates).some(([path, state]) => state !== 'closed'
+        && (path === targetPath || (operation.isDirectory && path.startsWith(`${targetPath}/`))))) {
+        setOperationError(t('filePanel.dialog.closeEditorFirst'));
+        return;
       }
-    };
-
-    const handleCreateDir = async () => {
-      if (!onCreateDirectory) return;
-      const name = prompt(t('filePanel.prompt.directoryName'));
-      if (!name) return;
-      try {
-        await onCreateDirectory(pathJoin(currentPath, name));
-        notify.success(t('filePanel.toast.directoryCreated'), { description: name });
-        loadDirectory(currentPath);
-      } catch (err) {
-        notify.error(t('filePanel.toast.createDirectoryFailed'), {
-          description: err instanceof Error ? err.message : String(err),
-        });
+      const name = nameDraft.trim();
+      if (operation.type !== 'delete' && (!name || name === '.' || name === '..' || /[/\\\0]/.test(name))) {
+        setOperationError(t('filePanel.dialog.invalidName'));
+        return;
       }
+      setOperationBusy(true);
+      setOperationError(null);
+      try {
+        if (operation.type === 'delete') await onDelete?.(pathJoin(operation.path, operation.name), !!operation.isDirectory);
+        else if (operation.type === 'rename') await onRename?.(pathJoin(operation.path, operation.name), pathJoin(operation.path, name));
+        else await onCreateDirectory?.(pathJoin(operation.path, name));
+        setOperation(null);
+        notify.success(t(operation.type === 'delete' ? 'filePanel.toast.deleted' : operation.type === 'rename' ? 'filePanel.toast.renamed' : 'filePanel.toast.directoryCreated'));
+        if (currentPathRef.current === operation.path) await loadDirectory(operation.path);
+      } catch (error) {
+        setOperationError(error instanceof Error ? error.message : String(error));
+      } finally { setOperationBusy(false); }
     };
 
     const handleCopyPath = (name: string) => {
-      writeClipboardText(pathJoin(currentPath, name));
-      notify.success(t('filePanel.toast.pathCopied'));
+      void writeClipboardText(pathJoin(currentPath, name))
+        .then(() => notify.success(t('filePanel.toast.pathCopied')))
+        .catch(error => notify.error(t('fileEditorView.copyPathFailed'), { description: String(error) }));
     };
 
     const handleTransfer = () => {
-      if (!onTransferToOther) return;
+      if (!onTransferToOther || disabled) return;
       const selected = entries.filter((e) => selectedNames.has(e.name));
       if (selected.length === 0) return;
+      if (selected.length === 1 && selected[0].file_type === "Directory" && onTransferDirectoryToOther) {
+        onTransferDirectoryToOther(selected[0].name, currentPath);
+        return;
+      }
       onTransferToOther(selected, currentPath);
     };
 
     // ------ Drag & drop ------
     const handleDragStart = (e: React.DragEvent, entry: FileEntry) => {
+      if (disabled) { e.preventDefault(); return; }
       // Add the current entry to selection if not already
       const selected = selectedNames.has(entry.name)
         ? entries.filter((en) => selectedNames.has(en.name))
@@ -449,6 +475,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       e.stopPropagation();
       setIsDragOver(false);
 
+      if (disabled) return;
       const data = e.dataTransfer.getData(DRAG_MIME);
       if (!data) return;
 
@@ -485,14 +512,29 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
 
     // ------ Keyboard ------
     const handleKeyDown = (e: React.KeyboardEvent) => {
-      // Don't intercept keys when typing in the filter input
-      const tag = (e.target as HTMLElement).tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-
-      if (e.key === "Backspace") {
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || disabled) return;
+      const target = e.target as HTMLElement;
+      if (target.closest('input, textarea, button, [contenteditable="true"], [role="dialog"]')) return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
+        e.preventDefault(); e.stopPropagation(); setPathDraft(currentPath); setPathEditing(true);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault(); e.stopPropagation(); setSelectedNames(new Set(filteredEntries.map(entry => entry.name)));
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
-        const parent = getParentPath(currentPath);
-        if (parent !== currentPath) loadDirectory(parent);
+        const previous = filteredEntries.findIndex(entry => selectedNames.has(entry.name));
+        const index = Math.min(filteredEntries.length - 1, Math.max(0, previous + (e.key === 'ArrowDown' ? 1 : -1)));
+        if (filteredEntries[index]) { setSelectedNames(new Set([filteredEntries[index].name])); setLastSelectedIndex(index); }
+      } else if (e.key === 'Enter' && selectedNames.size === 1) {
+        e.preventDefault(); const entry = entries.find(item => selectedNames.has(item.name));
+        if (entry) handleDoubleClick(entry);
+      } else if (e.key === 'F2' && selectedNames.size === 1 && onRename) {
+        e.preventDefault(); handleRename([...selectedNames][0]);
+      } else if (e.key === 'Delete' && selectedNames.size === 1 && onDelete) {
+        e.preventDefault(); const entry = entries.find(item => selectedNames.has(item.name));
+        if (entry) handleDelete(entry.name, entry.file_type === 'Directory');
+      } else if (e.key === 'Backspace') {
+        e.preventDefault(); const parent = getParentPath(currentPath);
+        if (parent !== currentPath) void loadDirectory(parent);
       }
     };
 
@@ -510,6 +552,9 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         ref={containerRef}
         className={`h-full flex flex-col relative bg-background text-foreground ${borderClass} rounded-sm overflow-hidden ${showDropOverlay ? "ring-2 ring-primary ring-inset bg-primary/5" : ""}`}
         onClick={onFocus}
+        onFocusCapture={onFocus}
+        aria-label={label}
+        aria-busy={loading}
         onKeyDown={handleKeyDown}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -525,11 +570,15 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           >
             {t(mode === "local" ? 'filePanel.panel.local' : 'filePanel.panel.remote')}
           </Badge>
-          <span className="text-[11px] text-muted-foreground truncate flex-1">
+          {(mode !== 'local' || label !== t('filePanel.panel.local')) && <span className="text-[11px] text-muted-foreground truncate flex-1">
             {label}
-          </span>
+          </span>}
         </div>
 
+        {loadError && <div className="flex items-center gap-2 px-3 py-2 text-xs text-destructive border-b border-border" role="alert">
+          <AlertCircle className="size-3.5 shrink-0" /><span className="flex-1 min-w-0 break-all">{loadError.message}</span>
+          <Button variant="ghost" size="sm" disabled={disabled} onClick={() => void loadDirectory(loadError.path)}>{t('fileEditorView.retry')}</Button>
+        </div>}
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-1 px-2 py-1.5 border-b border-border bg-muted/30 shrink-0">
           <Button
@@ -537,6 +586,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             size="icon"
             className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.goUp')}
+            aria-label={t('filePanel.toolbar.goUp')}
             disabled={disabled || currentPath === "/"}
             onClick={() => loadDirectory(getParentPath(currentPath))}
           >
@@ -547,6 +597,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             size="icon"
             className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.home')}
+            aria-label={t('filePanel.toolbar.home')}
             disabled={disabled}
             onClick={() => loadDirectory(initialPath ?? "/")}
           >
@@ -557,6 +608,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             size="icon"
             className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.refresh')}
+            aria-label={t('filePanel.toolbar.refresh')}
             disabled={disabled}
             onClick={() => loadDirectory(currentPath)}
           >
@@ -565,6 +617,12 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             />
           </Button>
 
+          {pathEditing ? <form className="flex-1 min-w-0" onSubmit={event => {
+            event.preventDefault(); if (pathDraft.trim()) { void loadDirectory(pathDraft.trim()); setPathEditing(false); }
+          }}><Input autoFocus aria-label={t('filePanel.toolbar.path')} className="h-7 text-xs font-mono" value={pathDraft}
+            onChange={event => setPathDraft(event.target.value)} onKeyDown={event => {
+              if (event.key === 'Escape') { event.stopPropagation(); setPathEditing(false); }
+            }} onBlur={() => setPathEditing(false)} /></form> : <>
           {/* Breadcrumbs */}
           <div className="flex items-center gap-0.5 ml-1 text-[11px] overflow-x-auto whitespace-nowrap flex-1 min-w-0">
             {segments.map((seg, i) => (
@@ -583,6 +641,10 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             ))}
           </div>
 
+          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" disabled={disabled}
+            title={t('filePanel.toolbar.path')} aria-label={t('filePanel.toolbar.path')}
+            onClick={() => { setPathDraft(currentPath); setPathEditing(true); }}><Pencil className="size-3" /></Button>
+          </>}
           {/* Filter */}
           <div className="order-last flex basis-full items-center h-8 rounded-md border border-input bg-muted/50 px-2 gap-1.5">
             <Search className="h-3 w-3 text-muted-foreground/60 shrink-0" />
@@ -595,8 +657,9 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
               autoCapitalize="off"
               spellCheck={false}
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(e) => { setFilter(e.target.value); setSelectedNames(new Set()); setLastSelectedIndex(null); }}
             />
+            {filter && <button type="button" aria-label={t('filePanel.toolbar.clearFilter')} onClick={() => setFilter('')}><X className="size-3" /></button>}
           </div>
 
           <Button
@@ -604,6 +667,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             size="icon"
             className="h-7 w-7 shrink-0"
             title={t('filePanel.toolbar.newFolder')}
+            aria-label={t('filePanel.toolbar.newFolder')}
             disabled={disabled}
             onClick={handleCreateDir}
           >
@@ -614,7 +678,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
         {/* File list */}
         <ContextMenu>
           <ContextMenuTrigger asChild>
-            <div className={`flex-1 min-h-0 overflow-auto transition-opacity duration-150 ${showOverlay && entries.length > 0 ? "opacity-40" : ""}`}>
+            <div className={`flex-1 min-h-0 overflow-auto transition-opacity duration-150 ${loading && entries.length > 0 ? "opacity-40" : ""}`}>
               {loading && entries.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-40 gap-2">
                   <Loader2 className="h-7 w-7 shrink-0 animate-spin text-muted-foreground/60" />
@@ -700,16 +764,31 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                         <ContextMenu key={entry.name}>
                           <ContextMenuTrigger asChild>
                             <tr
-                              className={`border-b border-border cursor-pointer transition-colors ${isSelected ? `${selectedBg} font-medium` : "hover:bg-muted/40"}`}
-                              onClick={(e) => handleRowClick(idx, e)}
+                              aria-selected={isSelected}
+                              tabIndex={-1}
+                              className={`group/row border-b border-border/40 cursor-pointer transition-colors ${isSelected ? `${selectedBg} font-medium` : "hover:bg-muted/40"}`}
+                              onClick={(e) => { handleRowClick(idx, e); containerRef.current?.focus(); }}
+                              onContextMenu={() => { onFocus(); if (!selectedNames.has(entry.name)) setSelectedNames(new Set([entry.name])); setLastSelectedIndex(idx); }}
                               onDoubleClick={() => handleDoubleClick(entry)}
-                              draggable
+                              draggable={!disabled}
                               onDragStart={(e) => handleDragStart(e, entry)}
                             >
                               <td className="px-2 py-0.5 overflow-hidden">
                                 <div className="flex items-center gap-1.5 min-w-0">
                                   {getFileIcon(entry)}
-                                  <span className="truncate">{entry.name}</span>
+                                  <span className="truncate flex-1" title={entry.name}>{entry.name}</span>
+                                  {editorStates[pathJoin(currentPath, entry.name)] && editorStates[pathJoin(currentPath, entry.name)] !== 'closed' && (
+                                    <span className="shrink-0 text-[10px] text-amber-600 dark:text-amber-400"
+                                      aria-label={t(`fileBrowser.editor.state.${editorStates[pathJoin(currentPath, entry.name)]}`)}
+                                      title={t(`fileBrowser.editor.state.${editorStates[pathJoin(currentPath, entry.name)]}`)}>
+                                      {editorStates[pathJoin(currentPath, entry.name)] === 'modified' ? '●' : editorStates[pathJoin(currentPath, entry.name)] === 'saving' ? '…' : editorStates[pathJoin(currentPath, entry.name)] === 'error' ? '!' : '↗'}
+                                    </span>
+                                  )}
+                                  {entry.file_type === 'File' && onOpenFile && <button type="button"
+                                    className="shrink-0 p-1 rounded hover:bg-muted text-muted-foreground opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
+                                    aria-label={t('filePanel.openFile', { name: entry.name })} title={openLabel(entry)} disabled={disabled || loading}
+                                    onClick={event => { event.stopPropagation(); handleDoubleClick(entry); }}
+                                    onDoubleClick={event => event.stopPropagation()}><FilePenLine className="size-3.5" /></button>}
                                 </div>
                               </td>
                               <td className="text-right px-2 py-0.5 text-muted-foreground overflow-hidden whitespace-nowrap">
@@ -728,8 +807,11 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                             </tr>
                           </ContextMenuTrigger>
                           <ContextMenuContent>
-                            {onTransferToOther && (
-                              <ContextMenuItem onClick={handleTransfer}>
+                            {entry.file_type === 'File' && onOpenFile && <ContextMenuItem disabled={disabled} onClick={() => handleDoubleClick(entry)}>
+                              <FilePenLine className="size-3.5 mr-2" />{openLabel(entry)}
+                            </ContextMenuItem>}
+                            {onTransferToOther && entry.file_type !== "Directory" && (
+                              <ContextMenuItem disabled={disabled} onClick={handleTransfer}>
                                 {mode === "local" ? (
                                   <Upload className="h-3.5 w-3.5 mr-2" />
                                 ) : (
@@ -743,6 +825,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                             {entry.file_type === "Directory" &&
                               onTransferDirectoryToOther && (
                                 <ContextMenuItem
+                                  disabled={disabled}
                                   onClick={() =>
                                     onTransferDirectoryToOther(
                                       entry.name,
@@ -773,6 +856,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                               </ContextMenuItem>
                             )}
                             <ContextMenuItem
+                              disabled={disabled || !onRename}
                               onClick={() => handleRename(entry.name)}
                             >
                               <Pencil className="h-3.5 w-3.5 mr-2" />
@@ -787,6 +871,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
                             <ContextMenuSeparator />
                             <ContextMenuItem
                               className="text-destructive"
+                              disabled={disabled || !onDelete}
                               onClick={() =>
                                 handleDelete(
                                   entry.name,
@@ -808,27 +893,17 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           </ContextMenuTrigger>
           {/* Background context menu */}
           <ContextMenuContent>
-            <ContextMenuItem onClick={handleCreateDir}>
+            <ContextMenuItem disabled={disabled || !onCreateDirectory} onClick={handleCreateDir}>
               <FolderPlus className="h-3.5 w-3.5 mr-2" />
               {t('filePanel.contextMenu.createDirectory')}
             </ContextMenuItem>
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => loadDirectory(currentPath)}>
+            <ContextMenuItem disabled={disabled || loading} onClick={() => loadDirectory(currentPath)}>
               <RefreshCw className="h-3.5 w-3.5 mr-2" />
               {t('filePanel.contextMenu.refresh')}
             </ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
-
-        {/* Loading overlay — at panel root to avoid ContextMenu stacking issues */}
-        {showOverlay && entries.length > 0 && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none">
-            <div className="flex flex-col items-center gap-1.5 bg-background/80 rounded-lg px-4 py-3 shadow-xs border border-border">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-              <span className="text-[11px] text-muted-foreground">{t('filePanel.loading')}</span>
-            </div>
-          </div>
-        )}
 
         {/* Drop overlay — cross-panel drag shows "Drop to upload/download";
             OS-native drop on remote shows "Drop files or folders to upload". */}
@@ -865,9 +940,30 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
             )}
           </span>
           <span className="truncate max-w-[200px]" title={currentPath}>
-            {currentPath}
+            {loading ? t('filePanel.loading') : t('filePanel.keyboardHint')}
           </span>
         </div>
+        <Dialog open={!!operation} onOpenChange={open => { if (!open && !operationBusy) setOperation(null); }}>
+          <DialogContent className="!inset-0 !m-auto !translate-x-0 !translate-y-0 h-fit">
+            <form onSubmit={event => void confirmOperation(event)} className="space-y-4">
+              <DialogHeader>
+                <DialogTitle>{t(operation?.type === 'delete' ? 'filePanel.dialog.deleteTitle' : operation?.type === 'rename' ? 'filePanel.contextMenu.rename' : 'filePanel.contextMenu.createDirectory')}</DialogTitle>
+                <DialogDescription className="break-all">{operation?.type === 'delete'
+                  ? t('filePanel.dialog.deleteDescription', { name: operation.name }) : operation?.path}</DialogDescription>
+              </DialogHeader>
+              {operation?.type !== 'delete' && <Input autoFocus aria-label={t('filePanel.column.name')} value={nameDraft}
+                disabled={operationBusy} onChange={event => setNameDraft(event.target.value)} onFocus={event => event.target.select()} />}
+              {operationError && <p role="alert" className="text-sm text-destructive">{operationError}</p>}
+              <DialogFooter>
+                <Button type="button" variant="outline" disabled={operationBusy} onClick={() => setOperation(null)}>{t('common.cancel')}</Button>
+                <Button type="submit" variant={operation?.type === 'delete' ? 'destructive' : 'default'} disabled={disabled || operationBusy}>
+                  {operationBusy && <Loader2 className="size-3.5 animate-spin" />}
+                  {t(operation?.type === 'delete' ? 'filePanel.contextMenu.delete' : 'common.save')}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
     );
   },

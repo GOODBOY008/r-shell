@@ -1,11 +1,37 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+  useRef,
+} from "react";
 import { parentPath } from "@/lib/file-entry-types";
+import { useEditorTab } from "@/lib/editor-tabs-context";
+import { useShortcutBindings } from "@/lib/shortcut-registry";
+import { isEditableTarget, isShortcutRecording, matchesKeyboardShortcut, parseKeyboardShortcut } from "@/lib/keyboard-shortcuts";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
-import { notify } from '@/lib/notifications';
-import { Save, RefreshCw, FileWarning, ExternalLink, Image as ImageIcon, FileArchive, Download } from "lucide-react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { notify } from "@/lib/notifications";
+import {
+  Save,
+  RefreshCw,
+  FileWarning,
+  ExternalLink,
+  Image as ImageIcon,
+  FileArchive,
+  Download,
+  FileCode2,
+  Check,
+  Copy,
+  LoaderCircle,
+  WifiOff,
+  AlertCircle,
+  ArrowLeft,
+} from "lucide-react";
 import { Button, buttonVariants } from "./ui/button";
 import { CodeEditor } from "./code-editor";
 import {
@@ -18,11 +44,17 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "./ui/alert-dialog";
-import { classifyFileByExtension, type FileViewKind } from "@/lib/editor-config";
+import {
+  classifyFileByExtension,
+  type FileViewKind,
+} from "@/lib/editor-config";
 import { submit, getTransferById } from "@/lib/transfer-queue-service";
 import {
   EDITOR_WINDOW_CHANGED_EVENT,
   type EditorWindowEventPayload,
+  EDITOR_FILE_STATE_EVENT,
+  EDITOR_FILE_SAVED_EVENT,
+  EDITOR_FILE_STATE_REQUEST_EVENT,
 } from "@/lib/editor-windows-store";
 
 interface Base64FileResponse {
@@ -32,13 +64,13 @@ interface Base64FileResponse {
 }
 
 interface FileEditorViewProps {
-  /** SSH connection ID used to read/write the file */
+  /** SSH, SFTP or FTP connection ID used to read/write the file */
   connectionId: string;
   /** Remote file path */
   filePath: string;
   /** Display name shown in the header */
   fileName: string;
-  /** Whether the underlying SSH connection is alive */
+  /** Whether the underlying file connection is available */
   isConnected: boolean;
   /**
    * When true (file-viewer window), this component owns the window close
@@ -46,6 +78,12 @@ interface FileEditorViewProps {
    * events are reported so the main window can track and restore editors.
    */
   guardWindowClose?: boolean;
+  host?: string;
+  tabId?: string;
+  isActive?: boolean;
+  onClose?: () => void | Promise<void>;
+  onBackToTerminal?: () => void;
+  backTarget?: 'terminal' | 'files';
 }
 
 export function FileEditorView({
@@ -54,18 +92,38 @@ export function FileEditorView({
   fileName,
   isConnected,
   guardWindowClose = false,
+  host = "",
+  tabId,
+  isActive = true,
+  onClose,
+  onBackToTerminal,
+  backTarget = 'terminal',
 }: FileEditorViewProps) {
   const { t } = useTranslation();
+  const { closeSession } = useShortcutBindings();
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const dirty = content !== savedContent;
+  const fileIdentity = `${connectionId}\0${filePath}`;
+  const [loadedFile, setLoadedFile] = useState<string | null>(null);
+  const hasLoaded = loadedFile === fileIdentity;
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [reloadConfirmOpen, setReloadConfirmOpen] = useState(false);
+  const saveInFlight = useRef(false);
+  const loadRequest = useRef(0);
+  const identityRef = useRef(fileIdentity);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const dirty = hasLoaded && content !== savedContent;
   const contentRef = useRef(content);
-  contentRef.current = content;
   const dirtyRef = useRef(dirty);
-  dirtyRef.current = dirty;
+  useLayoutEffect(() => {
+    identityRef.current = fileIdentity;
+    contentRef.current = content;
+    dirtyRef.current = dirty;
+  }, [fileIdentity, content, dirty]);
   // Unsaved-changes confirmation before closing the window or quitting the
   // app (both reuse the same dialog; the mode picks the action wiring).
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -93,6 +151,7 @@ export function FileEditorView({
   const [downloading, setDownloading] = useState(false);
 
   const loadFile = useCallback(async () => {
+    const request = ++loadRequest.current;
     if (fileKind === "text") {
       setLoading(true);
       setError(null);
@@ -101,59 +160,115 @@ export function FileEditorView({
           connectionId,
           path: filePath,
         });
+        if (request !== loadRequest.current) return;
         setContent(text);
         setSavedContent(text);
+        setLastSavedAt(null);
+        setLoadedFile(fileIdentity);
+        setSaveError(null);
       } catch (err) {
+        if (request !== loadRequest.current) return;
         const msg = err instanceof Error ? err.message : String(err);
         setError(msg);
-        notify.error(t('fileEditorView.failedToLoad'), { description: msg });
+        notify.error(t("fileEditorView.failedToLoad"), { description: msg });
       } finally {
-        setLoading(false);
+        if (request === loadRequest.current) setLoading(false);
       }
     } else if (fileKind === "image") {
       setImageLoading(true);
       setImageError(null);
       try {
-        const resp = await invoke<Base64FileResponse>("read_remote_file_base64", {
-          connectionId,
-          path: filePath,
-        });
+        const resp = await invoke<Base64FileResponse>(
+          "read_remote_file_base64",
+          {
+            connectionId,
+            path: filePath,
+          },
+        );
+        if (request !== loadRequest.current) return;
         setImageDataUri(`data:${resp.mime_type};base64,${resp.data}`);
       } catch (err) {
+        if (request !== loadRequest.current) return;
         const msg = err instanceof Error ? err.message : String(err);
         setImageError(msg);
       } finally {
-        setImageLoading(false);
+        if (request === loadRequest.current) setImageLoading(false);
       }
     }
     // For "binary" kind, no remote loading needed
-  }, [connectionId, filePath, fileKind]);
+  }, [connectionId, filePath, fileKind, fileIdentity, t]);
+
+  useEffect(
+    () => () => {
+      loadRequest.current += 1;
+    },
+    [fileIdentity],
+  );
 
   useEffect(() => {
-    if (isConnected) {
-      void loadFile();
-    }
-  }, [isConnected, loadFile]);
+    // A reconnect must not overwrite the buffer the user was editing offline.
+    if (isConnected && (fileKind !== "text" || !hasLoaded)) void loadFile();
+  }, [isConnected, loadFile, hasLoaded, fileKind]);
+
+  const requestReload = () => {
+    if (dirty) setReloadConfirmOpen(true);
+    else void loadFile();
+  };
 
   const handleSave = useCallback(async (): Promise<boolean> => {
+    if (saveInFlight.current || !isConnected || loading || !hasLoaded)
+      return false;
+    if (!dirtyRef.current) {
+      setSaveError(null);
+      return true;
+    }
+    const snapshot = contentRef.current;
+    saveInFlight.current = true;
     setSaving(true);
+    setSaveError(null);
     try {
       await invoke<boolean>("create_file", {
         connectionId,
         path: filePath,
-        content: contentRef.current,
+        content: snapshot,
       });
-      setSavedContent(contentRef.current);
-      notify.success(t('fileEditorView.fileSaved', { fileName }));
-      return true;
+      if (identityRef.current !== fileIdentity) return false;
+      setSavedContent(snapshot);
+      setLastSavedAt(new Date());
+      await emit(EDITOR_FILE_SAVED_EVENT, {
+        connectionId,
+        filePath,
+        fileName,
+      }).catch(() => {});
+      notify.success(t("fileEditorView.fileSaved", { fileName }));
+      // Typing during a slow save creates new unsaved changes. Keep the close
+      // guard active until those changes have been saved too.
+      return contentRef.current === snapshot;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      notify.error(t('fileEditorView.failedToSave'), { description: msg });
+      if (identityRef.current === fileIdentity) {
+        setSaveError(msg);
+        notify.error(t("fileEditorView.failedToSave"), { description: msg });
+      }
       return false;
     } finally {
+      saveInFlight.current = false;
       setSaving(false);
     }
-  }, [connectionId, filePath, fileName]);
+  }, [
+    connectionId,
+    filePath,
+    fileName,
+    fileIdentity,
+    isConnected,
+    loading,
+    hasLoaded,
+    t,
+  ]);
+
+  useEditorTab(tabId, dirty, handleSave, () => {
+    rootRef.current?.querySelector<HTMLElement>('[contenteditable="true"]')?.focus();
+  });
 
   // Download to temp directory and open with OS default app
   const handleDownloadAndOpen = useCallback(async () => {
@@ -183,38 +298,157 @@ export function FileEditorView({
       });
       const outcome = await transfer.done;
       if (outcome !== "completed") {
-        throw new Error(outcome === "cancelled"
-          ? "Download cancelled"
-          : getTransferById(transfer.id)?.error ?? "Download failed");
+        throw new Error(
+          outcome === "cancelled"
+            ? "Download cancelled"
+            : (getTransferById(transfer.id)?.error ?? "Download failed"),
+        );
       }
       await invoke<void>("open_in_os", { path: localPath });
-      notify.success(t('fileEditorView.openedWithOs', { fileName }));
+      notify.success(t("fileEditorView.openedWithOs", { fileName }));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      notify.error(t('fileEditorView.failedToOpenWithOs'), { description: msg });
+      notify.error(t("fileEditorView.failedToOpenWithOs"), {
+        description: msg,
+      });
     } finally {
       setDownloading(false);
     }
-  }, [connectionId, filePath, fileName]);
+  }, [connectionId, filePath, fileName, t]);
+
+  useEffect(() => {
+    if ((!guardWindowClose && !tabId) || !hasLoaded) return;
+    const state = saving
+      ? "saving"
+      : saveError
+        ? "error"
+        : dirty
+          ? "modified"
+          : "clean";
+    const report = () => {
+      void emit(EDITOR_FILE_STATE_EVENT, {
+        connectionId,
+        filePath,
+        state,
+      }).catch(() => {});
+    };
+    report();
+    let disposed = false;
+    const unlisten = listen<{ connectionId: string }>(
+      EDITOR_FILE_STATE_REQUEST_EVENT,
+      (event) => {
+        if (!disposed && event.payload.connectionId === connectionId) report();
+      },
+    );
+    try {
+      if (guardWindowClose) void getCurrentWindow()
+        .setTitle(`${dirty ? "● " : ""}${fileName}${host ? ` — ${host}` : ""}`)
+        .catch(() => {});
+    } catch {
+      /* Browser preview. */
+    }
+    return () => {
+      disposed = true;
+      void unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [
+    guardWindowClose,
+    tabId,
+    hasLoaded,
+    dirty,
+    saving,
+    saveError,
+    connectionId,
+    filePath,
+    fileName,
+    host,
+  ]);
+
+  useEffect(
+    () => () => {
+      if (guardWindowClose || tabId)
+        void emit(EDITOR_FILE_STATE_EVENT, {
+          connectionId,
+          filePath,
+          state: "closed",
+        }).catch(() => {});
+    },
+    [guardWindowClose, tabId, connectionId, filePath],
+  );
+
+  const returnToMain = async () => {
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const main = await WebviewWindow.getByLabel("main");
+      if (!main) throw new Error(t("fileEditorView.returnFailed"));
+      await main.show();
+      await main.unminimize();
+      await main.setFocus();
+    } catch (error) {
+      notify.error(t("fileEditorView.returnFailed"), {
+        description: String(error),
+      });
+    }
+  };
+
+  // App shortcuts deliberately leave editable focus alone. Capture this
+  // editor's configured close chord before CodeMirror consumes it, then use
+  // the same tab-close guard as the tab bar. Other focus stays with App.
+  useEffect(() => {
+    if (!isActive || guardWindowClose || !onClose) return;
+    const shortcut = parseKeyboardShortcut(closeSession);
+    if (!shortcut) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || isShortcutRecording()) return;
+      if (!(event.target instanceof Node) || !rootRef.current?.contains(event.target) || !isEditableTarget(event.target)) return;
+      if (!matchesKeyboardShortcut(event, shortcut)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) void onClose();
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [closeSession, guardWindowClose, isActive, onClose]);
 
   // Ctrl+S / Cmd+S to save (only for text files)
   useEffect(() => {
-    if (fileKind !== "text") return;
+    if (fileKind !== "text" || !isActive) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (
+        !guardWindowClose &&
+        !tabId &&
+        !rootRef.current?.contains(document.activeElement)
+      )
+        return;
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         void handleSave();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleSave, fileKind]);
+  }, [handleSave, fileKind, guardWindowClose, isActive, tabId]);
 
   // Report this editor to the main window (for tracking/restore).
-  const emitWindowEvent = useCallback((event: "opened" | "closed") => {
-    const payload: EditorWindowEventPayload = { event, connectionId, filePath, fileName };
-    void emit(EDITOR_WINDOW_CHANGED_EVENT, payload).catch(() => {});
-  }, [connectionId, filePath, fileName]);
+  const emitWindowEvent = useCallback(
+    (event: "opened" | "closed") => {
+      const payload: EditorWindowEventPayload = {
+        event,
+        connectionId,
+        filePath,
+        fileName,
+      };
+      void emit(EDITOR_WINDOW_CHANGED_EVENT, payload).catch(() => {});
+      if (event === "closed")
+        void emit(EDITOR_FILE_STATE_EVENT, {
+          connectionId,
+          filePath,
+          state: "closed",
+        }).catch(() => {});
+    },
+    [connectionId, filePath, fileName],
+  );
 
   useEffect(() => {
     if (!guardWindowClose) return;
@@ -265,7 +499,9 @@ export function FileEditorView({
   // a pending quit, which is what lets the quit proceed.
   useEffect(() => {
     if (!guardWindowClose || windowLabel === null) return;
-    invoke("editor_dirty_changed", { label: windowLabel, dirty }).catch(() => {});
+    invoke("editor_dirty_changed", { label: windowLabel, dirty }).catch(
+      () => {},
+    );
   }, [guardWindowClose, windowLabel, dirty]);
 
   // App quit while this editor is dirty: the backend emits `confirm-quit`
@@ -298,20 +534,28 @@ export function FileEditorView({
     if (!saved) {
       return; // Save failed — keep the window open (failure toast already shown).
     }
+    if (onClose) {
+      void onClose();
+      return;
+    }
     allowCloseRef.current = true;
     emitWindowEvent("closed");
     try {
-      void getCurrentWindow().close().catch(() => {});
+      void getCurrentWindow()
+        .close()
+        .catch(() => {});
     } catch {
       // Not inside a Tauri webview.
     }
-  }, [handleSave, emitWindowEvent]);
+  }, [handleSave, emitWindowEvent, onClose]);
 
   const handleDiscardAndClose = useCallback(() => {
     allowCloseRef.current = true;
     emitWindowEvent("closed");
     try {
-      void getCurrentWindow().close().catch(() => {});
+      void getCurrentWindow()
+        .close()
+        .catch(() => {});
     } catch {
       // Not inside a Tauri webview.
     }
@@ -319,37 +563,130 @@ export function FileEditorView({
 
   // ---------- Shared header toolbar ----------
   const renderToolbar = (showSaveButton: boolean) => (
-    <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-sidebar/40 text-xs shrink-0">
-      <span className="font-mono min-w-0 text-muted-foreground truncate flex-1" title={filePath}>
-        {filePath}
-      </span>
-      {showSaveButton && dirty && (
-        <span className="text-[var(--warning)] text-[11px] font-medium">{t('fileEditorView.modified')}</span>
-      )}
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-7 px-2"
-        onClick={loadFile}
-        disabled={loading || imageLoading}
-        title={t('fileEditorView.reload')}
-      >
-        <RefreshCw className={`h-3.5 w-3.5 ${(loading || imageLoading) ? "animate-spin" : ""}`} />
-      </Button>
-      {showSaveButton && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 px-2"
-          onClick={handleSave}
-          disabled={saving || !dirty}
-          title={t('fileEditorView.saveTooltip')}
+    <header className="file-editor-header">
+      {(guardWindowClose || onBackToTerminal) && (
+        <button
+          type="button"
+          className="file-editor-back"
+          title={t(onBackToTerminal ? (backTarget === 'files' ? "fileEditorView.backToFiles" : "fileEditorView.backToTerminal") : "fileEditorView.backToMain")}
+          aria-label={t(onBackToTerminal ? (backTarget === 'files' ? "fileEditorView.backToFiles" : "fileEditorView.backToTerminal") : "fileEditorView.backToMain")}
+          onClick={() => onBackToTerminal ? onBackToTerminal() : void returnToMain()}
         >
-          <Save className="h-3.5 w-3.5 mr-1" />
-          {t('fileEditorView.save')}
-        </Button>
+          <ArrowLeft />
+        </button>
       )}
-    </div>
+      <div className="file-editor-icon">
+        {fileKind === "image" ? (
+          <ImageIcon />
+        ) : fileKind === "binary" ? (
+          <FileArchive />
+        ) : (
+          <FileCode2 />
+        )}
+      </div>
+      <div className="file-editor-identity">
+        <div className="file-editor-title">
+          <span title={fileName}>{fileName}</span>
+          {host && (
+            <span className="file-editor-host" title={host}>
+              {host}
+            </span>
+          )}
+          {showSaveButton && dirty && (
+            <span
+              className="file-editor-dirty-dot"
+              aria-label={t("fileEditorView.unsaved")}
+            />
+          )}
+        </div>
+        <div className="file-editor-path">
+          <span title={filePath}>{parentPath(filePath)}</span>
+          <button
+            type="button"
+            aria-label={t("fileEditorView.copyPath")}
+            title={t("fileEditorView.copyPath")}
+            onClick={() => {
+              void writeText(filePath)
+                .then(() => notify.success(t("fileEditorView.pathCopied")))
+                .catch(() => notify.error(t("fileEditorView.copyPathFailed")));
+            }}
+          >
+            <Copy />
+          </button>
+        </div>
+      </div>
+      <div className="file-editor-actions">
+        {showSaveButton && hasLoaded && (
+          <span
+            className="file-editor-save-state"
+            data-dirty={dirty}
+            role="status"
+            aria-live="polite"
+          >
+            {saving ? (
+              <LoaderCircle className="animate-spin" />
+            ) : dirty ? (
+              <span className="file-editor-dirty-dot" />
+            ) : (
+              <Check />
+            )}
+            {saving
+              ? t("fileEditorView.saving")
+              : dirty
+                ? t("fileEditorView.unsaved")
+                : lastSavedAt
+                  ? t("fileEditorView.savedAt", {
+                      time: lastSavedAt.toLocaleTimeString(),
+                    })
+                  : t("fileEditorView.saved")}
+          </span>
+        )}
+        {fileKind !== "binary" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 p-0"
+            onClick={requestReload}
+            disabled={
+              !isConnected ||
+              (showSaveButton ? loading : imageLoading) ||
+              saving
+            }
+            title={t("fileEditorView.reload")}
+            aria-label={t("fileEditorView.reload")}
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${(showSaveButton ? loading : imageLoading) ? "animate-spin" : ""}`}
+            />
+          </Button>
+        )}
+        {showSaveButton && (
+          <Button
+            className="file-editor-save"
+            onClick={() => void handleSave()}
+            disabled={!isConnected || loading || saving || !dirty}
+            title={t("fileEditorView.saveTooltip")}
+          >
+            {saving ? (
+              <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Save className="h-3.5 w-3.5" />
+            )}
+            {t("fileEditorView.save")}
+          </Button>
+        )}
+        {showSaveButton && (guardWindowClose || onClose) && (
+          <Button
+            variant="outline"
+            className="file-editor-save-close"
+            disabled={!isConnected || loading || saving || !hasLoaded}
+            onClick={() => void handleSaveAndClose()}
+          >
+            {t("fileEditorView.saveAndClose")}
+          </Button>
+        )}
+      </div>
+    </header>
   );
 
   // ---------- Render: Image preview ----------
@@ -358,7 +695,7 @@ export function FileEditorView({
       return (
         <div className="h-full flex items-center justify-center text-muted-foreground">
           <FileWarning className="h-8 w-8 mr-3 opacity-50" />
-          <span>{t('fileEditorView.connectionLost')}</span>
+          <span>{t("fileEditorView.connectionLost")}</span>
         </div>
       );
     }
@@ -369,14 +706,18 @@ export function FileEditorView({
           {imageLoading && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <RefreshCw className="h-5 w-5 animate-spin" />
-              {t('fileEditorView.loading', { fileName })}
+              {t("fileEditorView.loading", { fileName })}
             </div>
           )}
           {imageError && (
             <div className="flex flex-col items-center gap-3 text-muted-foreground">
               <ImageIcon className="h-10 w-10 opacity-50" />
-              <p className="text-sm">{t('fileEditorView.imagePreviewFailed')}</p>
-              <p className="text-xs text-muted-foreground/70 max-w-md text-center">{imageError}</p>
+              <p className="text-sm">
+                {t("fileEditorView.imagePreviewFailed")}
+              </p>
+              <p className="text-xs text-muted-foreground/70 max-w-md text-center">
+                {imageError}
+              </p>
             </div>
           )}
           {!imageLoading && !imageError && imageDataUri && (
@@ -399,8 +740,8 @@ export function FileEditorView({
               <Download className="h-3.5 w-3.5" />
             )}
             {downloading
-              ? t('fileEditorView.downloading')
-              : t('fileEditorView.downloadAndOpen')}
+              ? t("fileEditorView.downloading")
+              : t("fileEditorView.downloadAndOpen")}
           </Button>
         </div>
       </div>
@@ -415,9 +756,11 @@ export function FileEditorView({
         <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-4 p-6">
           <FileArchive className="h-16 w-16 text-muted-foreground/40" />
           <div className="text-center break-words min-w-0 space-y-2">
-            <p className="text-sm font-medium">{t('fileEditorView.binaryFileTitle')}</p>
+            <p className="text-sm font-medium">
+              {t("fileEditorView.binaryFileTitle")}
+            </p>
             <p className="text-xs text-muted-foreground max-w-sm">
-              {t('fileEditorView.binaryFileDesc', { fileName })}
+              {t("fileEditorView.binaryFileDesc", { fileName })}
             </p>
           </div>
           <Button
@@ -433,64 +776,115 @@ export function FileEditorView({
               <ExternalLink className="h-3.5 w-3.5" />
             )}
             {downloading
-              ? t('fileEditorView.downloading')
-              : t('fileEditorView.downloadAndOpen')}
+              ? t("fileEditorView.downloading")
+              : t("fileEditorView.downloadAndOpen")}
           </Button>
         </div>
       </div>
     );
   }
 
-  // ---------- Render: Text file (original editor) ----------
-  if (!isConnected) {
-    return (
-      <div className="h-full flex items-center justify-center text-muted-foreground">
-        <FileWarning className="h-8 w-8 mr-3 opacity-50" />
-        <span>{t('fileEditorView.connectionLost')}</span>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="h-full flex items-center justify-center text-muted-foreground">
-        <RefreshCw className="h-5 w-5 animate-spin mr-2" />
-        {t('fileEditorView.loading', { fileName })}
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center text-muted-foreground gap-3">
-        <FileWarning className="h-8 w-8 opacity-50" />
-        <span>{t('fileEditorView.failedToLoadError', { error })}</span>
-        <Button variant="outline" size="sm" onClick={loadFile}>
-          <RefreshCw className="h-4 w-4 mr-1" /> {t('fileEditorView.retry')}
-        </Button>
-      </div>
-    );
-  }
-
+  // ---------- Render: Text editor ----------
   return (
-    <div className="h-full flex flex-col bg-background">
+    <div
+      ref={rootRef}
+      className="file-editor h-full min-h-0 flex flex-col bg-background"
+    >
       {renderToolbar(true)}
-      {/* Editor */}
-      <div className="flex-1 min-h-0">
-        <CodeEditor
-          value={content}
-          onChange={setContent}
-          filename={fileName}
-        />
-      </div>
+      {!isConnected && hasLoaded && (
+        <div className="file-editor-banner" role="status">
+          <WifiOff />
+          <span>{t("fileEditorView.offlineBuffer")}</span>
+        </div>
+      )}
+      {(saveError || (error && hasLoaded)) && (
+        <div className="file-editor-banner is-error" role="alert">
+          <AlertCircle />
+          <span>
+            {saveError
+              ? t("fileEditorView.saveFailedDetail", { error: saveError })
+              : t("fileEditorView.failedToLoadError", { error })}
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!isConnected || saving || loading}
+            onClick={saveError ? () => void handleSave() : requestReload}
+          >
+            {t("fileEditorView.retry")}
+          </Button>
+        </div>
+      )}
+      {hasLoaded ? (
+        <div className="flex-1 min-h-0">
+          <CodeEditor
+            value={content}
+            onChange={setContent}
+            filename={filePath}
+            readOnly={loading}
+            autoFocus={isActive}
+          />
+        </div>
+      ) : (
+        <div className="file-editor-empty" role="status">
+          {loading && isConnected ? (
+            <>
+              <LoaderCircle className="animate-spin" />
+              <span>{t("fileEditorView.loading", { fileName })}</span>
+            </>
+          ) : (
+            <>
+              <FileWarning />
+              <span>
+                {!isConnected
+                  ? t("fileEditorView.connectionLost")
+                  : t("fileEditorView.failedToLoadError", { error })}
+              </span>
+              {isConnected && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void loadFile()}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  {t("fileEditorView.retry")}
+                </Button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+      <AlertDialog open={reloadConfirmOpen} onOpenChange={setReloadConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("fileEditorView.reloadTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("fileEditorView.reloadDescription", { fileName })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: "destructive" })}
+              onClick={() => void loadFile()}
+            >
+              {t("fileEditorView.reloadDiscard")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {/* Unsaved-changes confirmation, shared by window close ("close") and
           app quit ("quit" — emitted by the backend quit guard) */}
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t('fileEditorView.unsavedTitle')}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {t("fileEditorView.unsavedTitle")}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {t('fileEditorView.unsavedDescription', { fileName })}
+              {t("fileEditorView.unsavedDescription", { fileName })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -501,15 +895,16 @@ export function FileEditorView({
                 }
               }}
             >
-              {t('common.cancel')}
+              {t("common.cancel")}
             </AlertDialogCancel>
             <AlertDialogAction
               className={buttonVariants({ variant: "destructive" })}
               onClick={() => void handleDiscardAndClose()}
             >
-              {t('fileEditorView.discardAndClose')}
+              {t("fileEditorView.discardAndClose")}
             </AlertDialogAction>
             <AlertDialogAction
+              disabled={!isConnected || loading || saving}
               onClick={() => {
                 if (confirmMode === "quit") {
                   // Just save: the backend quit completes when the dirty flag
@@ -521,7 +916,7 @@ export function FileEditorView({
                 }
               }}
             >
-              {t('common.save')}
+              {t("common.save")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

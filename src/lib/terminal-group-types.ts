@@ -26,6 +26,8 @@ export interface TerminalTab {
   editorFilePath?: string;
   /** For editor tabs: the SSH connectionId used to read/write the file */
   editorConnectionId?: string;
+  /** Connection display name, retained if its terminal tab closes. */
+  editorConnectionName?: string;
 }
 
 /** 终端组 */
@@ -50,6 +52,7 @@ export type TerminalGroupAction =
   | { type: 'REMOVE_GROUP'; groupId: string }
   | { type: 'ACTIVATE_GROUP'; groupId: string }
   | { type: 'ADD_TAB'; groupId: string; tab: TerminalTab }
+  | { type: 'OPEN_EDITOR_TAB'; tab: TerminalTab; groupId?: string; activate?: boolean }
   | { type: 'REMOVE_TAB'; groupId: string; tabId: string }
   | { type: 'ACTIVATE_TAB'; groupId: string; tabId: string }
   | { type: 'MOVE_TAB'; sourceGroupId: string; targetGroupId: string; tabId: string; targetIndex?: number }

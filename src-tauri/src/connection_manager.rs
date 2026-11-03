@@ -141,6 +141,8 @@ pub struct DetachedSession {
 pub struct SessionHealth {
     /// The SSH connection exists in the connection map.
     pub ssh_connected: bool,
+    /// A connection usable by the file editor (SSH, standalone SFTP or FTP).
+    pub file_connected: bool,
     /// An interactive PTY session is currently attached to a WebSocket.
     pub has_pty: bool,
     /// Current PTY generation counter, if any session was ever started.
@@ -687,6 +689,9 @@ impl ConnectionManager {
     /// sequentially (never nested) and unknown ids simply report all-false.
     pub async fn session_health(&self, connection_id: &str) -> SessionHealth {
         let ssh_connected = self.connections.read().await.contains_key(connection_id);
+        let file_connected = ssh_connected
+            || self.sftp_connections.read().await.contains_key(connection_id)
+            || self.ftp_connections.read().await.contains_key(connection_id);
         let has_pty = self.pty_sessions.read().await.contains_key(connection_id);
         let pty_generation = self
             .pty_generations
@@ -702,6 +707,7 @@ impl ConnectionManager {
         let connection_type = self.get_connection_type(connection_id).await;
         SessionHealth {
             ssh_connected,
+            file_connected,
             has_pty,
             pty_generation,
             detached,

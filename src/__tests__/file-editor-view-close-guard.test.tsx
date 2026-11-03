@@ -4,13 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileEditorView } from '../components/file-editor-view';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { EDITOR_WINDOW_CHANGED_EVENT, type EditorWindowEventPayload } from '@/lib/editor-windows-store';
+import { EDITOR_WINDOW_CHANGED_EVENT, EDITOR_FILE_SAVED_EVENT, EDITOR_FILE_STATE_EVENT, type EditorWindowEventPayload } from '@/lib/editor-windows-store';
 
-const { closeRequestedCaptured, closeMock, eventHandlers } = vi.hoisted(() => ({
+const { closeRequestedCaptured, closeMock, eventHandlers, titleMock } = vi.hoisted(() => ({
   closeRequestedCaptured: {} as {
     handler?: (event: { preventDefault: () => void }) => void;
   },
   closeMock: vi.fn(async () => {}),
+  titleMock: vi.fn(async () => {}),
   eventHandlers: new Map<string, (payload?: unknown) => void>(),
 }));
 
@@ -26,6 +27,7 @@ vi.mock('@tauri-apps/api/window', () => ({
       return vi.fn();
     }),
     close: closeMock,
+    setTitle: titleMock,
   }),
 }));
 
@@ -86,6 +88,70 @@ afterEach(() => {
 });
 
 describe('FileEditorView window close guard', () => {
+  it('confirms before reloading a dirty buffer and cancellation keeps it intact', async () => {
+    await act(async () => { renderEditor(); });
+    const editor = screen.getByTestId('code-editor');
+    fireEvent.change(editor, { target: { value: 'unsaved edit' } });
+    const reads = () => mockedInvoke.mock.calls.filter(([command]) => command === 'read_file_content').length;
+    expect(reads()).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Reload from server' }));
+    expect(screen.getByRole('alertdialog').textContent).toContain('Your unsaved changes will be discarded');
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByText('Cancel'));
+    expect((editor as HTMLTextAreaElement).value).toBe('unsaved edit');
+    expect(reads()).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Reload from server' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Reload and discard changes' })); });
+    expect((screen.getByTestId('code-editor') as HTMLTextAreaElement).value).toBe('original content');
+    expect(reads()).toBe(2);
+  });
+
+  it('only marks the snapshot actually sent as saved and suppresses overlapping saves', async () => {
+    let finishSave!: (value: boolean) => void;
+    const pendingSave = new Promise<boolean>(resolve => { finishSave = resolve; });
+    mockedInvoke.mockImplementation(async command => command === 'read_file_content' ? 'original content' : command === 'create_file' ? pendingSave : undefined);
+    await act(async () => { renderEditor(); });
+    fireEvent.change(screen.getByTestId('code-editor'), { target: { value: 'first edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save', exact: true }));
+    fireEvent.change(screen.getByTestId('code-editor'), { target: { value: 'later edit' } });
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === 'create_file')).toHaveLength(1);
+    expect(mockedInvoke).toHaveBeenCalledWith('create_file', expect.objectContaining({ content: 'first edit' }));
+    await act(async () => { finishSave(true); });
+    expect(screen.getByText('Unsaved changes')).toBeDefined();
+    expect((screen.getByRole('button', { name: 'Save', exact: true }) as HTMLButtonElement).disabled).toBe(false);
+    const preventDefault = vi.fn();
+    act(() => { closeRequestedCaptured.handler!({ preventDefault }); });
+    expect(preventDefault).toHaveBeenCalled();
+  });
+
+  it('keeps the editor mounted on a failed reload and exposes the error', async () => {
+    await act(async () => { renderEditor(); });
+    const editor = screen.getByTestId('code-editor');
+    mockedInvoke.mockImplementation(async command => {
+      if (command === 'read_file_content') throw new Error('network unavailable');
+      return undefined;
+    });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Reload from server' })); });
+    expect(screen.getByTestId('code-editor')).toBe(editor);
+    expect((editor as HTMLTextAreaElement).value).toBe('original content');
+    expect(screen.getByRole('alert').textContent).toContain('network unavailable');
+  });
+
+  it('preserves edits through disconnect and reconnect without silently reloading', async () => {
+    let result!: ReturnType<typeof renderEditor>;
+    await act(async () => { result = renderEditor(); });
+    const editor = screen.getByTestId('code-editor');
+    fireEvent.change(editor, { target: { value: 'local edit' } });
+    result.rerender(<FileEditorView {...PROPS} guardWindowClose isConnected={false} />);
+    expect(screen.getByTestId('code-editor')).toBe(editor);
+    expect((screen.getByRole('button', { name: 'Save', exact: true }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === 'create_file')).toHaveLength(0);
+    result.rerender(<FileEditorView {...PROPS} guardWindowClose />);
+    expect((screen.getByTestId('code-editor') as HTMLTextAreaElement).value).toBe('local edit');
+    expect(mockedInvoke.mock.calls.filter(([command]) => command === 'read_file_content')).toHaveLength(1);
+  });
+
   it('reports the editor as opened on mount (guard enabled)', async () => {
     await act(async () => {
       renderEditor();
@@ -215,6 +281,7 @@ describe('FileEditorView window close guard', () => {
     await act(async () => {});
 
     expect(closeMock).not.toHaveBeenCalled();
+    expect(mockedEmit).not.toHaveBeenCalledWith(EDITOR_FILE_SAVED_EVENT, expect.anything());
     expect(mockedEmit).not.toHaveBeenCalledWith(
       EDITOR_WINDOW_CHANGED_EVENT,
       expect.objectContaining({ event: 'closed' }),
@@ -235,6 +302,7 @@ describe('FileEditorView window close guard', () => {
     await act(async () => {});
 
     expect(closeMock).not.toHaveBeenCalled();
+    expect(mockedEmit).not.toHaveBeenCalledWith(EDITOR_FILE_SAVED_EVENT, expect.anything());
     expect(mockedEmit).not.toHaveBeenCalledWith(
       EDITOR_WINDOW_CHANGED_EVENT,
       expect.objectContaining({ event: 'closed' }),
@@ -338,5 +406,20 @@ describe('FileEditorView app quit guard', () => {
 
     expect(mockedInvoke).not.toHaveBeenCalledWith('create_file', expect.anything());
     expect(closeMock).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('editor workflow feedback', () => {
+  it('marks the native title dirty and publishes only successful server saves', async () => {
+    await act(async () => { renderEditor({guardWindowClose:true, host:'dev-host'}); });
+    fireEvent.change(screen.getByTestId('code-editor'),{target:{value:'new content'}});
+    expect(titleMock).toHaveBeenLastCalledWith('● a.txt — dev-host');
+    expect(mockedEmit).toHaveBeenCalledWith(EDITOR_FILE_STATE_EVENT,expect.objectContaining({state:'modified'}));
+    fireEvent.click(screen.getByRole('button',{name:'Save',exact:true}));
+    await act(async () => {});
+    expect(mockedEmit).toHaveBeenCalledWith(EDITOR_FILE_SAVED_EVENT,{connectionId:'conn-1',filePath:'/tmp/a.txt',fileName:'a.txt'});
+    expect(titleMock).toHaveBeenLastCalledWith('a.txt — dev-host');
+    expect(screen.getByText(/Saved at/)).toBeDefined();
   });
 });

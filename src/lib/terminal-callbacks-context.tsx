@@ -23,6 +23,8 @@ export interface TerminalCallbacks {
    * the background.
    */
   onCloseAllTabs?: (groupId: string) => void | Promise<void>;
+  /** One guarded batch for close others / left / right. */
+  onCloseTabs?: (tabIds: string[]) => void | Promise<void>;
   /** Xshell-style detach (Ctrl+A+D): keep the session alive in the background. */
   onDetachTab?: (tabId: string) => void | Promise<void>;
   /**

@@ -116,7 +116,9 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Local + Remote panels** — Side-by-side browsing with upload/download buttons
 - **Multi-protocol** — Works over SSH, SFTP, FTP, and FTPS
 - **File operations** — Create, rename, delete, copy files and directories
-- **Built-in code editor** — Open files in an embedded editor with syntax highlighting for common languages
+- **Built-in code editor** — Open files in reusable workspace tabs, switch without losing edits, and save/discard safely on close. Automatic syntax highlighting for scripts, JSON/YAML/TOML, Nginx and systemd configs, with searchable language selection, find/replace, go-to-line, undo/redo, and quick appearance settings
+- **Safer remote editing** — Clear save status, confirmation before reloading unsaved changes, and retained edits when saving or reloading fails
+- **File workflow** — Open with Enter or a double-click, see unsaved editor changes in the file list, and keep directory selections through refresh and reconnect. Upload/download controls show the selected count and destination; rename and delete use inline validation and confirmation
 - **Breadcrumb navigation** — Editable address bar with click-to-navigate
 - **Sort & filter** — By name, size, date, permissions, owner (ascending/descending)
 - **Multi-select** — Select multiple files for batch operations and batch delete
