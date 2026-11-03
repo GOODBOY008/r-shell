@@ -70,12 +70,12 @@ import { OPEN_SETTINGS_EVENT, QUICK_CONNECT_EVENT } from './lib/app-events';
 import {
   addOpenEditor,
   EDITOR_WINDOW_CHANGED_EVENT,
-  editorWindowLabel,
   loadOpenEditors,
   removeOpenEditor,
   type EditorWindowEventPayload,
 } from './lib/editor-windows-store';
-import { getAllWebviewWindows } from '@tauri-apps/api/webviewWindow';
+import { createEditorTab } from './lib/editor-tabs';
+import { EditorTabsProvider, useEditorTabs } from './lib/editor-tabs-context';
 import {
   effectiveConnectTimeoutMs,
   effectiveOverallTimeoutMs,
@@ -141,6 +141,8 @@ function AppContent() {
 
   // Terminal group state from context
   const { state, dispatch, activeGroup, activeTab, activeConnection } = useTerminalGroups();
+  const editorTabs = useEditorTabs()!;
+  const { confirmCloseTabs, focusTab } = editorTabs;
   const workingDirectorySequenceRef = useRef(0);
   // Fresh mirror of `state` for the mount-only restore effect (empty deps):
   // the closure's `state` is a mount-time snapshot, but the restore loop may
@@ -337,7 +339,8 @@ function AppContent() {
     if (
       (tab.connectionStatus === 'pending' || tab.connectionStatus === 'connecting') &&
       tab.tabType !== 'file-browser' &&
-      tab.tabType !== 'desktop'
+      tab.tabType !== 'desktop' &&
+      tab.tabType !== 'editor'
     ) {
       void invoke('ssh_cancel_connect', { connection_id: tab.id }).catch(() => {
         // No pending connection (already settled) — nothing to cancel.
@@ -350,21 +353,7 @@ function AppContent() {
   // duplicate tabs use `${connectionId}-dup-…` — either way every tab owns
   // its own session, so disconnecting here never takes down another tab's
   // connection.
-  const disconnectTabBackend = useCallback((tab: TerminalTab) => {
-    if (tab.tabType === 'file-browser') {
-      const command = tab.protocol === 'SFTP'
-        ? 'sftp_standalone_disconnect'
-        : tab.protocol === 'FTP'
-          ? 'ftp_disconnect'
-          : null;
-      if (command) {
-        void invoke(command, { connection_id: tab.id }).catch(() => {
-          // Ignore disconnect errors on tab close
-        });
-      }
-      return;
-    }
-
+  const disconnectTabBackend = useCallback((tab: TerminalTab, remainingTabs: TerminalTab[], released: Set<string>) => {
     if (tab.tabType === 'desktop') {
       // Desktop sessions are established by desktop_connect and live in their
       // own backend map, not with the PTY/SSH connections.
@@ -374,26 +363,48 @@ function AppContent() {
       return;
     }
 
-    // Editor tabs do not own a backend session — they borrow another tab's
-    // connection through `editorConnectionId`.
-    if (tab.tabType === 'editor') return;
+    // Editors share their source connection. Only its last user may
+    // disconnect it, including a detached terminal or a file browser.
+    const connectionId = tab.editorConnectionId ?? tab.id;
+    if (tab.tabType !== 'editor' && tab.tabType !== 'file-browser') cancelPendingTerminalConnect(tab);
+    if (released.has(connectionId)
+      || remainingTabs.some(item => item.id === connectionId || item.editorConnectionId === connectionId)
+      || detachedSessions.some(session => session.connectionId === connectionId)
+      || loadOpenEditors().some(editor => editor.connectionId === connectionId)) return;
+    released.add(connectionId);
+    const command = tab.protocol === 'SFTP' ? 'sftp_standalone_disconnect'
+      : tab.protocol === 'FTP' ? 'ftp_disconnect' : 'ssh_disconnect';
+    void invoke(command, { connection_id: connectionId }).catch(() => {});
+  }, [cancelPendingTerminalConnect, detachedSessions]);
 
-    // Cancel an in-flight connect before it can settle behind a removed tab.
-    cancelPendingTerminalConnect(tab);
-
-    // A standalone file-editor window may still be reading and writing
-    // through this SSH session. Keep the connection alive while that window
-    // is open; the editor-closed handler disconnects it once neither the
-    // window nor a tab uses it. Without this the editor's next save fails
-    // with "Connection not found".
-    if (loadOpenEditors().some(editor => editor.connectionId === tab.id)) {
-      return;
+  const closingTabIds = useRef(new Set<string>());
+  const handleCloseTabs = useCallback(async (tabIds: string[]) => {
+    if (tabIds.some(id => closingTabIds.current.has(id))) return;
+    tabIds.forEach(id => closingTabIds.current.add(id));
+    try {
+      if (!await confirmCloseTabs(tabIds)) return;
+      const closing = new Set(tabIds);
+      const currentTabs = Object.values(stateRef.current.groups).flatMap(group => group.tabs);
+      const remaining = currentTabs.filter(tab => !closing.has(tab.id));
+      const released = new Set<string>();
+      for (const tab of currentTabs) {
+        if (!closing.has(tab.id)) continue;
+        const groupId = stateRef.current.tabToGroupMap[tab.id];
+        dispatch({ type: 'REMOVE_TAB', groupId, tabId: tab.id });
+        disconnectTabBackend(tab, remaining, released);
+      }
+      if (remaining.length === 0) ActiveConnectionsManager.clearActiveConnections();
+    } finally {
+      tabIds.forEach(id => closingTabIds.current.delete(id));
     }
+  }, [confirmCloseTabs, dispatch, disconnectTabBackend]);
 
-    void invoke('ssh_disconnect', { connection_id: tab.id }).catch(() => {
-      // The session may already be gone (failed or cancelled connect).
-    });
-  }, [cancelPendingTerminalConnect]);
+  const handleCloseTab = useCallback((tabId: string) => handleCloseTabs([tabId]), [handleCloseTabs]);
+
+  const handleCloseAllTabs = useCallback((groupId: string) => {
+    const group = stateRef.current.groups[groupId];
+    if (group) return handleCloseTabs(group.tabs.map(tab => tab.id));
+  }, [handleCloseTabs]);
 
   const handleCloseActiveTab = useCallback(() => {
     if (!activeGroup) return;
@@ -419,16 +430,8 @@ function AppContent() {
       return;
     }
 
-    const tabId = activeGroup.activeTabId;
-    const tab = activeGroup.tabs.find(t => t.id === tabId);
-    const isLastTab = allTabs.length === 1;
-    dispatch({ type: 'REMOVE_TAB', groupId: activeGroup.id, tabId });
-    if (tab) disconnectTabBackend(tab);
-
-    if (isLastTab) {
-      ActiveConnectionsManager.clearActiveConnections();
-    }
-  }, [activeGroup, allTabs.length, dispatch, disconnectTabBackend]);
+    void handleCloseTab(activeGroup.activeTabId);
+  }, [activeGroup, allTabs.length, dispatch, handleCloseTab]);
 
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
@@ -1086,30 +1089,6 @@ function AppContent() {
     }
   }, [state.groups, dispatch]);
 
-  const handleCloseTab = useCallback((tabId: string) => {
-    for (const group of Object.values(state.groups)) {
-      const tab = group.tabs.find(t => t.id === tabId);
-      if (tab) {
-        // Remove first: a slow backend disconnect must not leave the tab in a
-        // group that has since moved. The teardown runs in the background.
-        dispatch({ type: 'REMOVE_TAB', groupId: group.id, tabId });
-        disconnectTabBackend(tab);
-        break;
-      }
-    }
-  }, [state.groups, dispatch, disconnectTabBackend]);
-
-  // Close every tab in a group, tearing down each backend session first
-  // (CLOSE_ALL_TABS is reducer-only and would otherwise leave sessions alive).
-  const handleCloseAllTabs = useCallback((groupId: string) => {
-    const group = state.groups[groupId];
-    if (!group) return;
-    for (const tab of group.tabs) {
-      disconnectTabBackend(tab);
-    }
-    dispatch({ type: 'CLOSE_ALL_TABS', groupId });
-  }, [state.groups, dispatch, disconnectTabBackend]);
-
   // Wired straight into onClick in several places, so `folderPath` may be a
   // MouseEvent rather than a path; only a real folder string is used (#218).
   const handleNewTab = useCallback((folderPath?: unknown) => {
@@ -1140,7 +1119,7 @@ function AppContent() {
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
-    if (!tabToDuplicate) return;
+    if (!tabToDuplicate || tabToDuplicate.tabType === 'editor') return;
 
     const originalConnectionId = tabToDuplicate.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
@@ -1598,99 +1577,13 @@ function AppContent() {
     notify.success(t('app.openingInLogMonitor', { filename: filePath.split("/").pop() }));
   }, [rightSidebar.select, layout.rightSidebarVisible, toggleRightSidebar, t]);
 
-  // Opens (or focuses) the dedicated Tauri window editing a remote file.
-  // One window per (connection, file) — reopening a file reuses the existing
-  // window with its state instead of duplicating it.
-  // `focus: false` (used by the launch/reopen restore) skips focusing an
-  // already-open editor so restored windows don't steal focus from the main
-  // window the user just opened (Dock reopen / app launch).
-  const openEditorWindow = useCallback(async (connectionId: string, filePath: string, fileName: string, options?: { focus?: boolean }) => {
-    const focus = options?.focus !== false;
-    const label = editorWindowLabel(connectionId, filePath);
-
-    // Reuse an already-open editor for this file: bring it to the front and
-    // restore it if minimized. Its content state is maintained in its own
-    // webview, so nothing needs reloading here.
-    try {
-      const windows = await getAllWebviewWindows();
-      const existing = windows.find((win) => win.label === label);
-      if (existing) {
-        try {
-          await existing.show();
-          await existing.unminimize();
-          if (focus) {
-            await existing.setFocus();
-          }
-        } catch (err: unknown) {
-          // Surface unexpected failures (e.g. an ACL denial); a window that
-          // is already visible/focused resolves these calls fine, so an
-          // error here means the reuse path silently no-opped.
-          console.warn('Failed to focus existing editor window', err);
-        }
-        return;
-      }
-    } catch {
-      // Window plugin unavailable — fall through and try to create below.
-    }
-
-    const url = `${window.location.origin}/?mode=file-viewer`
-      + `&connectionId=${encodeURIComponent(connectionId)}`
-      + `&filePath=${encodeURIComponent(filePath)}`
-      + `&fileName=${encodeURIComponent(fileName)}`;
-
-    const WIN_W = 900;
-    const WIN_H = 700;
-
-    try {
-      const [{ WebviewWindow }, { getCurrentWindow, currentMonitor }] = await Promise.all([
-        import('@tauri-apps/api/webviewWindow'),
-        import('@tauri-apps/api/window'),
-      ]);
-      const parentWin = getCurrentWindow();
-      const [monitor, scaleFactor] = await Promise.all([
-        currentMonitor(),          // standalone function, not a method on Window
-        parentWin.scaleFactor(),
-      ]);
-
-      // Derive logical (DIP) position centered on the parent's monitor.
-      // Falls back to Tauri's built-in centering if monitor info is unavailable.
-      let position: { x: number; y: number } | undefined;
-      if (monitor) {
-        const logicalMonX = monitor.position.x / scaleFactor;
-        const logicalMonY = monitor.position.y / scaleFactor;
-        const logicalMonW = monitor.size.width / scaleFactor;
-        const logicalMonH = monitor.size.height / scaleFactor;
-        position = {
-          x: Math.round(logicalMonX + (logicalMonW - WIN_W) / 2),
-          y: Math.round(logicalMonY + (logicalMonH - WIN_H) / 2),
-        };
-      }
-
-      const win = new WebviewWindow(label, {
-        url,
-        title: fileName,
-        width: WIN_W,
-        height: WIN_H,
-        // Use explicit position when available; fall back to primary-monitor center
-        ...(position ? position : { center: true }),
-        resizable: true,
-        decorations: true,
-      });
-      win.once('tauri://error', (e) => {
-        notify.error(t('app.failedToOpenWindow'), { description: String(e.payload) });
-      });
-    } catch (err: unknown) {
-      notify.error(t('app.couldNotOpenWindow'), { description: err instanceof Error ? err.message : String(err) });
-    }
-  }, [t]);
-
-  // Handler: open a remote file in a dedicated Tauri window.
-  // The window is centered on whichever monitor the parent window currently
-  // occupies, matching the behaviour of VS Code, Chrome, Figma, etc.
+  // Keep one live buffer per (connection, path) in the main tab strip.
   const handleOpenInEditor = useCallback((filePath: string, fileName: string) => {
     if (!activeConnection) return;
-    void openEditorWindow(activeConnection.connectionId, filePath, fileName);
-  }, [activeConnection, openEditorWindow]);
+    const tab = createEditorTab(activeConnection, filePath, fileName);
+    dispatch({ type: 'OPEN_EDITOR_TAB', tab });
+    focusTab(tab.id);
+  }, [activeConnection, dispatch, focusTab]);
 
   // Track open editor windows (persisted so they can be restored on next
   // launch) via events emitted by the viewer windows themselves.
@@ -1709,7 +1602,7 @@ function AppContent() {
         const stillOpen = loadOpenEditors().some(
           editor => editor.connectionId === connectionId,
         );
-        const hasTab = allTabsRef.current.some(tab => tab.id === connectionId);
+        const hasTab = allTabsRef.current.some(tab => tab.id === connectionId || tab.editorConnectionId === connectionId);
         if (!stillOpen && !hasTab) {
           void invoke('ssh_disconnect', { connection_id: connectionId }).catch(() => {
             // The session may already be gone.
@@ -1720,22 +1613,27 @@ function AppContent() {
     return () => { unlistenPromise.then(fn => fn()); };
   }, []);
 
-  // Reopen file-editor windows that were open when the app last quit. The
-  // viewer windows poll session health, so they load their files as soon as
-  // the backend reconnects or show the error/retry view when the connection
-  // is gone.
-  // Run-once by intent (on launch): the effect depends on openEditorWindow,
-  // whose identity changes with `t` (e.g. a language switch) — re-running
-  // would show/focus every editor window and steal focus mid-use.
+  // Bring legacy editor-window entries into their connection's tab group.
+  // Do not steal focus from a restoring terminal or open more native windows.
   const restoredEditorsRef = useRef(false);
   useEffect(() => {
     if (restoredEditorsRef.current) return;
     restoredEditorsRef.current = true;
-    const persistedEditors = loadOpenEditors();
-    for (const entry of persistedEditors) {
-      void openEditorWindow(entry.connectionId, entry.filePath, entry.fileName, { focus: false });
+    for (const entry of loadOpenEditors()) {
+      const groupId = stateRef.current.tabToGroupMap[entry.connectionId];
+      const owner = stateRef.current.groups[groupId]?.tabs.find(tab => tab.id === entry.connectionId);
+      if (owner && isRestoreSessionsOnStartupEnabled()) {
+        dispatch({
+          type: 'OPEN_EDITOR_TAB', groupId, activate: false,
+          tab: createEditorTab({
+            connectionId: owner.id, name: owner.name, host: owner.host,
+            username: owner.username, status: 'disconnected',
+          }, entry.filePath, entry.fileName),
+        });
+      }
+      removeOpenEditor(entry);
     }
-  }, [openEditorWindow]);
+  }, [dispatch]);
 
   const handleConnectionDialogConnect = useCallback(async (config: ConnectionConfig) => {
     const tabId = config.id || `connection-${Date.now()}`;
@@ -2355,9 +2253,9 @@ function AppContent() {
   const isFileBrowserTab = activeTab?.tabType === 'file-browser';
   // Desktop tabs (RDP/VNC) also don't need right sidebar or bottom panel
   const isDesktopTab = activeTab?.tabType === 'desktop';
-  // Editor tabs are standalone — hide extra panels like file-browser/desktop tabs
-  const isEditorTab = activeTab?.tabType === 'editor';
-  const hideExtraPanels = isFileBrowserTab || isDesktopTab || isEditorTab;
+  // Keep the file list available while editing so users can open the next file.
+  const hideExtraPanels = isFileBrowserTab || isDesktopTab
+    || activeConnection?.protocol === 'SFTP' || activeConnection?.protocol === 'FTP';
 
   return (
     <div className="h-screen flex flex-col overflow-hidden bg-background">
@@ -2487,6 +2385,7 @@ function AppContent() {
                       onWorkingDirectoryChange: handleWorkingDirectoryChange,
                       onCloseTab: handleCloseTab,
                       onCloseAllTabs: handleCloseAllTabs,
+                      onCloseTabs: handleCloseTabs,
                       onDetachTab: handleDetachTab,
                       failedPendingTabIds,
                     }}>
@@ -2690,7 +2589,9 @@ export default function App() {
     <ErrorBoundary label="R-Shell">
       <LayoutProvider>
         <TerminalGroupProvider>
-          <AppContent />
+          <EditorTabsProvider>
+            <AppContent />
+          </EditorTabsProvider>
         </TerminalGroupProvider>
       </LayoutProvider>
     </ErrorBoundary>

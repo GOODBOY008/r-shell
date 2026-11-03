@@ -87,3 +87,19 @@ export interface EditorWindowEventPayload {
 }
 
 export const EDITOR_WINDOW_CHANGED_EVENT = 'editor-window-changed';
+
+/** Transient UI state, separate from the persisted open-window inventory. */
+export const EDITOR_FILE_STATE_EVENT = 'editor-file-state';
+export interface EditorFileStateEvent {
+  connectionId: string;
+  filePath: string;
+  state: 'clean' | 'modified' | 'saving' | 'error' | 'closed';
+}
+export const EDITOR_FILE_SAVED_EVENT = 'editor-file-saved';
+export interface EditorFileSavedEvent {
+  connectionId: string;
+  filePath: string;
+  fileName: string;
+}
+
+export const EDITOR_FILE_STATE_REQUEST_EVENT = 'editor-file-state-request';

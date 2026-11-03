@@ -27,7 +27,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, act } from '@testing-library/react';
 import type { TerminalCallbacks } from '../lib/terminal-callbacks-context';
-import type { TerminalGroupState } from '../lib/terminal-group-types';
+import type { TerminalGroupState, TerminalTab } from '../lib/terminal-group-types';
 import App from '../App';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -508,7 +508,12 @@ describe('closing a pending tab while its connect is in flight', () => {
     expect(desktopDisconnects).toContainEqual({ connectionId: 'rdp-1' });
   });
 
-  it('does not disconnect the borrowed connection when an editor tab closes', async () => {
+  it.each(['none', 'terminal', 'editor'] as const)('releases a borrowed session only when no %s user remains', async (remainingKind) => {
+    const remainingTab: TerminalTab[] = remainingKind === 'none' ? [] : [{
+      id: remainingKind === 'terminal' ? 'ssh-owner' : 'editor-2', name: 'Remaining',
+      tabType: remainingKind, connectionStatus: 'connected', reconnectCount: 0,
+      ...(remainingKind === 'editor' ? { editorConnectionId: 'ssh-owner', editorFilePath: '/etc/other' } : {}),
+    }];
     mockState = {
       groups: {
         'group-1': {
@@ -521,14 +526,14 @@ describe('closing a pending tab while its connect is in flight', () => {
             reconnectCount: 0,
             editorConnectionId: 'ssh-owner',
             editorFilePath: '/etc/hosts',
-          }],
+          }, ...remainingTab],
           activeTabId: 'editor-1',
         },
       },
       activeGroupId: 'group-1',
       gridLayout: { type: 'leaf', groupId: 'group-1' },
       nextGroupId: 2,
-      tabToGroupMap: { 'editor-1': 'group-1' },
+      tabToGroupMap: { 'editor-1': 'group-1', ...Object.fromEntries(remainingTab.map(tab => [tab.id, 'group-1'])) },
     };
     const disconnects: Record<string, unknown>[] = [];
     lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
@@ -544,10 +549,10 @@ describe('closing a pending tab while its connect is in flight', () => {
       await lifecycle.callbacks.onCloseTab?.('editor-1');
     });
 
-    expect(disconnects).toHaveLength(0);
+    expect(disconnects).toEqual(remainingKind === 'none' ? [{ connection_id: 'ssh-owner' }] : []);
   });
 
-  it('keeps the SSH session alive while a file-editor window depends on it', async () => {
+  it('migrates legacy windows into tabs and keeps SSH alive until the last editor closes', async () => {
     localStorage.setItem(
       'r-shell-open-editors',
       JSON.stringify([
@@ -589,9 +594,15 @@ describe('closing a pending tab while its connect is in flight', () => {
     });
 
     expect(disconnects).toHaveLength(0);
+    const tabs = Object.values(lifecycle.stateHistory.at(-1)!.groups).flatMap(group => group.tabs);
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0].tabType).toBe('editor');
+    expect(localStorage.getItem('r-shell-open-editors')).toBe('[]');
+    await act(async () => { await lifecycle.callbacks.onCloseTab?.(tabs[0].id); });
+    expect(disconnects).toEqual([{ connection_id: 'ssh-1' }]);
   });
 
-  it('disconnects an FTP session when its file-browser tab is closed', async () => {
+  it.each(['SFTP', 'FTP'])('keeps a %s connection until its file browser and last editor close', async (protocol) => {
     mockState = {
       groups: {
         'group-1': {
@@ -600,9 +611,13 @@ describe('closing a pending tab while its connect is in flight', () => {
             id: 'ftp-1',
             name: 'Files',
             tabType: 'file-browser',
-            protocol: 'FTP',
+            protocol,
             connectionStatus: 'connected',
             reconnectCount: 0,
+          }, {
+            id: 'file-editor', name: 'app.conf', tabType: 'editor', protocol,
+            editorConnectionId: 'ftp-1', editorFilePath: '/app.conf',
+            connectionStatus: 'connected', reconnectCount: 0,
           }],
           activeTabId: 'ftp-1',
         },
@@ -610,11 +625,11 @@ describe('closing a pending tab while its connect is in flight', () => {
       activeGroupId: 'group-1',
       gridLayout: { type: 'leaf', groupId: 'group-1' },
       nextGroupId: 2,
-      tabToGroupMap: { 'ftp-1': 'group-1' },
+      tabToGroupMap: { 'ftp-1': 'group-1', 'file-editor': 'group-1' },
     };
     const ftpDisconnects: Record<string, unknown>[] = [];
     lifecycle.invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
-      if (command === 'ftp_disconnect') {
+      if (command === (protocol === 'FTP' ? 'ftp_disconnect' : 'sftp_standalone_disconnect')) {
         ftpDisconnects.push((args ?? {}) as Record<string, unknown>);
       }
       if (command === 'get_system_locale') return 'en-US';
@@ -626,7 +641,9 @@ describe('closing a pending tab while its connect is in flight', () => {
       await lifecycle.callbacks.onCloseTab?.('ftp-1');
     });
 
-    expect(ftpDisconnects).toContainEqual({ connection_id: 'ftp-1' });
+    expect(ftpDisconnects).toEqual([]);
+    await act(async () => { await lifecycle.callbacks.onCloseTab?.('file-editor'); });
+    expect(ftpDisconnects).toEqual([{ connection_id: 'ftp-1' }]);
   });
 
   it('disconnects the SSH session when the last editor window using it closes', async () => {

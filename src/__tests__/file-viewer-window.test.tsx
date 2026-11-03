@@ -149,7 +149,7 @@ describe('FileViewerWindow', () => {
     expect(closeMock).not.toHaveBeenCalled();
   });
 
-  it('reloads the file when the SSH session comes up after the initial load', async () => {
+  it('preserves the buffer through disconnect and reconnect without remounting', async () => {
     vi.useFakeTimers();
     // Session not ready at first: the backend has no session for this id yet.
     mockedInvoke.mockImplementation(async (cmd: string) => {
@@ -166,6 +166,8 @@ describe('FileViewerWindow', () => {
     });
     await act(async () => {});
 
+    const editor = screen.getByTestId('code-editor');
+    fireEvent.change(editor, { target: { value: 'offline draft' } });
     const readCallsAfterMount = mockedInvoke.mock.calls.filter(([cmd]) => cmd === 'read_file_content').length;
     expect(readCallsAfterMount).toBe(1);
 
@@ -193,6 +195,30 @@ describe('FileViewerWindow', () => {
     await act(async () => {});
 
     const readCallsAfterRemount = mockedInvoke.mock.calls.filter(([cmd]) => cmd === 'read_file_content').length;
-    expect(readCallsAfterRemount).toBe(2);
+    expect(readCallsAfterRemount).toBe(1);
+    expect(screen.getByTestId('code-editor')).toBe(editor);
+    expect((editor as HTMLTextAreaElement).value).toBe('offline draft');
   });
+  it('reads the file after a restored session becomes available', async () => {
+    vi.useFakeTimers();
+    let connected = false;
+    mockedInvoke.mockImplementation(async command => {
+      if (command === 'get_session_health') return {sshConnected: connected};
+      if (command === 'read_file_content') { if (!connected) throw new Error('Connection not found'); return 'restored'; }
+    });
+    await act(async () => { render(<FileViewerWindow />); });
+    await act(async () => { vi.advanceTimersByTime(500); });
+    connected = true;
+    await act(async () => { vi.advanceTimersByTime(2000); });
+    expect((screen.getByTestId('code-editor') as HTMLTextAreaElement).value).toBe('restored');
+  });
+
+  it('keeps literal percent sequences and spaces in remote filenames', async () => {
+    const path = '/tmp/100%25 #配置.conf';
+    const query = new URLSearchParams({mode:'file-viewer',connectionId:'conn-1',filePath:path,fileName:'100%25 #配置.conf'});
+    window.history.replaceState({},'',`/?${query}`);
+    await act(async () => { render(<FileViewerWindow />); });
+    expect(mockedInvoke).toHaveBeenCalledWith('read_file_content',{connectionId:'conn-1',path});
+  });
+
 });

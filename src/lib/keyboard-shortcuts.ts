@@ -944,6 +944,29 @@ function registerGlobalShortcuts(shortcutsRef: RefObject<KeyboardShortcut[]>) {
   };
 }
 
+/** Match configured DOM shortcuts, including Ctrl/Cmd equivalence on macOS. */
+export function matchesKeyboardShortcut(
+  event: KeyboardEvent,
+  shortcut: KeyboardShortcut | ParsedKeyboardShortcut,
+  isMac = currentPlatformIsMac(),
+): boolean {
+  const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
+  const ctrlOrCmd = isMac ? (event.metaKey || event.ctrlKey) : event.ctrlKey;
+  const usesExplicitMeta = shortcut.metaKey === true && shortcut.ctrlKey !== true;
+  const ctrlMatch = usesExplicitMeta
+    ? (shortcut.ctrlKey === undefined || event.ctrlKey === shortcut.ctrlKey)
+    : (shortcut.ctrlKey === undefined || ctrlOrCmd === shortcut.ctrlKey);
+  const shiftMatch = shortcut.shiftKey === undefined || event.shiftKey === shortcut.shiftKey;
+  const altMatch = shortcut.altKey === undefined || event.altKey === shortcut.altKey;
+  let metaMatch = shortcut.metaKey === undefined || event.metaKey === shortcut.metaKey;
+  if (usesExplicitMeta) {
+    metaMatch = event.metaKey === true;
+  } else if (isMac && shortcut.ctrlKey !== undefined) {
+    metaMatch = true;
+  }
+  return keyMatch && ctrlMatch && shiftMatch && altMatch && metaMatch;
+}
+
 /**
  * Browser-mode fallback: window keydown listener with the same semantics as
  * the OS registration — skipped while typing in editable fields (except the
@@ -964,25 +987,7 @@ function registerDomKeydown(shortcutsRef: RefObject<KeyboardShortcut[]>) {
     }
 
     for (const shortcut of shortcuts) {
-      const keyMatch = event.key.toLowerCase() === shortcut.key.toLowerCase();
-      // On macOS, treat Cmd (metaKey) as the equivalent of Ctrl for shortcut matching.
-      // This lets shortcuts defined with ctrlKey:true work with both Ctrl and Cmd on Mac.
-      const ctrlOrCmd = isMac ? (event.metaKey || event.ctrlKey) : event.ctrlKey;
-      const usesExplicitMeta = shortcut.metaKey === true && shortcut.ctrlKey !== true;
-      const ctrlMatch = usesExplicitMeta
-        ? (shortcut.ctrlKey === undefined || event.ctrlKey === shortcut.ctrlKey)
-        : (shortcut.ctrlKey === undefined || ctrlOrCmd === shortcut.ctrlKey);
-      const shiftMatch = shortcut.shiftKey === undefined || event.shiftKey === shortcut.shiftKey;
-      const altMatch = shortcut.altKey === undefined || event.altKey === shortcut.altKey;
-      // When ctrlKey is specified on Mac, don't additionally require metaKey matching
-      let metaMatch = shortcut.metaKey === undefined || event.metaKey === shortcut.metaKey;
-      if (usesExplicitMeta) {
-        metaMatch = event.metaKey === true;
-      } else if (isMac && shortcut.ctrlKey !== undefined) {
-        metaMatch = true;
-      }
-
-      if (keyMatch && ctrlMatch && shiftMatch && altMatch && metaMatch) {
+      if (matchesKeyboardShortcut(event, shortcut, isMac)) {
         if (shortcut.ignoreInTerminal && terminalInputTarget) {
           return;
         }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IntegratedFileBrowser } from '../components/integrated-file-browser';
 
@@ -13,6 +13,12 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   open: vi.fn(),
   warning: vi.fn(),
+  events: new Map<string, (event: {payload: unknown}) => void>(),
+}));
+
+vi.mock('@tauri-apps/api/event', () => ({
+  emit: vi.fn(async () => {}),
+  listen: vi.fn(async (name: string, handler: (event: {payload: unknown}) => void) => { mocks.events.set(name,handler); return () => mocks.events.delete(name); }),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -442,4 +448,63 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
       expect(paths).not.toContain('/home/..');
     });
   });
+});
+
+
+describe('file list to editor workflow', () => {
+  const entry = {name:'app.conf',size:12,modified:'2026-11-04 10:00',permissions:'-rw-r--r--',file_type:'File',owner:'app',group:'app'};
+  it('opens from the row action and Enter, and prevents duplicate pending requests', async () => {
+    mocks.invoke.mockImplementation(async command => command === 'list_files' ? [entry] : []);
+    let finish!: () => void;
+    const open = vi.fn(() => new Promise<void>(resolve => { finish = resolve; }));
+    const {container} = render(<IntegratedFileBrowser connectionId="flow-entry" isConnected onClose={() => {}} onOpenInEditor={open} />);
+    fireEvent.click(await screen.findByRole('button',{name:'Edit: app.conf'}));
+    const row = container.querySelector('[data-file-path="/home/app.conf"]')!;
+    fireEvent.doubleClick(row);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(row.getAttribute('aria-busy')).toBe('true');
+    await act(async () => { finish(); });
+    fireEvent.keyDown(row,{key:'Enter'});
+    expect(open).toHaveBeenCalledTimes(2);
+    await act(async () => { finish(); });
+    expect(open).toHaveBeenLastCalledWith('/home/app.conf','app.conf');
+  });
+  it('shows editor changes and refreshes saved metadata for the matching session', async () => {
+    mocks.invoke.mockImplementation(async command => command === 'list_files' ? [entry] : []);
+    render(<IntegratedFileBrowser connectionId="flow-save" isConnected onClose={() => {}} />);
+    await screen.findByRole('button',{name:'Edit: app.conf'});
+    await act(async () => { mocks.events.get('editor-file-state')!({payload:{connectionId:'flow-save',filePath:'/home/app.conf',state:'modified'}}); });
+    expect(screen.getByLabelText('Unsaved changes')).toBeDefined();
+    mocks.invoke.mockClear();
+    await act(async () => { mocks.events.get('editor-file-saved')!({payload:{connectionId:'other',filePath:'/home/app.conf',fileName:'app.conf'}}); });
+    expect(mocks.invoke).not.toHaveBeenCalledWith('list_files',expect.anything());
+    await act(async () => { mocks.events.get('editor-file-saved')!({payload:{connectionId:'flow-save',filePath:'/home/app.conf',fileName:'app.conf'}}); });
+    expect(mocks.invoke).toHaveBeenCalledWith('list_files',{connectionId:'flow-save',path:'/home'});
+    expect(screen.getByText('Saved to server: app.conf')).toBeDefined();
+  });
+  it('keeps the directory and selection when metadata refresh fails after a save', async () => {
+    mocks.invoke.mockImplementation(async command => command === 'list_files' ? [entry] : []);
+    const {container} = render(<IntegratedFileBrowser connectionId="flow-refresh-error" isConnected onClose={() => {}} terminalWorkingDirectory={{path:'/etc/app',sequence:1}} />);
+    await screen.findByRole('button',{name:'Edit: app.conf'});
+    const row = container.querySelector('[data-file-path="/etc/app/app.conf"]')!;
+    fireEvent.click(row);
+    mocks.invoke.mockImplementation(async command => { if (command === 'list_files') throw new Error('temporarily unavailable'); return []; });
+    await act(async () => { mocks.events.get('editor-file-saved')!({payload:{connectionId:'flow-refresh-error',filePath:'/etc/app/app.conf',fileName:'app.conf'}}); });
+    expect(container.querySelector('[data-file-path="/etc/app/app.conf"]')).toBe(row);
+    expect(row.className).toContain('bg-accent/80');
+    expect(screen.getByTitle('/etc/app')).toBeDefined();
+    expect(mocks.warning).toHaveBeenCalled();
+  });
+
+  it('does not delete a directory containing an open editor buffer', async () => {
+    mocks.invoke.mockImplementation(async command => command === 'list_files' ? [{...entry, name:'config', file_type:'Directory'}] : []);
+    render(<IntegratedFileBrowser connectionId="flow-protect" isConnected onClose={() => {}} />);
+    fireEvent.click(await screen.findByText('config'));
+    await act(async () => { mocks.events.get('editor-file-state')!({payload:{connectionId:'flow-protect',filePath:'/home/config/app.conf',state:'modified'}}); });
+    fireEvent.keyDown(document, {key:'Delete'});
+    fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
+    expect(mocks.invoke).not.toHaveBeenCalledWith('delete_file', expect.anything());
+    expect(mocks.warning).toHaveBeenCalledWith('Close the editor tab for this file before renaming or deleting it.');
+  });
+
 });

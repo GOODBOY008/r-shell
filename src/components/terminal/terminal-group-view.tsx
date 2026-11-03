@@ -14,7 +14,7 @@ interface TerminalGroupViewProps {
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onDuplicateTab, onNewTab, onReconnectTab, onCloseTab, onCloseAllTabs, closeTabShortcut, onDetachTab } = useTerminalCallbacks();
+  const { onDuplicateTab, onNewTab, onReconnectTab, onCloseTab, onCloseAllTabs, onCloseTabs, closeTabShortcut, onDetachTab } = useTerminalCallbacks();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
 
@@ -68,6 +68,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         onNewTab={onNewTab}
         onCloseTab={onCloseTab}
         onCloseAllTabs={onCloseAllTabs}
+        onCloseTabs={onCloseTabs}
         closeTabShortcut={closeTabShortcut}
         onDetachTab={onDetachTab}
       />

@@ -13,6 +13,8 @@
 export interface SessionHealth {
   /** The SSH connection exists in the backend's connection map. */
   sshConnected: boolean;
+  /** SSH, standalone SFTP or FTP session available for file operations. */
+  fileConnected?: boolean;
   /** An interactive PTY session is currently attached to a WebSocket. */
   hasPty: boolean;
   /** Current PTY generation counter, if any session was ever started. */

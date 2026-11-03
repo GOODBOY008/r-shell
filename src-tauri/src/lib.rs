@@ -10,6 +10,7 @@ mod os_detect;
 mod os_keypath;
 mod proxy;
 mod quit_guard;
+mod remote_editor;
 mod rdp;
 mod rdp_keymap;
 mod sftp_client;

@@ -101,8 +101,8 @@ export function TerminalGroupProvider({ children }: { children: React.ReactNode 
     const activeTab = activeGroup?.tabs.find((t) => t.id === activeGroup.activeTabId) ?? null;
     const activeConnection = activeTab
       ? {
-          connectionId: activeTab.id,
-          name: activeTab.name,
+          connectionId: activeTab.editorConnectionId ?? activeTab.id,
+          name: activeTab.editorConnectionName ?? activeTab.name,
           protocol: activeTab.protocol ?? '',
           host: activeTab.host,
           username: activeTab.username,

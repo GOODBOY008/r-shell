@@ -879,6 +879,10 @@ pub async fn create_file(
     content: String,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<bool, String> {
+    if crate::remote_editor::write_file(&state, &connection_id, &path, content.as_bytes())
+        .await.map_err(|error| error.to_string())? {
+        return Ok(true);
+    }
     let connection = state
         .get_connection(&connection_id)
         .await
@@ -902,6 +906,10 @@ pub async fn read_file_content(
     path: String,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<String, String> {
+    if let Some(bytes) = crate::remote_editor::read_file(&state, &connection_id, &path)
+        .await.map_err(|error| error.to_string())? {
+        return crate::remote_editor::decode_text(bytes).map_err(|error| error.to_string());
+    }
     let connection = state
         .get_connection(&connection_id)
         .await
@@ -937,6 +945,14 @@ pub async fn read_remote_file_base64(
     path: String,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<Base64FileResponse, String> {
+    if let Some(bytes) = crate::remote_editor::read_file(&state, &connection_id, &path)
+        .await.map_err(|error| error.to_string())? {
+        return Ok(Base64FileResponse {
+            size: bytes.len() as u64,
+            data: BASE64.encode(&bytes),
+            mime_type: editor_mime_type(&path).to_string(),
+        });
+    }
     let connection = state
         .get_connection(&connection_id)
         .await
@@ -977,9 +993,16 @@ pub async fn read_remote_file_base64(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Infer MIME type from extension
+    Ok(Base64FileResponse {
+        data: b64_data.trim().to_string(),
+        size: file_size,
+        mime_type: editor_mime_type(&path).to_string(),
+    })
+}
+
+fn editor_mime_type(path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("").to_lowercase();
-    let mime = match ext.as_str() {
+    match ext.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -990,13 +1013,7 @@ pub async fn read_remote_file_base64(
         "tiff" | "tif" => "image/tiff",
         "avif" => "image/avif",
         _ => "application/octet-stream",
-    };
-
-    Ok(Base64FileResponse {
-        data: b64_data.trim().to_string(),
-        size: file_size,
-        mime_type: mime.to_string(),
-    })
+    }
 }
 
 #[tauri::command]

@@ -22,6 +22,8 @@ import { PtyTerminal } from '../pty-terminal';
 import { FileBrowserView } from '../file-browser-view';
 import { DesktopViewer } from '../desktop-viewer';
 import { FileEditorView } from '../file-editor-view';
+import { createEditorTab } from '../../lib/editor-tabs';
+import { useEditorTabs } from '../../lib/editor-tabs-context';
 
 interface TerminalTabPortalContextValue {
   getPortalNode: (tabId: string) => HTMLDivElement;
@@ -74,7 +76,8 @@ function useAppearanceKey(): number {
 function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab; themeKey: number; appearanceKey: number }) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onReconnectTab, onDetachTab, failedPendingTabIds } = useTerminalCallbacks();
+  const editorTabs = useEditorTabs();
+  const { onReconnectTab, onDetachTab, onCloseTab, failedPendingTabIds } = useTerminalCallbacks();
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
@@ -168,6 +171,12 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
   } else if (tab.tabType === 'file-browser') {
     content = (
       <FileBrowserView
+        onOpenInEditor={(path, name) => {
+          const editor = createEditorTab({ connectionId: tab.id, name: tab.name, host: tab.host,
+            username: tab.username, protocol: tab.protocol, status: tab.connectionStatus }, path, name);
+          dispatch({ type: 'OPEN_EDITOR_TAB', tab: editor });
+          editorTabs?.focusTab(editor.id);
+        }}
         connectionId={tab.id}
         connectionName={tab.name}
         host={tab.host}
@@ -179,6 +188,17 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
   } else if (tab.tabType === 'editor' && tab.editorFilePath && tab.editorConnectionId) {
     content = (
       <FileEditorView
+        tabId={tab.id}
+        backTarget={tab.protocol === 'SFTP' || tab.protocol === 'FTP' ? 'files' : 'terminal'}
+        isActive={isActive}
+        host={tab.host}
+        onClose={onCloseTab ? () => onCloseTab(tab.id) : undefined}
+        onBackToTerminal={tab.editorConnectionId && state.tabToGroupMap[tab.editorConnectionId] ? () => {
+          const ownerId = tab.editorConnectionId!;
+          const ownerGroup = state.tabToGroupMap[ownerId];
+          dispatch({ type: 'ACTIVATE_GROUP', groupId: ownerGroup });
+          dispatch({ type: 'ACTIVATE_TAB', groupId: ownerGroup, tabId: ownerId });
+        } : undefined}
         connectionId={tab.editorConnectionId}
         filePath={tab.editorFilePath}
         fileName={tab.name}

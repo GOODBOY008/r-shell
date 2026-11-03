@@ -252,6 +252,31 @@ export function terminalGroupReducer(
       return { ...state, activeGroupId: action.groupId };
     }
 
+    case 'OPEN_EDITOR_TAB': {
+      // Resolve against the latest reducer state: two rapid opens must still
+      // share one buffer, even when React has not rendered the first add yet.
+      for (const group of Object.values(state.groups)) {
+        const existing = group.tabs.find(tab => tab.tabType === 'editor'
+          && tab.editorConnectionId === action.tab.editorConnectionId
+          && tab.editorFilePath === action.tab.editorFilePath);
+        if (existing) {
+          if (action.activate === false) return state;
+          return {
+            ...state,
+            activeGroupId: group.id,
+            groups: { ...state.groups, [group.id]: { ...group, activeTabId: existing.id } },
+          };
+        }
+      }
+      const groupId = action.groupId ?? state.activeGroupId;
+      const group = state.groups[groupId];
+      if (!group) return state;
+      const next = terminalGroupReducer(state, { type: 'ADD_TAB', groupId, tab: action.tab });
+      return action.activate === false
+        ? { ...next, groups: { ...next.groups, [groupId]: { ...next.groups[groupId], activeTabId: group.activeTabId } } }
+        : { ...next, activeGroupId: groupId };
+    }
+
     case 'ADD_TAB': {
       const { groupId, tab } = action;
       const group = state.groups[groupId];

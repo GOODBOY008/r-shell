@@ -4,6 +4,7 @@ import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, Arro
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
 import { getTabDisplayName } from '../../lib/terminal-group-utils';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
+import { useEditorTabs } from '../../lib/editor-tabs-context';
 import { Button } from '../ui/button';
 import {
   ContextMenu,
@@ -71,6 +72,7 @@ interface GroupTabBarProps {
   onCloseTab?: (tabId: string) => void | Promise<void>;
   /** Backend-aware close-all: tears down each tab's session when the group is emptied. */
   onCloseAllTabs?: (groupId: string) => void | Promise<void>;
+  onCloseTabs?: (tabIds: string[]) => void | Promise<void>;
   closeTabShortcut?: string;
   onDetachTab?: (tabId: string) => void;
 }
@@ -84,6 +86,7 @@ export function GroupTabBar({
   onReconnect,
   onCloseTab,
   onCloseAllTabs,
+  onCloseTabs,
   closeTabShortcut,
   onDetachTab,
 }: GroupTabBarProps) {
@@ -107,6 +110,7 @@ export function GroupTabBar({
     isMac,
   );
   const { dispatch } = useTerminalGroups();
+  const editorTabs = useEditorTabs();
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [dragGhost, setDragGhost] = useState<{ x: number; y: number; name: string } | null>(null);
@@ -358,9 +362,10 @@ export function GroupTabBar({
   // the SFTP/FTP disconnect and the pending-connect cancellation.
   const closeTabs = useCallback(
     (tabIds: string[]) => {
-      for (const tabId of tabIds) handleTabClose(tabId);
+      if (onCloseTabs) void onCloseTabs(tabIds);
+      else for (const tabId of tabIds) handleTabClose(tabId);
     },
-    [handleTabClose],
+    [handleTabClose, onCloseTabs],
   );
 
   const handleCloseAllTabs = useCallback(() => {
@@ -430,7 +435,7 @@ export function GroupTabBar({
                       className="flex items-center gap-2 min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={getTabDisplayName(tab, tabs)}
                       aria-pressed={tab.id === activeTabId}
-                      title={getTabDisplayName(tab, tabs)}
+                      title={tab.tabType === 'editor' ? `${tab.host ?? ''} · ${tab.editorFilePath ?? tab.name}` : getTabDisplayName(tab, tabs)}
                     >
                       {tab.tabType === 'file-browser' ? (
                         <FolderSync className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
@@ -441,7 +446,7 @@ export function GroupTabBar({
                       ) : (
                         <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
-                      <span
+                      {tab.tabType !== 'editor' && <span
                         data-connection-status={tab.connectionStatus}
                         className={`w-2 h-2 rounded-full shrink-0 ${
                           tab.connectionStatus === 'connected'
@@ -452,8 +457,16 @@ export function GroupTabBar({
                                 ? 'bg-muted-foreground/50'
                                 : 'bg-[var(--status-disconnected)]'
                         }`}
-                      />
+                      />}
                       <span className="text-xs font-medium truncate">{getTabDisplayName(tab, tabs)}</span>
+                      {editorTabs?.dirtyTabIds.has(tab.id) && (
+                        <span
+                          role="img"
+                          aria-label={t('fileEditorView.unsaved')}
+                          title={t('fileEditorView.unsaved')}
+                          className="h-1.5 w-1.5 rounded-full shrink-0 bg-amber-500"
+                        />
+                      )}
                       {tab.hasUnreadOutput && tab.id !== activeTabId &&
                         (tab.tabType === undefined || tab.tabType === 'terminal') && (
                           <span
@@ -486,7 +499,7 @@ export function GroupTabBar({
                 </ContextMenuTrigger>
                 <ContextMenuContent>
                   {/* Reconnect when disconnected */}
-                  {onReconnect && (
+                  {onReconnect && tab.tabType !== 'editor' && (
                     <>
                       <ContextMenuItem onClick={() => onReconnect(tab.id)}>
                         <RefreshCw className="mr-2 h-4 w-4" />
@@ -496,7 +509,7 @@ export function GroupTabBar({
                     </>
                   )}
                   {/* Duplicate */}
-                  {onDuplicateTab && (
+                  {onDuplicateTab && tab.tabType !== 'editor' && (
                     <>
                       <ContextMenuItem onClick={() => onDuplicateTab(tab.id)}>
                         <Copy className="mr-2 h-4 w-4" />
