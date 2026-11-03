@@ -66,7 +66,7 @@ ironrdp-dvc = "0.10"
 ironrdp-tokio = { version = "0.12", features = ["reqwest"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
-x509-cert = "0.2"
+x509-cert = "0.3"
 openssl = { version = "0.10", features = ["vendored"] }
 tokio-openssl = "0.6"
 smallvec = "1"
