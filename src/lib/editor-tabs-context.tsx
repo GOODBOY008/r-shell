@@ -141,6 +141,13 @@ export function EditorTabsProvider({ children }: { children: React.ReactNode }) 
       if (dirtyIds.length === 0) return;
       quitInFlight.current = true;
       void (async () => {
+        // Offline buffers can outlive every backend session, so the native
+        // session gate may not have revealed main. Restore it before prompting;
+        // a failed window operation must not abort the remaining steps.
+        const main = getCurrentWindow();
+        await main.show().catch(() => {});
+        await main.unminimize().catch(() => {});
+        await main.setFocus().catch(() => {});
         const approved = await confirmCloseTabs(dirtyIds);
         if (!approved) await invoke('cancel_app_quit').catch(() => {});
         quitInFlight.current = false;

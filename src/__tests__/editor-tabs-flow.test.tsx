@@ -11,6 +11,9 @@ import { createEditorTab } from '../lib/editor-tabs';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
+  show: vi.fn<() => Promise<void>>(),
+  unminimize: vi.fn<() => Promise<void>>(),
+  setFocus: vi.fn<() => Promise<void>>(),
   events: new Map<string, (event: { payload?: unknown }) => void>(),
   nativeClose: undefined as undefined | ((event: { preventDefault: () => void }) => void),
 }));
@@ -23,7 +26,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   }),
 }));
 vi.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({ label: 'main', onCloseRequested: async (handler: typeof mocks.nativeClose) => {
+  getCurrentWindow: () => ({ label: 'main', show: mocks.show, unminimize: mocks.unminimize, setFocus: mocks.setFocus, onCloseRequested: async (handler: typeof mocks.nativeClose) => {
     mocks.nativeClose = handler;
     return () => { mocks.nativeClose = undefined; };
   } }),
@@ -76,6 +79,9 @@ function edit(name: string, value: string) {
 beforeEach(() => {
   localStorage.clear();
   mocks.events.clear();
+  mocks.show.mockReset().mockResolvedValue(undefined);
+  mocks.unminimize.mockReset().mockResolvedValue(undefined);
+  mocks.setFocus.mockReset().mockResolvedValue(undefined);
   mocks.invoke.mockReset();
   mocks.invoke.mockImplementation(async (command: string, args?: { path?: string }) => {
     if (command === 'read_file_content') return `original ${args?.path}`;
@@ -83,7 +89,7 @@ beforeEach(() => {
     return true;
   });
 });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('workspace editor tabs', () => {
   it('reuses files across groups and retains the mounted buffer when switching', async () => {
@@ -193,6 +199,82 @@ describe('workspace editor tabs', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('cancel_app_quit');
     expect(mocks.invoke).toHaveBeenLastCalledWith('editor_dirty_changed', { label: 'main', dirty: true });
     expect(screen.getByRole('textbox')).toHaveValue('edited A');
+  });
+
+  it.each(['Cancel', "Don't Save"])('reveals the hidden macOS window before an offline quit prompt, then handles %s', async decision => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    await act(async () => {
+      render(<TerminalGroupProvider><EditorTabsProvider><Workspace /></EditorTabsProvider></TerminalGroupProvider>);
+    });
+    await act(async () => { fireEvent.click(screen.getByText('Open A')); });
+    edit('/etc/a.conf', 'offline buffer');
+    mocks.invoke.mockImplementation(async command => command === 'get_session_health' ? { sshConnected: false } : true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(screen.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
+    mocks.invoke.mockClear();
+
+    let finishShowing!: () => void;
+    let finishFocusing!: () => void;
+    mocks.show.mockReturnValueOnce(new Promise<void>(resolve => { finishShowing = resolve; }));
+    mocks.setFocus.mockReturnValueOnce(new Promise<void>(resolve => { finishFocusing = resolve; }));
+    await act(async () => { mocks.events.get('confirm-quit')?.({}); });
+    expect(mocks.show).toHaveBeenCalledTimes(1);
+    expect(mocks.unminimize).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+
+    // A repeated native quit while the window is opening must not stack prompts.
+    await act(async () => { mocks.events.get('confirm-quit')?.({}); });
+    expect(mocks.show).toHaveBeenCalledTimes(1);
+    await act(async () => { finishShowing(); });
+    expect(mocks.unminimize).toHaveBeenCalledTimes(1);
+    expect(mocks.setFocus).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    await act(async () => { finishFocusing(); });
+
+    const dialog = screen.getByRole('alertdialog');
+    await act(async () => { fireEvent.click(within(dialog).getByText('Save')); });
+    expect(screen.getByRole('alertdialog')).toBe(dialog);
+    expect(mocks.invoke.mock.calls.some(([command]) => command === 'create_file')).toBe(false);
+    expect(mocks.invoke).not.toHaveBeenCalledWith('editor_dirty_changed', { label: 'main', dirty: false });
+    await act(async () => { fireEvent.click(within(dialog).getByText(decision)); });
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    if (decision === 'Cancel') {
+      expect(mocks.invoke).toHaveBeenCalledWith('cancel_app_quit');
+      expect(mocks.invoke).toHaveBeenLastCalledWith('editor_dirty_changed', { label: 'main', dirty: true });
+      expect(screen.getByRole('textbox')).toHaveValue('offline buffer');
+    } else {
+      expect(mocks.invoke).not.toHaveBeenCalledWith('cancel_app_quit');
+      expect(mocks.invoke).toHaveBeenCalledWith('editor_dirty_changed', { label: 'main', dirty: false });
+    }
+  });
+
+  it.each(['show', 'unminimize', 'setFocus'] as const)('keeps quit cancellable if native %s fails', async method => {
+    await mount();
+    edit('/etc/a.conf', 'keep this buffer');
+    mocks[method].mockRejectedValueOnce(new Error('window operation failed'));
+    await act(async () => { mocks.events.get('confirm-quit')?.({}); });
+    const dialog = await screen.findByRole('alertdialog');
+    expect(mocks.show).toHaveBeenCalledTimes(1);
+    expect(mocks.unminimize).toHaveBeenCalledTimes(1);
+    expect(mocks.setFocus).toHaveBeenCalledTimes(1);
+    await act(async () => { fireEvent.click(within(dialog).getByText('Cancel')); });
+    expect(mocks.invoke).toHaveBeenCalledWith('cancel_app_quit');
+    expect(screen.getByRole('textbox')).toHaveValue('keep this buffer');
+    await act(async () => { mocks.events.get('confirm-quit')?.({}); });
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    expect(mocks.show).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not reveal main for a quit broadcast when its editors are clean', async () => {
+    await mount();
+    mocks.invoke.mockClear();
+    await act(async () => { mocks.events.get('confirm-quit')?.({}); });
+    expect(mocks.show).not.toHaveBeenCalled();
+    expect(mocks.unminimize).not.toHaveBeenCalled();
+    expect(mocks.setFocus).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(mocks.invoke).not.toHaveBeenCalledWith('cancel_app_quit');
   });
 
   it('guards native main-window destruction when an editor is dirty', async () => {
