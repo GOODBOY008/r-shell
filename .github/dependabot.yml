@@ -1,5 +1,6 @@
 # Dependabot version updates. Minor/patch bumps are grouped per ecosystem
-# to keep the PR stream manageable; major bumps stay as individual PRs.
+# to keep the PR stream manageable. IronRDP moves as one release family;
+# other major bumps stay as individual PRs.
 version: 2
 updates:
   # Frontend (root package.json; lockfile is pnpm-lock.yaml)
@@ -18,7 +19,14 @@ updates:
     schedule:
       interval: weekly
     groups:
+      # IronRDP shares types across subcrates. Its pre-1.0 minor bumps are
+      # classified as major updates and must move with the rest of the family.
+      ironrdp:
+        patterns:
+          - "ironrdp-*"
       cargo-minor-patch:
+        exclude-patterns:
+          - "ironrdp-*"
         update-types:
           - "minor"
           - "patch"
