@@ -223,8 +223,8 @@ async fn rdp_connect_attempt_body(
     // (internal_error) otherwise — see sspi-rs#651. Same extraction as
     // ironrdp-tls's extract_tls_server_public_key.
     let server_public_key: Vec<u8> = tls_cert
-        .tbs_certificate
-        .subject_public_key_info
+        .tbs_certificate()
+        .subject_public_key_info()
         .subject_public_key
         .as_bytes()
         .ok_or_else(|| anyhow::anyhow!("TLS cert public key is not byte-aligned"))?
