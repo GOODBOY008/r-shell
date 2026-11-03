@@ -53,18 +53,17 @@ keyring = "4"
 aes-gcm = "0.11"
 rand = "0.10"
 socket2 = "0.6"
-# Direct subcrate deps: the `ironrdp` meta crate (0.17.0) still re-exports the
-# previous generation (^0.10 connector / ^0.9 pdu), so using the new generation
-# means depending on the subcrates directly.
+# Keep the IronRDP subcrates on one release generation: their PDU, graphics,
+# connector and virtual-channel types cross crate boundaries.
 ironrdp-core = "0.3"
-ironrdp-pdu = "0.10"
+ironrdp-pdu = "0.11"
 ironrdp-connector = "0.12"
-ironrdp-session = "0.12"
+ironrdp-session = "0.13"
 ironrdp-graphics = "0.11"
 ironrdp-input = "0.9"
-ironrdp-displaycontrol = "0.9"
+ironrdp-displaycontrol = "0.10"
 ironrdp-dvc = "0.10"
-ironrdp-tokio = { version = "0.11", features = ["reqwest"] }
+ironrdp-tokio = { version = "0.12", features = ["reqwest"] }
 tokio-native-tls = "0.3"
 native-tls = "0.2"
 x509-cert = "0.2"
