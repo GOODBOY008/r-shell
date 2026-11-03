@@ -58,7 +58,7 @@ socket2 = "0.6"
 # means depending on the subcrates directly.
 ironrdp-core = "0.3"
 ironrdp-pdu = "0.10"
-ironrdp-connector = "0.11"
+ironrdp-connector = "0.12"
 ironrdp-session = "0.12"
 ironrdp-graphics = "0.10"
 ironrdp-input = "0.8"
