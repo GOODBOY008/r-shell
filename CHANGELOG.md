@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔖 R-Shell 3.1.2 — RDP Input & Connection Hardening
 
-This patch release keeps keyboard input in focused remote desktop sessions, improves RDP logon diagnostics and display scaling, and updates the IronRDP release family together. SSH host-key checks and default-key fallback are hardened, and downloads of server-named files stay inside the selected directory.
+This patch release keeps keyboard input in focused remote desktop sessions, improves RDP logon diagnostics and display scaling, and updates the IronRDP release family together. SSH host-key checks and default-key fallback are hardened, downloads of server-named files stay inside the selected directory, and process monitoring correctly handles Alpine and macOS hosts.
 
 ### New Features 🎉
 
@@ -17,6 +17,7 @@ This patch release keeps keyboard input in focused remote desktop sessions, impr
 
 ### Bug Fixes 🐛
 
+- fix(monitor): parse Alpine and macOS process lists correctly by @GOODBOY008
 - fix(rdp): give focused remote sessions exclusive keyboard input by @GOODBOY008 in #278
 - fix(rdp): use x509-cert 0.3 certificate accessors by @GOODBOY008 in #276
 - fix(deps): align IronRDP release family and connector config by @GOODBOY008 in #270

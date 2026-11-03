@@ -4,6 +4,24 @@ use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell};
 
+// BusyBox ps has no pcpu/pmem columns. Match procps' lifetime CPU percentage
+// using CPU time / elapsed time, and resident-memory percentage using MemTotal.
+// Emit the same headerless USER PID CPU MEM COMMAND columns as the other hosts.
+const BUSYBOX_PROCESS_COMMAND: &str = r#"ps -o user,pid,time,etime,rss,args 2>/dev/null | awk -v mem_total="$(awk '/^MemTotal:/{print $2}' /proc/meminfo)" '
+function seconds(value, days, parts, n, i, total) {
+    days = 0
+    if (index(value, "-")) { split(value, parts, "-"); days = parts[1]; value = parts[2] }
+    n = split(value, parts, ":"); total = 0
+    for (i = 1; i <= n; i++) total = total * 60 + parts[i]
+    return days * 86400 + total
+}
+NR > 1 && $2 ~ /^[0-9]+$/ && $5 ~ /^[0-9]+$/ {
+    user = $1; pid = $2; cpu_time = seconds($3); elapsed = seconds($4); rss = $5
+    for (i = 1; i <= 5; i++) $i = ""
+    sub(/^[[:space:]]+/, "")
+    printf "%s %s %.1f %.1f %s\n", user, pid, (elapsed > 0 ? 100 * cpu_time / elapsed : 0), (mem_total > 0 ? 100 * rss / mem_total : 0), $0
+}'"#;
+
 /// Detected OS family of a remote host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OsFamily {
@@ -353,32 +371,29 @@ impl OsInfo {
         "uptime | awk -F'load average:' '{print $2}' | xargs"
     }
 
-    /// Process list command.
+    /// Process list command: headerless USER PID CPU MEM COMMAND columns.
     ///
-    /// `ps aux --sort` is a GNU/procps extension.
-    /// BusyBox `ps` has a completely different output format.
+    /// BusyBox `ps` needs percentage calculation instead of pcpu/pmem columns.
     /// macOS `ps` supports `-r` (sort by CPU) and `-m` (sort by memory).
     pub fn process_cmd(&self, sort_by: &str) -> String {
+        let sort_col = if sort_by == "mem" { "4" } else { "3" };
         match self.family {
             OsFamily::MacOS => {
                 let flag = if sort_by == "mem" { "-amx" } else { "-arx" };
                 format!("ps {} -o user=,pid=,pcpu=,pmem=,command= | head -50", flag)
             }
             OsFamily::Alpine if !self.has_procps_top => {
-                // BusyBox ps doesn't support --sort. Use ps + sort pipeline.
-                let sort_col = if sort_by == "mem" { "4" } else { "3" };
                 format!(
-                    "ps aux 2>/dev/null | head -1; ps aux 2>/dev/null | tail -n +2 | sort -k{} -rn | head -49",
-                    sort_col
+                    "{} | sort -k{},{}nr | head -50",
+                    BUSYBOX_PROCESS_COMMAND, sort_col, sort_col
                 )
             }
             _ => {
-                // procps ps with --sort (Debian, RHEL, Arch, SUSE, generic Linux)
-                let sort_option = if sort_by == "mem" { "-%mem" } else { "-%cpu" };
+                // Test ps itself before piping: head succeeds on empty input,
+                // which otherwise prevents the BusyBox fallback from running.
                 format!(
-                    "ps aux --sort={} 2>/dev/null | head -50 || {{ ps aux 2>/dev/null | head -1; ps aux 2>/dev/null | tail -n +2 | sort -k{} -rn | head -49; }}",
-                    sort_option,
-                    if sort_by == "mem" { "4" } else { "3" }
+                    "{{ ps -eo user=,pid=,pcpu=,pmem=,args= 2>/dev/null || {}; }} | sort -k{},{}nr | head -50",
+                    BUSYBOX_PROCESS_COMMAND, sort_col, sort_col
                 )
             }
         }

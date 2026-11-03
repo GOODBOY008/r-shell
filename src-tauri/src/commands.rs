@@ -1033,6 +1033,78 @@ pub struct ProcessInfo {
     pub command: String,
 }
 
+pub(crate) fn parse_process_output(output: &str) -> Vec<ProcessInfo> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 5 || parts[1].parse::<u32>().ok()? == 0 {
+                return None;
+            }
+            let cpu = parts[2].parse::<f64>().ok()?;
+            let mem = parts[3].parse::<f64>().ok()?;
+            if !cpu.is_finite() || cpu < 0.0 || !mem.is_finite() || mem < 0.0 {
+                return None;
+            }
+            Some(ProcessInfo {
+                user: parts[0].to_string(),
+                pid: parts[1].to_string(),
+                cpu: parts[2].to_string(),
+                mem: parts[3].to_string(),
+                command: parts[4..].join(" "),
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod process_output_tests {
+    use super::parse_process_output;
+
+    #[test]
+    fn preserves_first_process_and_commands_with_arguments() {
+        let processes = parse_process_output(
+            "root 1 0.0 0.1 /sbin/init\nuser 42 125.5 3.2 /usr/bin/worker --name two words\n",
+        );
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[0].pid, "1");
+        assert_eq!(processes[0].command, "/sbin/init");
+        assert_eq!(processes[1].cpu, "125.5");
+        assert_eq!(processes[1].command, "/usr/bin/worker --name two words");
+    }
+
+    #[test]
+    fn parses_macos_and_normalized_busybox_rows() {
+        let processes = parse_process_output(
+            "  aiden 321  4.5  0.7 /Applications/My App.app/Contents/MacOS/app\n\
+             testuser 36 0.0 0.1 sshd: testuser@pts/0\n",
+        );
+        assert_eq!(processes.len(), 2);
+        assert_eq!(processes[0].user, "aiden");
+        assert_eq!(processes[0].mem, "0.7");
+        assert_eq!(processes[1].pid, "36");
+        assert_eq!(processes[1].command, "sshd: testuser@pts/0");
+    }
+
+    #[test]
+    fn ignores_headers_malformed_ids_and_non_finite_percentages() {
+        let processes = parse_process_output(
+            "USER PID CPU MEM COMMAND\n\
+             root bad 0.0 0.0 invalid-pid\n\
+             root 12oops 0.0 0.0 partial-pid\n\
+             root 0 0.0 0.0 invalid-pid\n\
+             root 12 NaN 0.0 invalid-cpu\n\
+             root 13 0.0 inf invalid-memory\n\
+             root 14 -1.0 0.0 negative-cpu\n\
+             root 15 0.0 -1.0 negative-memory\n\
+             root 16 0.0 0.0\n\
+             root 17 1.0 2.0 valid\n",
+        );
+        assert_eq!(processes.len(), 1);
+        assert_eq!(processes[0].pid, "17");
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProcessListResponse {
     pub success: bool,
@@ -1063,21 +1135,7 @@ pub async fn get_processes(
 
     match client.execute_command(&command).await {
         Ok(output) => {
-            let mut processes = Vec::new();
-
-            // Parse ps output (skip header line)
-            for line in output.lines().skip(1) {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.len() >= 11 {
-                    processes.push(ProcessInfo {
-                        user: parts[0].to_string(),
-                        pid: parts[1].to_string(),
-                        cpu: parts[2].to_string(),
-                        mem: parts[3].to_string(),
-                        command: parts[10..].join(" "),
-                    });
-                }
-            }
+            let processes = parse_process_output(&output);
 
             Ok(ProcessListResponse {
                 success: true,

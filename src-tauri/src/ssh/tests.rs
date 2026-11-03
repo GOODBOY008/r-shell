@@ -770,23 +770,21 @@ mod shell_integration_tests {
             "fixture runs BusyBox top; probe must not read it as procps"
         );
 
-        // The damage the misdetection caused, verified healed: the BusyBox
-        // process command must return a non-empty list with a recognisable
-        // header (the procps branch returned 0 bytes on this fixture).
+        // Exercise the same parser as the UI command: a nonempty BusyBox ps
+        // response alone is insufficient if its columns are misread as ps aux.
         let ps_out = client
             .execute_command(&os_info.process_cmd("cpu"))
             .await
             .expect("process_cmd executes");
-        assert!(
-            ps_out.contains("PID"),
-            "process list must have a header with PID, got: {:?}",
-            ps_out.lines().next().unwrap_or("")
-        );
-        assert!(
-            ps_out.lines().count() >= 2,
-            "process list must list processes, got {} lines",
-            ps_out.lines().count()
-        );
+        let processes = crate::commands::parse_process_output(&ps_out);
+        assert!(!processes.is_empty(), "no usable processes: {ps_out:?}");
+        assert_eq!(processes.len(), ps_out.lines().count());
+        assert!(processes.iter().any(|process| process.command.contains("sshd")));
+        for process in &processes {
+            assert!(process.pid.parse::<u32>().unwrap() > 0);
+            assert!(process.cpu.parse::<f64>().unwrap().is_finite());
+            assert!(process.mem.parse::<f64>().unwrap().is_finite());
+        }
 
         // CPU: the two-read /proc/stat delta must produce a plain bounded
         // number on BusyBox (the old top-based command smeared since-boot).
