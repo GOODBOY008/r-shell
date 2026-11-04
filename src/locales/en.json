@@ -278,8 +278,7 @@
     },
     "hint": {
       "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it.",
-      "sudoPassword": "Sent to the terminal via right-click → Type sudo password. Never shown back here.",
-      "notesEncrypted": "Stored encrypted like the passwords and left out of exports."
+      "sudoPassword": "Sent to the terminal via right-click → Type sudo password. Never shown back here."
     },
     "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored.",
     "x11": {
@@ -1077,12 +1076,9 @@
     "port": "Port",
     "protocol": "Protocol",
     "notes": "Notes",
-    "showNotes": "Show notes",
-    "hideNotes": "Hide notes",
     "copyNotes": "Copy notes",
     "notesCopied": "Notes copied to the clipboard",
     "notesCopyFailed": "Could not copy the notes",
-    "notesUnavailable": "Could not decrypt the notes",
     "connectionDeleted": "Connection deleted",
     "failedToDeleteConnection": "Failed to delete connection",
     "duplicated": "Duplicated: {{name}}",

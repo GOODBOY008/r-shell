@@ -278,8 +278,7 @@
     },
     "hint": {
       "savedPasswordKept": "此连接已保存密码。留空保持不变，输入新密码即可替换。",
-      "sudoPassword": "通过终端右键菜单“输入 sudo 密码”发送，此处不会再显示。",
-      "notesEncrypted": "与密码一样加密保存，且不会导出。"
+      "sudoPassword": "通过终端右键菜单“输入 sudo 密码”发送，此处不会再显示。"
     },
     "passwordSavingDisabledHint": "已在设置中关闭密码保存——连接可正常建立，但不会存储凭据。",
     "x11": {
@@ -1077,12 +1076,9 @@
     "port": "端口",
     "protocol": "协议",
     "notes": "备注",
-    "showNotes": "显示备注",
-    "hideNotes": "隐藏备注",
     "copyNotes": "复制备注",
     "notesCopied": "备注已复制到剪贴板",
     "notesCopyFailed": "无法复制备注",
-    "notesUnavailable": "无法解密备注",
     "connectionDeleted": "连接已删除",
     "failedToDeleteConnection": "删除连接失败",
     "duplicated": "已复制：{{name}}",

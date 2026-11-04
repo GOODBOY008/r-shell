@@ -1160,7 +1160,7 @@ export function ConnectionManager({
                   <span className="text-xs">{selectedConnection.protocol}</span>
                 </div>
 
-                <ConnectionNotes sealed={selectedConnection.notes} />
+                <ConnectionNotes notes={selectedConnection.notes} />
               </div>
             </div>
           )}

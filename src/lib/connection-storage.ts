@@ -34,7 +34,7 @@ export interface ConnectionData {
   color?: string;
   tags?: string[];
   description?: string;
-  /** Free text kept for the host (e.g. where its runbook lives); sealed at rest. */
+  /** Free text kept for the host; plain, travels with exports and imports. */
   notes?: string;
   // Authentication details
   authMethod?: 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
@@ -961,7 +961,6 @@ export interface ConnectionTreeNode {
   favorite?: boolean;
   color?: string;
   tags?: string[];
-  /** Sealed; the details panel decrypts it on request. */
   notes?: string;
   children?: ConnectionTreeNode[];
 }

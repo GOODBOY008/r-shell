@@ -2,7 +2,7 @@
  * Credential encryption for locally stored connection secrets.
  *
  * Secrets (SSH passwords, key passphrases, proxy/VNC passwords, the sudo
- * password and the per-host notes) are encrypted
+ * password) are encrypted
  * with AES-256-GCM on the Rust side using an app master key that lives in the
  * OS keychain (created on first use, one keychain entry for the whole app).
  * Dev/e2e builds never touch the keychain — every rebuild changes the ad-hoc
@@ -26,17 +26,9 @@ export const SECRET_FIELDS = [
   'tunnelPassword',
   'tunnelPassphrase',
   'sudoPassword',
-  'notes',
 ] as const;
 
 export type SecretField = (typeof SECRET_FIELDS)[number];
-
-/**
- * Secret fields the forms never echo back (a blank field on save keeps the
- * stored value). Notes are the exception: they are edited, so the dialog
- * shows them decrypted.
- */
-export const HIDDEN_SECRET_FIELDS: readonly SecretField[] = SECRET_FIELDS.filter((f) => f !== 'notes');
 
 /** True when the value is an encrypted-at-rest secret (v1 sealed format). */
 export function isSealed(value: unknown): value is string {

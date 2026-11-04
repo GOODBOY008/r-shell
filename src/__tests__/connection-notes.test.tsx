@@ -1,15 +1,14 @@
 /**
- * Per-host notes and the sudo password are sealed secrets: encrypted at rest
- * like the login password. Notes differ in one way — they are shown back
- * (decrypted) when editing and can be revealed/copied from the details panel;
- * the sudo password stays hidden like every other credential.
+ * Per-host notes are plain text that travels with the connection (exports
+ * included); the sudo password is a sealed secret like the login password:
+ * encrypted at rest, never echoed back, blank on save keeps the stored one.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConnectionDialog } from '../components/connection-dialog';
 import { ConnectionNotes } from '../components/connection-notes';
 import { ConnectionStorageManager } from '../lib/connection-storage';
-import { HIDDEN_SECRET_FIELDS, SECRET_FIELDS } from '../lib/credential-crypto';
+import { SECRET_FIELDS } from '../lib/credential-crypto';
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -44,6 +43,8 @@ function seal(plaintext: string): string {
   return `v1:test:${btoa(encodeURIComponent(plaintext))}`;
 }
 
+const NOTES = 'runbook: wiki/hosts/db-1\nsudo: ask Bob';
+
 const connection = {
   id: 'conn-1',
   name: 'My Server',
@@ -54,7 +55,7 @@ const connection = {
   authMethod: 'password' as const,
   password: seal('login-secret'),
   sudoPassword: seal('sudo-secret'),
-  notes: seal('root pw in the vault\nsudo: ask Bob'),
+  notes: NOTES,
 };
 
 function renderEditDialog(onSave = vi.fn()) {
@@ -80,69 +81,57 @@ beforeEach(() => {
   });
 });
 
-describe('notes and sudo password as sealed secrets', () => {
-  it('are secret fields, and only the notes are shown back', () => {
-    expect(SECRET_FIELDS).toContain('notes');
+describe('storage of notes and the sudo password', () => {
+  it('treats only the sudo password as a secret', () => {
     expect(SECRET_FIELDS).toContain('sudoPassword');
-    expect(HIDDEN_SECRET_FIELDS).toContain('sudoPassword');
-    expect(HIDDEN_SECRET_FIELDS).not.toContain('notes');
+    expect(SECRET_FIELDS).not.toContain('notes');
   });
 
-  it('never reach storage as plaintext', () => {
-    ConnectionStorageManager.saveConnectionWithId('conn-1', {
-      ...connection,
-      notes: 'plain notes',
-      sudoPassword: 'plain sudo password',
-    });
+  it('keeps plain notes but never a plaintext sudo password', () => {
+    ConnectionStorageManager.saveConnectionWithId('conn-1', { ...connection, sudoPassword: 'plain sudo password' });
     const stored = ConnectionStorageManager.getConnection('conn-1');
-    expect(stored?.notes).toBeUndefined();
+    expect(stored?.notes).toBe(NOTES);
     expect(stored?.sudoPassword).toBeUndefined();
 
     ConnectionStorageManager.saveConnectionWithId('conn-2', connection);
-    expect(ConnectionStorageManager.getConnection('conn-2')?.notes).toBe(connection.notes);
     expect(ConnectionStorageManager.getConnection('conn-2')?.sudoPassword).toBe(connection.sudoPassword);
   });
 });
 
 describe('ConnectionDialog notes and sudo password', () => {
-  it('shows the decrypted notes while keeping both passwords hidden', async () => {
+  it('shows the notes as saved while keeping both passwords hidden', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-1', connection);
     renderEditDialog();
 
-    const notes = screen.getByLabelText('Notes');
-    await waitFor(() => expect(notes).toHaveValue('root pw in the vault\nsudo: ask Bob'));
+    expect(screen.getByLabelText('Notes')).toHaveValue(NOTES);
 
     // Only the active tab is mounted: the credentials live on the Auth tab.
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
     expect(await screen.findByLabelText('Password')).toHaveValue('');
-    const sudo = await screen.findByLabelText('sudo password (optional)');
+    const sudo = screen.getByLabelText('sudo password (optional)');
     expect(sudo).toHaveValue('');
     expect(sudo).toHaveAttribute('placeholder', 'Leave blank to keep saved password');
   });
 
-  it('stores edited notes sealed and keeps a blank sudo password', async () => {
+  it('stores edited notes as typed and keeps a blank sudo password', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-1', connection);
     const onSave = renderEditDialog();
 
-    const notes = screen.getByLabelText('Notes');
-    await waitFor(() => expect(notes).toHaveValue('root pw in the vault\nsudo: ask Bob'));
-    fireEvent.change(notes, { target: { value: 'sudo: hunter3' } });
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: 'moved to rack 7' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     const stored = ConnectionStorageManager.getConnection('conn-1');
-    expect(stored?.notes).toBe(seal('sudo: hunter3'));
+    expect(stored?.notes).toBe('moved to rack 7');
     expect(stored?.sudoPassword).toBe(connection.sudoPassword);
     expect(stored?.password).toBe(connection.password);
   });
 
-  it('clears the notes when the field is emptied and replaces a typed sudo password', async () => {
+  it('seals a typed sudo password and clears emptied notes', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-1', connection);
     const onSave = renderEditDialog();
 
-    const notes = screen.getByLabelText('Notes');
-    await waitFor(() => expect(notes).toHaveValue('root pw in the vault\nsudo: ask Bob'));
-    fireEvent.change(notes, { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Notes'), { target: { value: '' } });
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
     fireEvent.change(await screen.findByLabelText('sudo password (optional)'), { target: { value: 'new-sudo' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -153,30 +142,28 @@ describe('ConnectionDialog notes and sudo password', () => {
     expect(stored?.sudoPassword).toBe(seal('new-sudo'));
   });
 
-  it('does not carry one connection\'s notes into the next form', async () => {
-    const { rerender } = render(
-      <ConnectionDialog open={true} onOpenChange={vi.fn()} onConnect={vi.fn()} editingConnection={connection} />,
+  it('has no sudo password field for a file-browser connection', async () => {
+    render(
+      <ConnectionDialog
+        open={true}
+        onOpenChange={vi.fn()}
+        onConnect={vi.fn()}
+        editingConnection={{ ...connection, protocol: 'SFTP', sudoPassword: undefined }}
+      />,
     );
-    await waitFor(() => expect(screen.getByLabelText('Notes')).toHaveValue('root pw in the vault\nsudo: ask Bob'));
-    rerender(<ConnectionDialog open={false} onOpenChange={vi.fn()} onConnect={vi.fn()} editingConnection={connection} />);
-    rerender(<ConnectionDialog open={true} onOpenChange={vi.fn()} onConnect={vi.fn()} editingConnection={null} />);
-    expect(screen.getByLabelText('Notes')).toHaveValue('');
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
+    expect(await screen.findByLabelText('Password')).toBeInTheDocument();
+    expect(screen.queryByLabelText('sudo password (optional)')).toBeNull();
   });
 });
 
 describe('ConnectionNotes details row', () => {
-  it('reveals, copies and hides the decrypted notes', async () => {
-    render(<ConnectionNotes sealed={connection.notes} />);
-    expect(screen.queryByText(/ask Bob/)).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Show notes' }));
-    expect(await screen.findByText(/ask Bob/)).toBeInTheDocument();
+  it('shows the notes and copies them as a whole', async () => {
+    render(<ConnectionNotes notes={NOTES} />);
+    expect(screen.getByText(/ask Bob/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy notes' }));
-    await waitFor(() => expect(writeText).toHaveBeenCalledWith('root pw in the vault\nsudo: ask Bob'));
-
-    fireEvent.click(screen.getByRole('button', { name: 'Hide notes' }));
-    expect(screen.queryByText(/ask Bob/)).toBeNull();
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(NOTES));
   });
 
   it('shows a dash for a connection without notes', () => {

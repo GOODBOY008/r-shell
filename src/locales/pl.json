@@ -280,8 +280,7 @@
     },
     "hint": {
       "savedPasswordKept": "Dla tego połączenia zapisano hasło. Pozostaw pole puste, aby je zachować, albo wpisz nowe, aby je zastąpić.",
-      "sudoPassword": "Wysyłane do terminala przez prawy przycisk → Wpisz hasło sudo. Nigdy nie jest tu pokazywane.",
-      "notesEncrypted": "Przechowywane zaszyfrowane jak hasła i pomijane w eksporcie."
+      "sudoPassword": "Wysyłane do terminala przez prawy przycisk → Wpisz hasło sudo. Nigdy nie jest tu pokazywane."
     },
     "passwordSavingDisabledHint": "Zapisywanie haseł jest wyłączone w ustawieniach — połączenie zadziała, ale dane logowania nie zostaną zapisane.",
     "x11": {
@@ -1115,12 +1114,9 @@
     "port": "Port",
     "protocol": "Protokół",
     "notes": "Notatki",
-    "showNotes": "Pokaż notatki",
-    "hideNotes": "Ukryj notatki",
     "copyNotes": "Kopiuj notatki",
     "notesCopied": "Notatki skopiowane do schowka",
     "notesCopyFailed": "Nie udało się skopiować notatek",
-    "notesUnavailable": "Nie udało się odszyfrować notatek",
     "connectionDeleted": "Połączenie usunięte",
     "failedToDeleteConnection": "Nie udało się usunąć połączenia",
     "duplicated": "Powielono: {{name}}",
