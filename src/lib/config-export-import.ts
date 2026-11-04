@@ -15,7 +15,15 @@ import {
   type ConnectionData,
   type ConnectionFolder,
 } from './connection-storage';
-import { SECRET_FIELDS } from './credential-crypto';
+import {
+  SECRET_FIELDS,
+  isBackupSealed,
+  isSealed,
+  openFromBackup,
+  openSecret,
+  sealForBackup,
+  sealSecret,
+} from './credential-crypto';
 import { ConnectionProfileManager, type ConnectionProfile } from './connection-profiles';
 import {
   loadAppearanceSettings,
@@ -39,6 +47,7 @@ import { migrateLegacyShortcutBindings } from './shortcut-registry';
 
 const SCHEMA_VERSION = 1;
 const LANGUAGE_STORAGE_KEY = 'r-shell-language';
+const CREDENTIALS_FORMAT = 'r-shell-credentials-v1';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,12 +65,29 @@ export interface ConfigBundle {
     editorConfig?: EditorConfig;
     appSettings?: Record<string, unknown>;
     language?: string;
+    /**
+     * Opt-in: every stored secret, keyed by connection id, encrypted under a
+     * passphrase the user chose at export time (`b1:` block).
+     */
+    credentials?: { format: string; sealed: string };
   };
+}
+
+/** Plaintext layout of the credentials block. */
+interface CredentialsBlock {
+  connections: Record<string, Record<string, string>>;
+}
+
+export interface ExportOptions {
+  /** Include the credentials block, encrypted under this passphrase. */
+  credentialsPassphrase?: string;
 }
 
 export interface ImportResult {
   connections: number;
   profiles: number;
+  /** Connections whose secrets were restored from the credentials block. */
+  credentials: number;
   terminalAppearance: boolean;
   editorConfig: boolean;
   appSettings: boolean;
@@ -75,12 +101,13 @@ export interface ImportResult {
  * JSON bundle to disk.  Returns `true` when the file was written, `false`
  * when the user cancelled the dialog.
  */
-// Secret fields that must never end up in an exported config bundle — not
-// even as ciphertext. Exported files are meant to be shareable; a stolen
-// master key would otherwise decrypt every exported credential.
+// Secret fields that never end up in an exported config bundle as stored —
+// not even as ciphertext. Exported files are meant to be shareable; a stolen
+// master key would otherwise decrypt every exported credential. The opt-in
+// credentials block carries them under the user's own passphrase instead.
 const EXPORT_STRIPPED_FIELDS = SECRET_FIELDS;
 
-export async function exportAllConfig(): Promise<boolean> {
+export async function exportAllConfig(options: ExportOptions = {}): Promise<boolean> {
   try {
     // 1. Build the bundle -------------------------------------------------------
     const bundle: ConfigBundle = {
@@ -148,6 +175,34 @@ export async function exportAllConfig(): Promise<boolean> {
 
     if (!filePath) return false; // cancelled
 
+    // 2b. Credentials (opt-in) ---------------------------------------------------
+    // Every stored secret, decrypted and re-encrypted under the passphrase,
+    // so the file stays portable yet unreadable without it.
+    if (options.credentialsPassphrase) {
+      const secrets: CredentialsBlock['connections'] = {};
+      for (const connection of connections) {
+        const record = connection as unknown as Record<string, unknown>;
+        const own: Record<string, string> = {};
+        for (const field of SECRET_FIELDS) {
+          const value = record[field];
+          if (isSealed(value)) {
+            own[field] = await openSecret(value);
+          } else if (typeof value === 'string' && value.length > 0) {
+            // Legacy plaintext still waiting for the startup seal migration.
+            own[field] = value;
+          }
+        }
+        if (Object.keys(own).length > 0) secrets[connection.id] = own;
+      }
+      if (Object.keys(secrets).length > 0) {
+        const block: CredentialsBlock = { connections: secrets };
+        bundle.data.credentials = {
+          format: CREDENTIALS_FORMAT,
+          sealed: await sealForBackup(options.credentialsPassphrase, JSON.stringify(block)),
+        };
+      }
+    }
+
     // 3. Write ------------------------------------------------------------------
     // The fs plugin may only touch files the user picked, so grant this one.
     await writeLocalTextFile(filePath, JSON.stringify(bundle, null, 2));
@@ -160,16 +215,27 @@ export async function exportAllConfig(): Promise<boolean> {
 
 // ── Import ────────────────────────────────────────────────────────────────────
 
+/** The credentials block did not open: wrong passphrase or damaged data. */
+export class WrongPassphraseError extends Error {
+  constructor() {
+    super('Wrong passphrase or damaged credentials block');
+    this.name = 'WrongPassphraseError';
+  }
+}
+
+export interface ImportOptions {
+  merge?: boolean;
+  /** Passphrase for the bundle's credentials block; absent = skip the block. */
+  credentialsPassphrase?: string;
+}
+
 /**
- * Open a file-dialog, parse the JSON bundle, optionally merge connections,
- * and write every category into localStorage.  Returns a summary of what
- * was imported, or `null` when the user cancelled.
+ * Open a file-dialog and parse the JSON bundle. Returns `null` when the user
+ * cancelled. Nothing is written yet: the caller may first have to ask for
+ * the credentials passphrase (see `bundleHasCredentials`).
  */
-export async function importAllConfig(
-  merge: boolean = false,
-): Promise<ImportResult | null> {
+export async function pickConfigBundle(): Promise<ConfigBundle | null> {
   try {
-    // 1. Pick file --------------------------------------------------------------
     const filePath = await tauriOpen({
       filters: [{ name: 'R-Shell Config', extensions: ['json'] }],
       multiple: false,
@@ -178,7 +244,6 @@ export async function importAllConfig(
 
     if (!filePath) return null; // cancelled
 
-    // 2. Read & parse -----------------------------------------------------------
     // The fs plugin may only touch files the user picked, so grant this one.
     const raw = await readLocalTextFile(filePath);
     const bundle = JSON.parse(raw) as ConfigBundle;
@@ -186,10 +251,33 @@ export async function importAllConfig(
     if (typeof bundle.version !== 'number' || !bundle.data) {
       throw new Error('Invalid config file: missing version or data block.');
     }
+    return bundle;
+  } catch (error) {
+    console.error('[config-import] Failed:', error);
+    throw error;
+  }
+}
 
+/** True when the bundle carries a passphrase-protected credentials block. */
+export function bundleHasCredentials(bundle: ConfigBundle): boolean {
+  return isBackupSealed(bundle.data.credentials?.sealed);
+}
+
+/**
+ * Write every category of a parsed bundle into localStorage, optionally
+ * merging connections. Returns a summary of what was imported. Throws
+ * `WrongPassphraseError` before touching storage when the credentials block
+ * does not open with the given passphrase.
+ */
+export async function applyConfigBundle(
+  bundle: ConfigBundle,
+  { merge = false, credentialsPassphrase }: ImportOptions = {},
+): Promise<ImportResult> {
+  try {
     const result: ImportResult = {
       connections: 0,
       profiles: 0,
+      credentials: 0,
       terminalAppearance: false,
       editorConfig: false,
       appSettings: false,
@@ -198,13 +286,41 @@ export async function importAllConfig(
 
     const { data } = bundle;
 
+    // 2. Credentials block first: a wrong passphrase must fail before any write.
+    let restored: CredentialsBlock['connections'] = {};
+    const block = data.credentials;
+    if (credentialsPassphrase && block && isBackupSealed(block.sealed)) {
+      let json: string;
+      try {
+        json = await openFromBackup(credentialsPassphrase, block.sealed);
+      } catch (error) {
+        console.error('[config-import] Credentials block did not open:', error);
+        throw new WrongPassphraseError();
+      }
+      restored = (JSON.parse(json) as Partial<CredentialsBlock>).connections ?? {};
+    }
+
     // 3a. Connections + folders -------------------------------------------------
     if (data.connections) {
-      const importedCount = ConnectionStorageManager.importConnections(
-        JSON.stringify(data.connections),
+      // Re-seal restored secrets with this machine's master key before they
+      // reach storage: plaintext is stripped on write.
+      const connections = await Promise.all(
+        data.connections.connections.map(async (connection) => {
+          const secrets = restored[connection.id];
+          if (!secrets) return connection;
+          const withSecrets = { ...connection } as Record<string, unknown>;
+          for (const field of SECRET_FIELDS) {
+            const value = secrets[field];
+            if (typeof value === 'string') withSecrets[field] = await sealSecret(value);
+          }
+          result.credentials += 1;
+          return withSecrets as unknown as ConnectionData;
+        }),
+      );
+      result.connections = ConnectionStorageManager.importConnections(
+        JSON.stringify({ ...data.connections, connections }),
         merge,
       );
-      result.connections = importedCount;
     }
 
     // 3b. Connection profiles ---------------------------------------------------
@@ -257,6 +373,19 @@ export async function importAllConfig(
     console.error('[config-import] Failed:', error);
     throw error;
   }
+}
+
+/**
+ * Pick a bundle and apply it in one go. Returns the import summary, or
+ * `null` when the user cancelled the file dialog.
+ */
+export async function importAllConfig(
+  merge: boolean = false,
+  credentialsPassphrase?: string,
+): Promise<ImportResult | null> {
+  const bundle = await pickConfigBundle();
+  if (!bundle) return null;
+  return applyConfigBundle(bundle, { merge, credentialsPassphrase });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

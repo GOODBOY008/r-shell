@@ -4829,6 +4829,72 @@ fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
     String::from_utf8(plaintext).map_err(|e| format!("Decrypted secret is not UTF-8: {e}"))
 }
 
+/// Argon2id cost for passphrase-protected backups: 64 MiB, 3 passes, 1 lane.
+const BACKUP_KDF_MEMORY_KIB: u32 = 64 * 1024;
+const BACKUP_KDF_PASSES: u32 = 3;
+const BACKUP_SALT_LEN: usize = 16;
+
+/// Derive the 32-byte backup key from the user's export passphrase.
+fn backup_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
+    let params = argon2::Params::new(BACKUP_KDF_MEMORY_KIB, BACKUP_KDF_PASSES, 1, Some(32))
+        .map_err(|e| format!("Invalid backup KDF parameters: {e}"))?;
+    let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let mut key = [0u8; 32];
+    argon
+        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .map_err(|e| format!("Failed to derive the backup key: {e}"))?;
+    Ok(key)
+}
+
+/// Encrypt text under a passphrase for a config export:
+/// `b1:<salt>:<nonce>:<ciphertext>` (all base64). Unlike `v1:` values, which
+/// need this machine's master key, the result opens on any machine that
+/// knows the passphrase.
+fn seal_for_backup(passphrase: &str, secret: &str) -> Result<String, String> {
+    if passphrase.is_empty() {
+        return Err("The backup passphrase is empty".to_string());
+    }
+    use rand::Rng;
+    let mut salt = [0u8; BACKUP_SALT_LEN];
+    rand::rng().fill_bytes(&mut salt);
+    let sealed = seal_with_key(&backup_key(passphrase, &salt)?, secret)?;
+    Ok(format!("b1:{}:{}", BASE64.encode(salt), &sealed["v1:".len()..]))
+}
+
+/// Decrypt a value produced by `seal_for_backup`. A wrong passphrase fails
+/// the AES-GCM tag check and surfaces as a decrypt error.
+fn open_from_backup(passphrase: &str, sealed: &str) -> Result<String, String> {
+    let parts: Vec<&str> = sealed.splitn(4, ':').collect();
+    if parts.len() != 4 || parts[0] != "b1" {
+        return Err("Unrecognized backup format".to_string());
+    }
+    let salt = BASE64
+        .decode(parts[1])
+        .map_err(|e| format!("Corrupt salt: {e}"))?;
+    if salt.len() != BACKUP_SALT_LEN {
+        return Err("Corrupt salt: invalid length".to_string());
+    }
+    let key = backup_key(passphrase, &salt)?;
+    open_with_key(&key, &format!("v1:{}:{}", parts[2], parts[3]))
+}
+
+/// Encrypt a config export's credentials block under the user's passphrase.
+/// Argon2id is deliberately slow, so the work stays off the async runtime.
+#[tauri::command]
+pub async fn backup_seal(passphrase: String, secret: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || seal_for_backup(&passphrase, &secret))
+        .await
+        .map_err(|e| format!("Backup sealing failed: {e}"))?
+}
+
+/// Decrypt a credentials block produced by `backup_seal`.
+#[tauri::command]
+pub async fn backup_open(passphrase: String, sealed: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || open_from_backup(&passphrase, &sealed))
+        .await
+        .map_err(|e| format!("Backup opening failed: {e}"))?
+}
+
 /// Encrypt a secret with the app master key (AES-256-GCM).
 /// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
 /// Async per Tauri guidance — the first call in a run does keychain/file
@@ -4899,6 +4965,27 @@ mod credential_key_tests {
             open_with_key(&key, &sealed).expect("open"),
             "s3cret-パスワード"
         );
+    }
+
+    #[test]
+    fn backup_block_roundtrips_under_its_passphrase_only() {
+        let block = r#"{"connections":{"c1":{"password":"hunter2"}}}"#;
+        let sealed = seal_for_backup("correct horse", block).expect("seal");
+        assert!(sealed.starts_with("b1:"));
+        assert_eq!(sealed.split(':').count(), 4);
+        assert!(!sealed.contains("hunter2"));
+        assert_eq!(open_from_backup("correct horse", &sealed).expect("open"), block);
+        assert!(open_from_backup("wrong horse", &sealed).is_err());
+        // A fresh salt per call: the same input never yields the same block.
+        assert_ne!(seal_for_backup("correct horse", block).expect("seal"), sealed);
+    }
+
+    #[test]
+    fn backup_block_rejects_malformed_input() {
+        assert!(seal_for_backup("", "x").is_err());
+        assert!(open_from_backup("pw", "v1:QUJD:REVG").is_err());
+        assert!(open_from_backup("pw", "b1:QUJD:REVG:R0hJ").is_err());
+        assert!(open_from_backup("pw", "b1:not base64!:REVG:R0hJ").is_err());
     }
 }
 

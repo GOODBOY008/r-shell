@@ -50,6 +50,8 @@ base64 = "0.23"
 sys-locale = "0.3"
 keyring = "4"
 aes-gcm = "0.11"
+# Passphrase-protected credential backups (already a transitive dependency via ssh-key).
+argon2 = "0.6"
 rand = "0.10"
 socket2 = "0.6"
 # Keep the IronRDP subcrates on one release generation: their PDU, graphics,
