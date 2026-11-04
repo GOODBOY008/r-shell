@@ -380,9 +380,7 @@
     "keyboard": {
       "title": "Skróty klawiszowe",
       "desc": "Dostosuj skróty klawiszowe dla najczęstszych działań.",
-      "newSessionNote": "Domyślna forma ⌘ jest obsługiwana przez menu aplikacji na macOS; własne skróty działają zgodnie z konfiguracją, chyba że kombinacja jest już używana przez inną funkcję lub skrót.",
       "note": "Zmiany skrótów klawiszowych zaczną działać po zapisaniu.",
-      "registerFailed": "Nie udało się zarejestrować skrótu {{shortcut}}",
       "recorderHint": "Naciśnij kombinację klawiszy (Esc, aby anulować)"
     },
     "advanced": {
@@ -469,18 +467,17 @@
         "tabs": "Karty",
         "layout": "Układ",
         "split": "Podział",
-        "app": "Aplikacja"
+        "app": "Aplikacja",
+        "editor": "Edytor",
+        "terminal": "Terminal",
+        "files": "Pliki"
       },
       "resetBinding": "Przywróć domyślny skrót: {{action}}",
-      "conflictDuplicate": "„{{chord}}” jest już używane przez {{other}} — pierwszy dopasowany skrót wygrywa, więc jeden z nich przestanie działać",
-      "conflictReserved": "„{{chord}}” jest zarezerwowane dla przełączania grup terminali (Ctrl+1–9)",
-      "conflictMenuOwned": "„{{chord}}” na macOS należy do natywnego menu aplikacji i nigdy nie dotrze do tego polecenia",
       "conflictSummary_one": "Rozwiąż {{count}} konflikt skrótów przed zapisaniem",
       "conflictSummary_few": "Rozwiąż {{count}} konflikty skrótów przed zapisaniem",
       "conflictSummary_many": "Rozwiąż {{count}} konfliktów skrótów przed zapisaniem",
       "conflictSummary_other": "Rozwiąż {{count}} konfliktów skrótów przed zapisaniem",
       "conflictSaveBlocked": "Zapisanie będzie możliwe po rozwiązaniu wszystkich konfliktów.",
-      "fixedNote": "Ctrl+1–9 (przełączanie grup terminali) nie może być zmieniane.",
       "command": {
         "newSession": "Nowa sesja",
         "closeSession": "Zamknij sesję",
@@ -494,7 +491,61 @@
         "toggleZenMode": "Przełącz tryb zen",
         "splitRight": "Podziel w prawo",
         "splitDown": "Podziel w dół",
-        "openSettings": "Otwórz ustawienia"
+        "openSettings": "Otwórz ustawienia",
+        "duplicateSession": "Duplikuj sesję",
+        "reconnect": "Połącz ponownie",
+        "saveFile": "Zapisz plik",
+        "findInEditor": "Znajdź w edytorze",
+        "replaceInEditor": "Zastąp w edytorze",
+        "goToLine": "Przejdź do wiersza",
+        "findInTerminal": "Znajdź w terminalu",
+        "clearTerminal": "Wyczyść terminal",
+        "detachSession": "Odłącz sesję do tła",
+        "filterFiles": "Filtruj pliki",
+        "refreshFiles": "Odśwież katalog",
+        "transferFiles": "Prześlij wybrane pliki",
+        "syncFiles": "Synchronizuj katalogi",
+        "focusGroup1": "Przejdź do grupy 1",
+        "focusGroup2": "Przejdź do grupy 2",
+        "focusGroup3": "Przejdź do grupy 3",
+        "focusGroup4": "Przejdź do grupy 4",
+        "focusGroup5": "Przejdź do grupy 5",
+        "focusGroup6": "Przejdź do grupy 6",
+        "focusGroup7": "Przejdź do grupy 7",
+        "focusGroup8": "Przejdź do grupy 8",
+        "focusGroup9": "Przejdź do grupy 9"
+      },
+      "resetAll": "Przywróć wszystkie",
+      "routingDescription": "Skróty działają w obszarze z fokusem. Szukaj według czynności, klawiszy lub kontekstu.",
+      "search": "Szukaj czynności lub skrótów",
+      "scopeColumn": "Kontekst",
+      "modifiedOnly": "Tylko zmienione",
+      "disabled": "Wyłączony",
+      "disableBinding": "Wyłącz skrót: {{action}}",
+      "shellOwns": "Ta kombinacja trafia do powłoki.",
+      "terminalAlternative": "W terminalu: {{chord}}",
+      "noMatches": "Brak pasujących skrótów",
+      "recordingHelp": "Kliknij skrót i naciśnij kombinację klawiszy. Esc anuluje, Tab przechodzi dalej. Wyłączenie usuwa przypisanie; reset przywraca domyślne. Zmiany działają po zapisaniu.",
+      "rules": {
+        "foregroundTitle": "Aktywne okno",
+        "foreground": "Skróty aplikacji działają tylko w aktywnym oknie R-Shell. Okna dialogowe i menu obsługują własne klawisze.",
+        "shellTitle": "Powłoka ma pierwszeństwo",
+        "shell": "Kombinacje Control i Alt trafiają do powłoki. Dla czynności aplikacji używaj alternatywnych skrótów terminala podanych poniżej.",
+        "desktopTitle": "Pulpit zdalny",
+        "desktop": "Podczas przechwytywania klawiatury klawisze trafiają do sesji zdalnej. Zwolnij przechwytywanie, aby używać skrótów aplikacji."
+      },
+      "scope": {
+        "all": "Wszystkie konteksty",
+        "workspace": "Obszar roboczy",
+        "terminal": "Terminal",
+        "editor": "Edytor",
+        "files": "Pliki",
+        "input": "Pola tekstowe"
+      },
+      "conflict": {
+        "duplicate": "{{chord}} koliduje z {{other}} w tym samym kontekście.",
+        "reserved": "{{chord}} jest zarezerwowany dla systemu lub edycji tekstu.",
+        "invalid": "Użyj klawisza z modyfikatorem lub klawisza funkcyjnego (F1–F24)."
       }
     }
   },
@@ -630,7 +681,8 @@
     "toggleMonitorPanel": "Przełącz panel monitora",
     "toggleZenMode": "Przełącz tryb zen",
     "closeTab": "Zamknij kartę",
-    "window": "Okno"
+    "window": "Okno",
+    "saveFile": "Zapisz plik"
   },
   "aboutDialog": {
     "version": "Wersja"
@@ -776,7 +828,7 @@
       "uploadFolder": "Wyślij folder",
       "download": "Pobierz",
       "delete": "Usuń",
-      "syncDirectories": "Synchronizuj katalogi (Ctrl+Shift+S)"
+      "syncDirectories": "Synchronizuj katalogi"
     },
     "selected": "Zaznaczono: {{count}}",
     "loading": "Ładowanie…",
@@ -1565,7 +1617,7 @@
     "retry": "Ponów",
     "modified": "ZMODYFIKOWANO",
     "reload": "Wczytaj ponownie z serwera",
-    "saveTooltip": "Zapisz (⌘/Ctrl+S)",
+    "saveTooltip": "Zapisz",
     "save": "Zapisz",
     "imagePreviewFailed": "Nie można wyświetlić podglądu obrazu",
     "binaryFileTitle": "Plik binarny",

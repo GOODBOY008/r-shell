@@ -25,13 +25,16 @@ import {
 export function EditorSearchPanel({
   view,
   state,
+  replaceRequest = 0,
 }: {
   view: EditorView;
   state: EditorState;
+  replaceRequest?: number;
 }) {
   const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
   const [showReplace, setShowReplace] = useState(false);
+  useEffect(() => { if (replaceRequest > 0) setShowReplace(true); }, [replaceRequest]);
   const query = getSearchQuery(state);
   const invalid = !!query.search && !query.valid;
   const results = useMemo(() => {

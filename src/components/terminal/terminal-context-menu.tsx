@@ -1,3 +1,5 @@
+import { useShortcutBindings } from '@/lib/shortcut-registry';
+import { formatKeyboardShortcut } from '@/lib/keyboard-shortcut-model';
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -63,6 +65,7 @@ export function TerminalContextMenu({
   searchActive = false,
 }: TerminalContextMenuProps) {
   const { t } = useTranslation();
+  const bindings = useShortcutBindings();
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -85,7 +88,7 @@ export function TerminalContextMenu({
         <ContextMenuItem onClick={onSearch}>
           <Search className="mr-2 h-4 w-4" />
           <span>{t('contextMenu.search')}</span>
-          <ContextMenuShortcut>{modKey}+F</ContextMenuShortcut>
+          <ContextMenuShortcut>{formatKeyboardShortcut(bindings.findInTerminal, isMac)}</ContextMenuShortcut>
         </ContextMenuItem>
         
         {searchActive && onFindNext && (
@@ -143,7 +146,7 @@ export function TerminalContextMenu({
             <ContextMenuItem onClick={onDetach}>
               <MonitorOff className="mr-2 h-4 w-4" />
               <span>{t('contextMenu.detach')}</span>
-              <ContextMenuShortcut>Ctrl+A D</ContextMenuShortcut>
+              <ContextMenuShortcut>{formatKeyboardShortcut(bindings.detachSession, isMac)}</ContextMenuShortcut>
             </ContextMenuItem>
           </>
         )}

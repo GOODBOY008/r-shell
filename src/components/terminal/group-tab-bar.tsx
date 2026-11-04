@@ -17,7 +17,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuSubContent,
 } from '../ui/context-menu';
-import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
+import { formatKeyboardShortcut, terminalShortcutBinding } from '@/lib/keyboard-shortcuts';
 import { useShortcutBindings } from '@/lib/shortcut-registry';
 import { announce } from '@/lib/live-announcer';
 
@@ -95,10 +95,11 @@ export function GroupTabBar({
   // fixed chords — the same source the engine registers from.
   const shortcutBindings = useShortcutBindings();
   const isMac = navigator.platform.toUpperCase().includes('MAC');
-  // Duplicate Tab is a menu action outside the remappable set — literal.
-  const duplicateTabShortcut = formatKeyboardShortcut('Ctrl+D', isMac);
-  const formattedCloseTabShortcut = formatKeyboardShortcut(
-    closeTabShortcut ?? shortcutBindings.closeSession,
+  const duplicateTabShortcut = formatKeyboardShortcut(shortcutBindings.duplicateSession, isMac);
+  const formattedCloseTabShortcut = (tab: TerminalTab) => formatKeyboardShortcut(
+    tab.tabType === undefined || tab.tabType === 'terminal'
+      ? terminalShortcutBinding('closeSession', { ...shortcutBindings, closeSession: closeTabShortcut ?? shortcutBindings.closeSession }, isMac)
+      : closeTabShortcut ?? shortcutBindings.closeSession,
     isMac,
   );
   const formattedMoveTabLeftShortcut = formatKeyboardShortcut(
@@ -533,7 +534,7 @@ export function GroupTabBar({
                   <ContextMenuItem onClick={() => handleTabClose(tab.id)}>
                     <X className="mr-2 h-4 w-4" />
                     {t('contextMenu.closeTab')}
-                    <ContextMenuShortcut>{formattedCloseTabShortcut}</ContextMenuShortcut>
+                    <ContextMenuShortcut>{formattedCloseTabShortcut(tab)}</ContextMenuShortcut>
                   </ContextMenuItem>
                   {/* Close Others */}
                   {tabs.length > 1 && (

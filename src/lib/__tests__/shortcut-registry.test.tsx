@@ -1,239 +1,134 @@
 import React from 'react';
-import { cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { APP_SETTINGS_CHANGED_EVENT } from '../keyboard-shortcuts';
+import { APP_SETTINGS_CHANGED_EVENT, terminalShortcutBinding } from '../keyboard-shortcuts';
 import {
-  DEFAULT_SHORTCUT_BINDINGS,
-  SHORTCUT_DEFINITIONS,
-  findConflicts,
-  isReservedChord,
-  loadShortcutBindings,
-  loadShortcutOverrides,
-  migrateLegacyShortcutBindings,
-  resolveShortcutBindings,
-  useShortcutBindings,
+  SHORTCUT_DEFINITIONS, defaultShortcutBindings, findConflicts, isReservedChord,
+  loadShortcutBindings, loadShortcutOverrides, migrateLegacyShortcutBindings,
+  resolveShortcutBindings, useShortcutBindings,
 } from '../shortcut-registry';
 
-const SETTINGS_KEY = 'sshClientSettings';
+const saveBlob = (blob: Record<string, unknown>) => localStorage.setItem('sshClientSettings', JSON.stringify(blob));
+beforeEach(() => { localStorage.clear(); vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32'); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-function saveBlob(blob: Record<string, unknown>) {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(blob));
-}
-
-describe('SHORTCUT_DEFINITIONS', () => {
-  it('covers the 13 remappable commands with unique ids and defaults', () => {
-    expect(SHORTCUT_DEFINITIONS).toHaveLength(13);
-    const ids = new Set(SHORTCUT_DEFINITIONS.map(def => def.id));
-    expect(ids.size).toBe(13);
-    const defaults = new Set(SHORTCUT_DEFINITIONS.map(def => def.default));
-    // The engine is first-match-wins: two commands sharing a default would
-    // silently shadow one of them out of the box.
-    expect(defaults.size).toBe(13);
-  });
-
-  it('is the single source of DEFAULT_SHORTCUT_BINDINGS', () => {
-    for (const def of SHORTCUT_DEFINITIONS) {
-      expect(DEFAULT_SHORTCUT_BINDINGS[def.id]).toBe(def.default);
-    }
-  });
-});
-
-describe('resolveShortcutBindings', () => {
-  it('merges sparse overrides over the defaults', () => {
-    const resolved = resolveShortcutBindings({ nextTab: 'Ctrl+PageDown' });
-    expect(resolved.nextTab).toBe('Ctrl+PageDown');
-    expect(resolved.previousTab).toBe(DEFAULT_SHORTCUT_BINDINGS.previousTab);
-  });
-});
-
-describe('loadShortcutOverrides', () => {
-  beforeEach(() => {
-    localStorage.clear();
-  });
-
-  it('returns empty overrides with no stored settings', () => {
-    expect(loadShortcutOverrides()).toEqual({});
-  });
-
-  it('returns empty overrides on corrupt JSON', () => {
-    localStorage.setItem(SETTINGS_KEY, '{not json');
-    expect(loadShortcutOverrides()).toEqual({});
-  });
-
-  it('reads valid overrides from the sparse shortcutBindings map', () => {
-    saveBlob({ shortcutBindings: { newSession: 'Alt+N', closeSession: 'Alt+W' } });
-    expect(loadShortcutOverrides()).toEqual({ newSession: 'Alt+N', closeSession: 'Alt+W' });
-  });
-
-  it('drops unparseable values and unknown command ids', () => {
-    saveBlob({
-      shortcutBindings: {
-        newSession: 'Ctrl+', // no key part
-        closeSession: 42, // not a string
-        bogusCommand: 'Alt+X', // not a registry command
-      },
-    });
-    expect(loadShortcutOverrides()).toEqual({});
-  });
-
-  it('prefers shortcutBindings over the legacy flat keys', () => {
-    saveBlob({
-      shortcutBindings: { newSession: 'Alt+N' },
-      newSession: 'Alt+M',
-      closeSession: 'Alt+W',
-    });
-    expect(loadShortcutOverrides()).toEqual({ newSession: 'Alt+N' });
-  });
-
-  it('falls back to the legacy flat keys when the map is absent', () => {
-    saveBlob({
-      closeSession: 'Alt+W',
-      nextTab: 'Ctrl+PageDown',
-      previousTab: 'Ctrl+PageUp',
-      newSession: 'Alt+N',
-    });
-    expect(loadShortcutOverrides()).toEqual({
-      closeSession: 'Alt+W',
-      nextTab: 'Ctrl+PageDown',
-      previousTab: 'Ctrl+PageUp',
-      newSession: 'Alt+N',
-    });
-  });
-
-  it('migrates the retired Ctrl+Shift+W close spelling to the default', () => {
-    saveBlob({ closeSession: 'Ctrl+Shift+W' });
-    expect(loadShortcutOverrides().closeSession).toBeUndefined();
-    expect(loadShortcutBindings().closeSession).toBe(DEFAULT_SHORTCUT_BINDINGS.closeSession);
-  });
-});
-
-describe('migrateLegacyShortcutBindings', () => {
-  it('folds legacy flat keys into shortcutBindings and deletes them', () => {
-    const blob: Record<string, unknown> = {
-      theme: 'dark',
-      newSession: 'Alt+N',
-      closeSession: 'Alt+W',
-      nextTab: 'Ctrl+PageDown',
-      previousTab: 'Ctrl+PageUp',
-    };
-    migrateLegacyShortcutBindings(blob);
-    expect(blob.shortcutBindings).toEqual({
-      newSession: 'Alt+N',
-      closeSession: 'Alt+W',
-      nextTab: 'Ctrl+PageDown',
-      previousTab: 'Ctrl+PageUp',
-    });
-    expect('newSession' in blob).toBe(false);
-    expect('closeSession' in blob).toBe(false);
-    expect('nextTab' in blob).toBe(false);
-    expect('previousTab' in blob).toBe(false);
-    expect(blob.theme).toBe('dark');
-  });
-
-  it('keeps an existing shortcutBindings map untouched', () => {
-    const blob: Record<string, unknown> = {
-      shortcutBindings: { newSession: 'Alt+N' },
-      newSession: 'Alt+M',
-    };
-    migrateLegacyShortcutBindings(blob);
-    expect(blob.shortcutBindings).toEqual({ newSession: 'Alt+N' });
-    expect('newSession' in blob).toBe(false);
-  });
-});
-
-describe('isReservedChord', () => {
-  it('reserves Ctrl+1..9 exactly', () => {
-    expect(isReservedChord('Ctrl+1')).toBe(true);
-    expect(isReservedChord('Ctrl+9')).toBe(true);
-    // Shift/Alt variants do not collide with the focus-group bindings.
-    expect(isReservedChord('Ctrl+Shift+3')).toBe(false);
-    expect(isReservedChord('Ctrl+Alt+3')).toBe(false);
-    expect(isReservedChord('Ctrl+0')).toBe(false);
-    expect(isReservedChord('Ctrl+B')).toBe(false);
-  });
-});
-
-describe('findConflicts', () => {
-  it('reports no conflicts for the defaults on any platform', () => {
+describe('command definitions', () => {
+  it('has unique ids and conflict-free defaults on both platforms, including terminal alternatives', () => {
+    expect(new Set(SHORTCUT_DEFINITIONS.map(def => def.id)).size).toBe(SHORTCUT_DEFINITIONS.length);
     expect(findConflicts({}, false)).toEqual([]);
     expect(findConflicts({}, true)).toEqual([]);
   });
 
-  it('flags two commands resolving to the same chord as duplicates', () => {
-    const conflicts = findConflicts({ closeSession: 'Ctrl+B' }, false);
-    const duplicate = conflicts.find(c => c.kind === 'duplicate');
-    expect(duplicate).toBeDefined();
-    // The LATER command in registry order is the shadowed one.
-    expect(duplicate!.commandId).toBe('toggleLeftSidebar');
-    expect(duplicate!.otherCommandId).toBe('closeSession');
+  it('uses contextual terminal and editor defaults', () => {
+    const win = defaultShortcutBindings(false); const mac = defaultShortcutBindings(true);
+    expect(win.findInTerminal).toBe('Mod+Shift+F'); expect(mac.findInTerminal).toBe('Mod+F');
+    expect(win.findInEditor).toBe('Mod+F'); expect(win.refreshFiles).toBe('F5'); expect(win.transferFiles).toBe('Mod+Enter');
+    expect(terminalShortcutBinding('closeSession', win, false)).toBe('Mod+Shift+W');
+    expect(terminalShortcutBinding('closeSession', mac, true)).toBe('Mod+W');
+    expect(terminalShortcutBinding('closeSession', { ...win, closeSession: 'Ctrl+U' }, false)).toBe('');
+    expect(terminalShortcutBinding('closeSession', { ...win, closeSession: 'Alt+Shift+W' }, false)).toBe('Alt+Shift+W');
   });
 
-  it('treats modifier spelling variants as the same chord', () => {
-    // "Control+Comma" and "Ctrl+," are the same physical chord.
-    const conflicts = findConflicts({ nextTab: 'Control+,' }, false);
-    expect(conflicts.some(c => c.kind === 'duplicate' && c.commandId === 'openSettings')).toBe(true);
-  });
-
-  it('flags chords reserved by the fixed focus-group bindings', () => {
-    const conflicts = findConflicts({ closeSession: 'Ctrl+3' }, false);
-    expect(conflicts.some(c => c.kind === 'reserved' && c.commandId === 'closeSession')).toBe(true);
-  });
-
-  it('does not report menu ownership off macOS', () => {
-    // Ctrl+D is the macOS Duplicate menu item, but Windows/Linux have no menu.
-    expect(findConflicts({ newSession: 'Ctrl+D' }, false)).toEqual([]);
-  });
-
-  it('flags macOS menu-owned chords that belong to a different feature', () => {
-    // Cmd+D is owned by the Duplicate menu item — New Session would never fire.
-    const conflicts = findConflicts({ newSession: 'Ctrl+D' }, true);
-    expect(conflicts.some(c => c.kind === 'menuOwned' && c.commandId === 'newSession')).toBe(true);
-
-    // Modifier-less F5 is the menu's Reconnect item.
-    expect(findConflicts({ closeSession: 'F5' }, true).some(c => c.kind === 'menuOwned')).toBe(true);
-  });
-
-  it('allows a command default whose menu form routes back to the same action', () => {
-    // Ctrl+N/Ctrl+W/Ctrl+, ARE menu-owned on macOS but the menu routes them
-    // to the same command — the defaults themselves must not be conflicts.
-    const conflicts = findConflicts({}, true);
-    expect(conflicts.filter(c => c.kind === 'menuOwned')).toEqual([]);
-  });
-
-  it('allows menu-degraded chords with the in-window Control fallback', () => {
-    // Cmd+Shift+Z degrades to the in-window ⌃⇧Z listener (not the menu's
-    // Redo), so binding another command there still works.
-    const conflicts = findConflicts({ closeSession: 'Ctrl+Shift+Z' }, true);
-    expect(conflicts.filter(c => c.kind === 'menuOwned')).toEqual([]);
+  it('distinguishes disabling from restoring the default', () => {
+    expect(resolveShortcutBindings({ saveFile: '' }).saveFile).toBe('');
+    expect(resolveShortcutBindings({}).saveFile).toBe('Mod+S');
   });
 });
 
-describe('useShortcutBindings', () => {
-  afterEach(() => {
-    cleanup();
-    vi.restoreAllMocks();
+describe('migration and persistence', () => {
+  it('handles absent and corrupt settings', () => {
+    expect(loadShortcutOverrides()).toEqual({});
+    localStorage.setItem('sshClientSettings', '{not json'); expect(loadShortcutOverrides()).toEqual({});
+    for (const blob of [null, [], false]) { localStorage.setItem('sshClientSettings', JSON.stringify(blob)); expect(loadShortcutOverrides()).toEqual({}); }
   });
 
-  function BindingsProbe({ onUpdate }: { onUpdate: (bindings: Record<string, string>) => void }) {
-    const bindings = useShortcutBindings();
-    onUpdate(bindings);
-    return null;
-  }
+  it('migrates old implicit Ctrl to Mod, retaining Control fallbacks and unrelated settings', () => {
+    const blob: Record<string, unknown> = { theme: 'dark', shortcutBindings: { newSession: 'Ctrl+Shift+N', nextTab: 'CmdOrCtrl+Tab', toggleZenMode: 'Ctrl+Z', toggleRightSidebar: 'Ctrl+Shift+M' } };
+    migrateLegacyShortcutBindings(blob);
+    expect(blob).toEqual({ theme: 'dark', shortcutBindingsVersion: 2, shortcutBindings: { newSession: 'Mod+Shift+N', nextTab: 'Ctrl+Tab', toggleZenMode: 'Ctrl+z', toggleRightSidebar: 'Mod+Shift+M' } });
+    const once = JSON.stringify(blob); migrateLegacyShortcutBindings(blob); expect(JSON.stringify(blob)).toBe(once);
+  });
 
-  it('resolves the persisted bindings and refreshes on the settings event', async () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      shortcutBindings: { newSession: 'Alt+N' },
-    }));
+  it('preserves explicit physical Ctrl, disabled keys and platform modifiers in v2', () => {
+    saveBlob({ shortcutBindingsVersion: 2, shortcutBindings: { newSession: 'Ctrl+N', closeSession: '', findInEditor: 'Mod+F' } });
+    expect(loadShortcutOverrides()).toEqual({ newSession: 'Ctrl+N', closeSession: '', findInEditor: 'Mod+F' });
+  });
 
-    const seen: Array<Record<string, string>> = [];
-    render(<BindingsProbe onUpdate={(b) => seen.push({ newSession: b.newSession })} />);
-    expect(seen[seen.length - 1]).toEqual({ newSession: 'Alt+N' });
+  it('preserves a customized legacy close key rather than discarding it', () => {
+    saveBlob({ closeSession: 'Ctrl+Shift+W' }); expect(loadShortcutBindings().closeSession).toBe('Mod+Shift+W');
+  });
 
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      shortcutBindings: { newSession: 'Alt+M' },
-    }));
-    window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+  it('prefers the map over legacy flat keys and removes only the retired fields', () => {
+    const blob: Record<string, unknown> = { theme: 'light', shortcutBindings: { newSession: 'Alt+N' }, newSession: 'Alt+M', closeSession: 'Alt+W' };
+    migrateLegacyShortcutBindings(blob);
+    expect(blob.shortcutBindings).toEqual({ newSession: 'Alt+N' }); expect(blob.newSession).toBeUndefined(); expect(blob.closeSession).toBeUndefined(); expect(blob.theme).toBe('light');
+  });
 
-    await waitFor(() => expect(seen[seen.length - 1]).toEqual({ newSession: 'Alt+M' }));
+  it('migrates flat settings and ignores unknown ids and malformed values', () => {
+    saveBlob({ newSession: 'Alt+N', closeSession: 'Ctrl+', nextTab: 'Ctrl+PageDown', previousTab: 42 });
+    expect(loadShortcutOverrides()).toEqual({ newSession: 'Alt+N', nextTab: 'Mod+PageDown' });
+    saveBlob({ shortcutBindingsVersion: 2, shortcutBindings: { newSession: 'Ctrl+', closeSession: 42, bogusCommand: 'Alt+X' } });
+    expect(loadShortcutOverrides()).toEqual({});
+  });
+
+  it('does not reinterpret explicit Mac Control when settings are loaded again', () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    const blob: Record<string, unknown> = { shortcutBindings: { nextTab: 'Cmd+Tab', newSession: 'Ctrl+N', toggleZenMode: 'Cmd+Z' } };
+    migrateLegacyShortcutBindings(blob); saveBlob(blob);
+    expect(loadShortcutOverrides()).toEqual({ nextTab: 'Ctrl+Tab', newSession: 'Mod+N', toggleZenMode: 'Ctrl+z' });
+    saveBlob({ shortcutBindingsVersion: 2, shortcutBindings: { newSession: 'Ctrl+N' } });
+    expect(loadShortcutOverrides().newSession).toBe('Ctrl+N');
+  });
+});
+
+describe('context-aware conflicts', () => {
+  it('allows the same key in disjoint feature contexts', () => {
+    expect(findConflicts({ findInEditor: 'Alt+Shift+F', filterFiles: 'Alt+Shift+F' }, false)).toEqual([]);
+  });
+
+  it('reports overlapping commands and aliases with spelling-independent modifiers', () => {
+    expect(findConflicts({ closeSession: 'Control+B' }, false)).toContainEqual(expect.objectContaining({ kind: 'duplicate', commandId: 'toggleLeftSidebar', otherCommandId: 'closeSession' }));
+    expect(findConflicts({ clearTerminal: 'Mod+Shift+W' }, false)).toContainEqual(expect.objectContaining({ kind: 'duplicate', commandId: 'clearTerminal', otherCommandId: 'closeSession' }));
+  });
+
+  it('allows remapping focus groups, and detects their collisions as regular commands', () => {
+    expect(isReservedChord('Ctrl+1', false)).toBe(false);
+    expect(findConflicts({ focusGroup1: 'Alt+Shift+1' }, false)).toEqual([]);
+    expect(findConflicts({ closeSession: 'Mod+3' }, false)).toContainEqual(expect.objectContaining({ kind: 'duplicate', commandId: 'focusGroup3' }));
+  });
+
+  it.each(['Mod+Z', 'Mod+Shift+Z', 'Mod+A', 'Mod+C', 'Mod+X', 'Mod+V'])(
+    'reserves text editing %s on both platforms', chord => {
+      for (const mac of [false, true]) expect(findConflicts({ closeSession: chord }, mac)).toContainEqual(expect.objectContaining({ kind: 'reserved', commandId: 'closeSession' }));
+    },
+  );
+
+  it('reserves actual OS shortcuts without silently changing their modifiers', () => {
+    for (const chord of ['Cmd+Q', 'Cmd+M', 'Cmd+H', 'Cmd+Tab', 'Cmd+Space']) expect(isReservedChord(chord, true)).toBe(true);
+    for (const chord of ['Alt+F4', 'Alt+Tab', 'Ctrl+Alt+Delete', 'Meta+X']) expect(isReservedChord(chord, false)).toBe(true);
+    expect(isReservedChord('Ctrl+Tab', true)).toBe(false);
+    expect(isReservedChord('Ctrl+Q', true)).toBe(false);
+  });
+
+  it('does not reserve former application menu accelerators', () => {
+    expect(findConflicts({ newSession: 'Cmd+D' }, true)).toEqual([]);
+  });
+
+  it('ignores disabled commands and rejects bare printable keys', () => {
+    expect(findConflicts({ closeSession: '', newSession: '' }, false)).toEqual([]);
+    expect(findConflicts({ closeSession: 'w' }, false)).toContainEqual(expect.objectContaining({ kind: 'invalid' }));
+    expect(findConflicts({ closeSession: 'Ctrl+' }, false)).toContainEqual(expect.objectContaining({ kind: 'invalid' }));
+  });
+});
+
+describe('live configuration', () => {
+  function Probe({ update }: { update: (key: string) => void }) { update(useShortcutBindings().newSession); return null; }
+  it('reloads on same-window settings changes and cross-window storage events', () => {
+    saveBlob({ shortcutBindingsVersion: 2, shortcutBindings: { newSession: 'Alt+N' } });
+    const update = vi.fn(); render(<Probe update={update} />); expect(update).toHaveBeenLastCalledWith('Alt+N');
+    saveBlob({ shortcutBindingsVersion: 2, shortcutBindings: { newSession: 'Alt+Shift+N' } });
+    act(() => window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT))); expect(update).toHaveBeenLastCalledWith('Alt+Shift+N');
+    saveBlob({ shortcutBindingsVersion: 2, shortcutBindings: { newSession: '' } });
+    act(() => window.dispatchEvent(new StorageEvent('storage'))); expect(update).toHaveBeenLastCalledWith('');
   });
 });

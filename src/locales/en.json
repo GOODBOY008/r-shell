@@ -378,9 +378,7 @@
     "keyboard": {
       "title": "Keyboard Shortcuts",
       "desc": "Customize keyboard shortcuts for common actions.",
-      "newSessionNote": "The default's ⌘ form is handled by the app menu on macOS; customized bindings apply as configured unless the chord is already used by another app feature or binding.",
       "note": "Changes to keyboard shortcuts take effect after saving.",
-      "registerFailed": "Failed to register shortcut {{shortcut}}",
       "recorderHint": "Press a key combination (Esc to cancel)"
     },
     "advanced": {
@@ -467,16 +465,15 @@
         "tabs": "Tabs",
         "layout": "Layout",
         "split": "Split Panes",
-        "app": "Application"
+        "app": "Application",
+        "editor": "Editor",
+        "terminal": "Terminal",
+        "files": "Files"
       },
       "resetBinding": "Reset {{action}} to default",
-      "conflictDuplicate": "\"{{chord}}\" is already used by {{other}} — the first match wins, so one of them would stop working",
-      "conflictReserved": "\"{{chord}}\" is reserved for switching terminal groups (Ctrl+1–9)",
-      "conflictMenuOwned": "\"{{chord}}\" is owned by the native app menu on macOS and would never reach this command",
       "conflictSummary_one": "Resolve {{count}} shortcut conflict before saving",
       "conflictSummary_other": "Resolve {{count}} shortcut conflicts before saving",
       "conflictSaveBlocked": "Saving is disabled until all conflicts are resolved.",
-      "fixedNote": "Ctrl+1–9 (switch terminal group) cannot be remapped.",
       "command": {
         "newSession": "New Session",
         "closeSession": "Close Session",
@@ -490,7 +487,61 @@
         "toggleZenMode": "Toggle Zen Mode",
         "splitRight": "Split Right",
         "splitDown": "Split Down",
-        "openSettings": "Open Settings"
+        "openSettings": "Open Settings",
+        "duplicateSession": "Duplicate Session",
+        "reconnect": "Reconnect",
+        "saveFile": "Save File",
+        "findInEditor": "Find in Editor",
+        "replaceInEditor": "Replace in Editor",
+        "goToLine": "Go to Line",
+        "findInTerminal": "Find in Terminal",
+        "clearTerminal": "Clear Terminal",
+        "detachSession": "Detach Session",
+        "filterFiles": "Filter Files",
+        "refreshFiles": "Refresh Directory",
+        "transferFiles": "Transfer Selected Files",
+        "syncFiles": "Sync Directories",
+        "focusGroup1": "Focus Group 1",
+        "focusGroup2": "Focus Group 2",
+        "focusGroup3": "Focus Group 3",
+        "focusGroup4": "Focus Group 4",
+        "focusGroup5": "Focus Group 5",
+        "focusGroup6": "Focus Group 6",
+        "focusGroup7": "Focus Group 7",
+        "focusGroup8": "Focus Group 8",
+        "focusGroup9": "Focus Group 9"
+      },
+      "resetAll": "Reset all",
+      "routingDescription": "Shortcuts follow the focused area. Search by action, key or context.",
+      "search": "Search actions or shortcuts",
+      "scopeColumn": "Context",
+      "modifiedOnly": "Modified only",
+      "disabled": "Disabled",
+      "disableBinding": "Disable shortcut: {{action}}",
+      "shellOwns": "This combination is sent to the shell.",
+      "terminalAlternative": "In terminal: {{chord}}",
+      "noMatches": "No matching shortcuts",
+      "recordingHelp": "Click a shortcut and press a combination. Esc cancels, Tab moves to the next control. Disable removes the binding; Reset restores its default. Changes apply after saving.",
+      "rules": {
+        "foregroundTitle": "Focused window",
+        "foreground": "Only the active R-Shell window handles application shortcuts. Dialogs and menus keep their own keys.",
+        "shellTitle": "Shell first",
+        "shell": "Control and Alt combinations stay in the shell. Use the terminal alternatives shown below for application actions.",
+        "desktopTitle": "Remote desktop",
+        "desktop": "While remote input is captured, keys go to the remote session. Release capture to use application shortcuts."
+      },
+      "scope": {
+        "all": "All contexts",
+        "workspace": "Workspace",
+        "terminal": "Terminal",
+        "editor": "Editor",
+        "files": "Files",
+        "input": "Text fields"
+      },
+      "conflict": {
+        "duplicate": "{{chord}} overlaps with {{other}} in the same context.",
+        "reserved": "{{chord}} is reserved for the system or text editing.",
+        "invalid": "Use modifiers with a key, or a function key (F1–F24)."
       }
     }
   },
@@ -620,7 +671,8 @@
     "toggleMonitorPanel": "Toggle Monitor Panel",
     "toggleZenMode": "Toggle Zen Mode",
     "closeTab": "Close Tab",
-    "window": "Window"
+    "window": "Window",
+    "saveFile": "Save File"
   },
   "aboutDialog": {
     "version": "Version"
@@ -756,7 +808,7 @@
       "uploadFolder": "Upload folder",
       "download": "Download",
       "delete": "Delete",
-      "syncDirectories": "Sync directories (Ctrl+Shift+S)"
+      "syncDirectories": "Sync Directories"
     },
     "selected": "{{count}} selected",
     "loading": "Loading…",
@@ -1515,7 +1567,7 @@
     "retry": "Retry",
     "modified": "MODIFIED",
     "reload": "Reload from server",
-    "saveTooltip": "Save (⌘/Ctrl+S)",
+    "saveTooltip": "Save",
     "save": "Save",
     "imagePreviewFailed": "Unable to preview image",
     "binaryFileTitle": "Binary file",

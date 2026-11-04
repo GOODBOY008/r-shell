@@ -25,6 +25,7 @@ import {
 import {
   APP_SETTINGS_CHANGED_EVENT,
   APP_SETTINGS_STORAGE_KEY,
+  SHORTCUT_BINDINGS_VERSION,
   stripRemovedSettingsKeys,
 } from '../lib/keyboard-shortcuts';
 import {
@@ -294,6 +295,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
       // moved to a Homebrew install or an older macOS) falls back to stable.
       updateChannel: settings.updateChannel === 'current' && currentChannelEligible ? 'current' : 'stable',
       shortcutBindings: shortcutOverrides,
+      shortcutBindingsVersion: SHORTCUT_BINDINGS_VERSION,
     }));
     window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     onOpenChange(false);
@@ -388,6 +390,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
           <KeyboardSection
             overrides={shortcutOverrides}
             onOverrideChange={handleOverrideChange}
+            onResetAll={() => setShortcutOverrides({})}
             query={searchQuery}
           />
         );

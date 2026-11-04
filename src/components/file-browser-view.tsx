@@ -1,3 +1,4 @@
+import { useCommandShortcuts } from '@/lib/keyboard-shortcuts';
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from 'react-i18next';
 import { emit, listen } from "@tauri-apps/api/event";
@@ -45,6 +46,7 @@ export interface FileBrowserViewProps {
   host?: string;
   protocol?: string;
   isConnected: boolean;
+  isActive?: boolean;
   onReconnect?: () => void;
   onOpenInEditor?: (path: string, name: string) => void | Promise<void>;
 }
@@ -57,6 +59,7 @@ export function FileBrowserView({
   host,
   protocol = "SFTP",
   isConnected,
+  isActive = true,
   onReconnect,
   onOpenInEditor,
 }: FileBrowserViewProps) {
@@ -83,6 +86,17 @@ export function FileBrowserView({
   const [remotePath, setRemotePath] = useState("/");
   const localPanelRef = useRef<FilePanelRef>(null);
   const remotePanelRef = useRef<FilePanelRef>(null);
+  const wasActiveRef = useRef(false);
+
+  // Tab contents stay mounted. Restore the chosen pane when its tab becomes
+  // active, without moving focus away from an input the user just clicked.
+  useEffect(() => {
+    const activated = isActive && !wasActiveRef.current;
+    wasActiveRef.current = isActive;
+    if (!activated || rootRef.current?.contains(document.activeElement)) return;
+    const panel = activePanel === 'remote' && isConnected ? remotePanelRef : localPanelRef;
+    panel.current?.focus();
+  }, [isActive, activePanel, isConnected]);
 
   // Selection counts for transfer controls
   const [localSelCount, setLocalSelCount] = useState(0);
@@ -468,18 +482,10 @@ export function FileBrowserView({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+      if (!isActive || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || e.nativeEvent.getModifierState('AltGraph')) return;
       const target = e.target as HTMLElement;
       if (target.closest('input, textarea, button, [contenteditable="true"], [role="dialog"]')) return;
       if (!isConnected) return;
-      if (e.key === "F5") {
-        e.preventDefault();
-        if (activePanel === "local") {
-          handleUploadButton();
-        } else {
-          handleDownloadButton();
-        }
-      }
       if (e.key === "a" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
         if (activePanel === "local") {
@@ -488,13 +494,8 @@ export function FileBrowserView({
           remotePanelRef.current?.selectAll();
         }
       }
-      // Ctrl+Shift+S to open sync dialog
-      if (e.key === "S" && (e.ctrlKey || e.metaKey) && e.shiftKey) {
-        e.preventDefault();
-        setSyncDialogOpen(true);
-      }
     },
-    [activePanel, handleUploadButton, handleDownloadButton, isConnected],
+    [activePanel, isActive, isConnected],
   );
 
   useEffect(() => {
@@ -515,10 +516,16 @@ export function FileBrowserView({
     };
   }, [connectionId]);
 
+  useCommandShortcuts({
+    syncFiles: () => setSyncDialogOpen(true),
+    transferFiles: () => { if (activePanel === 'local') handleUploadButton(); else handleDownloadButton(); },
+  }, { enabled: isActive && isConnected, element: () => rootRef.current });
+
   // ------ Render ------
   return (
     <div
       ref={rootRef}
+      data-shortcut-scope="files"
       className="h-full w-full flex flex-col bg-background text-foreground"
       onKeyDown={handleKeyDown}
       tabIndex={-1}
@@ -557,7 +564,7 @@ export function FileBrowserView({
               ref={localPanelRef}
               mode="local"
               label={t('fileBrowser.local')}
-              isActive={activePanel === "local"}
+              isActive={isActive && activePanel === "local"}
               initialPath={localHomePath}
               onLoadDirectory={loadLocalDirectory}
               onDelete={deleteLocalItem}
@@ -586,7 +593,7 @@ export function FileBrowserView({
               ref={remotePanelRef}
               mode="remote"
               label={host ?? connectionName}
-              isActive={activePanel === "remote"}
+              isActive={isActive && activePanel === "remote"}
               initialPath="/"
               onLoadDirectory={loadRemoteDirectory}
               onOpenFile={onOpenInEditor}

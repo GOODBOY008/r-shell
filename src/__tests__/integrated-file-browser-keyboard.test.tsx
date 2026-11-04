@@ -373,7 +373,7 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
     expect(await screen.findByText('2 selected')).toBeTruthy();
 
-    fireEvent.keyDown(document, { key: 'Delete' });
+    fireEvent.keyDown(document.querySelector('[data-shortcut-scope="files"]')!, { key: 'Delete' });
 
     expect(await screen.findByText('Delete 2 Items?')).toBeTruthy();
     const confirmButton = screen.getByRole('button', { name: 'Delete' });
@@ -432,11 +432,11 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     );
 
     await screen.findByText('a.txt');
-    fireEvent.keyDown(document, { key: 'a', ctrlKey: true });
+    fireEvent.keyDown(document.querySelector('[data-shortcut-scope="files"]')!, { key: 'a', ctrlKey: true });
     expect(await screen.findByText('3 selected')).toBeTruthy();
 
     // Delete via the selection: only a/b/c are deleted, never "..".
-    fireEvent.keyDown(document, { key: 'Delete' });
+    fireEvent.keyDown(document.querySelector('[data-shortcut-scope="files"]')!, { key: 'Delete' });
     expect(await screen.findByText('Delete 3 Items?')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
@@ -501,7 +501,7 @@ describe('file list to editor workflow', () => {
     render(<IntegratedFileBrowser connectionId="flow-protect" isConnected onClose={() => {}} />);
     fireEvent.click(await screen.findByText('config'));
     await act(async () => { mocks.events.get('editor-file-state')!({payload:{connectionId:'flow-protect',filePath:'/home/config/app.conf',state:'modified'}}); });
-    fireEvent.keyDown(document, {key:'Delete'});
+    fireEvent.keyDown(document.querySelector('[data-shortcut-scope="files"]')!, {key:'Delete'});
     fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));
     expect(mocks.invoke).not.toHaveBeenCalledWith('delete_file', expect.anything());
     expect(mocks.warning).toHaveBeenCalledWith('Close the editor tab for this file before renaming or deleting it.');

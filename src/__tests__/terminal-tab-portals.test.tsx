@@ -15,6 +15,7 @@ const lifecycle = vi.hoisted(() => ({
   reconnect: vi.fn(),
   ptyProps: vi.fn(),
   desktopProps: vi.fn(),
+  fileBrowserProps: vi.fn(),
 }));
 
 let mockState: TerminalGroupState;
@@ -47,7 +48,7 @@ vi.mock('../components/pty-terminal', async () => {
 });
 
 vi.mock('../components/file-browser-view', () => ({
-  FileBrowserView: () => <div />,
+  FileBrowserView: (props: unknown) => { lifecycle.fileBrowserProps(props); return <div />; },
 }));
 
 vi.mock('../components/desktop-viewer', () => ({
@@ -137,11 +138,27 @@ describe('TerminalTabPortalProvider', () => {
     lifecycle.reconnect.mockClear();
     lifecycle.ptyProps.mockClear();
     lifecycle.desktopProps.mockClear();
+    lifecycle.fileBrowserProps.mockClear();
     localStorage.clear();
     mockState = singleGroupState();
   });
 
   afterEach(() => { cleanup(); localStorage.clear(); });
+
+  it('activates file commands only in the focused split group', () => {
+    mockState = splitGroupState();
+    mockState.groups['1'].tabs = [{ ...tabB, tabType: 'file-browser' }];
+    mockState.groups['2'].tabs = [{ ...tabA, tabType: 'file-browser' }];
+    const view = render(<PortalHosts split />);
+    expect(lifecycle.fileBrowserProps).toHaveBeenCalledWith(expect.objectContaining({ connectionId: tabA.id, isActive: true }));
+    expect(lifecycle.fileBrowserProps).toHaveBeenCalledWith(expect.objectContaining({ connectionId: tabB.id, isActive: false }));
+
+    lifecycle.fileBrowserProps.mockClear();
+    mockState = { ...mockState, activeGroupId: '1' };
+    view.rerender(<PortalHosts split />);
+    expect(lifecycle.fileBrowserProps).toHaveBeenCalledWith(expect.objectContaining({ connectionId: tabA.id, isActive: false }));
+    expect(lifecycle.fileBrowserProps).toHaveBeenCalledWith(expect.objectContaining({ connectionId: tabB.id, isActive: true }));
+  });
 
   it.each([undefined, 'saved-rdp'])('passes the saved RDP resolution using the original connection id: %s', (originalConnectionId) => {
     localStorage.setItem('r-shell-connections', JSON.stringify([

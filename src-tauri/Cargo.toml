@@ -26,7 +26,6 @@ tauri-plugin-fs = "2"
 tauri-plugin-process = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-autostart = "2"
-tauri-plugin-global-shortcut = "2"
 tauri-plugin-positioner = "2"
 tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }

@@ -1,3 +1,5 @@
+import { useShortcutBindings } from '@/lib/shortcut-registry';
+import { formatKeyboardShortcut } from '@/lib/keyboard-shortcut-model';
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { EditorView } from "@codemirror/view";
@@ -50,6 +52,7 @@ export function EditorToolbar({
   dark,
 }: CommonProps) {
   const { t } = useTranslation();
+  const bindings = useShortcutBindings();
   return (
     <div
       className="editor-toolbar"
@@ -61,7 +64,7 @@ export function EditorToolbar({
           type="button"
           className="editor-tool"
           aria-label={t("codeEditor.undo")}
-          title={`${t("codeEditor.undo")} (⌘/Ctrl+Z)`}
+          title={`${t("codeEditor.undo")} (${formatKeyboardShortcut('Mod+Z')})`}
           disabled={!state || state.readOnly || !undoDepth(state)}
           onClick={() => {
             if (view) {
@@ -76,7 +79,7 @@ export function EditorToolbar({
           type="button"
           className="editor-tool"
           aria-label={t("codeEditor.redo")}
-          title={`${t("codeEditor.redo")} (⌘/Ctrl+Shift+Z)`}
+          title={`${t("codeEditor.redo")} (${formatKeyboardShortcut('Mod+Shift+Z')})`}
           disabled={!state || state.readOnly || !redoDepth(state)}
           onClick={() => {
             if (view) {
@@ -93,7 +96,7 @@ export function EditorToolbar({
         type="button"
         className="editor-tool editor-tool-label"
         aria-label={t("codeEditor.find")}
-        title={`${t("codeEditor.find")} (⌘/Ctrl+F)`}
+        title={[t("codeEditor.find"), formatKeyboardShortcut(bindings.findInEditor)].filter(Boolean).join(" · ")}
         aria-pressed={state ? searchPanelOpen(state) : false}
         onClick={() => {
           if (view) openSearchPanel(view);
@@ -101,7 +104,7 @@ export function EditorToolbar({
       >
         <Search />
         <span>{t("codeEditor.find")}</span>
-        <kbd>⌘/Ctrl F</kbd>
+        {bindings.findInEditor && <kbd>{formatKeyboardShortcut(bindings.findInEditor)}</kbd>}
       </button>
       <div className="editor-toolbar-spacer" />
       <button
@@ -248,6 +251,7 @@ export function EditorStatusBar({
   onGoToLineOpenChange: (open: boolean) => void;
 }) {
   const { t } = useTranslation();
+  const bindings = useShortcutBindings();
   const [languageOpen, setLanguageOpen] = useState(false);
   const [lineInput, setLineInput] = useState("");
   const lineInputId = useId();
@@ -278,7 +282,7 @@ export function EditorStatusBar({
             <button
               type="button"
               className="editor-status-button"
-              title={`${t("codeEditor.goToLine")} (⌘/Ctrl+Alt+G)`}
+              title={[t("codeEditor.goToLine"), formatKeyboardShortcut(bindings.goToLine)].filter(Boolean).join(" · ")}
               aria-label={t("codeEditor.goToLine")}
               onClick={() => setLineInput(String(line?.number ?? 1))}
             >

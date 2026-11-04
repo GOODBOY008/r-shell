@@ -101,8 +101,8 @@ describe('SettingsModal removed-field migration', () => {
     expect(saved.shortcutBindings).toEqual({
       newSession: 'Alt+N',
       closeSession: 'Alt+W',
-      nextTab: 'Ctrl+PageDown',
-      previousTab: 'Ctrl+PageUp',
+      nextTab: 'Mod+PageDown',
+      previousTab: 'Mod+PageUp',
     });
     // …and every removed field is gone instead of being written back.
     for (const key of [

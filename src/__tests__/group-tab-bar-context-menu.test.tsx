@@ -1,5 +1,5 @@
 import React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { GroupTabBar } from '../components/terminal/group-tab-bar';
 import type { TerminalTab } from '../lib/terminal-group-types';
@@ -12,7 +12,10 @@ vi.mock('../lib/terminal-group-context', () => ({
 
 beforeEach(() => {
   dispatch.mockClear();
+  localStorage.clear();
 });
+
+afterEach(() => { vi.restoreAllMocks(); localStorage.clear(); });
 
 function makeTab(id: string): TerminalTab {
   return { id, name: id, connectionStatus: 'connected', reconnectCount: 0 };
@@ -29,6 +32,15 @@ describe('GroupTabBar context menu', () => {
     fireEvent.click(selector, { detail: 0 });
     expect(dispatch).toHaveBeenCalledWith({ type: 'ACTIVATE_TAB', groupId: '1', tabId: 'b' });
     expect(onCloseTab).not.toHaveBeenCalled();
+  });
+
+  it('shows remapped duplicate and shell-safe close hints', () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32');
+    localStorage.setItem('sshClientSettings', JSON.stringify({ shortcutBindingsVersion: 2, shortcutBindings: { duplicateSession: 'Mod+Shift+U' } }));
+    render(<GroupTabBar groupId="1" tabs={[makeTab('a')]} activeTabId="a" onDuplicateTab={vi.fn()} />);
+    fireEvent.contextMenu(screen.getByText('a'));
+    expect(screen.getByRole('menuitem', { name: /Duplicate Tab/ }).textContent).toContain('Ctrl+Shift+U');
+    expect(screen.getByRole('menuitem', { name: /^Close Tab/ }).textContent).toContain('Ctrl+Shift+W');
   });
 
   it('offers Close All Tabs and dispatches CLOSE_ALL_TABS', async () => {
@@ -124,6 +136,7 @@ describe('GroupTabBar context menu', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'REORDER_TAB', groupId: '1', fromIndex: 1, toIndex: 0 });
 
     dispatch.mockClear();
+  localStorage.clear();
     fireEvent.contextMenu(screen.getByText('b'));
     fireEvent.click(await screen.findByText('Move Tab Right'));
     expect(dispatch).toHaveBeenCalledWith({ type: 'REORDER_TAB', groupId: '1', fromIndex: 1, toIndex: 2 });

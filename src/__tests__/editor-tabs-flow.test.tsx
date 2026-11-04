@@ -165,7 +165,7 @@ describe('workspace editor tabs', () => {
     fireEvent.click(screen.getByText('Open B'));
     await screen.findByRole('textbox', { name: '/etc/b.conf' });
     edit('/etc/b.conf', 'edited B');
-    await act(async () => { fireEvent.keyDown(window, { key: 's', ctrlKey: true }); });
+    await act(async () => { fireEvent.keyDown(screen.getByLabelText('/etc/b.conf'), { key: 's', ctrlKey: true }); });
     expect(mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'create_file')).toEqual([
       ['create_file', { connectionId: 'ssh-1', path: '/etc/b.conf', content: 'edited B' }],
     ]);

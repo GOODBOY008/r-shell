@@ -66,7 +66,7 @@ describe('isEditableTarget', () => {
     contentEditableFalse.setAttribute('contenteditable', 'false');
 
     expect(isEditableTarget(button)).toBe(false);
-    expect(isEditableTarget(select)).toBe(false);
+    expect(isEditableTarget(select)).toBe(true);
     expect(isEditableTarget(contentEditableFalse)).toBe(false);
     expect(isEditableTarget(null)).toBe(false);
   });

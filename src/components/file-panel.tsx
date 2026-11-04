@@ -1,3 +1,4 @@
+import { useCommandShortcuts } from '@/lib/keyboard-shortcuts';
 import React, {
   useState,
   useEffect,
@@ -96,6 +97,7 @@ export interface FilePanelProps {
 }
 
 export interface FilePanelRef {
+  focus: () => void;
   getCurrentPath: () => string;
   getSelectedEntries: () => FileEntry[];
   refresh: () => void;
@@ -263,6 +265,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     useImperativeHandle(
       ref,
       () => ({
+        focus: () => containerRef.current?.focus(),
         getCurrentPath: () => currentPath,
         getSelectedEntries: () =>
           entries.filter((e) => selectedNames.has(e.name)),
@@ -510,9 +513,14 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
       }
     };
 
+    useCommandShortcuts({
+      refreshFiles: () => { void loadDirectory(currentPath); },
+      filterFiles: () => containerRef.current?.querySelector<HTMLInputElement>('[data-file-filter]')?.focus(),
+    }, { enabled: isActive && !disabled, element: () => containerRef.current });
+
     // ------ Keyboard ------
     const handleKeyDown = (e: React.KeyboardEvent) => {
-      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || disabled) return;
+      if (!isActive || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || e.nativeEvent.getModifierState('AltGraph') || disabled) return;
       const target = e.target as HTMLElement;
       if (target.closest('input, textarea, button, [contenteditable="true"], [role="dialog"]')) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
@@ -550,6 +558,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     return (
       <div
         ref={containerRef}
+        data-shortcut-scope="files"
         className={`h-full flex flex-col relative bg-background text-foreground ${borderClass} rounded-sm overflow-hidden ${showDropOverlay ? "ring-2 ring-primary ring-inset bg-primary/5" : ""}`}
         onClick={onFocus}
         onFocusCapture={onFocus}
@@ -649,6 +658,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
           <div className="order-last flex basis-full items-center h-8 rounded-md border border-input bg-muted/50 px-2 gap-1.5">
             <Search className="h-3 w-3 text-muted-foreground/60 shrink-0" />
             <input
+              data-file-filter
               aria-label={t('filePanel.toolbar.filter')}
               placeholder={t('filePanel.toolbar.filter')}
               className="h-full min-w-0 w-full text-xs bg-transparent outline-hidden placeholder:text-muted-foreground/50"

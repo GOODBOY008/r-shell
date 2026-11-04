@@ -279,10 +279,20 @@ describe('PtyTerminal F3 passthrough', () => {
 
   async function openSearchBar(handler: (event: FakeKeyEvent) => boolean) {
     await act(async () => {
-      expect(handler(fakeKeyEvent({ key: 'f', keyCode: 70, ctrlKey: true }))).toBe(false);
+      // Physical Ctrl+F remains a shell command. Application search uses its configured chord.
+      expect(handler(fakeKeyEvent({ key: 'f', keyCode: 70, ctrlKey: true }))).toBe(true);
+      document.querySelector('[data-shortcut-scope="terminal"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'F', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
     });
     expect(mocks.searchBar.props?.visible).toBe(true);
   }
+
+  it('forwards Ctrl+A immediately and leaves the next D as ordinary input', async () => {
+    const { handler } = await mountTerminal();
+    for (const event of [fakeKeyEvent({ key: 'a', keyCode: 65, ctrlKey: true }), fakeKeyEvent({ key: 'd', keyCode: 68 })]) {
+      expect(handler(event)).toBe(true);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+  });
 
   it('hands F3 and Shift+F3 to the remote application while the search bar is closed', async () => {
     const { handler } = await mountTerminal();
