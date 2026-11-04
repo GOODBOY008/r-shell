@@ -24,6 +24,8 @@ export function toConnectionConfig(data: ConnectionData): ConnectionConfig {
     password: data.password,
     privateKeyPath: data.privateKeyPath,
     passphrase: data.passphrase,
+    sudoPassword: data.sudoPassword,
+    notes: data.notes,
     ftpsEnabled: data.ftpsEnabled,
     ftpsVerifyCert: data.ftpsVerifyCert,
     domain: data.domain,

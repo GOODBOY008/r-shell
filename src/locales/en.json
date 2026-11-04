@@ -160,7 +160,9 @@
       "tunnelAuthMethod": "Tunnel Auth Method",
       "tunnelPassword": "Tunnel Password",
       "tunnelKeyPath": "Tunnel Private Key",
-      "tunnelPassphrase": "Tunnel Passphrase (optional)"
+      "tunnelPassphrase": "Tunnel Passphrase (optional)",
+      "sudoPassword": "sudo password (optional)",
+      "notes": "Notes"
     },
     "placeholder": {
       "connectionName": "My Server",
@@ -181,7 +183,9 @@
       "tunnelPassword": "Enter tunnel password",
       "tunnelKeyPath": "~/.ssh/id_ed25519",
       "tunnelPassphrase": "Enter passphrase if key is encrypted",
-      "savedPassword": "Leave blank to keep saved password"
+      "savedPassword": "Leave blank to keep saved password",
+      "sudoPassword": "Typed into the terminal on request",
+      "notes": "Anything you want at hand for this host"
     },
     "authMethod": {
       "password": "Password",
@@ -273,7 +277,9 @@
       "enableDesc": "Forward the connection through a jump host (bastion) to reach the target."
     },
     "hint": {
-      "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it."
+      "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it.",
+      "sudoPassword": "Sent to the terminal via right-click → Type sudo password. Never shown back here.",
+      "notesEncrypted": "Stored encrypted like the passwords and left out of exports."
     },
     "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored.",
     "x11": {
@@ -895,7 +901,8 @@
     "saveOutputToFile": "Save Output to File",
     "closeTabsToLeft": "Close Tabs to Left",
     "closeAllTabs": "Close All Tabs",
-    "detach": "Detach Session"
+    "detach": "Detach Session",
+    "sendSudoPassword": "Type sudo password"
   },
   "updateChecker": {
     "checkForUpdates": "Check for Updates",
@@ -1069,7 +1076,13 @@
     "username": "Username",
     "port": "Port",
     "protocol": "Protocol",
-    "description": "Description",
+    "notes": "Notes",
+    "showNotes": "Show notes",
+    "hideNotes": "Hide notes",
+    "copyNotes": "Copy notes",
+    "notesCopied": "Notes copied to the clipboard",
+    "notesCopyFailed": "Could not copy the notes",
+    "notesUnavailable": "Could not decrypt the notes",
     "connectionDeleted": "Connection deleted",
     "failedToDeleteConnection": "Failed to delete connection",
     "duplicated": "Duplicated: {{name}}",
@@ -1334,6 +1347,8 @@
   "ptyTerminal": {
     "terminalNotConnected": "Terminal not connected",
     "failedToReadClipboard": "Failed to read from clipboard",
+    "noSudoPassword": "No sudo password is saved for this connection. Add one in the connection settings.",
+    "sudoPasswordUnavailable": "Could not decrypt the sudo password",
     "copiedToClipboard": "Copied to clipboard",
     "failedToCopyClipboard": "Failed to copy to clipboard",
     "reconnectingTerminal": "Reconnecting terminal…",

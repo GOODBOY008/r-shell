@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from './ui/dialog';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { Textarea } from './ui/textarea';
 import { KeyPathInput } from './key-path-input';
 import { PasswordInput } from './ui/password-input';
 import { Label } from './ui/label';
@@ -16,7 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
-import { SECRET_FIELDS, sealSecret, openSecret } from '../lib/credential-crypto';
+import { HIDDEN_SECRET_FIELDS, isSealed, openSecret, sealSecret, type SecretField } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
@@ -53,6 +54,10 @@ export interface ConnectionConfig {
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
+  /** Typed into the terminal from its right-click menu; stored like the password. */
+  sudoPassword?: string;
+  /** Shown back when editing (unlike the credentials); sealed at rest. */
+  notes?: string;
 
   // Advanced options
   proxyType?: 'none' | 'http' | 'socks4' | 'socks5';
@@ -117,14 +122,7 @@ function mergeWithDefaults(defaults: ConnectionConfig, overrides: ConnectionConf
  * connection — reset on dialog open/close so secrets never leak across
  * connections.
  */
-interface StoredSecrets {
-  password: string;
-  passphrase: string;
-  proxyPassword: string;
-  vncPassword: string;
-  tunnelPassword: string;
-  tunnelPassphrase: string;
-}
+type StoredSecrets = Record<SecretField, string>;
 
 const EMPTY_STORED_SECRETS: StoredSecrets = {
   password: '',
@@ -133,6 +131,8 @@ const EMPTY_STORED_SECRETS: StoredSecrets = {
   vncPassword: '',
   tunnelPassword: '',
   tunnelPassphrase: '',
+  sudoPassword: '',
+  notes: '',
 };
 
 /**
@@ -211,6 +211,8 @@ export function ConnectionDialog({
     password: '',
     privateKeyPath: '',
     passphrase: '',
+    sudoPassword: '',
+    notes: '',
     proxyType: 'none',
     proxyHost: '',
     proxyPort: 8080,
@@ -322,6 +324,8 @@ export function ConnectionDialog({
           vncPassword: editingConnection.vncPassword ?? '',
           tunnelPassword: editingConnection.tunnelPassword ?? '',
           tunnelPassphrase: editingConnection.tunnelPassphrase ?? '',
+          sudoPassword: editingConnection.sudoPassword ?? '',
+          notes: editingConnection.notes ?? '',
         });
         const merged = mergeWithDefaults(defaultConfig, editingConnection);
         // Stored secrets are never echoed back into the form: the fields stay
@@ -332,7 +336,17 @@ export function ConnectionDialog({
         merged.vncPassword = '';
         merged.tunnelPassword = '';
         merged.tunnelPassphrase = '';
+        merged.notes = '';
+        merged.sudoPassword = '';
         setConfig(merged);
+        // Notes are the one secret shown back: they are edited, not re-typed.
+        // Only land them on the form of the connection they belong to.
+        if (isSealed(editingConnection.notes)) {
+          const editingId = editingConnection.id;
+          openSecret(editingConnection.notes)
+            .then((notes) => setConfig((prev) => (prev.id === editingId ? { ...prev, notes } : prev)))
+            .catch((error) => console.error('[Credential] Failed to decrypt notes:', error));
+        }
         syncDisplayValues({
           port: editingConnection.port ?? 22,
           proxyPort: editingConnection.proxyPort ?? 8080,
@@ -421,7 +435,11 @@ export function ConnectionDialog({
    * "replace". Returns the secret values ready for persistence — already
    * encrypted (sealed) so plaintext never reaches localStorage.
    */
-  const resolveSecretsForSave = async (): Promise<Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>> => {
+  const resolveSecretsForSave = async (): Promise<Pick<ConnectionConfig, SecretField>> => {
+    // Notes are edited in the clear, so the field is saved as typed (blank
+    // clears them). They are encrypted whatever the password switch says:
+    // the user put them into a field that promises encrypted storage.
+    const notes = config.notes ? await sealSecret(config.notes) : '';
     // Password-saving master switch (Settings) off → never write NEW
     // secrets: the connect request below still uses the typed value from
     // `config`, so the connection itself works, and an edited connection
@@ -431,17 +449,19 @@ export function ConnectionDialog({
     // Typing a replacement secret while the switch is off does not persist
     // it; turn the switch back on to update stored credentials.
     if (!isPasswordSavingAllowed()) {
-      return { ...previousSecrets };
+      return { ...previousSecrets, notes };
     }
-    const result: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'> = {
+    const result: Pick<ConnectionConfig, SecretField> = {
       password: '',
       passphrase: '',
       proxyPassword: '',
       vncPassword: '',
       tunnelPassword: '',
       tunnelPassphrase: '',
+      sudoPassword: '',
+      notes,
     };
-    for (const field of SECRET_FIELDS) {
+    for (const field of HIDDEN_SECRET_FIELDS) {
       // Use the value as typed — never trim it. Leading/trailing whitespace
       // can be part of a credential, and the connect request below sends the
       // unmodified `config` value, so trimming here would store a different
@@ -497,7 +517,7 @@ export function ConnectionDialog({
     // user's default key (~/.ssh/id_rsa, then id_ed25519).
 
     // Encrypt secrets for persistence (blank field = keep stored value).
-    let sealedSecrets: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>;
+    let sealedSecrets: Pick<ConnectionConfig, SecretField>;
     try {
       sealedSecrets = await resolveSecretsForSave();
     } catch {
@@ -511,7 +531,7 @@ export function ConnectionDialog({
     // it here (plaintext exists transiently in memory only). The persisted
     // payload above keeps the sealed form.
     const connectConfig: ConnectionConfig = { ...config };
-    for (const field of SECRET_FIELDS) {
+    for (const field of HIDDEN_SECRET_FIELDS) {
       if (connectConfig[field] === '' && previousSecrets[field]) {
         try {
           connectConfig[field] = await openSecret(previousSecrets[field]);
@@ -557,6 +577,8 @@ export function ConnectionDialog({
             tunnelKeyPath: config.tunnelKeyPath,
             tunnelPassphrase: sealedSecrets.tunnelPassphrase,
             proxyPassword: sealedSecrets.proxyPassword,
+            sudoPassword: sealedSecrets.sudoPassword,
+            notes: sealedSecrets.notes,
             compression: config.compression,
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
@@ -594,6 +616,8 @@ export function ConnectionDialog({
             tunnelKeyPath: config.tunnelKeyPath,
             tunnelPassphrase: sealedSecrets.tunnelPassphrase,
             proxyPassword: sealedSecrets.proxyPassword,
+            sudoPassword: sealedSecrets.sudoPassword,
+            notes: sealedSecrets.notes,
             compression: config.compression,
             keepAlive: config.keepAlive,
             keepAliveInterval: config.keepAliveInterval,
@@ -645,6 +669,8 @@ export function ConnectionDialog({
         tunnelKeyPath: config.tunnelKeyPath,
         tunnelPassphrase: sealedSecrets.tunnelPassphrase,
         proxyPassword: sealedSecrets.proxyPassword,
+        sudoPassword: sealedSecrets.sudoPassword,
+        notes: sealedSecrets.notes,
         compression: config.compression,
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
@@ -677,6 +703,8 @@ export function ConnectionDialog({
         tunnelKeyPath: config.tunnelKeyPath,
         tunnelPassphrase: sealedSecrets.tunnelPassphrase,
         proxyPassword: sealedSecrets.proxyPassword,
+        sudoPassword: sealedSecrets.sudoPassword,
+        notes: sealedSecrets.notes,
         compression: config.compression,
         keepAlive: config.keepAlive,
         keepAliveInterval: config.keepAliveInterval,
@@ -774,7 +802,7 @@ const handleCancelConnectionAttempt = async () => {
     if (!editingConnection?.id) return;
 
     // Encrypt secrets for persistence (blank field = keep stored value).
-    let sealed: Pick<ConnectionConfig, 'password' | 'passphrase' | 'proxyPassword' | 'vncPassword' | 'tunnelPassword' | 'tunnelPassphrase'>;
+    let sealed: Pick<ConnectionConfig, SecretField>;
     try {
       sealed = await resolveSecretsForSave();
     } catch {
@@ -808,6 +836,8 @@ const handleCancelConnectionAttempt = async () => {
       tunnelKeyPath: config.tunnelKeyPath,
       tunnelPassphrase: sealed.tunnelPassphrase,
       proxyPassword: sealed.proxyPassword,
+      sudoPassword: sealed.sudoPassword,
+      notes: sealed.notes,
       compression: config.compression,
       keepAlive: config.keepAlive,
       keepAliveInterval: config.keepAliveInterval,
@@ -1066,6 +1096,17 @@ const handleCancelConnectionAttempt = async () => {
                     </p>
                   </div>
                 )}
+
+                <div className="space-y-2">
+                  <Label htmlFor="notes">{t('connectionDialog.label.notes')}</Label>
+                  <Textarea
+                    id="notes"
+                    placeholder={t('connectionDialog.placeholder.notes')}
+                    value={config.notes ?? ''}
+                    onChange={(e) => updateConfig({ notes: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground">{t('connectionDialog.hint.notesEncrypted')}</p>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -1194,6 +1235,23 @@ const handleCancelConnectionAttempt = async () => {
                       </>
                     )}
                   </>
+                )}
+
+                {!['SFTP', 'FTP', 'RDP', 'VNC'].includes(config.protocol) && (
+                  <div className="space-y-2">
+                    <Label htmlFor="sudo-password">{t('connectionDialog.label.sudoPassword')}</Label>
+                    <PasswordInput
+                      id="sudo-password"
+                      placeholder={
+                        previousSecrets.sudoPassword
+                          ? t('connectionDialog.placeholder.savedPassword')
+                          : t('connectionDialog.placeholder.sudoPassword')
+                      }
+                      value={config.sudoPassword}
+                      onChange={(e) => updateConfig({ sudoPassword: e.target.value })}
+                    />
+                    <p className="text-xs text-muted-foreground">{t('connectionDialog.hint.sudoPassword')}</p>
+                  </div>
                 )}
 
                 <div className="p-4 bg-muted rounded-lg">

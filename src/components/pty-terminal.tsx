@@ -20,10 +20,14 @@ import { registerTerminalWorkingDirectoryHandler } from '../lib/terminal-working
 import { TERMINAL_COMMAND_EVENT, type TerminalCommandDetail } from '../lib/terminal-commands';
 import { registerDetachHandler } from '../lib/terminal-detach-registry';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
+import { ConnectionStorageManager } from '../lib/connection-storage';
+import { openSecret } from '../lib/credential-crypto';
 import '@xterm/xterm/css/xterm.css';
 
 interface PtyTerminalProps {
   connectionId: string;
+  /** Saved connection this tab was opened from; differs from connectionId for duplicated tabs. */
+  savedConnectionId?: string;
   connectionName: string;
   host?: string;
   username?: string;
@@ -113,6 +117,7 @@ function isAutoReconnectEnabled(): boolean {
 
 export function PtyTerminal({
   connectionId,
+  savedConnectionId,
   connectionName,
   host = 'localhost', 
   username = 'user',
@@ -1497,6 +1502,27 @@ export function PtyTerminal({
     }
   }, [sendInputToPty]);
 
+  // Right-click → Type sudo password: the stored secret goes straight to the
+  // PTY, then Enter — no paste normalization, exactly like typing it blind.
+  const handleSendSudoPassword = React.useCallback(async () => {
+    const sealed = ConnectionStorageManager.getConnection(savedConnectionId ?? connectionId)?.sudoPassword;
+    if (!sealed) {
+      notify.info(i18n.t('ptyTerminal.noSudoPassword'));
+      return;
+    }
+    let password: string;
+    try {
+      password = await openSecret(sealed);
+    } catch (error) {
+      console.error('[Credential] Failed to decrypt the sudo password:', error);
+      notify.error(i18n.t('ptyTerminal.sudoPasswordUnavailable'));
+      return;
+    }
+    if (!sendInputToPty(`${password}\r`)) {
+      notify.error(i18n.t('ptyTerminal.terminalNotConnected'));
+    }
+  }, [connectionId, savedConnectionId, sendInputToPty]);
+
   React.useEffect(() => {
     const handleTerminalCommand = (event: Event) => {
       const { tabId, command, text, execute } = (event as CustomEvent<TerminalCommandDetail>).detail;
@@ -1511,12 +1537,13 @@ export function PtyTerminal({
         case 'find-previous': handleFindPrevious(); break;
         case 'clear-screen': handleClear(); break;
         case 'send-text': handleSendText(text ?? '', execute !== false); break;
+        case 'send-sudo-password': void handleSendSudoPassword(); break;
       }
     };
 
     window.addEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
     return () => window.removeEventListener(TERMINAL_COMMAND_EVENT, handleTerminalCommand);
-  }, [connectionId, handleClear, handleCopy, handleFindNext, handleFindPrevious, handlePaste, handleSearch, handleSelectAll, handleSendText]);
+  }, [connectionId, handleClear, handleCopy, handleFindNext, handleFindPrevious, handlePaste, handleSearch, handleSelectAll, handleSendSudoPassword, handleSendText]);
 
   const handleReconnect = React.useCallback(() => {
     if (onReconnectTab) {
@@ -1571,6 +1598,7 @@ export function PtyTerminal({
     <TerminalContextMenu
       onCopy={handleCopy}
       onPaste={handlePaste}
+      onSendSudoPassword={handleSendSudoPassword}
       onClear={handleClear}
       onClearScrollback={handleClearScrollback}
       onSearch={handleSearch}

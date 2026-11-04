@@ -160,7 +160,9 @@
       "tunnelAuthMethod": "隧道认证方式",
       "tunnelPassword": "隧道密码",
       "tunnelKeyPath": "隧道私钥路径",
-      "tunnelPassphrase": "隧道密钥密码（可选）"
+      "tunnelPassphrase": "隧道密钥密码（可选）",
+      "sudoPassword": "sudo 密码（可选）",
+      "notes": "备注"
     },
     "placeholder": {
       "connectionName": "我的服务器",
@@ -181,7 +183,9 @@
       "tunnelPassword": "输入隧道密码",
       "tunnelKeyPath": "~/.ssh/id_ed25519",
       "tunnelPassphrase": "密钥加密时输入密码",
-      "savedPassword": "留空保持已保存的密码"
+      "savedPassword": "留空保持已保存的密码",
+      "sudoPassword": "按需输入到终端",
+      "notes": "此主机需要随手可用的信息"
     },
     "authMethod": {
       "password": "密码",
@@ -273,7 +277,9 @@
       "enableDesc": "通过跳板机（Bastion / Jump Host）转发到目标主机。"
     },
     "hint": {
-      "savedPasswordKept": "此连接已保存密码。留空保持不变，输入新密码即可替换。"
+      "savedPasswordKept": "此连接已保存密码。留空保持不变，输入新密码即可替换。",
+      "sudoPassword": "通过终端右键菜单“输入 sudo 密码”发送，此处不会再显示。",
+      "notesEncrypted": "与密码一样加密保存，且不会导出。"
     },
     "passwordSavingDisabledHint": "已在设置中关闭密码保存——连接可正常建立，但不会存储凭据。",
     "x11": {
@@ -895,7 +901,8 @@
     "saveOutputToFile": "保存输出到文件",
     "closeTabsToLeft": "关闭左侧标签页",
     "closeAllTabs": "关闭全部标签页",
-    "detach": "分离会话"
+    "detach": "分离会话",
+    "sendSudoPassword": "输入 sudo 密码"
   },
   "updateChecker": {
     "checkForUpdates": "检查更新",
@@ -1069,7 +1076,13 @@
     "username": "用户名",
     "port": "端口",
     "protocol": "协议",
-    "description": "描述",
+    "notes": "备注",
+    "showNotes": "显示备注",
+    "hideNotes": "隐藏备注",
+    "copyNotes": "复制备注",
+    "notesCopied": "备注已复制到剪贴板",
+    "notesCopyFailed": "无法复制备注",
+    "notesUnavailable": "无法解密备注",
     "connectionDeleted": "连接已删除",
     "failedToDeleteConnection": "删除连接失败",
     "duplicated": "已复制：{{name}}",
@@ -1332,6 +1345,8 @@
   "ptyTerminal": {
     "terminalNotConnected": "终端未连接",
     "failedToReadClipboard": "从剪贴板读取失败",
+    "noSudoPassword": "此连接未保存 sudo 密码。请在连接设置中添加。",
+    "sudoPasswordUnavailable": "无法解密 sudo 密码",
     "copiedToClipboard": "已复制到剪贴板",
     "failedToCopyClipboard": "复制到剪贴板失败",
     "reconnectingTerminal": "正在重新连接终端…",
