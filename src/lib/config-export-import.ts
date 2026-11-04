@@ -186,7 +186,12 @@ export async function exportAllConfig(options: ExportOptions = {}): Promise<bool
         for (const field of SECRET_FIELDS) {
           const value = record[field];
           if (isSealed(value)) {
-            own[field] = await openSecret(value);
+            try {
+              own[field] = await openSecret(value);
+            } catch (error) {
+              // A value this machine can no longer open cannot be exported; keep the rest.
+              console.warn(`[config-export] Skipping ${field} of ${connection.id}:`, error);
+            }
           } else if (typeof value === 'string' && value.length > 0) {
             // Legacy plaintext still waiting for the startup seal migration.
             own[field] = value;
@@ -260,7 +265,8 @@ export async function pickConfigBundle(): Promise<ConfigBundle | null> {
 
 /** True when the bundle carries a passphrase-protected credentials block. */
 export function bundleHasCredentials(bundle: ConfigBundle): boolean {
-  return isBackupSealed(bundle.data.credentials?.sealed);
+  const block = bundle.data.credentials;
+  return block?.format === CREDENTIALS_FORMAT && isBackupSealed(block.sealed);
 }
 
 /**
@@ -289,7 +295,7 @@ export async function applyConfigBundle(
     // 2. Credentials block first: a wrong passphrase must fail before any write.
     let restored: CredentialsBlock['connections'] = {};
     const block = data.credentials;
-    if (credentialsPassphrase && block && isBackupSealed(block.sealed)) {
+    if (credentialsPassphrase && block && bundleHasCredentials(bundle)) {
       let json: string;
       try {
         json = await openFromBackup(credentialsPassphrase, block.sealed);
@@ -303,24 +309,29 @@ export async function applyConfigBundle(
     // 3a. Connections + folders -------------------------------------------------
     if (data.connections) {
       // Re-seal restored secrets with this machine's master key before they
-      // reach storage: plaintext is stripped on write.
-      const connections = await Promise.all(
-        data.connections.connections.map(async (connection) => {
-          const secrets = restored[connection.id];
-          if (!secrets) return connection;
-          const withSecrets = { ...connection } as Record<string, unknown>;
-          for (const field of SECRET_FIELDS) {
-            const value = secrets[field];
-            if (typeof value === 'string') withSecrets[field] = await sealSecret(value);
-          }
-          result.credentials += 1;
-          return withSecrets as unknown as ConnectionData;
-        }),
-      );
-      result.connections = ConnectionStorageManager.importConnections(
-        JSON.stringify({ ...data.connections, connections }),
-        merge,
-      );
+      // reach storage: plaintext is stripped on write. A malformed list is
+      // left for importConnections to reject with its own message.
+      let payload = data.connections;
+      if (Object.keys(restored).length > 0 && Array.isArray(payload.connections)) {
+        const connections = await Promise.all(
+          payload.connections.map(async (connection) => {
+            const secrets = restored[connection.id];
+            if (!secrets) return connection;
+            const withSecrets = { ...connection } as Record<string, unknown>;
+            let sealedAny = false;
+            for (const field of SECRET_FIELDS) {
+              const value = secrets[field];
+              if (typeof value !== 'string') continue;
+              withSecrets[field] = await sealSecret(value);
+              sealedAny = true;
+            }
+            if (sealedAny) result.credentials += 1;
+            return withSecrets as unknown as ConnectionData;
+          }),
+        );
+        payload = { ...payload, connections };
+      }
+      result.connections = ConnectionStorageManager.importConnections(JSON.stringify(payload), merge);
     }
 
     // 3b. Connection profiles ---------------------------------------------------

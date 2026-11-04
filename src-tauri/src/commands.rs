@@ -4858,7 +4858,11 @@ fn seal_for_backup(passphrase: &str, secret: &str) -> Result<String, String> {
     let mut salt = [0u8; BACKUP_SALT_LEN];
     rand::rng().fill_bytes(&mut salt);
     let sealed = seal_with_key(&backup_key(passphrase, &salt)?, secret)?;
-    Ok(format!("b1:{}:{}", BASE64.encode(salt), &sealed["v1:".len()..]))
+    Ok(format!(
+        "b1:{}:{}",
+        BASE64.encode(salt),
+        &sealed["v1:".len()..]
+    ))
 }
 
 /// Decrypt a value produced by `seal_for_backup`. A wrong passphrase fails
@@ -4974,10 +4978,16 @@ mod credential_key_tests {
         assert!(sealed.starts_with("b1:"));
         assert_eq!(sealed.split(':').count(), 4);
         assert!(!sealed.contains("hunter2"));
-        assert_eq!(open_from_backup("correct horse", &sealed).expect("open"), block);
+        assert_eq!(
+            open_from_backup("correct horse", &sealed).expect("open"),
+            block
+        );
         assert!(open_from_backup("wrong horse", &sealed).is_err());
         // A fresh salt per call: the same input never yields the same block.
-        assert_ne!(seal_for_backup("correct horse", block).expect("seal"), sealed);
+        assert_ne!(
+            seal_for_backup("correct horse", block).expect("seal"),
+            sealed
+        );
     }
 
     #[test]

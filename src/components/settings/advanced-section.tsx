@@ -73,22 +73,27 @@ export function AdvancedSection({
   const [exportPassphraseRepeat, setExportPassphraseRepeat] = useState('');
   const [importPassphrase, setImportPassphrase] = useState('');
   const [passphrasePrompt, setPassphrasePrompt] = useState({ open: false, wrong: false });
-  const passphraseResolver = useRef<((passphrase: string | null) => void) | null>(null);
+  const passphraseResolver = useRef<((answer: string | null | undefined) => void) | null>(null);
 
   const passphraseMismatch = includeCredentials && exportPassphrase !== exportPassphraseRepeat;
   const exportBlocked =
     includeCredentials && (exportPassphrase.length < MIN_PASSPHRASE_LENGTH || passphraseMismatch);
 
-  /** Ask for the credentials passphrase; resolves null when the user skips. */
+  /**
+   * Ask for the credentials passphrase. Resolves the passphrase, `null` for
+   * "Skip credentials", or `undefined` when the dialog was dismissed (Esc,
+   * overlay, X), which cancels the import instead of importing without secrets.
+   */
   const askPassphrase = (wrong: boolean) =>
-    new Promise<string | null>((resolve) => {
+    new Promise<string | null | undefined>((resolve) => {
       passphraseResolver.current = resolve;
       setImportPassphrase('');
       setPassphrasePrompt({ open: true, wrong });
     });
-  const answerPassphrase = (passphrase: string | null) => {
+  const answerPassphrase = (answer: string | null | undefined) => {
     setPassphrasePrompt({ open: false, wrong: false });
-    passphraseResolver.current?.(passphrase);
+    setImportPassphrase('');
+    passphraseResolver.current?.(answer);
     passphraseResolver.current = null;
   };
 
@@ -104,8 +109,6 @@ export function AdvancedSection({
         credentialsPassphrase: includeCredentials ? exportPassphrase : undefined,
       });
       if (saved) {
-        setExportPassphrase('');
-        setExportPassphraseRepeat('');
         notify.success(t('settings.advanced.exportSuccess'));
       } else {
         notify.info(t('settings.advanced.exportCancelled'));
@@ -116,12 +119,20 @@ export function AdvancedSection({
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      // A typed passphrase never outlives the attempt, whatever its outcome.
+      setExportPassphrase('');
+      setExportPassphraseRepeat('');
       setIsExporting(false);
     }
   };
 
-  // A wrong passphrase re-opens the prompt; skipping imports everything else.
-  const applyBundle = async (bundle: ConfigBundle, passphrase: string | null): Promise<ImportResult> => {
+  // A wrong passphrase re-opens the prompt; skipping imports everything else;
+  // dismissing the prompt cancels (null result).
+  const applyBundle = async (
+    bundle: ConfigBundle,
+    passphrase: string | null | undefined,
+  ): Promise<ImportResult | null> => {
+    if (passphrase === undefined) return null;
     try {
       return await applyConfigBundle(bundle, {
         merge: importMerge,
@@ -145,6 +156,10 @@ export function AdvancedSection({
       }
       const passphrase = bundleHasCredentials(bundle) ? await askPassphrase(false) : null;
       const result = await applyBundle(bundle, passphrase);
+      if (!result) {
+        notify.info(t('settings.advanced.importCancelled'));
+        return;
+      }
       const summary = [
         t('settings.advanced.importSuccessDesc', {
           connections: result.connections,
@@ -432,7 +447,7 @@ export function AdvancedSection({
       </CardContent>
     </Card>
 
-    <Dialog open={passphrasePrompt.open} onOpenChange={(open) => { if (!open) answerPassphrase(null); }}>
+    <Dialog open={passphrasePrompt.open} onOpenChange={(open) => { if (!open) answerPassphrase(undefined); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t('settings.advanced.importPassphraseTitle')}</DialogTitle>
