@@ -30,6 +30,14 @@ export const SECRET_FIELDS = [
 
 export type SecretField = (typeof SECRET_FIELDS)[number];
 
+/**
+ * Secrets a connect request carries. The sudo password is typed into the
+ * terminal on demand, so connect flows leave it sealed: the record they
+ * decrypt is also what the edit dialog gets after a failed connect, and a
+ * plaintext value there would be written back and then stripped as such.
+ */
+export const CONNECT_SECRET_FIELDS: readonly SecretField[] = SECRET_FIELDS.filter((f) => f !== 'sudoPassword');
+
 /** True when the value is an encrypted-at-rest secret (v1 sealed format). */
 export function isSealed(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('v1:') && value.split(':').length === 3;
@@ -69,15 +77,15 @@ export async function sealLegacySecrets(
 }
 
 /**
- * Decrypt all sealed secret fields on a connection object in place, so the
- * values can be used to build a connect request. Sealed fields that fail to
- * decrypt are left as-is (the backend auth will fail with a clear error
+ * Decrypt the connect-time secret fields on a connection object in place, so
+ * the values can be used to build a connect request. Sealed fields that fail
+ * to decrypt are left as-is (the backend auth will fail with a clear error
  * rather than silently sending a wrong password).
  */
 export async function openConnectionSecrets(
   connection: Record<string, unknown>,
 ): Promise<void> {
-  for (const field of SECRET_FIELDS) {
+  for (const field of CONNECT_SECRET_FIELDS) {
     const value = connection[field];
     if (isSealed(value)) {
       try {

@@ -27,7 +27,7 @@ import { buildFtpConnectRequest } from './lib/ftp-connect-request';
 import { ActiveConnectionsManager, ConnectionStorageManager, connectionHasCredentials, getStorageCorruption, markSealFailed, clearSealFailed } from './lib/connection-storage';
 import { beginConnect, endConnect, nextDuplicateId } from './lib/connect-guard';
 import { ConnectionProfileManager } from './lib/connection-profiles';
-import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, SECRET_FIELDS } from './lib/credential-crypto';
+import { openConnectionSecrets, sealLegacySecrets, sealSecret, isLegacyPlaintext, CONNECT_SECRET_FIELDS, SECRET_FIELDS } from './lib/credential-crypto';
 import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { buildSftpConnectRequest, buildSshConnectRequest, getConnectionTimeoutSetting } from './lib/ssh-connect-request';
@@ -1863,12 +1863,12 @@ function AppContent() {
     // A blank secret on a saved connection means "keep the stored secret" —
     // decrypt the stored values so the connect requests below carry the real
     // values (covers the password, tunnel credentials, etc.).
-    if (SECRET_FIELDS.some((f) => !config[f])) {
+    if (CONNECT_SECRET_FIELDS.some((f) => !config[f])) {
       const stored = ConnectionStorageManager.getConnection(config.id);
       if (stored) {
         const withSecrets: Record<string, unknown> = { ...stored };
         await openConnectionSecrets(withSecrets);
-        for (const f of SECRET_FIELDS) {
+        for (const f of CONNECT_SECRET_FIELDS) {
           if (!config[f] && typeof withSecrets[f] === 'string' && withSecrets[f]) {
             (config as unknown as Record<string, unknown>)[f] = withSecrets[f];
           }

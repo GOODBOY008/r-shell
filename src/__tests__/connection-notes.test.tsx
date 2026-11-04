@@ -3,12 +3,13 @@
  * included); the sudo password is a sealed secret like the login password:
  * encrypted at rest, never echoed back, blank on save keeps the stored one.
  */
+import '@testing-library/jest-dom/vitest';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConnectionDialog } from '../components/connection-dialog';
 import { ConnectionNotes } from '../components/connection-notes';
 import { ConnectionStorageManager } from '../lib/connection-storage';
-import { SECRET_FIELDS } from '../lib/credential-crypto';
+import { SECRET_FIELDS, openConnectionSecrets } from '../lib/credential-crypto';
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -95,6 +96,16 @@ describe('storage of notes and the sudo password', () => {
 
     ConnectionStorageManager.saveConnectionWithId('conn-2', connection);
     expect(ConnectionStorageManager.getConnection('conn-2')?.sudoPassword).toBe(connection.sudoPassword);
+  });
+
+  it('leaves the sudo password sealed when a connect flow decrypts the record', async () => {
+    // After a failed connect App.tsx hands this very record to the edit
+    // dialog, whose blank sudo field keeps previousSecrets as stored — a
+    // plaintext value there would be persisted and then stripped.
+    const record: Record<string, unknown> = { ...connection };
+    await openConnectionSecrets(record);
+    expect(record.password).toBe('login-secret');
+    expect(record.sudoPassword).toBe(connection.sudoPassword);
   });
 });
 
