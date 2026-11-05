@@ -5,6 +5,7 @@ use crate::os_keypath::resolve_private_key_path;
 use crate::proxy::{ProxyConfig, ProxyType};
 use crate::sftp_client::{FileEntry, FileEntryType, SftpConfig};
 use crate::sftp_transfer;
+use crate::ssh::passphrase_store::{PassphraseAttempt, PassphraseStore, SavedKeyPassphrase};
 use crate::ssh::{
     AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig,
     DEFAULT_COMMAND_TIMEOUT_SECS,
@@ -27,6 +28,8 @@ pub struct IdentityRequest {
     pub attempt_id: String,
     #[serde(default)]
     pub auth_responses: Vec<crate::ssh::auto_auth::AuthReply>,
+    #[serde(skip)]
+    passphrases: Option<PassphraseAttempt>,
 }
 impl std::fmt::Debug for IdentityRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -66,7 +69,7 @@ fn build_auth(
                         endpoint: endpoint.clone(),
                         key_path: file.clone(),
                         passphrase: Some(passphrase.clone()),
-                        skip: false,
+                        ..Default::default()
                     });
                 }
             }
@@ -85,6 +88,7 @@ fn build_auth(
                     attempt_id: identity.attempt_id.clone(),
                     endpoint,
                     replies,
+                    passphrases: identity.passphrases.clone(),
                 },
             })
         }
@@ -96,6 +100,7 @@ fn build_auth(
                 attempt_id: identity.attempt_id.clone(),
                 endpoint,
                 replies: identity.auth_responses.clone(),
+                passphrases: identity.passphrases.clone(),
             },
         }),
         _ => Err("Invalid SSH auth method".into()),
@@ -277,6 +282,7 @@ pub struct SshConnectResponse {
     pub host_key_changed: Option<HostKeyChanged>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_required: Option<crate::ssh::auto_auth::AuthRequired>,
+    pub passphrase_save_failed: bool,
 }
 
 /// Endpoint named by an "accept-new" request: the host whose changed key the
@@ -311,9 +317,12 @@ pub async fn preview_ssh_config_import(
 
 #[tauri::command]
 pub async fn ssh_connect(
-    request: ConnectRequest,
+    app: tauri::AppHandle,
+    mut request: ConnectRequest,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<SshConnectResponse, String> {
+    let passphrases = PassphraseAttempt::for_app(&app);
+    request.identity.passphrases = Some(passphrases.clone());
     let proxy = build_proxy(&request)?;
     let tunnel = build_tunnel(&request)?;
 
@@ -374,6 +383,7 @@ pub async fn ssh_connect(
             error: None,
             host_key_changed: None,
             auth_required: None,
+            passphrase_save_failed: !passphrases.save().await,
         }),
         Err(e) => Ok(SshConnectResponse {
             success: false,
@@ -383,6 +393,7 @@ pub async fn ssh_connect(
             auth_required: e
                 .downcast_ref::<crate::ssh::auto_auth::AuthRequired>()
                 .cloned(),
+            passphrase_save_failed: false,
         }),
     }
 }
@@ -2852,9 +2863,12 @@ pub struct SftpConnectRequest {
 
 #[tauri::command]
 pub async fn sftp_connect(
-    request: SftpConnectRequest,
+    app: tauri::AppHandle,
+    mut request: SftpConnectRequest,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<SshConnectResponse, String> {
+    let passphrases = PassphraseAttempt::for_app(&app);
+    request.identity.passphrases = Some(passphrases.clone());
     let auth = build_auth(
         &request.auth_method,
         Some(request.password.unwrap_or_default()),
@@ -2918,6 +2932,7 @@ pub async fn sftp_connect(
             error: None,
             host_key_changed: None,
             auth_required: None,
+            passphrase_save_failed: !passphrases.save().await,
         }),
         Err(e) => Ok(SshConnectResponse {
             success: false,
@@ -2927,6 +2942,7 @@ pub async fn sftp_connect(
             auth_required: e
                 .downcast_ref::<crate::ssh::auto_auth::AuthRequired>()
                 .cloned(),
+            passphrase_save_failed: false,
         }),
     }
 }
@@ -4861,7 +4877,7 @@ pub fn editor_dirty_changed(app: tauri::AppHandle, label: String, dirty: bool) {
 const MASTER_KEY_SERVICE: &str = "com.aiden.r-shell.dataprotection";
 const MASTER_KEY_USER: &str = "connection-secrets";
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -4886,11 +4902,15 @@ fn keychain_disabled() -> bool {
 /// Tauri-resolved app-data dir (`app_data_dir()` — the same dir the app
 /// already uses for localStorage), so the key persists across dev relaunches
 /// and follows tauri.conf.json's identifier instead of a hardcoded copy.
-fn file_master_key_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("dev-master-key.dat"))
-        .map_err(|e| format!("Cannot resolve the app data directory: {e}"))
+pub(crate) fn dev_master_key_path(app: &tauri::AppHandle) -> Result<Option<std::path::PathBuf>, String> {
+    if keychain_disabled() {
+        app.path()
+            .app_data_dir()
+            .map(|dir| Some(dir.join("dev-master-key.dat")))
+            .map_err(|e| format!("Cannot resolve the app data directory: {e}"))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Decode a previously persisted 32-byte file master key.
@@ -4951,22 +4971,20 @@ fn load_or_create_file_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
 /// Load (or first-use create) the 32-byte master key. Stored in the OS
 /// keychain normally; in a local file in dev/e2e runs so automation never
 /// trips a keychain authorization prompt.
-fn master_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
-    if let Some(key) = MASTER_KEY_CACHE
+pub(crate) fn master_key(dev_key_path: Option<&std::path::Path>) -> Result<Vec<u8>, String> {
+    let mut cache = MASTER_KEY_CACHE
         .lock()
-        .map_err(|e| format!("Key cache lock poisoned: {e}"))?
-        .as_ref()
-    {
+        .map_err(|e| format!("Key cache lock poisoned: {e}"))?;
+    if let Some(key) = cache.as_ref() {
         return Ok(key.clone());
     }
 
-    let key = if keychain_disabled() {
-        let path = file_master_key_path(app)?;
+    let key = if let Some(path) = dev_key_path {
         tracing::info!(
             "Dev/e2e run: OS keychain bypassed, master key file at {}",
             path.display()
         );
-        load_or_create_file_key(&path)?
+        load_or_create_file_key(path)?
     } else {
         let entry = keyring::Entry::new(MASTER_KEY_SERVICE, MASTER_KEY_USER)
             .map_err(|e| format!("Failed to open keychain entry: {e}"))?;
@@ -4994,15 +5012,13 @@ fn master_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
         key
     };
 
-    if let Ok(mut cache) = MASTER_KEY_CACHE.lock() {
-        *cache = Some(key.clone());
-    }
+    *cache = Some(key.clone());
     Ok(key)
 }
 
 /// Encrypt a secret with the given master key (AES-256-GCM).
 /// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
-fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
+pub(crate) fn seal_with_key(key: &[u8], secret: &str, aad: &[u8]) -> Result<String, String> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
 
@@ -5011,7 +5027,10 @@ fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
     rand::rng().fill_bytes(&mut nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), secret.as_bytes())
+        .encrypt(
+            &Nonce::from(nonce_bytes),
+            Payload { msg: secret.as_bytes(), aad },
+        )
         .map_err(|e| format!("Failed to encrypt secret: {e}"))?;
 
     Ok(format!(
@@ -5022,17 +5041,16 @@ fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
 }
 
 /// Decrypt a value produced by `seal_with_key`.
-fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
+pub(crate) fn open_with_key(key: &[u8], sealed: &str, aad: &[u8]) -> Result<String, String> {
     let parts: Vec<&str> = sealed.splitn(3, ':').collect();
     if parts.len() != 3 || parts[0] != "v1" {
         return Err("Unrecognized sealed secret format".to_string());
     }
-    let nonce_bytes = BASE64
+    let nonce_bytes: [u8; 12] = BASE64
         .decode(parts[1])
-        .map_err(|e| format!("Corrupt nonce: {e}"))?;
-    if nonce_bytes.len() != 12 {
-        return Err("Corrupt nonce: invalid length".to_string());
-    }
+        .map_err(|e| format!("Corrupt nonce: {e}"))?
+        .try_into()
+        .map_err(|_| "Corrupt nonce: invalid length".to_string())?;
     let ciphertext = BASE64
         .decode(parts[2])
         .map_err(|e| format!("Corrupt ciphertext: {e}"))?;
@@ -5040,7 +5058,7 @@ fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
     let plaintext = cipher
-        .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
+        .decrypt(&Nonce::from(nonce_bytes), Payload { msg: &ciphertext, aad })
         .map_err(|e| format!("Failed to decrypt secret: {e}"))?;
 
     String::from_utf8(plaintext).map_err(|e| format!("Decrypted secret is not UTF-8: {e}"))
@@ -5052,13 +5070,25 @@ fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
 /// I/O, which must not block the main thread. The `AppHandle` is injected.
 #[tauri::command]
 pub async fn credential_seal(app: tauri::AppHandle, secret: String) -> Result<String, String> {
-    seal_with_key(&master_key(&app)?, &secret)
+    let key = master_key(dev_master_key_path(&app)?.as_deref())?;
+    seal_with_key(&key, &secret, b"")
 }
 
 /// Decrypt a value produced by `credential_seal`.
 #[tauri::command]
 pub async fn credential_open(app: tauri::AppHandle, sealed: String) -> Result<String, String> {
-    open_with_key(&master_key(&app)?, &sealed)
+    let key = master_key(dev_master_key_path(&app)?.as_deref())?;
+    open_with_key(&key, &sealed, b"")
+}
+
+#[tauri::command]
+pub async fn list_ssh_key_passphrases(app: tauri::AppHandle) -> Result<Vec<SavedKeyPassphrase>, String> {
+    PassphraseStore::for_app(&app)?.list()
+}
+
+#[tauri::command]
+pub async fn forget_ssh_key_passphrase(app: tauri::AppHandle, digest: String) -> Result<(), String> {
+    PassphraseStore::for_app(&app)?.forget(&digest)
 }
 
 #[cfg(test)]
@@ -5110,10 +5140,10 @@ mod credential_key_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("dev-master-key.dat");
         let key = load_or_create_file_key(&path).expect("key");
-        let sealed = seal_with_key(&key, "s3cret-パスワード").expect("seal");
+        let sealed = seal_with_key(&key, "s3cret-パスワード", b"").expect("seal");
         assert!(sealed.starts_with("v1:"));
         assert_eq!(
-            open_with_key(&key, &sealed).expect("open"),
+            open_with_key(&key, &sealed, b"").expect("open"),
             "s3cret-パスワード"
         );
     }

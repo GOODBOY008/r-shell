@@ -380,7 +380,17 @@
       "hostKeyVerification": "Weryfikacja klucza hosta",
       "hostKeyVerificationDesc": "Weryfikuj klucze hostów SSH dla większego bezpieczeństwa",
       "allowPasswordSaving": "Zezwalaj na zapisywanie haseł lokalnie",
-      "allowPasswordSavingDesc": "Określa, czy okno połączenia oferuje zapisywanie danych logowania. Zapisane dane pozostają nietknięte i są zawsze szyfrowane AES-256-GCM."
+      "allowPasswordSavingDesc": "Pokazuje opcję zapisywania danych logowania w oknach połączenia i odblokowania klucza. Zapisane dane są szyfrowane algorytmem AES-256-GCM.",
+      "sshPassphrases": {
+        "title": "Zapisane hasła kluczy SSH",
+        "description": "Zarządzaj hasłami zapamiętanymi na tym urządzeniu. Usunięcie hasła dotyczy wszystkich połączeń korzystających z tego klucza.",
+        "empty": "Brak zapisanych haseł kluczy SSH.",
+        "loadFailed": "Nie udało się wczytać zapisanych haseł kluczy SSH.",
+        "unknownKey": "Nieznana ścieżka klucza",
+        "forget": "Usuń",
+        "forgetKey": "Usuń zapisane hasło klucza {{key}}",
+        "forgetFailed": "Nie udało się usunąć zapisanego hasła."
+      }
     },
     "interface": {
       "title": "Ustawienia interfejsu",
@@ -1897,11 +1907,14 @@
     },
     "unlock": {
       "title": "Odblokuj klucz prywatny SSH",
-      "description": "Hasło jest przechowywane tylko przez czas trwania tego połączenia i jego transferów.",
+      "description": "Domyślnie R-Shell przechowuje hasło na czas tego połączenia i powiązanych transferów.",
       "incorrect": "Hasło nie odblokowało klucza. Spróbuj ponownie lub pomiń klucz.",
       "passphrase": "Hasło klucza",
       "skip": "Pomiń ten klucz",
-      "submit": "Odblokuj"
+      "submit": "Odblokuj",
+      "remember": "Zapamiętaj hasło na tym urządzeniu",
+      "rememberHint": "Używaj hasła przy kolejnych połączeniach z tym kluczem. Zapisanymi hasłami możesz zarządzać w sekcji Ustawienia → Bezpieczeństwo.",
+      "saveFailed": "Połączono, ale R-Shell nie mógł zapisać hasła klucza na tym urządzeniu."
     },
     "diagnostic": {
       "homeUnavailable": "Nie można ustalić katalogu domowego użytkownika",

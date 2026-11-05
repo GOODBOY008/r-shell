@@ -51,14 +51,17 @@ export interface SshAuthRequired {
   attempt_id: string;
   endpoint: string;
   key_path: string;
+  key_digest?: string;
   reason: 'encrypted_key' | 'incorrect_passphrase';
 }
 
 export interface SshAuthReply {
   endpoint: string;
   key_path: string;
+  key_digest?: string;
   passphrase?: string;
   skip?: boolean;
+  remember?: boolean;
 }
 
 export interface SshIdentityRequest {

@@ -1,4 +1,5 @@
 pub mod auto_auth;
+pub(crate) mod passphrase_store;
 #[cfg(test)]
 mod ssh_import_e2e;
 

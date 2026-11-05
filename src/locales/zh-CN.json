@@ -378,7 +378,17 @@
       "hostKeyVerification": "主机密钥验证",
       "hostKeyVerificationDesc": "验证 SSH 主机密钥以增强安全性",
       "allowPasswordSaving": "允许在本地保存密码",
-      "allowPasswordSavingDesc": "控制连接对话框是否提供保存密码选项。已保存的凭据不受影响，始终以 AES-256-GCM 加密存储。"
+      "allowPasswordSavingDesc": "在连接和私钥解锁对话框中提供保存凭据的选项。已保存的凭据使用 AES-256-GCM 加密。",
+      "sshPassphrases": {
+        "title": "已保存的 SSH 私钥口令",
+        "description": "管理此设备上记住的口令。忘记口令会影响使用该私钥的所有连接。",
+        "empty": "尚未保存 SSH 私钥口令。",
+        "loadFailed": "无法加载已保存的 SSH 私钥口令。",
+        "unknownKey": "未知的私钥路径",
+        "forget": "忘记",
+        "forgetKey": "忘记 {{key}} 已保存的口令",
+        "forgetFailed": "无法忘记已保存的口令。"
+      }
     },
     "interface": {
       "title": "界面设置",
@@ -1842,11 +1852,14 @@
     },
     "unlock": {
       "title": "解锁 SSH 私钥",
-      "description": "口令仅在当前连接及其附属传输的生命周期内保留。",
+      "description": "默认情况下，R-Shell 仅为当前连接及其附属传输保留口令。",
       "incorrect": "口令未能解锁此私钥，请重试或跳过。",
       "passphrase": "私钥口令",
       "skip": "跳过此密钥",
-      "submit": "解锁"
+      "submit": "解锁",
+      "remember": "在此设备上记住口令",
+      "rememberHint": "使用此私钥的其他连接可复用口令。可在设置 → 安全中管理已保存的口令。",
+      "saveFailed": "已连接，但 R-Shell 无法在此设备上保存私钥口令。"
     },
     "diagnostic": {
       "homeUnavailable": "无法确定用户主目录",

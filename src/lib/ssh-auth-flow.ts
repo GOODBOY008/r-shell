@@ -2,12 +2,15 @@ import { invoke } from '@tauri-apps/api/core';
 import { requestHostKeyDecision, type HostKeyChangedInfo } from './host-key';
 import type { SshConnectRequest, SftpConnectRequest } from './ssh-connect-request';
 import type { SshAuthRequired, SshAuthReply, SshJumpHost } from './ssh-options';
+import i18n from './i18n';
+import { notify } from './notifications';
 
 export interface SshConnectResult {
   success: boolean;
   error?: string;
   host_key_changed?: HostKeyChangedInfo;
   auth_required?: SshAuthRequired;
+  passphrase_save_failed?: boolean;
   cancelled?: boolean;
 }
 export class SshConnectionError extends Error {
@@ -20,12 +23,13 @@ export interface ConnectInteraction {
   interactive?: boolean;
 }
 export const SSH_KEY_UNLOCK_EVENT = 'rshell-ssh-key-unlock';
+type KeyUnlockReply = Pick<SshAuthReply, 'passphrase' | 'skip' | 'remember'>;
 export interface KeyUnlockRequest {
   id: string;
   info: SshAuthRequired;
   signal: AbortSignal;
   claim: () => void;
-  resolve: (reply: Pick<SshAuthReply, 'passphrase' | 'skip'> | null) => void;
+  resolve: (reply: KeyUnlockReply | null) => void;
 }
 
 interface Attempt {
@@ -48,7 +52,7 @@ export function cancelSshConnect(connectionId: string): void {
 function askForKey(
   info: SshAuthRequired,
   signal: AbortSignal
-): Promise<Pick<SshAuthReply, 'passphrase' | 'skip'> | null> {
+): Promise<KeyUnlockReply | null> {
   return new Promise((resolve) => {
     let claimed = false;
     let settled = false;
@@ -119,6 +123,7 @@ export async function connectWithDecisions(
           );
         return cancelled;
       }
+      if (result.passphrase_save_failed) notify.warning(i18n.t('openSsh.unlock.saveFailed'));
       if (result.success || interaction.interactive === false) return result;
       if (result.host_key_changed) {
         const { host, port } = result.host_key_changed;
@@ -144,7 +149,12 @@ export async function connectWithDecisions(
           ...request.auth_responses.filter(
             (r) => r.endpoint !== info.endpoint || r.key_path !== info.key_path
           ),
-          { endpoint: info.endpoint, key_path: info.key_path, ...answer },
+          {
+            endpoint: info.endpoint,
+            key_path: info.key_path,
+            ...(info.key_digest && { key_digest: info.key_digest }),
+            ...answer,
+          },
         ],
       };
     }

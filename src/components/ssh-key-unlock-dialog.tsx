@@ -10,9 +10,11 @@ import {
   DialogFooter,
 } from './ui/dialog';
 import { Button } from './ui/button';
+import { Checkbox } from './ui/checkbox';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { SSH_KEY_UNLOCK_EVENT, type KeyUnlockRequest } from '@/lib/ssh-auth-flow';
+import { isPasswordSavingAllowed } from '@/lib/credential-crypto';
 
 function UnlockForm({
   request,
@@ -23,6 +25,8 @@ function UnlockForm({
 }) {
   const { t } = useTranslation();
   const [passphrase, setPassphrase] = useState('');
+  const [remember, setRemember] = useState(false);
+  const canRemember = Boolean(request.info.key_digest) && isPasswordSavingAllowed();
   return (
     <Dialog
       open
@@ -34,7 +38,7 @@ function UnlockForm({
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            finish({ passphrase });
+            finish({ passphrase, ...(canRemember && remember && { remember: true }) });
           }}
         >
           <DialogHeader>
@@ -63,6 +67,22 @@ function UnlockForm({
               value={passphrase}
               onChange={(e) => setPassphrase(e.target.value)}
             />
+            {canRemember && (
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="ssh-key-remember"
+                  aria-describedby="ssh-key-remember-hint"
+                  checked={remember}
+                  onCheckedChange={(checked) => setRemember(checked === true)}
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="ssh-key-remember">{t('openSsh.unlock.remember')}</Label>
+                  <p id="ssh-key-remember-hint" className="text-xs text-muted-foreground">
+                    {t('openSsh.unlock.rememberHint')}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => finish(null)}>

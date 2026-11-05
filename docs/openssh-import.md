@@ -94,13 +94,21 @@ Authentication deduplicates public identities, tries the appropriate agent
 signer, and falls back to permitted local keys if the agent is unavailable or
 refuses signing. Agent and file identities use the same RSA algorithm fallback,
 including legacy `ssh-rsa` servers. Encrypted OpenSSH and PEM keys return a structured
-`auth_required` result identifying the attempt, endpoint, key path, and reason.
+`auth_required` result identifying the attempt, endpoint, key path, key digest,
+and reason.
 The UI offers unlock, skip, and cancel. Wrong passphrases can be retried; skipping
 applies only to the requested endpoint and identity.
 
-Unlock replies remain in the current attempt/session and its associated
-transfers. They never enter saved connections, source snapshots, or JSON
-exports. Cancelling or superseding an attempt closes its dialog and prevents
+By default, unlock replies stay in the current attempt, session, and its
+transfers. Select **Remember passphrase on this device** to reuse a passphrase
+across connections and restarts. R-Shell saves it after the key decrypts and the
+connection succeeds. An SSH agent can still sign for the same key. R-Shell
+matches the saved passphrase to the exact key file contents, so replacing or
+re-encrypting the key requires a new unlock. Use **Settings → Security → Saved
+SSH key passphrases** to forget a passphrase for every connection using that key.
+The unlock dialog offers to remember it when local credential saving is enabled.
+
+Cancelling or superseding an attempt closes its dialog and prevents
 late replies from restarting it. The native pending slot remains reserved until
 cleanup finishes, including completion of native cancellation before the same
 connection ID is reused. Waiting for a busy connection map does not block
@@ -113,9 +121,10 @@ them; preparation has a separate bounded deadline. Automatic restore and
 reconnect leave a host requiring a decision pending; the explicit Connect
 action opens the unlock dialog.
 
-User-entered saved passwords and passphrases, including jump credentials, use
-the existing encrypted credential store. JSON exports strip nested secrets as
-well as top-level secrets.
+R-Shell encrypts remembered passphrases with its device-local credential master
+key and stores them separately from saved connections and source snapshots.
+Connection exports omit remembered passphrases and strip profile credentials,
+including nested jump credentials.
 
 ## Validation
 

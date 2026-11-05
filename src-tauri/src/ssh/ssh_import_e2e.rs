@@ -28,6 +28,7 @@ fn auth(name: &str, endpoint: &str) -> AuthMethod {
             attempt_id: "fixture-attempt".into(),
             endpoint: endpoint.into(),
             replies: vec![],
+            ..Default::default()
         },
     }
 }
@@ -284,7 +285,7 @@ async fn encrypted_keys_wrong_passphrase_skip_missing_key_and_hop_failure() {
         endpoint: "target".into(),
         key_path: key("target-locked"),
         passphrase: Some("wrong".into()),
-        skip: false,
+        ..Default::default()
     });
     let error = connect(&cfg).await.err().unwrap();
     assert_eq!(
@@ -306,7 +307,10 @@ async fn encrypted_keys_wrong_passphrase_skip_missing_key_and_hop_failure() {
     );
     SshClient::close_extra_sessions(sessions).await;
     client.disconnect().await.unwrap();
-    assert!(client.config.is_none(), "disconnect must discard unlock replies");
+    assert!(
+        client.config.is_none(),
+        "disconnect must discard unlock replies"
+    );
     let AuthMethod::AutoKey { options } = &mut cfg.auth_method else {
         unreachable!()
     };
@@ -320,6 +324,73 @@ async fn encrypted_keys_wrong_passphrase_skip_missing_key_and_hop_failure() {
         error.downcast_ref::<AuthRequired>().unwrap().endpoint,
         "jump 2"
     );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable Docker OpenSSH fixtures"]
+async fn remembered_passphrase_reconnects_with_the_same_key_file_contents() {
+    use super::passphrase_store::PassphraseAttempt;
+    use crate::ConnectionManager;
+
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("passphrases");
+    let mut cfg = config(2);
+    cfg.auth_method = auth("target-locked", "target");
+    let locked = connect(&cfg).await.err().unwrap();
+    let challenge = locked.downcast_ref::<AuthRequired>().unwrap();
+    let attempt = PassphraseAttempt::for_test(vault.clone());
+    let AuthMethod::AutoKey { options } = &mut cfg.auth_method else {
+        unreachable!()
+    };
+    options.passphrases = Some(attempt.clone());
+    options.replies.push(AuthReply {
+        endpoint: challenge.endpoint.clone(),
+        key_path: challenge.key_path.clone(),
+        key_digest: Some(challenge.key_digest.clone()),
+        passphrase: Some("wrong".into()),
+        remember: true,
+        skip: false,
+    });
+    let error = connect(&cfg).await.err().unwrap();
+    assert_eq!(
+        error.downcast_ref::<AuthRequired>().unwrap().reason,
+        "incorrect_passphrase"
+    );
+    assert!(attempt.load(&challenge.key_digest).is_none());
+    assert!(!vault.exists());
+
+    let AuthMethod::AutoKey { options } = &mut cfg.auth_method else {
+        unreachable!()
+    };
+    options.replies[0].passphrase = Some("fixture-passphrase".into());
+    let mut first = connect(&cfg).await.unwrap();
+    first.disconnect().await.unwrap();
+    assert!(attempt.save().await);
+
+    let copy = dir.path().join("copied-key");
+    std::fs::copy(&challenge.key_path, &copy).unwrap();
+    let AuthMethod::AutoKey { options } = &mut cfg.auth_method else {
+        unreachable!()
+    };
+    options.endpoint = "different connection".into();
+    options.replies.clear();
+    options.passphrases = Some(PassphraseAttempt::for_test(vault.clone()));
+    options.identity_files = Some(vec![copy.to_string_lossy().into_owned()]);
+
+    let manager = ConnectionManager::new();
+    manager
+        .create_sftp_connection("remembered".into(), sftp_config(&cfg))
+        .await
+        .unwrap();
+    manager.close_sftp_connection("remembered").await.unwrap();
+
+    // Same private key with different file bytes must request consent again.
+    let text = std::fs::read_to_string(&copy).unwrap();
+    std::fs::write(&copy, text.replace('\n', "\r\n")).unwrap();
+    let changed = connect(&cfg).await.err().unwrap();
+    let changed = changed.downcast_ref::<AuthRequired>().unwrap();
+    assert_eq!(changed.reason, "encrypted_key");
+    assert_ne!(changed.key_digest, challenge.key_digest);
 }
 
 #[cfg(unix)]

@@ -1,4 +1,5 @@
 import type { SshJumpHost } from './ssh-options';
+import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcut-model';
 /**
  * Credential encryption for locally stored connection secrets.
  *
@@ -17,6 +18,19 @@ import type { SshJumpHost } from './ssh-options';
  * `credential_seal` Tauri command; `credential_open` reverses it).
  */
 import { invoke } from '@tauri-apps/api/core';
+
+/** Only an explicit false in Security settings disables saving new credentials. */
+export function isPasswordSavingAllowed(): boolean {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return true;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return true;
+    return (parsed as Record<string, unknown>).allowPasswordSaving !== false;
+  } catch {
+    return true;
+  }
+}
 
 /** Secret field names on a connection object that are encrypted at rest. */
 export const SECRET_FIELDS = [

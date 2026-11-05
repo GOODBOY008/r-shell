@@ -68,6 +68,26 @@ describe('SSH unlock attempt lifecycle', () => {
     expect(dialog).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenCalledTimes(1);
   });
+  it('scopes the remember opt-in to the challenged key bytes', async () => {
+    const digest = 'a'.repeat(64);
+    const seen: unknown[] = [];
+    invoke.mockImplementation(async (_command, { request: req }) => {
+      seen.push(structuredClone(req));
+      const result = challenge(req);
+      return seen.length === 1
+        ? { ...result, auth_required: { ...result.auth_required, key_digest: digest } }
+        : { success: true };
+    });
+    onUnlock((req) => req.resolve({ passphrase: 'valid', remember: true }));
+    await connectWithDecisions('ssh_connect', request());
+    expect(seen[0]).toMatchObject({ auth_responses: [] });
+    expect(seen[1]).toMatchObject({
+      auth_responses: [{
+        endpoint: 'target user@host:22', key_path: '/key', key_digest: digest,
+        passphrase: 'valid', remember: true,
+      }],
+    });
+  });
   it('sends skip only for the requested endpoint and key', async () => {
     const seen: unknown[] = [];
     invoke.mockImplementation(async (_command, { request: req }) => {

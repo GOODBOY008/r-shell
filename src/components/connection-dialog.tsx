@@ -18,7 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
-import { SECRET_FIELDS, CONNECT_SECRET_FIELDS, isSealed, sealSecret, openSecret, openConnectionSecrets, sealJumpHosts, type SecretField } from '../lib/credential-crypto';
+import { SECRET_FIELDS, CONNECT_SECRET_FIELDS, isSealed, sealSecret, openSecret, openConnectionSecrets, sealJumpHosts, isPasswordSavingAllowed, type SecretField } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
@@ -189,25 +189,6 @@ const EMPTY_STORED_SECRETS: StoredSecrets = {
   tunnelPassphrase: '',
   sudoPassword: '',
 };
-
-/**
- * Password-saving master switch from Settings. Only an explicit `false`
- * disables saving — a missing key or unparsable settings keep the current
- * behaviour (saving allowed). Uses the `allowPasswordSaving` key (not the
- * legacy dead `savePasswords` field) since stale `false` values written by
- * the old dead switch must never flip the gate off for existing users.
- */
-function isPasswordSavingAllowed(): boolean {
-  try {
-    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
-    if (!raw) return true;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return true;
-    return (parsed as Record<string, unknown>).allowPasswordSaving !== false;
-  } catch {
-    return true;
-  }
-}
 
 /**
  * Default protocol for NEW connections, from the Settings "Default Protocol"

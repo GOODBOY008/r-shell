@@ -378,7 +378,17 @@
       "hostKeyVerification": "Host Key Verification",
       "hostKeyVerificationDesc": "Verify SSH host keys for enhanced security",
       "allowPasswordSaving": "Allow saving passwords locally",
-      "allowPasswordSavingDesc": "Controls whether the connection dialog offers to save credentials. Already-saved credentials are unaffected and always stored AES-256-GCM encrypted."
+      "allowPasswordSavingDesc": "Offer to save credentials in the connection and key unlock dialogs. Saved credentials are encrypted with AES-256-GCM.",
+      "sshPassphrases": {
+        "title": "Saved SSH key passphrases",
+        "description": "Manage passphrases remembered on this device. Forgetting a passphrase applies to every connection that uses that key.",
+        "empty": "No SSH key passphrases saved.",
+        "loadFailed": "Could not load saved SSH key passphrases.",
+        "unknownKey": "Unknown key path",
+        "forget": "Forget",
+        "forgetKey": "Forget saved passphrase for {{key}}",
+        "forgetFailed": "Could not forget the saved passphrase."
+      }
     },
     "interface": {
       "title": "Interface Settings",
@@ -1845,11 +1855,14 @@
     },
     "unlock": {
       "title": "Unlock SSH private key",
-      "description": "The passphrase is kept only for this connection and its transfers.",
+      "description": "By default, R-Shell keeps the passphrase for this connection and its transfers.",
       "incorrect": "The passphrase did not unlock this key. Try again or skip it.",
       "passphrase": "Key passphrase",
       "skip": "Skip this key",
-      "submit": "Unlock"
+      "submit": "Unlock",
+      "remember": "Remember passphrase on this device",
+      "rememberHint": "Reuse the passphrase for this key across connections. Manage saved passphrases in Settings → Security.",
+      "saveFailed": "Connected, but R-Shell could not save the key passphrase on this device."
     },
     "diagnostic": {
       "homeUnavailable": "Cannot determine the user's home directory",

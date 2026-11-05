@@ -1,3 +1,4 @@
+use super::passphrase_store::PassphraseAttempt;
 use super::{client, offer_key, public_key_hash_algorithms, Client};
 use anyhow::{anyhow, Result};
 use russh::keys::agent::{
@@ -7,6 +8,7 @@ use russh::keys::agent::{
 use russh::keys::{decode_secret_key, HashAlg, PrivateKey, PublicKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fmt::Write;
 use std::time::Duration;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -16,6 +18,9 @@ pub struct AuthReply {
     pub passphrase: Option<String>,
     #[serde(default)]
     pub skip: bool,
+    pub key_digest: Option<String>,
+    #[serde(default)]
+    pub remember: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -30,6 +35,8 @@ pub struct AutoKeyOptions {
     pub endpoint: String,
     #[serde(default)]
     pub replies: Vec<AuthReply>,
+    #[serde(skip)]
+    pub(crate) passphrases: Option<PassphraseAttempt>,
 }
 
 impl std::fmt::Debug for AutoKeyOptions {
@@ -48,6 +55,7 @@ pub struct AuthRequired {
     pub attempt_id: String,
     pub endpoint: String,
     pub key_path: String,
+    pub key_digest: String,
     pub reason: &'static str,
 }
 
@@ -87,6 +95,14 @@ fn fingerprint(key: &PublicKey) -> String {
     key.fingerprint(HashAlg::Sha256).to_string()
 }
 
+fn key_digest(text: &str) -> String {
+    let mut digest = String::with_capacity(64);
+    for byte in openssl::sha::sha256(text.as_bytes()) {
+        write!(digest, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    digest
+}
+
 struct FileIdentity {
     path: String,
     public: Option<PublicKey>,
@@ -94,25 +110,65 @@ struct FileIdentity {
     locked: bool,
     wrong_passphrase: bool,
     skipped: bool,
+    digest: String,
+    encrypted_text: Option<String>,
+}
+
+fn decode_identity(
+    text: &str,
+    passphrase: Option<&str>,
+    locked: bool,
+) -> Result<PrivateKey, russh::keys::Error> {
+    decode_secret_key(text, passphrase).or_else(|original_error| {
+        // russh's legacy PEM reader only decrypts AES-128-CBC. Use
+        // OpenSSL for other PEM ciphers, converting to PKCS#8 in memory.
+        if text.contains("BEGIN OPENSSH PRIVATE KEY") || !text.contains("-----BEGIN") {
+            return Err(original_error);
+        }
+        let pem = if let Some(passphrase) = passphrase {
+            openssl::pkey::PKey::private_key_from_pem_passphrase(
+                text.as_bytes(),
+                passphrase.as_bytes(),
+            )
+        } else if !locked {
+            openssl::pkey::PKey::private_key_from_pem(text.as_bytes())
+        } else {
+            return Err(original_error);
+        };
+        match pem.and_then(|key| key.private_key_to_pem_pkcs8()) {
+            Ok(bytes) => decode_secret_key(&String::from_utf8_lossy(&bytes), None),
+            Err(_) => Err(original_error),
+        }
+    })
 }
 
 fn read_identity(path: &str, options: &AutoKeyOptions, errors: &mut Vec<String>) -> FileIdentity {
-    let reply = options
+    let mut replies = options
         .replies
         .iter()
         .rev()
-        .find(|r| r.endpoint == options.endpoint && r.key_path == path);
+        .filter(|r| r.endpoint == options.endpoint && r.key_path == path)
+        .peekable();
     let mut identity = FileIdentity {
         path: path.into(),
         public: None,
         private: None,
         locked: false,
         wrong_passphrase: false,
-        skipped: reply.is_some_and(|r| r.skip),
+        skipped: replies.peek().is_some_and(|r| r.skip),
+        digest: String::new(),
+        encrypted_text: None,
     };
     // A public-only IdentityFile is useful when the private part lives solely
     // in an agent. Encrypted OpenSSH files also expose their public key.
     if let Ok(text) = std::fs::read_to_string(path) {
+        // Hash the original file bytes, before normalizing line endings.
+        identity.digest = key_digest(&text);
+        let reply = replies.find(|r| {
+            r.key_digest
+                .as_ref()
+                .is_none_or(|digest| digest == &identity.digest)
+        });
         let text = text.replace("\r\n", "\n");
         identity.locked =
             text.contains("BEGIN ENCRYPTED PRIVATE KEY") || text.contains("Proc-Type: 4,ENCRYPTED");
@@ -126,30 +182,18 @@ fn read_identity(path: &str, options: &AutoKeyOptions, errors: &mut Vec<String>)
         }
         if !identity.skipped {
             let passphrase = reply.and_then(|r| r.passphrase.as_deref());
-            let decoded = decode_secret_key(&text, passphrase).or_else(|original_error| {
-                // russh's legacy PEM reader only decrypts AES-128-CBC. Use
-                // the existing OpenSSL dependency for other PEM ciphers and
-                // convert the result to unencrypted PKCS#8 in memory only.
-                if text.contains("BEGIN OPENSSH PRIVATE KEY") || !text.contains("-----BEGIN") {
-                    return Err(original_error);
-                }
-                let pem = if let Some(passphrase) = passphrase {
-                    openssl::pkey::PKey::private_key_from_pem_passphrase(
-                        text.as_bytes(),
-                        passphrase.as_bytes(),
-                    )
-                } else if !identity.locked {
-                    openssl::pkey::PKey::private_key_from_pem(text.as_bytes())
-                } else {
-                    return Err(original_error);
-                };
-                match pem.and_then(|key| key.private_key_to_pem_pkcs8()) {
-                    Ok(bytes) => decode_secret_key(&String::from_utf8_lossy(&bytes), None),
-                    Err(_) => Err(original_error),
-                }
-            });
-            match decoded {
+            match decode_identity(&text, passphrase, identity.locked) {
                 Ok(key) => {
+                    if identity.locked
+                        && reply.is_some_and(|r| {
+                            r.remember && r.key_digest.as_ref() == Some(&identity.digest)
+                        })
+                    {
+                        if let (Some(store), Some(passphrase)) = (&options.passphrases, passphrase)
+                        {
+                            store.stage(&identity.digest, path, passphrase);
+                        }
+                    }
                     identity.public = Some(key.public_key().clone());
                     identity.private = Some(key);
                     identity.locked = false;
@@ -158,8 +202,10 @@ fn read_identity(path: &str, options: &AutoKeyOptions, errors: &mut Vec<String>)
                     let message = e.to_string().to_lowercase();
                     identity.locked |=
                         message.contains("encrypted") || message.contains("passphrase");
-                    identity.wrong_passphrase =
-                        identity.locked && reply.and_then(|r| r.passphrase.as_ref()).is_some();
+                    identity.wrong_passphrase = identity.locked && passphrase.is_some();
+                    if identity.locked && passphrase.is_none() {
+                        identity.encrypted_text = Some(text);
+                    }
                     if !identity.locked {
                         errors.push(format!("{path}: {e}"));
                     }
@@ -175,6 +221,28 @@ fn read_identity(path: &str, options: &AutoKeyOptions, errors: &mut Vec<String>)
             .and_then(|s| PublicKey::from_openssh(&s).ok());
     }
     identity
+}
+
+impl FileIdentity {
+    async fn try_saved_passphrase(&mut self, passphrases: Option<&PassphraseAttempt>) {
+        let (Some(text), Some(passphrases)) = (self.encrypted_text.take(), passphrases) else {
+            return;
+        };
+        let passphrases = passphrases.clone();
+        let digest = self.digest.clone();
+        // Keychain access and key decryption are blocking. A timed-out
+        // connection can drop this read without leaving any pending write.
+        let unlocked = tokio::task::spawn_blocking(move || {
+            let passphrase = passphrases.load(&digest)?;
+            decode_identity(&text, Some(&passphrase), true).ok()
+        })
+        .await;
+        if let Ok(Some(key)) = unlocked {
+            self.locked = false;
+            self.public = Some(key.public_key().clone());
+            self.private = Some(key);
+        }
+    }
 }
 
 async fn offer_agent_key(
@@ -212,7 +280,7 @@ pub(super) async fn authenticate(
     });
     let mut errors = Vec::new();
     let mut unique_paths = HashSet::new();
-    let files: Vec<_> = paths
+    let mut files: Vec<_> = paths
         .iter()
         .map(|p| crate::os_keypath::expand_tilde(p))
         .filter(|p| !p.is_empty() && unique_paths.insert(p.clone()))
@@ -271,7 +339,7 @@ pub(super) async fn authenticate(
     }
     // Explicit/default identities go first, using their agent signer when
     // available. Unrelated agent identities never bypass IdentitiesOnly.
-    for file in &files {
+    for file in &mut files {
         if file.skipped {
             continue;
         }
@@ -293,13 +361,17 @@ pub(super) async fn authenticate(
                     }
                 }
             }
-            if !attempted.contains(&id) {
-                if let Some(key) = &file.private {
-                    attempted.insert(id);
-                    if offer_key(session, username, key.clone(), &file.path).await? {
-                        return Ok(());
-                    }
-                }
+            if attempted.contains(&id) {
+                continue;
+            }
+        }
+        file.try_saved_passphrase(options.passphrases.as_ref())
+            .await;
+        if let Some(key) = file.private.take() {
+            if attempted.insert(fingerprint(key.public_key()))
+                && offer_key(session, username, key, &file.path).await?
+            {
+                return Ok(());
             }
         }
     }
@@ -330,6 +402,7 @@ pub(super) async fn authenticate(
                 attempt_id: options.attempt_id.clone(),
                 endpoint: options.endpoint.clone(),
                 key_path: file.path.clone(),
+                key_digest: file.digest.clone(),
                 reason: if file.wrong_passphrase {
                     "incorrect_passphrase"
                 } else {
@@ -373,7 +446,7 @@ mod tests {
             endpoint: "target".into(),
             key_path: path.clone(),
             passphrase: Some("wrong".into()),
-            skip: false,
+            ..Default::default()
         });
         assert!(read_identity(&path, &options, &mut errors).wrong_passphrase);
         options.replies[0].passphrase = Some("fixture-passphrase".into());
@@ -397,6 +470,7 @@ mod tests {
                 key_path: path.into(),
                 skip: true,
                 passphrase: None,
+                ..Default::default()
             }],
             ..Default::default()
         };
