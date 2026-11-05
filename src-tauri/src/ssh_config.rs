@@ -626,9 +626,12 @@ impl Parser {
             ("identitiesonly", &mut endpoint.identities_only),
         ] {
             if let Some(n) = values.get(key) {
-                match n.args.first().map(String::as_str) {
+                let value = n.args.first().map(|value| value.to_ascii_lowercase());
+                match value.as_deref() {
                     Some("yes") => *target = true,
                     Some("no") => *target = false,
+                    Some("true") if key == "identitiesonly" => *target = true,
+                    Some("false") if key == "identitiesonly" => *target = false,
                     _ => diagnostics.push(n.diagnostic("error", Reason::ExpectedBoolean)),
                 }
             }
@@ -1233,6 +1236,51 @@ mod tests {
             dev.identity_files.as_ref().unwrap()[0],
             home.path().join(".ssh/key one").to_str().unwrap()
         );
+    }
+
+    #[test]
+    fn boolean_defaults_accept_openssh_case_and_identity_synonyms() {
+        for (compression, identities, expected) in [
+            ("YES", "Yes", true),
+            ("No", "nO", false),
+            ("yes", "TrUe", true),
+            ("no", "FaLsE", false),
+        ] {
+            let (home, p) = fixture(&format!(
+                "Host first second\nHost *\nCompression {compression}\nIdentitiesOnly {identities}\n"
+            ));
+            assert_eq!(p.entries.len(), 2);
+            for entry in &p.entries {
+                assert!(entry.importable, "{:?}", entry.diagnostics);
+                assert_eq!(entry.config.endpoint.compression, expected);
+                assert_eq!(entry.config.endpoint.identities_only, expected);
+            }
+            if let Ok(output) = std::process::Command::new("ssh")
+                .args(["-G", "-F"])
+                .arg(home.path().join(".ssh/config"))
+                .arg("first")
+                .output()
+            {
+                assert!(output.status.success());
+                let text = String::from_utf8(output.stdout).unwrap();
+                let value = if expected { "yes" } else { "no" };
+                for option in ["compression", "identitiesonly"] {
+                    assert!(text.lines().any(|line| line == format!("{option} {value}")));
+                }
+            }
+        }
+
+        let (_, p) = fixture("Host explicit\nCompression No\nIdentitiesOnly FALSE\nHost implicit\nHost *\nCompression YES\nIdentitiesOnly Yes\n");
+        assert!(p.entries.iter().all(|entry| entry.importable));
+        assert!(!p.entries[0].config.endpoint.compression);
+        assert!(!p.entries[0].config.endpoint.identities_only);
+        assert!(p.entries[1].config.endpoint.compression);
+        assert!(p.entries[1].config.endpoint.identities_only);
+
+        for invalid in ["Compression ON", "Compression True", "IdentitiesOnly 1"] {
+            let (_, p) = fixture(&format!("Host invalid\n{invalid}\n"));
+            assert!(!p.entries[0].importable);
+        }
     }
     #[test]
     fn includes_are_ordered_scoped_and_cycles_are_reported() {
