@@ -183,7 +183,6 @@
       "tunnelPassword": "Enter tunnel password",
       "tunnelKeyPath": "~/.ssh/id_ed25519",
       "tunnelPassphrase": "Enter passphrase if key is encrypted",
-      "savedPassword": "Leave blank to keep saved password",
       "sudoPassword": "Typed into the terminal on request",
       "notes": "Anything you want at hand for this host"
     },
@@ -277,7 +276,6 @@
       "enableDesc": "Forward the connection through a jump host (bastion) to reach the target."
     },
     "hint": {
-      "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it.",
       "sudoPassword": "Sent to the terminal via right-click → Type sudo password. Never shown back here."
     },
     "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored.",
@@ -286,6 +284,20 @@
       "enableDesc": "Forward remote X11 apps to your local X server. Trusted mode (-Y): the remote host only ever sees a per-session fake cookie — your real xauth cookie stays local",
       "displayOverride": "DISPLAY override",
       "displayPlaceholder": "Auto-detected if blank"
+    },
+    "storedSecret": {
+      "saved": "Saved and encrypted. The value is never shown.",
+      "change": "Change",
+      "changeNamed": "Change {{name}}",
+      "remove": "Remove",
+      "removeNamed": "Remove {{name}}",
+      "undo": "Undo",
+      "undoNamed": "Undo removing {{name}}",
+      "cancelNamed": "Cancel changing {{name}}",
+      "newValue": "Type the new value",
+      "replacing": "Replaces the saved value when you save. Cancel keeps the saved one.",
+      "replacingNotStored": "Password saving is turned off in Settings: the new value is not stored, and the saved one stays.",
+      "removing": "The saved value will be deleted when you save."
     }
   },
   "settings": {

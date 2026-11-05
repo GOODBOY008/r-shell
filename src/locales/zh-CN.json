@@ -183,7 +183,6 @@
       "tunnelPassword": "输入隧道密码",
       "tunnelKeyPath": "~/.ssh/id_ed25519",
       "tunnelPassphrase": "密钥加密时输入密码",
-      "savedPassword": "留空保持已保存的密码",
       "sudoPassword": "按需输入到终端",
       "notes": "此主机需要随手可用的信息"
     },
@@ -277,7 +276,6 @@
       "enableDesc": "通过跳板机（Bastion / Jump Host）转发到目标主机。"
     },
     "hint": {
-      "savedPasswordKept": "此连接已保存密码。留空保持不变，输入新密码即可替换。",
       "sudoPassword": "通过终端右键菜单“输入 sudo 密码”发送，此处不会再显示。"
     },
     "passwordSavingDisabledHint": "已在设置中关闭密码保存——连接可正常建立，但不会存储凭据。",
@@ -286,6 +284,20 @@
       "enableDesc": "将远程 X11 应用转发到本地 X 服务器。受信任模式（-Y）：远程主机只会收到每次会话的临时 cookie，真实的 xauth cookie 始终保留在本地",
       "displayOverride": "DISPLAY 覆盖",
       "displayPlaceholder": "留空则自动检测"
+    },
+    "storedSecret": {
+      "saved": "已保存并加密。该值永远不会显示。",
+      "change": "更改",
+      "changeNamed": "更改{{name}}",
+      "remove": "删除",
+      "removeNamed": "删除{{name}}",
+      "undo": "撤销",
+      "undoNamed": "撤销删除{{name}}",
+      "cancelNamed": "取消更改{{name}}",
+      "newValue": "输入新值",
+      "replacing": "保存后将替换已保存的值。取消则保留已保存的值。",
+      "replacingNotStored": "已在设置中关闭密码保存：新值不会被保存，已保存的值保持不变。",
+      "removing": "保存后将删除已保存的值。"
     }
   },
   "settings": {

@@ -185,7 +185,6 @@
       "tunnelPassword": "Wpisz hasło tunelu",
       "tunnelKeyPath": "~/.ssh/id_ed25519",
       "tunnelPassphrase": "Wpisz hasło, jeśli klucz jest zaszyfrowany",
-      "savedPassword": "Pozostaw puste, aby zachować zapisane hasło",
       "sudoPassword": "Wpisywane do terminala na żądanie",
       "notes": "Co chcesz mieć pod ręką dla tego hosta"
     },
@@ -279,7 +278,6 @@
       "enableDesc": "Przekieruj połączenie przez host pośredniczący (bastion), aby dotrzeć do celu."
     },
     "hint": {
-      "savedPasswordKept": "Dla tego połączenia zapisano hasło. Pozostaw pole puste, aby je zachować, albo wpisz nowe, aby je zastąpić.",
       "sudoPassword": "Wysyłane do terminala przez prawy przycisk → Wpisz hasło sudo. Nigdy nie jest tu pokazywane."
     },
     "passwordSavingDisabledHint": "Zapisywanie haseł jest wyłączone w ustawieniach — połączenie zadziała, ale dane logowania nie zostaną zapisane.",
@@ -288,6 +286,20 @@
       "enableDesc": "Przekieruj zdalne aplikacje X11 do lokalnego serwera X. Tryb zaufany (-Y): zdalny host widzi wyłącznie jednorazowe fałszywe ciasteczko sesji — prawdziwe ciasteczko xauth pozostaje lokalnie",
       "displayOverride": "Nadpisanie DISPLAY",
       "displayPlaceholder": "Automatycznie wykrywane, jeśli puste"
+    },
+    "storedSecret": {
+      "saved": "Zapisane i zaszyfrowane. Wartość nigdy nie jest pokazywana.",
+      "change": "Zmień",
+      "changeNamed": "Zmień: {{name}}",
+      "remove": "Usuń",
+      "removeNamed": "Usuń: {{name}}",
+      "undo": "Cofnij",
+      "undoNamed": "Cofnij usunięcie: {{name}}",
+      "cancelNamed": "Anuluj zmianę: {{name}}",
+      "newValue": "Wpisz nową wartość",
+      "replacing": "Zastąpi zapisaną wartość po zapisaniu. Anuluj zachowuje zapisaną.",
+      "replacingNotStored": "Zapisywanie haseł jest wyłączone w ustawieniach: nowa wartość nie zostanie zapisana, a zapisana pozostanie.",
+      "removing": "Zapisana wartość zostanie usunięta po zapisaniu."
     }
   },
   "settings": {

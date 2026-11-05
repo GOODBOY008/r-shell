@@ -121,7 +121,8 @@ describe('ConnectionDialog notes and sudo password', () => {
     expect(await screen.findByLabelText('Password')).toHaveValue('');
     const sudo = screen.getByLabelText('sudo password (optional)');
     expect(sudo).toHaveValue('');
-    expect(sudo).toHaveAttribute('placeholder', 'Leave blank to keep saved password');
+    expect(sudo).toHaveAttribute('readonly');
+    expect(sudo).toHaveAccessibleDescription(/Saved and encrypted/);
   });
 
   it('stores edited notes as typed and keeps a blank sudo password', async () => {
@@ -144,7 +145,8 @@ describe('ConnectionDialog notes and sudo password', () => {
 
     fireEvent.change(screen.getByLabelText('Notes'), { target: { value: '' } });
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
-    fireEvent.change(await screen.findByLabelText('sudo password (optional)'), { target: { value: 'new-sudo' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Change sudo password (optional)' }));
+    fireEvent.change(screen.getByLabelText('sudo password (optional)'), { target: { value: 'new-sudo' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());

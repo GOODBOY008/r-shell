@@ -6,11 +6,14 @@
  *   must send the decrypted retained credential — not an empty one.
  * - Secrets must be sealed as typed (no trimming): whitespace can be part of
  *   a credential.
+ * - A stored secret shows as a fixed mask with Change / Remove; Cancel keeps
+ *   it, Remove deletes it on save (also with password saving switched off).
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConnectionDialog } from '../components/connection-dialog';
 import { ConnectionStorageManager } from '../lib/connection-storage';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = () => {};
@@ -134,6 +137,7 @@ describe('ConnectionDialog stored-secret handling', () => {
 
     // Activate the Auth tab and type a password with surrounding whitespace.
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: '  padded  ' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -144,5 +148,77 @@ describe('ConnectionDialog stored-secret handling', () => {
     });
     const sealCall = mockInvoke.mock.calls.find(([cmd]) => cmd === 'credential_seal');
     expect((sealCall?.[1] as { secret: string }).secret).toBe('  padded  ');
+  });
+});
+
+describe('ConnectionDialog saved-secret controls', () => {
+  const sealCalls = () => mockInvoke.mock.calls.filter(([cmd]) => cmd === 'credential_seal');
+
+  function editAuthTab(onSave = vi.fn()) {
+    ConnectionStorageManager.saveConnectionWithId('conn-1', baseConnection);
+    renderDialog({ editingConnection: baseConnection, onSave });
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
+    return onSave;
+  }
+
+  it('shows a stored password as a fixed mask that cannot be typed into', () => {
+    editAuthTab();
+
+    const field = screen.getByLabelText('Password') as HTMLInputElement;
+    expect(field.readOnly).toBe(true);
+    expect(field.value).toBe('');
+    expect(screen.getByText('••••••••')).toBeTruthy();
+    expect(screen.getByText(/Saved and encrypted/)).toBeTruthy();
+    // Rendering the form never decrypts the stored value.
+    expect(mockInvoke.mock.calls.some(([cmd]) => cmd === 'credential_open')).toBe(false);
+  });
+
+  it('keeps the stored password when a change is cancelled', async () => {
+    const onSave = editAuthTab();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'typo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel changing Password' }));
+    expect((screen.getByLabelText('Password') as HTMLInputElement).readOnly).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('conn-1')?.password).toBe(sealedPassword);
+    expect(sealCalls()).toHaveLength(0);
+  });
+
+  it('deletes the stored password on save after Remove, and Undo takes it back', async () => {
+    const onSave = editAuthTab();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Password' }));
+    expect(screen.getByText(/will be deleted when you save/)).toBeTruthy();
+    // Keyboard focus follows the swapped-in control instead of dropping out.
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Undo removing Password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Undo removing Password' }));
+    expect(screen.getByText(/Saved and encrypted/)).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Change Password' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('conn-1')?.password).toBe('');
+  });
+
+  it('removes a stored password even with password saving turned off', async () => {
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ allowPasswordSaving: false }));
+    const onSave = editAuthTab();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('conn-1')?.password).toBe('');
+  });
+
+  it('says a replacement is not stored while password saving is off', () => {
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ allowPasswordSaving: false }));
+    editAuthTab();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Change Password' }));
+    expect(screen.getByText(/the new value is not stored/)).toBeTruthy();
   });
 });
