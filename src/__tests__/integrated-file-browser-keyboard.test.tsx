@@ -423,13 +423,18 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     // list_files returns 3 real entries; the component prepends a ".." row,
     // which sits at the top of the sorted list (index 0). Ctrl+A must exclude
     // it (the only path where the exclusion is actually exercised).
-    render(
-      <IntegratedFileBrowser
-        connectionId="conn-paren"
-        isConnected
-        onClose={() => {}}
-      />,
-    );
+    // Flush the resolved directory request and its passive keyboard-listener
+    // effect before dispatching a native document event. A visible row alone
+    // does not guarantee that the listener has the loaded files on slow CI.
+    await act(async () => {
+      render(
+        <IntegratedFileBrowser
+          connectionId="conn-paren"
+          isConnected
+          onClose={() => {}}
+        />,
+      );
+    });
 
     await screen.findByText('a.txt');
     fireEvent.keyDown(document.querySelector('[data-shortcut-scope="files"]')!, { key: 'a', ctrlKey: true });
