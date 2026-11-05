@@ -7,7 +7,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
 import { KeyPathInput } from './key-path-input';
-import { PasswordInput } from './ui/password-input';
+import { StoredSecretInput } from './stored-secret-input';
 import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
@@ -18,7 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
-import { SECRET_FIELDS, CONNECT_SECRET_FIELDS, sealSecret, openSecret, openConnectionSecrets, sealJumpHosts, type SecretField } from '../lib/credential-crypto';
+import { SECRET_FIELDS, CONNECT_SECRET_FIELDS, isSealed, sealSecret, openSecret, openConnectionSecrets, sealJumpHosts, type SecretField } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
@@ -133,17 +133,19 @@ function savedSecretsSource(config: ConnectionConfig): ConnectionConfig {
   // credentials from storage so saving the edit never replaces sealed values
   // with that transient plaintext (which persistence would correctly strip).
   const stored = config.id ? ConnectionStorageManager.getConnection(config.id) : undefined;
-  if (!stored) return config;
+  if (!stored) return { ...config };
   const source = { ...config };
-  for (const field of SECRET_FIELDS) source[field] = stored[field] ?? config[field];
+  for (const field of SECRET_FIELDS) {
+    source[field] = isSealed(config[field]) ? config[field] : (stored[field] ?? '');
+  }
   source.jumpHosts = config.jumpHosts?.map(hop => {
     const previous = stored.jumpHosts?.find(h =>
       h.host === hop.host && h.port === hop.port && h.username === hop.username,
     );
     return {
       ...hop,
-      password: previous?.password ?? hop.password,
-      passphrase: previous?.passphrase ?? hop.passphrase,
+      password: previous && !isSealed(hop.password) ? (previous.password ?? '') : hop.password,
+      passphrase: previous && !isSealed(hop.passphrase) ? (previous.passphrase ?? '') : hop.passphrase,
     };
   });
   return source;
@@ -296,6 +298,20 @@ export function ConnectionDialog({
   // blank form field on save resolves back to these — plaintext is never
   // echoed into the form.
   const [previousSecrets, setPreviousSecrets] = useState<StoredSecrets>(EMPTY_STORED_SECRETS);
+  // Stored secrets the user chose to delete; saving writes them as empty.
+  const [removedSecrets, setRemovedSecrets] = useState<SecretField[]>([]);
+  // What a blank field keeps: the stored secret, unless the user removed it.
+  const keptSecret = (field: SecretField) => (removedSecrets.includes(field) ? '' : previousSecrets[field]);
+  const previousJumpHosts = () => {
+    if (!editingConnection) return undefined;
+    const saved = savedSecretsSource(editingConnection);
+    // Removing a legacy tunnel secret also removes the retained value when
+    // that tunnel is converted to the ordered jump-host editor.
+    if (saved.jumpHosts === undefined) {
+      for (const field of removedSecrets) saved[field] = '';
+    }
+    return legacyJump(saved);
+  };
 
   // Track number input display values separately from config to allow
   // the field to be empty while editing — React controlled inputs need
@@ -370,7 +386,11 @@ export function ConnectionDialog({
       if (editingConnection) {
         const saved = savedSecretsSource(editingConnection);
         // Remember the stored (sealed) secrets so a blank field on save means
-        // "keep the stored one". The form itself never shows them.
+        // "keep the stored one". The form itself never shows them. A sealed
+        // value handed in is the stored one. For a stored connection anything
+        // else may be plaintext App decrypted for a failed connect (#283),
+        // which storage would strip on save, deleting the secret: take the
+        // sealed value from storage instead.
         setPreviousSecrets({
           password: saved.password ?? '',
           passphrase: saved.passphrase ?? '',
@@ -380,9 +400,10 @@ export function ConnectionDialog({
           tunnelPassphrase: saved.tunnelPassphrase ?? '',
           sudoPassword: saved.sudoPassword ?? '',
         });
+        setRemovedSecrets([]);
         const merged = mergeWithDefaults(defaultConfig, editingConnection);
-        // Stored secrets are never echoed back into the form: the fields stay
-        // empty with a hint below. Typing a new value replaces the stored one.
+        // Stored secrets are never echoed back into the form: the values stay
+        // empty and StoredSecretInput shows a fixed mask with Change / Remove.
         merged.password = '';
         merged.passphrase = '';
         merged.proxyPassword = '';
@@ -407,6 +428,7 @@ export function ConnectionDialog({
         // field on connection B would silently resolve to A's stored secrets.
         setConfig(defaultConfig);
         setPreviousSecrets(EMPTY_STORED_SECRETS);
+        setRemovedSecrets([]);
         setSaveAsConnection(true);
         syncDisplayValues(initialDisplayValues);
       }
@@ -414,8 +436,26 @@ export function ConnectionDialog({
       // Reset connection state when dialog closes
       resetConnectionState();
       setPreviousSecrets(EMPTY_STORED_SECRETS);
+      setRemovedSecrets([]);
     }
   }, [open, editingConnection, initialFolder]);
+
+  const secretInput = (field: SecretField, id: string, label: string, placeholder: string) => (
+    <StoredSecretInput
+      id={id}
+      label={label}
+      placeholder={placeholder}
+      value={config[field] ?? ''}
+      onChange={(value) => updateConfig({ [field]: value })}
+      saved={!!previousSecrets[field]}
+      encrypted={isSealed(previousSecrets[field])}
+      removed={removedSecrets.includes(field)}
+      onRemovedChange={(removed) =>
+        setRemovedSecrets((prev) => (removed ? [...prev, field] : prev.filter((f) => f !== field)))
+      }
+      savingDisabled={!isPasswordSavingAllowed()}
+    />
+  );
 
   const _handleSaveProfile = async () => {
     try {
@@ -479,10 +519,10 @@ export function ConnectionDialog({
 
   /**
    * UX contract for stored secrets: a saved password is NEVER shown back to
-   * the user. When editing a connection that has one, the field stays empty
-   * with a hint ("leave blank to keep the saved password"). An empty field on
-   * save therefore means "keep whatever is stored"; a typed value means
-   * "replace". Returns the secret values ready for persistence — already
+   * the user. When editing a connection that has one, the field shows a fixed
+   * mask with Change / Remove while its value stays empty. An empty value on
+   * save therefore means "keep whatever is stored" (unless removed); a typed
+   * value means "replace". Returns the secret values ready for persistence — already
    * encrypted (sealed) so plaintext never reaches localStorage.
    */
   const resolveSecretsForSave = async (): Promise<SavedSecrets> => {
@@ -493,9 +533,15 @@ export function ConnectionDialog({
     // is what "existing saved credentials are untouched" promises — an
     // empty string here would overwrite them in updateConnection's merge).
     // Typing a replacement secret while the switch is off does not persist
-    // it; turn the switch back on to update stored credentials.
+    // it; turn the switch back on to update stored credentials. Removing a
+    // stored secret stores nothing, so it is honoured either way.
     if (!isPasswordSavingAllowed()) {
-      return { ...previousSecrets, jumpHosts: await sealJumpHosts(config.jumpHosts, editingConnection ? legacyJump(savedSecretsSource(editingConnection)) : undefined, false) };
+      const kept = { ...previousSecrets };
+      for (const field of removedSecrets) kept[field] = '';
+      return {
+        ...kept,
+        jumpHosts: await sealJumpHosts(config.jumpHosts, previousJumpHosts(), false),
+      };
     }
     const result: Pick<ConnectionConfig, SecretField> = {
       password: '',
@@ -514,7 +560,7 @@ export function ConnectionDialog({
       const typed = config[field] ?? '';
       if (typed.length === 0) {
         // Field left blank → keep the previously stored (sealed) value.
-        result[field] = previousSecrets[field];
+        result[field] = keptSecret(field);
       } else {
         // User typed a new value → seal it for storage.
         try {
@@ -529,7 +575,7 @@ export function ConnectionDialog({
       ...result,
       jumpHosts: await sealJumpHosts(
         config.jumpHosts,
-        editingConnection ? legacyJump(savedSecretsSource(editingConnection)) : undefined,
+        previousJumpHosts(),
         true,
       ),
     };
@@ -586,14 +632,14 @@ export function ConnectionDialog({
       ...config,
       jumpHosts: retainedJumpSecrets(
         config.jumpHosts,
-        editingConnection ? legacyJump(savedSecretsSource(editingConnection)) : undefined,
+        previousJumpHosts(),
       ),
     };
     await openConnectionSecrets(connectConfig as unknown as Record<string, unknown>);
     for (const field of CONNECT_SECRET_FIELDS) {
-      if (connectConfig[field] === '' && previousSecrets[field]) {
+      if (connectConfig[field] === '' && keptSecret(field)) {
         try {
-          connectConfig[field] = await openSecret(previousSecrets[field]);
+          connectConfig[field] = await openSecret(keptSecret(field));
         } catch (error) {
           // Decrypt failed (keychain hiccup etc.) — leave blank; auth will
           // fail with a clear error rather than a wrong password.
@@ -1220,20 +1266,11 @@ const handleCancelConnectionAttempt = async () => {
                 {config.authMethod === 'password' && (
                   <div className="space-y-2">
                     <Label htmlFor="password">{t('connectionDialog.label.password')}</Label>
-                    <PasswordInput
-                      id="password"
-                      placeholder={
-                        previousSecrets.password
-                          ? t('connectionDialog.placeholder.savedPassword')
-                          : t('connectionDialog.placeholder.password')
-                      }
-                      value={config.password}
-                      onChange={(e) => updateConfig({ password: e.target.value })}
-                    />
-                    {previousSecrets.password && (
-                      <p className="text-xs text-muted-foreground">
-                        {t('connectionDialog.hint.savedPasswordKept')}
-                      </p>
+                    {secretInput(
+                      'password',
+                      'password',
+                      t('connectionDialog.label.password'),
+                      t('connectionDialog.placeholder.password'),
                     )}
                   </div>
                 )}
@@ -1254,12 +1291,12 @@ const handleCancelConnectionAttempt = async () => {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="passphrase">{t('connectionDialog.label.passphrase')}</Label>
-                      <PasswordInput
-                        id="passphrase"
-                        placeholder={t('connectionDialog.placeholder.passphrase')}
-                        value={config.passphrase}
-                        onChange={(e) => updateConfig({ passphrase: e.target.value })}
-                      />
+                      {secretInput(
+                        'passphrase',
+                        'passphrase',
+                        t('connectionDialog.label.passphrase'),
+                        t('connectionDialog.placeholder.passphrase'),
+                      )}
                     </div>
                   </div>
                 )}
@@ -1312,16 +1349,12 @@ const handleCancelConnectionAttempt = async () => {
                 {!['SFTP', 'FTP', 'RDP', 'VNC'].includes(config.protocol) && (
                   <div className="space-y-2">
                     <Label htmlFor="sudo-password">{t('connectionDialog.label.sudoPassword')}</Label>
-                    <PasswordInput
-                      id="sudo-password"
-                      placeholder={
-                        previousSecrets.sudoPassword
-                          ? t('connectionDialog.placeholder.savedPassword')
-                          : t('connectionDialog.placeholder.sudoPassword')
-                      }
-                      value={config.sudoPassword}
-                      onChange={(e) => updateConfig({ sudoPassword: e.target.value })}
-                    />
+                    {secretInput(
+                      'sudoPassword',
+                      'sudo-password',
+                      t('connectionDialog.label.sudoPassword'),
+                      t('connectionDialog.placeholder.sudoPassword'),
+                    )}
                     <p className="text-xs text-muted-foreground">{t('connectionDialog.hint.sudoPassword')}</p>
                   </div>
                 )}
@@ -1410,12 +1443,12 @@ const handleCancelConnectionAttempt = async () => {
                       </div>
                       <div className="space-y-2">
                         <Label htmlFor="proxy-password">{t('connectionDialog.label.proxyPassword')}</Label>
-                        <PasswordInput
-                          id="proxy-password"
-                          placeholder={t('connectionDialog.placeholder.proxyPassword')}
-                          value={config.proxyPassword}
-                          onChange={(e) => updateConfig({ proxyPassword: e.target.value })}
-                        />
+                        {secretInput(
+                          'proxyPassword',
+                          'proxy-password',
+                          t('connectionDialog.label.proxyPassword'),
+                          t('connectionDialog.placeholder.proxyPassword'),
+                        )}
                       </div>
                     </div>
                   </>
@@ -1538,16 +1571,11 @@ const handleCancelConnectionAttempt = async () => {
                         {config.tunnelAuthMethod === 'password' && (
                           <div className="space-y-2">
                             <Label htmlFor="tunnel-password">{t('connectionDialog.label.tunnelPassword')}</Label>
-                            <PasswordInput
-                              id="tunnel-password"
-                              placeholder={t('connectionDialog.placeholder.tunnelPassword')}
-                              value={config.tunnelPassword}
-                              onChange={(e) => updateConfig({ tunnelPassword: e.target.value })}
-                            />
-                            {previousSecrets.tunnelPassword && (
-                              <p className="text-xs text-muted-foreground">
-                                {t('connectionDialog.hint.savedPasswordKept')}
-                              </p>
+                            {secretInput(
+                              'tunnelPassword',
+                              'tunnel-password',
+                              t('connectionDialog.label.tunnelPassword'),
+                              t('connectionDialog.placeholder.tunnelPassword'),
                             )}
                           </div>
                         )}
@@ -1565,16 +1593,11 @@ const handleCancelConnectionAttempt = async () => {
                             </div>
                             <div className="space-y-2">
                               <Label htmlFor="tunnel-passphrase">{t('connectionDialog.label.tunnelPassphrase')}</Label>
-                              <PasswordInput
-                                id="tunnel-passphrase"
-                                placeholder={t('connectionDialog.placeholder.tunnelPassphrase')}
-                                value={config.tunnelPassphrase}
-                                onChange={(e) => updateConfig({ tunnelPassphrase: e.target.value })}
-                              />
-                              {previousSecrets.tunnelPassphrase && (
-                                <p className="text-xs text-muted-foreground">
-                                  {t('connectionDialog.hint.savedPasswordKept')}
-                                </p>
+                              {secretInput(
+                                'tunnelPassphrase',
+                                'tunnel-passphrase',
+                                t('connectionDialog.label.tunnelPassphrase'),
+                                t('connectionDialog.placeholder.tunnelPassphrase'),
                               )}
                             </div>
                           </>

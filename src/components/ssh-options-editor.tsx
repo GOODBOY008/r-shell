@@ -177,7 +177,7 @@ export function SshJumpHostsEditor({
           {hop.authMethod === 'password' && (
             <PasswordInput
               aria-label={t('connectionDialog.label.password')}
-              placeholder={t('connectionDialog.placeholder.savedPassword')}
+              placeholder={t('connectionDialog.placeholder.password')}
               value={hop.password ?? ''}
               onChange={(e) => update(index, { password: e.target.value })}
             />
@@ -191,7 +191,7 @@ export function SshJumpHostsEditor({
               />
               <PasswordInput
                 aria-label={t('connectionDialog.label.passphrase')}
-                placeholder={t('connectionDialog.placeholder.savedPassword')}
+                placeholder={t('connectionDialog.placeholder.passphrase')}
                 value={hop.passphrase ?? ''}
                 onChange={(e) => update(index, { passphrase: e.target.value })}
               />

@@ -219,7 +219,7 @@ describe('ConnectionDialog proxy persistence', () => {
     expect((screen.getByLabelText('Proxy Host') as HTMLInputElement).value).toBe('proxy.example.com');
     expect((screen.getByLabelText('Proxy Port') as HTMLInputElement).value).toBe('3128');
     expect((screen.getByLabelText('Proxy Username') as HTMLInputElement).value).toBe('proxyuser');
-    // The stored secret is NOT echoed — the field stays blank with a hint.
+    // The stored secret is NOT echoed — the value stays blank behind the mask.
     expect((screen.getByLabelText('Proxy Password') as HTMLInputElement).value).toBe('');
   });
 });

@@ -20,6 +20,7 @@ vi.mock('../lib/connection-storage', () => ({
   ConnectionStorageManager: {
     getConnection: vi.fn(() => undefined),
     getValidFolders: vi.fn(() => [{ path: 'All Connections' }]),
+    getConnection: vi.fn(() => undefined),
     updateConnection: vi.fn(() => null),
   },
 }));
