@@ -1,4 +1,4 @@
-use super::{client, offer_key, Client};
+use super::{client, offer_key, public_key_hash_algorithms, Client};
 use anyhow::{anyhow, Result};
 use russh::keys::agent::{
     client::{AgentClient, AgentStream},
@@ -177,6 +177,24 @@ fn read_identity(path: &str, options: &AutoKeyOptions, errors: &mut Vec<String>)
     identity
 }
 
+async fn offer_agent_key(
+    session: &mut client::Handle<Client>,
+    username: &str,
+    key: &PublicKey,
+    agent: &mut DynamicAgent,
+) -> Result<bool> {
+    for hash in public_key_hash_algorithms(key.algorithm()) {
+        if session
+            .authenticate_publickey_with(username, key.clone(), *hash, agent)
+            .await?
+            .success()
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub(super) async fn authenticate(
     session: &mut client::Handle<Client>,
     username: &str,
@@ -264,18 +282,10 @@ pub(super) async fn authenticate(
             }
             if agent_keys.iter().any(|key| fingerprint(key) == id) {
                 if let Some(a) = &mut agent {
-                    match session
-                        .authenticate_publickey_with(
-                            username,
-                            public.clone(),
-                            Some(HashAlg::Sha256),
-                            a,
-                        )
-                        .await
-                    {
-                        Ok(result) => {
+                    match offer_agent_key(session, username, public, a).await {
+                        Ok(accepted) => {
                             attempted.insert(id.clone());
-                            if result.success() {
+                            if accepted {
                                 return Ok(());
                             }
                         }
@@ -300,12 +310,9 @@ pub(super) async fn authenticate(
                 if !attempted.insert(id) {
                     continue;
                 }
-                match session
-                    .authenticate_publickey_with(username, key, Some(HashAlg::Sha256), a)
-                    .await
-                {
-                    Ok(result) if result.success() => return Ok(()),
-                    Ok(_) => {}
+                match offer_agent_key(session, username, &key, a).await {
+                    Ok(true) => return Ok(()),
+                    Ok(false) => {}
                     Err(e) => errors.push(format!("Agent signing failed: {e}")),
                 }
             }

@@ -1,5 +1,6 @@
 import type { ConnectionData } from './connection-storage';
 import type { OpenSshSnapshot, SshJumpHost } from './ssh-options';
+import type en from '@/locales/en.json';
 
 export class SshImportError extends Error {
   constructor(
@@ -15,12 +16,20 @@ export class SshImportError extends Error {
   }
 }
 
-export interface SshImportDiagnostic {
+export interface SshImportDiagnosticReason {
+  code: keyof typeof en.openSsh.diagnostic;
+  params?: Record<string, string | number>;
+}
+export function isSshImportDiagnosticReason(value: unknown): value is SshImportDiagnosticReason {
+  return (
+    typeof value === 'object' && value !== null && 'code' in value && typeof value.code === 'string'
+  );
+}
+export interface SshImportDiagnostic extends SshImportDiagnosticReason {
   severity: 'warning' | 'error';
   file: string;
   line: number;
   option: string;
-  message: string;
 }
 export interface SshImportEntry {
   alias: string;

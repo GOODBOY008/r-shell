@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 ssh-keygen -A
-for user in jumpone jumptwo target; do
+for user in jumpone jumptwo target legacyrsa; do
   mkdir -p "/home/$user/.ssh"
   cat "/keys/$user.pub" > "/home/$user/.ssh/authorized_keys"
   if [ "$user" = target ]; then cat /keys/target-locked.pub >> "/home/$user/.ssh/authorized_keys"; fi

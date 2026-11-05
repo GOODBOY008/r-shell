@@ -11,3 +11,8 @@ UseDNS no
 MaxAuthTries 20
 LogLevel VERBOSE
 Subsystem sftp internal-sftp
+
+# Restrict one fixture account to the legacy RSA signature algorithm to verify
+# that both local keys and Agent signers keep the existing fallback behavior.
+Match User legacyrsa
+    PubkeyAcceptedAlgorithms ssh-rsa

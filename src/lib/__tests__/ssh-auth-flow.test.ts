@@ -5,10 +5,12 @@ import {
   connectWithDecisions,
   cancelSshConnect,
   SSH_KEY_UNLOCK_EVENT,
+  sshRouteTimeoutMs,
   type KeyUnlockRequest,
   type SshConnectResult,
 } from '../ssh-auth-flow';
 import { buildSshConnectRequest } from '../ssh-connect-request';
+import { HOST_KEY_CHANGED_EVENT, type HostKeyDecisionRequest } from '../host-key';
 
 const request = (id = 'a') =>
   buildSshConnectRequest(id, { host: 'host', port: 22, username: 'user', authMethod: 'auto' });
@@ -140,5 +142,74 @@ describe('SSH unlock attempt lifecycle', () => {
     expect((await first).success).toBe(false);
     expect((await second).success).toBe(true);
     expect(order).toEqual(['ssh_connect', 'ssh_cancel_connect', 'ssh_disconnect', 'ssh_connect']);
+  });
+
+  it.each([
+    ['ssh_connect', 'unlock'],
+    ['ssh_connect', 'host-key'],
+    ['sftp_connect', 'unlock'],
+    ['sftp_connect', 'host-key'],
+  ] as const)('waits for delayed native cancellation of %s during %s decisions', async (command, decision) => {
+    let finishCancellation!: () => void;
+    let pending: KeyUnlockRequest | HostKeyDecisionRequest | undefined;
+    let connects = 0;
+    const order: string[] = [];
+    invoke.mockImplementation(async (name, args) => {
+      order.push(name);
+      if (name === 'ssh_cancel_connect') {
+        await new Promise<void>((resolve) => { finishCancellation = resolve; });
+        order.push('cancelled');
+      } else if (name === command && ++connects === 1) {
+        return decision === 'unlock' ? challenge(args.request) : {
+          success: false,
+          host_key_changed: { host: 'host', port: 22, fingerprint: 'key', line: 1, file: '/known_hosts' },
+        };
+      }
+      return { success: true };
+    });
+    if (decision === 'unlock') onUnlock((req) => { pending = req; });
+    else {
+      const listener = (event: Event) => {
+        pending = (event as CustomEvent<HostKeyDecisionRequest>).detail;
+        pending.claim();
+      };
+      window.addEventListener(HOST_KEY_CHANGED_EVENT, listener);
+      removers.push(() => window.removeEventListener(HOST_KEY_CHANGED_EVENT, listener));
+    }
+    const first = connectWithDecisions(command, request());
+    await vi.waitFor(() => expect(pending).toBeDefined());
+    const firstSettled = vi.fn();
+    void first.then(firstSettled);
+    const second = connectWithDecisions(command, request());
+    // Flush the aborted decision and predecessor cleanup while native cancel
+    // is deliberately still in flight.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(connects).toBe(1);
+    expect(firstSettled).not.toHaveBeenCalled();
+    finishCancellation();
+    await expect(first).resolves.toMatchObject({ cancelled: true });
+    await expect(second).resolves.toEqual({ success: true });
+    expect(order).toEqual([command, 'ssh_cancel_connect', 'cancelled', command]);
+  });
+});
+
+describe('unattended SSH route deadlines', () => {
+  it('allows the configured timeout for both target handshake and authentication', () => {
+    const timeout = sshRouteTimeoutMs({ connectTimeout: 60 }, 15_000);
+    expect(timeout).toBe(120_000);
+    expect(timeout).toBeGreaterThan(50_000 + 30_000);
+  });
+
+  it('includes each hop and keeps the minimum authentication budget', () => {
+    expect(sshRouteTimeoutMs({ connectTimeout: 5 }, 1_000)).toBe(15_000);
+    expect(sshRouteTimeoutMs({ connectTimeout: 60, jumpHosts: [
+      { host: 'one', port: 22, username: 'one', authMethod: 'auto', connectTimeout: 30 },
+      { host: 'two', port: 22, username: 'two', authMethod: 'auto' },
+    ] }, 15_000)).toBe(200_000);
+  });
+
+  it('preserves the application fallback when no target timeout is specified', () => {
+    expect(sshRouteTimeoutMs({}, 15_000)).toBe(15_000);
+    expect(sshRouteTimeoutMs({ connectTimeout: 5 }, 25_000)).toBe(25_000);
   });
 });

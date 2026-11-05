@@ -434,3 +434,51 @@ async fn agent_refusing_signature_falls_back_to_local_private_key() {
     assert_eq!(signed.load(Ordering::Relaxed), 1);
     server.abort();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+#[ignore = "requires local ssh-agent and disposable Docker OpenSSH fixtures"]
+async fn rsa_agent_keeps_legacy_algorithm_fallback() {
+    let mut cfg = config(0);
+    cfg.username = "legacyrsa".into();
+    cfg.auth_method = auth("legacyrsa", "target");
+    // This account only accepts ssh-rsa, not rsa-sha2-256. First establish
+    // that the local-key path can authenticate before loading the same key.
+    connect(&cfg).await.unwrap().disconnect().await.unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("agent.sock");
+    let _agent = AgentProcess(
+        std::process::Command::new("ssh-agent")
+            .args(["-D", "-a"])
+            .arg(&socket)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    for _ in 0..100 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(std::process::Command::new("ssh-add")
+        .env("SSH_AUTH_SOCK", &socket)
+        .arg(key("legacyrsa"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success());
+
+    for files in [vec![key("legacyrsa")], vec![key("legacyrsa.pub")], vec![]] {
+        let AuthMethod::AutoKey { options } = &mut cfg.auth_method else {
+            unreachable!()
+        };
+        options.identity_agent = Some(socket.to_string_lossy().into_owned());
+        options.identities_only = !files.is_empty();
+        options.identity_files = Some(files);
+        connect(&cfg).await.unwrap().disconnect().await.unwrap();
+    }
+}

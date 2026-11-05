@@ -794,13 +794,8 @@ async fn offer_key(
     key: PrivateKey,
     path: &str,
 ) -> Result<bool> {
-    let is_rsa = matches!(key.algorithm(), Algorithm::Rsa { .. });
+    let hashes = public_key_hash_algorithms(key.algorithm());
     let key = Arc::new(key);
-    let hashes: &[Option<HashAlg>] = if is_rsa {
-        &[Some(HashAlg::Sha256), None]
-    } else {
-        &[Some(HashAlg::Sha256)]
-    };
     for hash in hashes {
         let result = session
             .authenticate_publickey(username, PrivateKeyWithHashAlg::new(key.clone(), *hash))
@@ -813,6 +808,16 @@ async fn offer_key(
         }
     }
     Ok(false)
+}
+
+// Agent and file identities must offer the same algorithms before an identity
+// is considered rejected. Loading a key into an agent cannot remove fallback.
+fn public_key_hash_algorithms(algorithm: Algorithm) -> &'static [Option<HashAlg>] {
+    if matches!(algorithm, Algorithm::Rsa { .. }) {
+        &[Some(HashAlg::Sha256), None]
+    } else {
+        &[Some(HashAlg::Sha256)]
+    }
 }
 
 async fn authenticate(

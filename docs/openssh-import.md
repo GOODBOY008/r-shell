@@ -34,7 +34,9 @@ the user to select again before committing.
 ## Configuration semantics
 
 The Rust parser reads regular configuration files and reports filename, line,
-option, and reason for diagnostics. Preview does not start SSH, execute a shell,
+option, and reason for diagnostics. Diagnostic codes and interpolation values
+are translated into the selected application language, including source-wide
+and file-access errors. Preview does not start SSH, execute a shell,
 read private keys, or connect to a server. The selected source and its Includes
 are evaluated as a user configuration; `/etc/ssh/ssh_config` is not implicitly
 merged into it.
@@ -85,7 +87,8 @@ endpoint and is cleared after the attempt.
 
 Authentication deduplicates public identities, tries the appropriate agent
 signer, and falls back to permitted local keys if the agent is unavailable or
-refuses signing. Encrypted OpenSSH and PEM keys return a structured
+refuses signing. Agent and file identities use the same RSA algorithm fallback,
+including legacy `ssh-rsa` servers. Encrypted OpenSSH and PEM keys return a structured
 `auth_required` result identifying the attempt, endpoint, key path, and reason.
 The UI offers unlock, skip, and cancel. Wrong passphrases can be retried; skipping
 applies only to the requested endpoint and identity.
@@ -94,7 +97,9 @@ Unlock replies remain in the current attempt/session and its associated
 transfers. They never enter saved connections, source snapshots, or JSON
 exports. Cancelling or superseding an attempt closes its dialog and prevents
 late replies from restarting it. The native pending slot remains reserved until
-cleanup finishes. Automatic restore and reconnect leave a host requiring a
+cleanup finishes, including completion of native cancellation before the same
+connection ID is reused. Restore budgets include both dialing and authentication
+at the target's configured timeout. Automatic restore and reconnect leave a host requiring a
 decision pending; the explicit Connect action opens the unlock dialog.
 
 User-entered saved passwords and passphrases, including jump credentials, use
@@ -122,7 +127,8 @@ The integration script creates fixture keys and three isolated OpenSSH servers
 with different users and keys. It verifies direct, single-hop, and two-hop
 connections; terminal input and commands; SFTP; remote editing; parallel upload
 and download; per-hop host-key refusal; encrypted keys and skipped identities;
-agent identity restrictions, unavailable agents, and refused signatures. Tests
+agent identity restrictions, unavailable agents, refused signatures, and legacy
+RSA algorithm fallback with private-key and public-key-only identities. Tests
 use temporary known-hosts files, not personal credentials or host-key records.
 Containers, networks, and fixture keys are removed on exit. The Linux runner
 keeps reusable Cargo cache volumes named `rshell-import-linux-target` and
@@ -131,8 +137,9 @@ keeps reusable Cargo cache volumes named `rshell-import-linux-target` and
 Parser tests include controlled comparisons with `ssh -G` when OpenSSH is
 installed. Frontend tests cover merge conflicts, idempotence, metadata and
 credential preservation, corrupt storage, edit/copy behavior, cancellation,
-unattended challenges, and concurrent attempt isolation. English, Simplified
-Chinese, and Polish translations have matching keys. Browser interaction checks
+unattended challenges, delayed native cancellation, and concurrent attempt
+isolation. Diagnostic rendering is tested in English, Simplified Chinese, and
+Polish; all locales have matching keys. Browser interaction checks
 use mocked Tauri IPC; they do not replace native platform acceptance.
 
 Before release, verify the packaged Windows application with the Windows

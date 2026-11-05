@@ -17,6 +17,7 @@ for identity in jumpone jumptwo target; do
   ssh-keygen -q -t ed25519 -N '' -f "$fixture_dir/$identity"
 done
 ssh-keygen -q -t ed25519 -N 'fixture-passphrase' -f "$fixture_dir/target-locked"
+ssh-keygen -q -t rsa -b 2048 -N '' -f "$fixture_dir/legacyrsa"
 docker build -q -t rshell-ssh-import-test "$project_root/src-tauri/docker/ssh-import"
 docker network create "$fixture_name" >/dev/null
 for endpoint in one two target; do

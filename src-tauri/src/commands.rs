@@ -301,10 +301,12 @@ fn parse_host_key_policy(value: Option<&str>, accept_new_for: AcceptNewFor) -> H
 #[tauri::command]
 pub async fn preview_ssh_config_import(
     path: Option<String>,
-) -> Result<crate::ssh_config::ImportPreview, String> {
+) -> Result<crate::ssh_config::ImportPreview, crate::ssh_config::Reason> {
     tauri::async_runtime::spawn_blocking(move || crate::ssh_config::preview(path))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| crate::ssh_config::Reason::PreviewFailed {
+            detail: e.to_string(),
+        })?
 }
 
 #[tauri::command]

@@ -1,4 +1,6 @@
 //! Read-only OpenSSH import. This module never starts a process or opens a key.
+mod diagnostic;
+pub use diagnostic::DiagnosticReason as Reason;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::io::Read;
@@ -71,7 +73,8 @@ pub struct Diagnostic {
     pub file: String,
     pub line: usize,
     pub option: String,
-    pub message: String,
+    #[serde(flatten)]
+    pub reason: Reason,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,17 +101,17 @@ struct Directive {
     file: String,
     line: usize,
     include: Vec<Vec<Directive>>,
-    error: Option<String>,
+    error: Option<Reason>,
     deferred_include: bool,
 }
 impl Directive {
-    fn diagnostic(&self, severity: &'static str, message: impl Into<String>) -> Diagnostic {
+    fn diagnostic(&self, severity: &'static str, reason: Reason) -> Diagnostic {
         Diagnostic {
             severity,
             file: self.file.clone(),
             line: self.line,
             option: self.option.clone(),
-            message: message.into(),
+            reason,
         }
     }
 }
@@ -125,7 +128,7 @@ struct Parser {
 }
 
 /// OpenSSH tokenization, including quotes, escaped spaces and `Key=value`.
-fn tokenize(line: &str) -> Result<Vec<String>, String> {
+fn tokenize(line: &str) -> Result<Vec<String>, Reason> {
     let mut words = Vec::new();
     let mut word = String::new();
     let mut quote = None;
@@ -176,7 +179,7 @@ fn tokenize(line: &str) -> Result<Vec<String>, String> {
         }
     }
     if quote.is_some() {
-        return Err("Unterminated quoted value".into());
+        return Err(Reason::UnterminatedQuote);
     }
     if started {
         words.push(word);
@@ -225,16 +228,19 @@ fn host_matches(patterns: &[String], alias: &str) -> bool {
     positive
 }
 
-pub(crate) fn expand_env(value: &str) -> Result<String, String> {
+pub(crate) fn expand_env(value: &str) -> Result<String, Reason> {
     let mut result = String::new();
     let mut rest = value;
     while let Some(pos) = rest.find("${") {
         result.push_str(&rest[..pos]);
         let tail = &rest[pos + 2..];
-        let end = tail.find('}').ok_or("Unterminated environment variable")?;
+        let end = tail
+            .find('}')
+            .ok_or(Reason::UnterminatedEnvironmentVariable)?;
         let name = &tail[..end];
         result.push_str(
-            &std::env::var(name).map_err(|_| format!("Environment variable {name} is not set"))?,
+            &std::env::var(name)
+                .map_err(|_| Reason::MissingEnvironmentVariable { name: name.into() })?,
         );
         rest = &tail[end + 1..];
     }
@@ -243,10 +249,10 @@ pub(crate) fn expand_env(value: &str) -> Result<String, String> {
 }
 
 #[cfg(unix)]
-fn user_home(name: &str) -> Result<PathBuf, String> {
+fn user_home(name: &str) -> Result<PathBuf, Reason> {
     use std::ffi::{CStr, CString};
     use std::os::unix::ffi::OsStrExt;
-    let name = CString::new(name).map_err(|_| "Invalid local username")?;
+    let name = CString::new(name).map_err(|_| Reason::InvalidLocalUsername)?;
     let mut buffer = vec![0u8; 128 * 1024];
     let mut entry = std::mem::MaybeUninit::<libc::passwd>::uninit();
     let mut found = std::ptr::null_mut();
@@ -262,47 +268,47 @@ fn user_home(name: &str) -> Result<PathBuf, String> {
         )
     };
     if status != 0 || found.is_null() {
-        return Err("Cannot resolve the named user's home directory".into());
+        return Err(Reason::UnknownUserHome);
     }
     let home = unsafe { CStr::from_ptr((*found).pw_dir) };
     Ok(PathBuf::from(std::ffi::OsStr::from_bytes(home.to_bytes())))
 }
 
 #[cfg(windows)]
-fn user_home(_name: &str) -> Result<PathBuf, String> {
-    Err("Named-user home expansion requires a local account profile on this platform".into())
+fn user_home(_name: &str) -> Result<PathBuf, Reason> {
+    Err(Reason::NamedUserHomeUnsupported)
 }
 
-fn local_hostname() -> Result<String, String> {
+fn local_hostname() -> Result<String, Reason> {
     #[cfg(unix)]
     {
         let mut bytes = [0u8; 256];
         // gethostname only reads the local machine name; no DNS lookup.
         if unsafe { libc::gethostname(bytes.as_mut_ptr().cast(), bytes.len()) } != 0 {
-            return Err("Cannot determine the local hostname".into());
+            return Err(Reason::LocalHostnameUnavailable);
         }
         let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
         Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
     }
     #[cfg(windows)]
     {
-        std::env::var("COMPUTERNAME").map_err(|_| "Cannot determine the local hostname".into())
+        std::env::var("COMPUTERNAME").map_err(|_| Reason::LocalHostnameUnavailable)
     }
 }
 
-fn local_user_id() -> Result<String, String> {
+fn local_user_id() -> Result<String, Reason> {
     #[cfg(unix)]
     {
         Ok(unsafe { libc::getuid() }.to_string())
     }
     #[cfg(windows)]
     {
-        Err("The %i token is not supported on Windows".into())
+        Err(Reason::UserIdUnsupported)
     }
 }
 
 impl Parser {
-    fn path(&self, raw: &str, relative: &Path) -> Result<PathBuf, String> {
+    fn path(&self, raw: &str, relative: &Path) -> Result<PathBuf, Reason> {
         let value = expand_env(raw)?;
         let path = if value == "~" {
             self.home.clone()
@@ -329,35 +335,41 @@ impl Parser {
         })
     }
 
-    fn read(&mut self, path: &Path) -> Result<Vec<Directive>, String> {
+    fn read(&mut self, path: &Path) -> Result<Vec<Directive>, Reason> {
         let path = path
             .canonicalize()
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+            .map_err(|e| Reason::file_access(path, e))?;
         if self.stack.contains(&path) {
-            return Err(format!("Include cycle at {}", path.display()));
+            return Err(Reason::IncludeCycle {
+                path: path.to_string_lossy().into_owned(),
+            });
         }
         if let Some(nodes) = self.cache.get(&path) {
             return Ok(nodes.clone());
         }
         if self.stack.len() >= MAX_DEPTH {
-            return Err("Include nesting exceeds 16 files".into());
+            return Err(Reason::IncludeDepth { limit: MAX_DEPTH });
         }
-        let metadata = std::fs::metadata(&path).map_err(|e| e.to_string())?;
+        let metadata = std::fs::metadata(&path).map_err(|e| Reason::file_access(&path, e))?;
         if !metadata.is_file() {
-            return Err("SSH configuration must be a regular file".into());
+            return Err(Reason::NotRegularFile);
         }
         let size = metadata.len();
         if size > MAX_BYTES as u64 || self.bytes.saturating_add(size as usize) > MAX_BYTES {
-            return Err("SSH configuration exceeds 4 MiB".into());
+            return Err(Reason::SourceTooLarge {
+                limit: MAX_BYTES / (1024 * 1024),
+            });
         }
         let mut text = String::new();
         std::fs::File::open(&path)
-            .map_err(|e| e.to_string())?
+            .map_err(|e| Reason::file_access(&path, e))?
             .take((MAX_BYTES - self.bytes + 1) as u64)
             .read_to_string(&mut text)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Reason::file_access(&path, e))?;
         if self.bytes + text.len() > MAX_BYTES {
-            return Err("SSH configuration exceeds 4 MiB".into());
+            return Err(Reason::SourceTooLarge {
+                limit: MAX_BYTES / (1024 * 1024),
+            });
         }
         self.bytes += text.len();
         self.stack.push(path.clone());
@@ -381,14 +393,12 @@ impl Parser {
                 deferred_include: false,
             };
             if node.option == "match" {
-                self.fatal.push(node.diagnostic(
-                    "error",
-                    "Match blocks cannot be converted reliably; this source cannot be imported",
-                ));
+                self.fatal
+                    .push(node.diagnostic("error", Reason::MatchUnsupported));
             }
             if node.option == "include" {
                 if node.args.is_empty() {
-                    node.error = Some("Include requires a path".into());
+                    node.error = Some(Reason::IncludePathRequired);
                 }
                 // Host-dependent paths are expanded during evaluation, using
                 // only values obtained before this Include directive.
@@ -419,14 +429,10 @@ impl Parser {
                 }
             }
             if node.option == "syntax" || (node.option == "host" && node.args.is_empty()) {
-                self.fatal.push(
-                    node.diagnostic(
-                        "error",
-                        node.error
-                            .clone()
-                            .unwrap_or("Host requires a pattern".into()),
-                    ),
-                );
+                self.fatal.push(node.diagnostic(
+                    "error",
+                    node.error.clone().unwrap_or(Reason::HostPatternRequired),
+                ));
             }
             nodes.push(node);
         }
@@ -435,7 +441,7 @@ impl Parser {
         Ok(nodes)
     }
 
-    fn tokens(&self, raw: &str, alias: &str, endpoint: &SshEndpoint) -> Result<String, String> {
+    fn tokens(&self, raw: &str, alias: &str, endpoint: &SshEndpoint) -> Result<String, Reason> {
         self.tokens_with_jump(raw, alias, endpoint, "")
     }
 
@@ -445,7 +451,7 @@ impl Parser {
         alias: &str,
         endpoint: &SshEndpoint,
         jump: &str,
-    ) -> Result<String, String> {
+    ) -> Result<String, Reason> {
         let mut result = String::new();
         let mut chars = raw.chars();
         while let Some(c) = chars.next() {
@@ -487,7 +493,11 @@ impl Parser {
                         .map(|b| format!("{b:02x}"))
                         .collect()
                 }
-                other => return Err(format!("Unsupported SSH path token: %{other:?}")),
+                other => {
+                    return Err(Reason::UnsupportedToken {
+                        token: format!("%{}", other.map(|c| c.to_string()).unwrap_or_default()),
+                    })
+                }
             });
         }
         Ok(result)
@@ -499,12 +509,18 @@ impl Parser {
         alias: &str,
         endpoint: &SshEndpoint,
         jump: &str,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>, Reason> {
         let expanded = self.tokens_with_jump(raw, alias, endpoint, jump)?;
         let path = self.path(&expanded, &self.home.join(".ssh"))?;
         let mut paths = glob::glob(&path.to_string_lossy())
-            .map_err(|e| e.to_string())?
-            .map(|p| p.map_err(|e| e.to_string()))
+            .map_err(|e| Reason::InvalidIncludePattern {
+                detail: e.to_string(),
+            })?
+            .map(|p| {
+                p.map_err(|e| Reason::IncludePatternRead {
+                    detail: e.to_string(),
+                })
+            })
             .collect::<Result<Vec<_>, _>>()?;
         paths.sort();
         Ok(paths)
@@ -613,7 +629,7 @@ impl Parser {
                 match n.args.first().map(String::as_str) {
                     Some("yes") => *target = true,
                     Some("no") => *target = false,
-                    _ => diagnostics.push(n.diagnostic("error", "Expected yes or no")),
+                    _ => diagnostics.push(n.diagnostic("error", Reason::ExpectedBoolean)),
                 }
             }
         }
@@ -652,7 +668,7 @@ impl Parser {
                     _ => false,
                 };
                 if !valid {
-                    diagnostics.push(n.diagnostic("error", "Invalid numeric value"));
+                    diagnostics.push(n.diagnostic("error", Reason::InvalidNumber));
                 }
             }
         }
@@ -719,7 +735,7 @@ impl Parser {
         target: &SshEndpoint,
         alias: &str,
         stack: &mut Vec<String>,
-    ) -> Result<(Vec<SshEndpoint>, Vec<Diagnostic>), String> {
+    ) -> Result<(Vec<SshEndpoint>, Vec<Diagnostic>), Reason> {
         let raw = self.tokens(
             jump.args.first().map(String::as_str).unwrap_or(""),
             alias,
@@ -733,11 +749,11 @@ impl Parser {
         for (index, spec) in raw.split(',').enumerate() {
             let (name, user, port) = parse_jump(spec)?;
             if stack.iter().any(|s| s.eq_ignore_ascii_case(&name)) {
-                return Err(format!("ProxyJump cycle involving {name}"));
+                return Err(Reason::JumpCycle { host: name });
             }
             stack.push(name.clone());
             if stack.len() > MAX_JUMPS + 1 {
-                return Err("ProxyJump exceeds 8 hops".into());
+                return Err(Reason::TooManyJumps { limit: MAX_JUMPS });
             }
             let (endpoint, via, mut notes, _) = self.resolve(nodes, &name, user.as_deref(), port);
             diagnostics.append(&mut notes);
@@ -756,18 +772,18 @@ impl Parser {
                 && endpoint.port == target.port
                 && endpoint.username == target.username
             {
-                return Err("ProxyJump points back to the target".into());
+                return Err(Reason::JumpTargetsSelf);
             }
             if hops.iter().any(|h: &SshEndpoint| {
                 h.host.eq_ignore_ascii_case(&endpoint.host)
                     && h.port == endpoint.port
                     && h.username == endpoint.username
             }) {
-                return Err("ProxyJump repeats a hop".into());
+                return Err(Reason::JumpRepeated);
             }
             hops.push(endpoint);
             if hops.len() > MAX_JUMPS {
-                return Err("ProxyJump exceeds 8 hops".into());
+                return Err(Reason::TooManyJumps { limit: MAX_JUMPS });
             }
         }
         Ok((hops, diagnostics))
@@ -803,7 +819,7 @@ fn parse_seconds(value: &str) -> Option<u64> {
     }
 }
 
-fn parse_jump(spec: &str) -> Result<(String, Option<String>, Option<u16>), String> {
+fn parse_jump(spec: &str) -> Result<(String, Option<String>, Option<u16>), Reason> {
     let uri = spec.starts_with("ssh://");
     let spec = spec.strip_prefix("ssh://").unwrap_or(spec);
     let spec = if uri {
@@ -816,32 +832,32 @@ fn parse_jump(spec: &str) -> Result<(String, Option<String>, Option<u16>), Strin
         _ => (None, spec),
     };
     let (host, port) = if let Some(rest) = host.strip_prefix('[') {
-        let (h, suffix) = rest.split_once(']').ok_or("Invalid bracketed jump host")?;
+        let (h, suffix) = rest.split_once(']').ok_or(Reason::InvalidJumpBrackets)?;
         (
             h,
             if suffix.is_empty() {
                 None
             } else {
-                Some(suffix.strip_prefix(':').ok_or("Invalid jump port")?)
+                Some(suffix.strip_prefix(':').ok_or(Reason::InvalidJumpPort)?)
             },
         )
     } else if let Some((h, p)) = host.rsplit_once(':') {
         if h.contains(':') {
-            return Err("IPv6 jump addresses must be bracketed".into());
+            return Err(Reason::UnbracketedIpv6);
         }
         (h, Some(p))
     } else {
         (host, None)
     };
     if host.is_empty() || host.chars().any(|c| c.is_whitespace() || c == '/') {
-        return Err("Invalid ProxyJump host".into());
+        return Err(Reason::InvalidJumpHost);
     }
     let port = port
         .map(|p| {
             p.parse::<u16>()
                 .ok()
                 .filter(|p| *p > 0)
-                .ok_or("Invalid ProxyJump port".to_string())
+                .ok_or(Reason::InvalidJumpPort)
         })
         .transpose()?;
     let user = user
@@ -856,7 +872,7 @@ fn parse_jump(spec: &str) -> Result<(String, Option<String>, Option<u16>), Strin
     Ok((host.to_string(), user, port))
 }
 
-fn decode_uri_user(value: &str) -> Result<String, String> {
+fn decode_uri_user(value: &str) -> Result<String, Reason> {
     let mut bytes = Vec::new();
     let mut chars = value.bytes();
     while let Some(c) = chars.next() {
@@ -867,18 +883,18 @@ fn decode_uri_user(value: &str) -> Result<String, String> {
         let hi = chars
             .next()
             .and_then(|c| (c as char).to_digit(16))
-            .ok_or("Invalid ProxyJump URI escape")?;
+            .ok_or(Reason::InvalidJumpEscape)?;
         let lo = chars
             .next()
             .and_then(|c| (c as char).to_digit(16))
-            .ok_or("Invalid ProxyJump URI escape")?;
+            .ok_or(Reason::InvalidJumpEscape)?;
         let c = (hi * 16 + lo) as u8;
         if c == 0 {
-            return Err("Invalid ProxyJump username".into());
+            return Err(Reason::InvalidJumpUsername);
         }
         bytes.push(c);
     }
-    String::from_utf8(bytes).map_err(|_| "Invalid UTF-8 in ProxyJump username".into())
+    String::from_utf8(bytes).map_err(|_| Reason::InvalidJumpUsername)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -908,7 +924,7 @@ fn evaluate(
             continue;
         }
         if let Some(error) = &n.error {
-            diagnostics.push(n.diagnostic("error", error));
+            diagnostics.push(n.diagnostic("error", error.clone()));
             continue;
         }
         if n.option == "include" {
@@ -970,13 +986,13 @@ fn evaluate(
             continue;
         }
         if n.args.is_empty() {
-            diagnostics.push(n.diagnostic("error", "Missing option value"));
+            diagnostics.push(n.diagnostic("error", Reason::MissingValue));
             continue;
         }
         match n.option.as_str() {
             "identityfile" => {
                 if n.args.len() != 1 || n.args[0].is_empty() {
-                    diagnostics.push(n.diagnostic("error", "IdentityFile expects one path"));
+                    diagnostics.push(n.diagnostic("error", Reason::IdentityPathRequired));
                 } else {
                     identities.push(n.clone());
                 }
@@ -991,7 +1007,7 @@ fn evaluate(
             | "serveraliveinterval"
             | "serveralivecountmax" => {
                 if n.args.len() != 1 {
-                    diagnostics.push(n.diagnostic("error", "Expected one option value"));
+                    diagnostics.push(n.diagnostic("error", Reason::ExpectedSingleValue));
                 } else {
                     values.entry(n.option.clone()).or_insert_with(|| n.clone());
                 }
@@ -1027,12 +1043,9 @@ fn evaluate(
             | "ciphers"
             | "macs"
             | "bindaddress"
-            | "bindinterface" => diagnostics.push(n.diagnostic(
-                "error",
-                "This connection or authentication option cannot be converted",
-            )),
+            | "bindinterface" => diagnostics.push(n.diagnostic("error", Reason::UnsupportedOption)),
             "match" => {}
-            _ => diagnostics.push(n.diagnostic("warning", "This option is not imported")),
+            _ => diagnostics.push(n.diagnostic("warning", Reason::IgnoredOption)),
         }
     }
     // Diagnose the effective transport, not a shadowed ProxyCommand.
@@ -1040,7 +1053,7 @@ fn evaluate(
         if n.args.first().is_some_and(|s| s != "none")
             && !diagnostics.iter().any(|d| d.option == "proxycommand")
         {
-            diagnostics.push(n.diagnostic("error", "ProxyCommand is not supported"));
+            diagnostics.push(n.diagnostic("error", Reason::ProxyCommandUnsupported));
         }
     }
 }
@@ -1064,8 +1077,17 @@ fn evaluate_include(
         return;
     };
     let path = PathBuf::from(&first.file);
-    if stack.contains(&path) || stack.len() >= MAX_DEPTH {
-        diagnostics.push(source.diagnostic("error", "Include cycle or nesting exceeds 16 files"));
+    if stack.contains(&path) {
+        diagnostics.push(source.diagnostic(
+            "error",
+            Reason::IncludeCycle {
+                path: first.file.clone(),
+            },
+        ));
+        return;
+    }
+    if stack.len() >= MAX_DEPTH {
+        diagnostics.push(source.diagnostic("error", Reason::IncludeDepth { limit: MAX_DEPTH }));
         return;
     }
     aliases(nodes, &mut parser.discovered);
@@ -1101,11 +1123,11 @@ fn aliases(nodes: &[Directive], result: &mut BTreeSet<String>) {
     }
 }
 
-pub fn preview(path: Option<String>) -> Result<ImportPreview, String> {
-    let home = dirs::home_dir().ok_or("Cannot determine the user's home directory")?;
+pub fn preview(path: Option<String>) -> Result<ImportPreview, Reason> {
+    let home = dirs::home_dir().ok_or(Reason::HomeUnavailable)?;
     let username = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
-        .map_err(|_| "Cannot determine the local username")?;
+        .map_err(|_| Reason::UsernameUnavailable)?;
     preview_with_home(path, home, username)
 }
 
@@ -1113,10 +1135,12 @@ fn preview_with_home(
     path: Option<String>,
     home: PathBuf,
     username: String,
-) -> Result<ImportPreview, String> {
+) -> Result<ImportPreview, Reason> {
     let mut parser = Parser {
         home,
-        cwd: std::env::current_dir().map_err(|e| e.to_string())?,
+        cwd: std::env::current_dir().map_err(|e| Reason::CurrentDirectoryUnavailable {
+            detail: e.to_string(),
+        })?,
         username,
         bytes: 0,
         stack: vec![],
@@ -1127,7 +1151,7 @@ fn preview_with_home(
     let path = parser.path(path.as_deref().unwrap_or("~/.ssh/config"), &parser.cwd)?;
     let canonical = path
         .canonicalize()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
+        .map_err(|e| Reason::file_access(&path, e))?;
     let nodes = parser.read(&canonical)?;
     let mut names = BTreeSet::new();
     aliases(&nodes, &mut names);
@@ -1138,7 +1162,7 @@ fn preview_with_home(
             continue;
         }
         if processed.len() > 4096 {
-            return Err("SSH configuration exceeds 4096 aliases".into());
+            return Err(Reason::TooManyAliases { limit: 4096 });
         }
         let (endpoint, jump, mut diagnostics, explicit) =
             parser.resolve(&nodes, &alias, None, None);
@@ -1344,13 +1368,19 @@ mod tests {
             .endpoint;
         assert_eq!(prod.username, "included");
         assert_eq!(prod.port, 2200);
-        assert!(prod.identity_files.as_ref().unwrap()[0].ends_with("/first"));
+        assert_eq!(
+            Path::new(&prod.identity_files.as_ref().unwrap()[0]),
+            home.path().join("first")
+        );
         // Compare actual OpenSSH using absolute includes (ssh -G uses the real
         // user's home; the importer fixture deliberately uses a temporary one).
         let source = home.path().join(".ssh/config");
         let text = std::fs::read_to_string(&source).unwrap().replace(
             "parts/*.conf",
-            &format!("{}/.ssh/parts/*.conf", home.path().display()),
+            &format!(
+                "{}/.ssh/parts/*.conf",
+                home.path().to_string_lossy().replace('\\', "/")
+            ),
         );
         std::fs::write(&source, text).unwrap();
         if let Ok(output) = std::process::Command::new("ssh")
@@ -1361,8 +1391,8 @@ mod tests {
         {
             assert!(output.status.success());
             let text = String::from_utf8(output.stdout).unwrap();
-            assert!(text.contains("user included\n"));
-            assert!(text.contains("port 2200\n"));
+            assert!(text.lines().any(|line| line == "user included"));
+            assert!(text.lines().any(|line| line == "port 2200"));
         }
     }
 
@@ -1433,7 +1463,10 @@ mod tests {
         let prod = preview.entries.iter().find(|e| e.alias == "prod").unwrap();
         assert!(prod.importable, "{:?}", prod.diagnostics);
         assert_eq!(prod.config.endpoint.port, 2200);
-        assert!(prod.config.endpoint.identity_files.as_ref().unwrap()[0].ends_with("/prod-key"));
+        assert_eq!(
+            Path::new(&prod.config.endpoint.identity_files.as_ref().unwrap()[0]),
+            home.path().join("prod-key")
+        );
         let literal = preview
             .entries
             .iter()
@@ -1459,5 +1492,42 @@ mod tests {
         let preview = preview_with_home(None, home.path().into(), "local".into()).unwrap();
         assert!(preview.entries[0].importable);
         assert_eq!(preview.entries[0].config.endpoint.port, 2201);
+    }
+
+    #[test]
+    fn preview_diagnostics_serialize_codes_parameters_and_source_positions() {
+        let (_, preview) = fixture("Host bad\nIdentityFile %Q\nHost warning\nLocalCommand echo ignored\nHost loop\nProxyJump loop\n");
+        let json = serde_json::to_value(&preview).unwrap();
+        let bad = &json["entries"][0]["diagnostics"][0];
+        assert_eq!(bad["code"], "unsupportedToken");
+        assert_eq!(bad["params"]["token"], "%Q");
+        assert_eq!(bad["file"], json["sourcePath"]);
+        assert_eq!(bad["line"], 2);
+        assert_eq!(bad["option"], "identityfile");
+        assert!(bad.get("message").is_none());
+        let cycle = &json["entries"][1]["diagnostics"][0];
+        assert_eq!(cycle["code"], "jumpCycle");
+        assert_eq!(cycle["params"]["host"], "loop");
+        let warning = &json["entries"][2]["diagnostics"][0];
+        assert_eq!(warning["code"], "ignoredOption");
+        assert_eq!(warning["severity"], "warning");
+
+        let (_, preview) = fixture("Host all\nMatch exec ignored\n");
+        let json = serde_json::to_value(preview).unwrap();
+        assert_eq!(json["diagnostics"][0]["code"], "matchUnsupported");
+        assert_eq!(json["diagnostics"][0]["line"], 2);
+    }
+
+    #[test]
+    fn unreadable_source_returns_a_structured_error() {
+        let home = tempfile::tempdir().unwrap();
+        let error = preview_with_home(None, home.path().into(), "local".into()).unwrap_err();
+        let json = serde_json::to_value(error).unwrap();
+        assert_eq!(json["code"], "fileAccess");
+        assert_eq!(
+            Path::new(json["params"]["path"].as_str().unwrap()),
+            home.path().join(".ssh/config")
+        );
+        assert!(!json["params"]["detail"].as_str().unwrap().is_empty());
     }
 }

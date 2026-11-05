@@ -21,6 +21,7 @@ import { Badge } from './ui/badge';
 import { ConnectionStorageManager } from '@/lib/connection-storage';
 import {
   compareSshImport,
+  isSshImportDiagnosticReason,
   SshImportError,
   type SshImportPreview,
   type SshImportField,
@@ -29,6 +30,7 @@ import {
 import { notify } from '@/lib/notifications';
 
 function Diagnostics({ items }: { items: SshImportDiagnostic[] }) {
+  const { t } = useTranslation();
   return (
     <ul className="space-y-1 text-xs break-words">
       {items.map((d, i) => (
@@ -38,7 +40,7 @@ function Diagnostics({ items }: { items: SshImportDiagnostic[] }) {
             d.severity === 'error' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'
           }
         >
-          {d.file}:{d.line} · {d.option}: {d.message}
+          {d.file}:{d.line} · {d.option}: {t(`openSsh.diagnostic.${d.code}`, d.params ?? {})}
         </li>
       ))}
     </ul>
@@ -128,7 +130,13 @@ export function SshConfigImportDialog({
         )
       );
     } catch (e) {
-      if (version === generation.current) setError(String(e));
+      if (version === generation.current) {
+        setError(
+          isSshImportDiagnosticReason(e)
+            ? t(`openSsh.diagnostic.${e.code}`, e.params ?? {})
+            : String(e)
+        );
+      }
     } finally {
       if (version === generation.current) setBusy(false);
     }

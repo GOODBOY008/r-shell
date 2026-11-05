@@ -31,13 +31,18 @@ export interface KeyUnlockRequest {
 interface Attempt {
   controller: AbortController;
   finished: Promise<void>;
+  cancellation?: Promise<void>;
 }
 const attempts = new Map<string, Attempt>();
 export function cancelSshConnect(connectionId: string): void {
   const attempt = attempts.get(connectionId);
-  if (!attempt) return;
+  if (!attempt || attempt.controller.signal.aborted) return;
+  // Native cancellation is keyed by connection ID. Keep it inside this
+  // attempt's cleanup barrier so it cannot cancel a replacement attempt.
+  attempt.cancellation = invoke<void>('ssh_cancel_connect', { connection_id: connectionId }).catch(
+    () => {}
+  );
   attempt.controller.abort();
-  void invoke('ssh_cancel_connect', { connection_id: connectionId }).catch(() => {});
 }
 
 function askForKey(
@@ -149,6 +154,7 @@ export async function connectWithDecisions(
     throw error;
   } finally {
     request.auth_responses = [];
+    if (attempt.cancellation) await attempt.cancellation;
     if (attempts.get(original.connection_id) === attempt) attempts.delete(original.connection_id);
     release();
   }
@@ -169,7 +175,12 @@ export function sshRouteTimeoutMs(
   fallback: number
 ): number {
   return (
-    Math.max(fallback, source.connectTimeout ? source.connectTimeout * 1000 + 10_000 : 0) +
+    Math.max(
+      fallback,
+      source.connectTimeout
+        ? (Math.max(1, source.connectTimeout) + Math.max(10, source.connectTimeout)) * 1000
+        : 0
+    ) +
     (source.jumpHosts ?? []).reduce(
       (sum, hop) => sum + Math.max(10, hop.connectTimeout ?? 10) * 2000,
       0
