@@ -172,18 +172,27 @@ export async function sftpConnect(
 /** Whole-route budget for unattended restore; manual unlock has no UI timer. */
 export function sshRouteTimeoutMs(
   source: { connectTimeout?: number; jumpHosts?: SshJumpHost[] },
-  fallback: number
+  fallback: number,
+  configuredTimeout?: number | null
 ): number {
-  return (
-    Math.max(
-      fallback,
-      source.connectTimeout
-        ? (Math.max(1, source.connectTimeout) + Math.max(10, source.connectTimeout)) * 1000
-        : 0
-    ) +
-    (source.jumpHosts ?? []).reduce(
-      (sum, hop) => sum + Math.max(10, hop.connectTimeout ?? 10) * 2000,
-      0
-    )
+  const targetTimeout = source.connectTimeout ?? configuredTimeout;
+  let budget = Math.max(
+    fallback,
+    targetTimeout != null
+      ? (Math.max(1, targetTimeout) + Math.max(10, targetTimeout)) * 1000
+      : 0
   );
+  // dial_ssh builds the route backwards: a hop without its own timeout
+  // inherits the next hop's effective value, starting with the target.
+  // Ten seconds covers both backend defaults (SSH: 3, SFTP: 10).
+  let inheritedTimeout = targetTimeout ?? 10;
+  const hops = source.jumpHosts ?? [];
+  for (let index = hops.length - 1; index >= 0; index--) {
+    const timeout = Math.max(1, hops[index].connectTimeout ?? inheritedTimeout);
+    // Each hop has separate handshake, authentication and direct-tcpip
+    // channel-open deadlines. Authentication always allows at least 10 s.
+    budget += (2 * timeout + Math.max(10, timeout)) * 1000;
+    inheritedTimeout = timeout;
+  }
+  return budget;
 }

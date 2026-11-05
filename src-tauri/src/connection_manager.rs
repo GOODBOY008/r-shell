@@ -8,6 +8,7 @@ use crate::vnc_client::VncClient;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 #[cfg(test)]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -229,26 +230,43 @@ impl ConnectionManager {
                 )
             })?;
 
-        let connect_result = tokio::select! {
-            res = client.connect(&config) => res,
-            _ = cancel_token.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
-        };
+        self.finish_pending_connection(
+            &connection_id,
+            &cancel_token,
+            async {
+                client.connect(&config).await?;
+                Ok((client, self.connections.write().await))
+            },
+            |(client, mut connections)| {
+                connections.insert(connection_id.clone(), Arc::new(RwLock::new(client)));
+            },
+        )
+        .await
+    }
 
-        // Keep the token registered until commit. Cancellation and publication
-        // share this lock so a closed tab cannot publish a late connection.
+    /// Dial and acquire publication guards without holding the pending registry.
+    /// Slow readers of the client maps must not block unrelated cancellation or
+    /// registration. The final cancellation check and synchronous publication
+    /// share the pending lock so a closed tab cannot publish a late connection.
+    async fn finish_pending_connection<T>(
+        &self,
+        connection_id: &str,
+        cancel: &CancellationToken,
+        prepare: impl Future<Output = Result<T>>,
+        publish: impl FnOnce(T),
+    ) -> Result<()> {
+        let prepared = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
+            result = prepare => result,
+        };
         let mut pending = self.pending_connections.write().await;
-        let result = if cancel_token.is_cancelled() {
+        let result = if cancel.is_cancelled() {
             Err(anyhow::anyhow!("Connection cancelled by user"))
         } else {
-            connect_result
+            prepared.map(publish)
         };
-        if result.is_ok() {
-            self.connections
-                .write()
-                .await
-                .insert(connection_id.clone(), Arc::new(RwLock::new(client)));
-        }
-        pending.remove(&connection_id);
+        pending.remove(connection_id);
         result
     }
 
@@ -925,32 +943,21 @@ impl ConnectionManager {
             .register_pending_connection(&connection_id)
             .await
             .ok_or_else(|| anyhow::anyhow!("A connection attempt is already in progress"))?;
-        let result = tokio::select! {
-            result = StandaloneSftpClient::connect(&config) => result,
-            _ = cancel.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
-        };
-        let mut pending = self.pending_connections.write().await;
-        let result = if cancel.is_cancelled() {
-            Err(anyhow::anyhow!("Connection cancelled by user"))
-        } else {
-            result
-        };
-        let result = match result {
-            Ok(client) => {
-                self.sftp_connections
-                    .write()
-                    .await
-                    .insert(connection_id.clone(), client);
-                self.connection_types
-                    .write()
-                    .await
-                    .insert(connection_id.clone(), "SFTP".into());
-                Ok(())
-            }
-            Err(e) => Err(e),
-        };
-        pending.remove(&connection_id);
-        result
+        self.finish_pending_connection(
+            &connection_id,
+            &cancel,
+            async {
+                let client = StandaloneSftpClient::connect(&config).await?;
+                let connections = self.sftp_connections.write().await;
+                let types = self.connection_types.write().await;
+                Ok((client, connections, types))
+            },
+            |(client, mut connections, mut types)| {
+                connections.insert(connection_id.clone(), client);
+                types.insert(connection_id.clone(), "SFTP".into());
+            },
+        )
+        .await
     }
 
     pub async fn get_sftp_connection(&self) -> Arc<RwLock<HashMap<String, StandaloneSftpClient>>> {
@@ -1384,6 +1391,78 @@ mod tests {
         assert!(mgr.register_pending_connection("conn-1").await.is_none());
         mgr.clear_pending_connection("conn-1").await;
         assert!(mgr.register_pending_connection("conn-1").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn waiting_for_sftp_publication_does_not_block_registration_or_cancellation() {
+        let mgr = Arc::new(ConnectionManager::new());
+        let cancel = mgr.register_pending_connection("waiting").await.unwrap();
+        // Remote editing can keep this read guard during a slow network read.
+        let reader = mgr.sftp_connections.read().await;
+        let (preparing, waiting) = tokio::sync::oneshot::channel();
+        let published = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn({
+            let mgr = mgr.clone();
+            let published = published.clone();
+            async move {
+                mgr.finish_pending_connection(
+                    "waiting",
+                    &cancel,
+                    async {
+                        preparing.send(()).unwrap();
+                        Ok(mgr.sftp_connections.write().await)
+                    },
+                    |_| published.store(true, Ordering::SeqCst),
+                )
+                .await
+            }
+        });
+        waiting.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            assert!(mgr.register_pending_connection("other").await.is_some());
+            assert!(mgr.cancel_pending_connection("other").await);
+            assert!(mgr.cancel_pending_connection("waiting").await);
+            assert!(task.await.unwrap().is_err());
+            // Cancellation cleans up even before the slow reader releases.
+            assert!(mgr.register_pending_connection("waiting").await.is_some());
+        })
+        .await
+        .expect("a held SFTP guard must not lock the pending registry");
+        assert!(!published.load(Ordering::SeqCst));
+        drop(reader);
+    }
+
+    #[tokio::test]
+    async fn cancellation_before_publication_still_prevents_a_late_connection() {
+        let mgr = Arc::new(ConnectionManager::new());
+        let cancel = mgr.register_pending_connection("waiting").await.unwrap();
+        let pending = mgr.pending_connections.write().await;
+        let (ready, prepared) = tokio::sync::oneshot::channel();
+        let published = Arc::new(AtomicBool::new(false));
+        let task = tokio::spawn({
+            let mgr = mgr.clone();
+            let cancel = cancel.clone();
+            let published = published.clone();
+            async move {
+                mgr.finish_pending_connection(
+                    "waiting",
+                    &cancel,
+                    async {
+                        let guard = mgr.connections.write().await;
+                        ready.send(()).unwrap();
+                        Ok(guard)
+                    },
+                    |_| published.store(true, Ordering::SeqCst),
+                )
+                .await
+            }
+        });
+        prepared.await.unwrap();
+        cancel.cancel();
+        drop(pending);
+        assert!(task.await.unwrap().is_err());
+        assert!(!published.load(Ordering::SeqCst));
+        assert!(mgr.register_pending_connection("waiting").await.is_some());
     }
 
     #[tokio::test]

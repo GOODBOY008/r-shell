@@ -625,7 +625,10 @@ function AppContent() {
 
     // A configured Connection Timeout above the restore default must not be
     // raced to death by this wrapper — take the larger of the two.
-    const connectTimeout = sshRouteTimeoutMs(connectionData, effectiveConnectTimeoutMs(getConnectionTimeoutSetting()));
+    const configuredTimeout = getConnectionTimeoutSetting();
+    const connectTimeout = sshRouteTimeoutMs(
+      connectionData, effectiveConnectTimeoutMs(configuredTimeout), configuredTimeout
+    );
     const isDesktop = tab.tabType === 'desktop';
     const isFileBrowser = tab.tabType === 'file-browser'
       || (!isDesktop && (tab.protocol === 'SFTP' || tab.protocol === 'FTP'));

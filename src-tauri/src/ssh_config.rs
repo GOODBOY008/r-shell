@@ -160,7 +160,7 @@ fn tokenize(line: &str) -> Result<Vec<String>, Reason> {
         } else if c == '"' || c == '\'' {
             quote = Some(c);
             started = true;
-        } else if c == '#' {
+        } else if c == '#' && !started {
             break;
         } else if c == '=' && !separator && (words.is_empty() || (words.len() == 1 && !started)) {
             if started {
@@ -736,18 +736,21 @@ impl Parser {
         alias: &str,
         stack: &mut Vec<String>,
     ) -> Result<(Vec<SshEndpoint>, Vec<Diagnostic>), Reason> {
-        let raw = self.tokens(
-            jump.args.first().map(String::as_str).unwrap_or(""),
-            alias,
-            target,
-        )?;
+        let raw = jump.args.first().map(String::as_str).unwrap_or("");
         if raw == "none" {
             return Ok((vec![], vec![]));
         }
         let mut hops = Vec::new();
         let mut diagnostics = Vec::new();
         for (index, spec) in raw.split(',').enumerate() {
-            let (name, user, port) = parse_jump(spec)?;
+            // URI usernames use percent-encoding, not SSH percent tokens.
+            // Keep them intact until parse_jump decodes them, exactly once;
+            // in particular %40 is '@', not an unsupported %4 token.
+            let expanded = match spec.strip_prefix("ssh://").and_then(|s| s.rsplit_once('@')) {
+                Some((user, host)) => format!("ssh://{user}@{}", self.tokens(host, alias, target)?),
+                None => self.tokens(spec, alias, target)?,
+            };
+            let (name, user, port) = parse_jump(&expanded)?;
             if stack.iter().any(|s| s.eq_ignore_ascii_case(&name)) {
                 return Err(Reason::JumpCycle { host: name });
             }
@@ -1279,6 +1282,56 @@ mod tests {
         assert_eq!(target.config.jump_hosts[1].port, 2222);
         assert_eq!(target.config.jump_hosts[1].identity_files, Some(vec![]));
     }
+
+    #[test]
+    fn jump_uri_usernames_keep_percent_escapes_until_uri_decoding() {
+        let (_, p) = fixture("Host target\nUser deploy\nProxyJump ssh://user%40realm@bastion:2200,ssh://caf%C3%A9%2C%2525@[::1]:2201,%r@gateway:%p\nHost bastion\nUser fallback\n");
+        let target = p.entries.iter().find(|h| h.alias == "target").unwrap();
+        assert!(target.importable, "{:?}", target.diagnostics);
+        let hops = &target.config.jump_hosts;
+        assert_eq!(hops.len(), 3);
+        assert_eq!(hops[0].username, "user@realm");
+        assert_eq!(hops[0].host, "bastion");
+        assert_eq!(hops[0].port, 2200);
+        assert_eq!(hops[1].username, "café,%25");
+        assert_eq!(hops[1].host, "::1");
+        assert_eq!(hops[1].port, 2201);
+        assert_eq!(hops[2].username, "deploy");
+        assert_eq!(hops[2].port, 22);
+
+        for user in ["bad%4", "bad%GG", "bad%00", "bad%FF"] {
+            let (_, p) = fixture(&format!("Host target\nProxyJump ssh://{user}@bastion\n"));
+            assert!(!p.entries[0].importable, "{user}");
+        }
+    }
+
+    #[test]
+    fn comments_start_at_token_boundaries_and_keep_hashes_in_values() {
+        assert!(tokenize("  # comment").unwrap().is_empty());
+        for line in [
+            "User admin#prod # comment",
+            "User = admin#prod\t# comment",
+            "User \"admin#prod\" # comment",
+        ] {
+            assert_eq!(tokenize(line).unwrap(), vec!["User", "admin#prod"]);
+        }
+        let (home, p) = fixture("Host prod\nUser admin#prod # comment\nIdentityFile ~/key#prod # comment\nIdentityAgent ~/agent#prod\n");
+        let host = &p.entries[0];
+        assert!(host.importable);
+        assert_eq!(host.config.endpoint.username, "admin#prod");
+        assert_eq!(
+            host.config.endpoint.identity_files,
+            Some(vec![home
+                .path()
+                .join("key#prod")
+                .to_string_lossy()
+                .into_owned()])
+        );
+        assert_eq!(
+            host.config.endpoint.identity_agent.as_deref(),
+            home.path().join("agent#prod").to_str()
+        );
+    }
     #[test]
     fn unsafe_routes_and_match_never_silently_become_direct_connections() {
         let (_, p) =
@@ -1308,7 +1361,7 @@ mod tests {
     }
     #[test]
     fn supported_fixture_matches_openssh() {
-        let (home, p) = fixture("Host prod other\n HostName 192.0.2.4\n User deploy\n Port 2222\n IdentityFile ~/.ssh/deploy\nHost *\n User nobody\n Compression yes\n ServerAliveInterval 30\n");
+        let (home, p) = fixture("Host prod other\n HostName 192.0.2.4\n User deploy#prod # comment\n Port 2222\n IdentityFile ~/.ssh/deploy#prod # comment\n ProxyJump ssh://user%40realm@bastion:2200\nHost *\n User nobody\n Compression yes\n ServerAliveInterval 30\n");
         let output = match std::process::Command::new("ssh")
             .args(["-G", "-F"])
             .arg(home.path().join(".ssh/config"))
@@ -1320,18 +1373,20 @@ mod tests {
         };
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).unwrap();
-        let c = &p
+        let host = p
             .entries
             .iter()
             .find(|h| h.alias == "prod")
-            .unwrap()
-            .config
-            .endpoint;
+            .unwrap();
+        let c = &host.config.endpoint;
+        let hop = &host.config.jump_hosts[0];
         for expected in [
             format!("hostname {}", c.host),
             format!("user {}", c.username),
             format!("port {}", c.port),
             format!("serveraliveinterval {}", c.keep_alive_interval),
+            "identityfile ~/.ssh/deploy#prod".into(),
+            format!("proxyjump {}@{}:{}", hop.username, hop.host, hop.port),
         ] {
             assert!(text.lines().any(|line| line == expected));
         }

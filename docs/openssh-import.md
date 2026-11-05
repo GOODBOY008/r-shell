@@ -49,7 +49,7 @@ merged into it.
 | `IdentityFile` | Paths accumulate in declaration order. An explicit list replaces automatic default-key discovery. `none` contributes no file and suppresses default-key discovery when used alone. |
 | `IdentityAgent` | Uses the default Unix socket or Windows OpenSSH named pipe when unset. Explicit sockets, environment selectors, and `none` are supported. |
 | `IdentitiesOnly` | Restricts agent offers to configured/default identities. The agent may still sign for a configured public identity. |
-| `ProxyJump` | Supports aliases, explicit users and ports, SSH URIs, bracketed IPv6, comma-separated chains, and a first hop's own route. Every hop resolves its own user and identity settings. |
+| `ProxyJump` | Supports aliases, explicit users and ports, SSH URIs with percent-encoded usernames, bracketed IPv6, comma-separated chains, and a first hop's own route. Every hop resolves its own user and identity settings. |
 | Connection options | Maps `ConnectTimeout`, `Compression`, `ServerAliveInterval`, and `ServerAliveCountMax`. An omitted timeout uses the application setting. |
 
 Paths support `~`, named Unix users, `${VARIABLE}`, and the applicable OpenSSH
@@ -98,9 +98,13 @@ transfers. They never enter saved connections, source snapshots, or JSON
 exports. Cancelling or superseding an attempt closes its dialog and prevents
 late replies from restarting it. The native pending slot remains reserved until
 cleanup finishes, including completion of native cancellation before the same
-connection ID is reused. Restore budgets include both dialing and authentication
-at the target's configured timeout. Automatic restore and reconnect leave a host requiring a
-decision pending; the explicit Connect action opens the unlock dialog.
+connection ID is reused. Waiting for a busy connection map does not block
+cancellation or registration of other attempts. Restore budgets include target
+dialing and authentication plus each hop's dialing, authentication, and tunnel
+channel setup. Hop timeouts inherit from the next hop or target, including the
+application setting when no target override exists. Automatic restore and
+reconnect leave a host requiring a decision pending; the explicit Connect
+action opens the unlock dialog.
 
 User-entered saved passwords and passphrases, including jump credentials, use
 the existing encrypted credential store. JSON exports strip nested secrets as
