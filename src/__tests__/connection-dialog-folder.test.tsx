@@ -26,6 +26,7 @@ const mockFolders = [
 vi.mock('../lib/connection-storage', () => ({
   ConnectionStorageManager: {
     getValidFolders: vi.fn(() => mockFolders),
+    getConnection: vi.fn(() => undefined),
   },
 }));
 

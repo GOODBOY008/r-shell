@@ -131,6 +131,18 @@ describe('ConnectionDialog stored-secret handling', () => {
     expect(passedConfig.password).toBe('');
   });
 
+  it('keeps the sealed password when handed a record decrypted for a failed connect (#283)', async () => {
+    ConnectionStorageManager.saveConnectionWithId('conn-1', baseConnection);
+    const onSave = vi.fn();
+    // App reopens the dialog with the record it just decrypted for ssh_connect.
+    renderDialog({ editingConnection: { ...baseConnection, password: 'password' }, onSave });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('conn-1')?.password).toBe(sealedPassword);
+  });
+
   it('seals the password as typed, without trimming', async () => {
     ConnectionStorageManager.saveConnectionWithId('conn-1', baseConnection);
     renderDialog({ editingConnection: baseConnection });

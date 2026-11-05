@@ -17,7 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
-import { SECRET_FIELDS, sealSecret, openSecret, type SecretField } from '../lib/credential-crypto';
+import { SECRET_FIELDS, isSealed, sealSecret, openSecret, type SecretField } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
@@ -319,15 +319,24 @@ export function ConnectionDialog({
       // pre-filled values a new connection gets.
       if (editingConnection) {
         // Remember the stored (sealed) secrets so a blank field on save means
-        // "keep the stored one". The form itself never shows them.
+        // "keep the stored one". The form itself never shows them. A sealed
+        // value handed in is the stored one. For a stored connection anything
+        // else may be plaintext App decrypted for a failed connect (#283),
+        // which storage would strip on save, deleting the secret: take the
+        // sealed value from storage instead.
+        const stored = editingConnection.id ? ConnectionStorageManager.getConnection(editingConnection.id) : undefined;
+        const storedSecret = (field: SecretField) => {
+          const handed = editingConnection[field] ?? '';
+          return stored && !isSealed(handed) ? (stored[field] ?? '') : handed;
+        };
         setPreviousSecrets({
-          password: editingConnection.password ?? '',
-          passphrase: editingConnection.passphrase ?? '',
-          proxyPassword: editingConnection.proxyPassword ?? '',
-          vncPassword: editingConnection.vncPassword ?? '',
-          tunnelPassword: editingConnection.tunnelPassword ?? '',
-          tunnelPassphrase: editingConnection.tunnelPassphrase ?? '',
-          sudoPassword: editingConnection.sudoPassword ?? '',
+          password: storedSecret('password'),
+          passphrase: storedSecret('passphrase'),
+          proxyPassword: storedSecret('proxyPassword'),
+          vncPassword: storedSecret('vncPassword'),
+          tunnelPassword: storedSecret('tunnelPassword'),
+          tunnelPassphrase: storedSecret('tunnelPassphrase'),
+          sudoPassword: storedSecret('sudoPassword'),
         });
         setRemovedSecrets([]);
         const merged = mergeWithDefaults(defaultConfig, editingConnection);
