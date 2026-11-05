@@ -8,7 +8,8 @@ export type TerminalCommand =
   | 'find-next'
   | 'find-previous'
   | 'clear-screen'
-  | 'send-text';
+  | 'send-text'
+  | 'send-sudo-password';
 
 export interface TerminalCommandDetail {
   tabId: string;

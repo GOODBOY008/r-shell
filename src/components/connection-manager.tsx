@@ -34,6 +34,7 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import { ConnectionStorageManager, getStorageCorruption } from '../lib/connection-storage';
+import { ConnectionNotes } from './connection-notes';
 import {
   applyCollapsedState,
   collectCollapsedFolderIds,
@@ -74,6 +75,7 @@ interface ConnectionNode {
   profileId?: string;
   lastConnected?: string;
   isConnected?: boolean;
+  notes?: string;
   children?: ConnectionNode[];
   isExpanded?: boolean;
 }
@@ -1158,10 +1160,7 @@ export function ConnectionManager({
                   <span className="text-xs">{selectedConnection.protocol}</span>
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium">{t('connectionManager.description')}</span>
-                  <span className="text-xs text-muted-foreground">-</span>
-                </div>
+                <ConnectionNotes notes={selectedConnection.notes} />
               </div>
             </div>
           )}

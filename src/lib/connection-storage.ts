@@ -34,11 +34,15 @@ export interface ConnectionData {
   color?: string;
   tags?: string[];
   description?: string;
+  /** Free text kept for the host; plain, travels with exports and imports. */
+  notes?: string;
   // Authentication details
   authMethod?: 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
   password?: string; // Note: In production, this should be encrypted
   privateKeyPath?: string;
   passphrase?: string;
+  /** Typed into the terminal on request (right-click menu); sealed at rest. */
+  sudoPassword?: string;
   // FTP-specific
   ftpsEnabled?: boolean;
   /** Verify the FTPS certificate; treated as true when absent. */
@@ -819,6 +823,7 @@ export class ConnectionStorageManager {
                 favorite: c.favorite,
                 color: c.color,
                 tags: c.tags,
+                notes: c.notes,
               }))
           ],
         };
@@ -956,6 +961,7 @@ export interface ConnectionTreeNode {
   favorite?: boolean;
   color?: string;
   tags?: string[];
+  notes?: string;
   children?: ConnectionTreeNode[];
 }
 

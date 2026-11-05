@@ -13,6 +13,7 @@ import {
 import {
   Copy,
   Clipboard,
+  Key,
   Search,
   Trash2,
   FileText,
@@ -24,6 +25,8 @@ interface TerminalContextMenuProps {
   children: React.ReactNode;
   onCopy: () => void;
   onPaste: () => void;
+  /** Type the connection's stored sudo password into the PTY. */
+  onSendSudoPassword?: () => void;
   onClear: () => void;
   onClearScrollback: () => void;
   onSearch: () => void;
@@ -52,6 +55,7 @@ export function TerminalContextMenu({
   children,
   onCopy,
   onPaste,
+  onSendSudoPassword,
   onClear,
   onClearScrollback,
   onSearch,
@@ -82,6 +86,12 @@ export function TerminalContextMenu({
           <span>{t('contextMenu.paste')}</span>
           <ContextMenuShortcut>{modKey}+V</ContextMenuShortcut>
         </ContextMenuItem>
+        {onSendSudoPassword && (
+          <ContextMenuItem onClick={onSendSudoPassword}>
+            <Key className="mr-2 h-4 w-4" />
+            <span>{t('contextMenu.sendSudoPassword')}</span>
+          </ContextMenuItem>
+        )}
         
         <ContextMenuSeparator />
         

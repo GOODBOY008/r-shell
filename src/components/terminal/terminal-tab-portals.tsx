@@ -233,6 +233,7 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
       <PtyTerminal
         key={`${tab.id}-${tab.reconnectCount}`}
         connectionId={tab.id}
+        savedConnectionId={tab.originalConnectionId || tab.id}
         connectionName={tab.name}
         host={tab.host}
         username={tab.username}
