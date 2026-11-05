@@ -68,7 +68,12 @@ automatic selection. Host keys use R-Shell's existing verification setting and
 shared OpenSSH `known_hosts` file.
 
 Preview is bounded to 4 MiB of distinct configuration files, 16 nested files,
-4,096 explicit aliases, and eight jump hosts. Unsupported or invalid values are
+4,096 explicit aliases, and eight jump hosts. Included syntax trees are shared;
+alias discovery visits each file once. A separate 64 MiB work budget charges
+file references and parsed/evaluated directives by their structure and text size
+across all aliases and routes. Exceeding that budget aborts the entire preview
+with a localized source-location error; it never imports partial results.
+Unsupported or invalid values are
 diagnosed rather than silently converted. The reference semantics are documented
 in the [OpenSSH configuration manual](https://man.openbsd.org/ssh_config).
 
@@ -102,7 +107,9 @@ connection ID is reused. Waiting for a busy connection map does not block
 cancellation or registration of other attempts. Restore budgets include target
 dialing and authentication plus each hop's dialing, authentication, and tunnel
 channel setup. Hop timeouts inherit from the next hop or target, including the
-application setting when no target override exists. Automatic restore and
+application setting when no target override exists. The overall startup deadline
+includes all eager routes and the PTY-ready pacing between
+them; preparation has a separate bounded deadline. Automatic restore and
 reconnect leave a host requiring a decision pending; the explicit Connect
 action opens the unlock dialog.
 

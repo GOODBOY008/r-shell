@@ -26,12 +26,15 @@ import { cleanup, render, screen } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
 import App from '../App';
 import { setRestoreTimingForTests } from '../lib/restore-timing';
+import * as restoreTiming from '../lib/restore-timing';
+import { cancelSshConnect } from '../lib/ssh-auth-flow';
 
 const lifecycle = vi.hoisted(() => ({
   invoke: vi.fn(),
   activeConnections: [] as Array<{ tabId: string; connectionId: string; order: number; tabType: string; protocol: string }>,
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
   clearActiveConnectionsCalls: 0,
+  pendingConnections: new Map<string, () => void>(),
 }));
 
 let mockState: TerminalGroupState;
@@ -113,7 +116,14 @@ vi.mock('@/lib/connection-storage', async (importOriginal) => {
 });
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => lifecycle.invoke(...args),
+  invoke: (...args: unknown[]) => {
+    if (args[0] === 'ssh_cancel_connect') {
+      const id = (args[1] as { connection_id: string }).connection_id;
+      lifecycle.pendingConnections.get(id)?.();
+      lifecycle.pendingConnections.delete(id);
+    }
+    return lifecycle.invoke(...args);
+  },
   // App's keyboard-shortcut hook branches on this; the restore path runs in
   // browser mode where there is no Tauri backend.
   isTauri: () => false,
@@ -237,8 +247,13 @@ describe('session restore overall-timeout cancellation', () => {
     lifecycle.clearActiveConnectionsCalls = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanup();
+    for (const active of lifecycle.activeConnections) cancelSshConnect(active.connectionId);
+    for (const finish of lifecycle.pendingConnections.values()) finish();
+    lifecycle.pendingConnections.clear();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    vi.restoreAllMocks();
     // Restore production timing defaults for other tests.
     setRestoreTimingForTests({ connectTimeoutMs: 15_000, overallTimeoutMs: 60_000 });
   });
@@ -248,11 +263,16 @@ describe('session restore overall-timeout cancellation', () => {
     // per-connect 100 ms, overall 350 ms — far below the 500 ms that 5 serial
     // connections would need, so the overall budget fires mid-restore.
     setRestoreTimingForTests({ connectTimeoutMs: 100, overallTimeoutMs: 350 });
+    // Force an early outer timeout to exercise cancellation independently of
+    // the production route-budget calculation (which now covers all routes).
+    vi.spyOn(restoreTiming, 'effectiveOverallTimeoutMs').mockReturnValue(350);
 
     // Every ssh_connect hangs forever (never resolves).
-    lifecycle.invoke.mockImplementation((command: string) => {
+    lifecycle.invoke.mockImplementation((command: string, args: { request: { connection_id: string } }) => {
       if (command === 'ssh_connect') {
-        return new Promise(() => {});
+        return new Promise(resolve => {
+          lifecycle.pendingConnections.set(args.request.connection_id, () => resolve({ success: false }));
+        });
       }
       if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
       if (command === 'credential_open') return Promise.resolve('secret');
@@ -290,6 +310,7 @@ describe('session restore overall-timeout cancellation', () => {
     // 350 ms (a per-connect 100 ms budget would reject it first, which is not
     // the reported worst case).
     setRestoreTimingForTests({ connectTimeoutMs: 10_000, overallTimeoutMs: 350 });
+    vi.spyOn(restoreTiming, 'effectiveOverallTimeoutMs').mockReturnValue(350);
 
     // First 4 connections succeed immediately; the 5th hangs until we settle
     // it AFTER the overall timeout has already fired.
@@ -298,10 +319,11 @@ describe('session restore overall-timeout cancellation', () => {
       settleFinal = () => resolve({ success: true });
     });
     let sshCalls = 0;
-    lifecycle.invoke.mockImplementation((command: string) => {
+    lifecycle.invoke.mockImplementation((command: string, args: { request: { connection_id: string } }) => {
       if (command === 'ssh_connect') {
         sshCalls++;
         if (sshCalls < 5) return Promise.resolve({ success: true });
+        lifecycle.pendingConnections.set(args.request.connection_id, settleFinal!);
         return finalInvoke;
       }
       if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
@@ -312,6 +334,7 @@ describe('session restore overall-timeout cancellation', () => {
 
     render(<App />);
 
+    await vi.waitFor(() => expect(sshCalls).toBe(5));
     // Wait for the overall-timeout toast (fires at ~350 ms of real time).
     await vi.waitFor(
       () => {
@@ -342,5 +365,33 @@ describe('session restore overall-timeout cancellation', () => {
     expect(lifecycle.toast.error.mock.calls.length).toBe(errorCallsAtSettle);
     expect(lifecycle.clearActiveConnectionsCalls).toBe(clearCallsAtTimeout);
     expect(lifecycle.activeConnections).toHaveLength(5);
+  });
+
+  it.each([
+    { connectTimeout: 120 },
+    { jumpHosts: [{ host: 'bastion', port: 22, username: 'jump', authMethod: 'auto', connectTimeout: 120 }] },
+  ])('restores later active tabs after a slow imported route: %j', async (route) => {
+    setRestoreTimingForTests({ connectTimeoutMs: 250, overallTimeoutMs: 200 });
+    const saved = JSON.parse(localStorage.getItem('r-shell-connections')!);
+    Object.assign(saved[0], route);
+    localStorage.setItem('r-shell-connections', JSON.stringify(saved));
+    let connects = 0;
+    lifecycle.invoke.mockImplementation((command: string) => {
+      if (command === 'ssh_connect') {
+        connects++;
+        return connects === 1
+          ? new Promise(resolve => setTimeout(() => resolve({ success: true }), 350))
+          : Promise.resolve({ success: true });
+      }
+      if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
+      if (command === 'credential_open') return Promise.resolve('secret');
+      if (command === 'get_system_locale') return Promise.resolve('en-US');
+      return Promise.resolve({});
+    });
+
+    render(<App />);
+    await vi.waitFor(() => expect(connects).toBe(5), { timeout: 5_000 });
+    await vi.waitFor(() => expect(lifecycle.toast.success).toHaveBeenCalled());
+    expect(lifecycle.toast.error).not.toHaveBeenCalled();
   });
 });

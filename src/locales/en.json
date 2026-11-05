@@ -1868,6 +1868,7 @@
       "includeDepth": "Include nesting exceeds {{limit}} files",
       "notRegularFile": "SSH configuration must be a regular file",
       "sourceTooLarge": "SSH configuration exceeds {{limit}} MiB",
+      "previewWorkLimit": "Configuration at {{path}} (line {{line}}) is too complex to preview. Reduce repeated Includes or split the source.",
       "matchUnsupported": "Match blocks cannot be converted reliably; this source cannot be imported",
       "includePathRequired": "Include requires a path",
       "hostPatternRequired": "Host requires a pattern",

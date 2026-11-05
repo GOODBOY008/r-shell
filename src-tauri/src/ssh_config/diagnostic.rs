@@ -41,6 +41,8 @@ pub enum DiagnosticReason {
     NotRegularFile,
     #[error("SSH configuration exceeds {limit} MiB")]
     SourceTooLarge { limit: usize },
+    #[error("SSH configuration at {path}:{line} exceeds the preview work limit")]
+    PreviewWorkLimit { path: String, line: usize },
     #[error("Match blocks cannot be converted reliably; this source cannot be imported")]
     MatchUnsupported,
     #[error("Include requires a path")]

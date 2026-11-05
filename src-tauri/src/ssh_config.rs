@@ -2,12 +2,17 @@
 mod diagnostic;
 pub use diagnostic::DiagnosticReason as Reason;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const MAX_DEPTH: usize = 16;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
+// Charge parsed nodes, file references and every evaluated directive by their
+// owned text/structure size. This bounds repeated Includes across all aliases
+// and jump hosts, including amplification of a single large directive.
+const MAX_PREVIEW_WORK: usize = 64 * 1024 * 1024;
 pub const MAX_JUMPS: usize = 8;
 
 /// Shared by imported targets and jump hosts. Secrets are absent in imports.
@@ -98,9 +103,9 @@ pub struct ImportPreview {
 struct Directive {
     option: String,
     args: Vec<String>,
-    file: String,
+    file: Arc<str>,
     line: usize,
-    include: Vec<Vec<Directive>>,
+    include: Vec<Arc<[Directive]>>,
     error: Option<Reason>,
     deferred_include: bool,
 }
@@ -108,11 +113,22 @@ impl Directive {
     fn diagnostic(&self, severity: &'static str, reason: Reason) -> Diagnostic {
         Diagnostic {
             severity,
-            file: self.file.clone(),
+            file: self.file.to_string(),
             line: self.line,
             option: self.option.clone(),
             reason,
         }
+    }
+
+    fn work_size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.file.len()
+            + self.option.len()
+            + self
+                .args
+                .iter()
+                .map(|arg| std::mem::size_of::<String>() + arg.len())
+                .sum::<usize>()
     }
 }
 
@@ -123,8 +139,9 @@ struct Parser {
     bytes: usize,
     stack: Vec<PathBuf>,
     fatal: Vec<Diagnostic>,
-    cache: HashMap<PathBuf, Vec<Directive>>,
+    cache: HashMap<PathBuf, Arc<[Directive]>>,
     discovered: BTreeSet<String>,
+    remaining_work: usize,
 }
 
 /// OpenSSH tokenization, including quotes, escaped spaces and `Key=value`.
@@ -308,6 +325,17 @@ fn local_user_id() -> Result<String, Reason> {
 }
 
 impl Parser {
+    fn charge_work(&mut self, size: usize, path: &str, line: usize) -> Result<(), Reason> {
+        self.remaining_work =
+            self.remaining_work
+                .checked_sub(size)
+                .ok_or_else(|| Reason::PreviewWorkLimit {
+                    path: path.into(),
+                    line,
+                })?;
+        Ok(())
+    }
+
     fn path(&self, raw: &str, relative: &Path) -> Result<PathBuf, Reason> {
         let value = expand_env(raw)?;
         let path = if value == "~" {
@@ -335,10 +363,15 @@ impl Parser {
         })
     }
 
-    fn read(&mut self, path: &Path) -> Result<Vec<Directive>, Reason> {
+    fn read(&mut self, path: &Path) -> Result<Arc<[Directive]>, Reason> {
         let path = path
             .canonicalize()
             .map_err(|e| Reason::file_access(path, e))?;
+        self.charge_work(
+            std::mem::size_of::<Directive>() + path.as_os_str().len(),
+            &path.to_string_lossy(),
+            0,
+        )?;
         if self.stack.contains(&path) {
             return Err(Reason::IncludeCycle {
                 path: path.to_string_lossy().into_owned(),
@@ -373,7 +406,17 @@ impl Parser {
         }
         self.bytes += text.len();
         self.stack.push(path.clone());
+        let result = self.parse_file(&path, &text);
+        self.stack.pop();
+        let nodes = result?;
+        aliases(&nodes, &mut self.discovered)?;
+        self.cache.insert(path, nodes.clone());
+        Ok(nodes)
+    }
+
+    fn parse_file(&mut self, path: &Path, text: &str) -> Result<Arc<[Directive]>, Reason> {
         let mut nodes = Vec::new();
+        let file: Arc<str> = path.to_string_lossy().into_owned().into();
         for (line, text) in text.lines().enumerate() {
             let tokens = tokenize(text.trim_start_matches('\u{feff}'));
             if matches!(&tokens, Ok(t) if t.is_empty()) {
@@ -386,12 +429,13 @@ impl Parser {
             let mut node = Directive {
                 option: words[0].to_ascii_lowercase(),
                 args: words[1..].to_vec(),
-                file: path.to_string_lossy().into(),
+                file: file.clone(),
                 line: line + 1,
                 include: Vec::new(),
                 error,
                 deferred_include: false,
             };
+            self.charge_work(node.work_size(), &node.file, node.line)?;
             if node.option == "match" {
                 self.fatal
                     .push(node.diagnostic("error", Reason::MatchUnsupported));
@@ -419,10 +463,15 @@ impl Parser {
                                 for included in paths {
                                     match self.read(&included) {
                                         Ok(child) => node.include.push(child),
+                                        Err(
+                                            e @ (Reason::PreviewWorkLimit { .. }
+                                            | Reason::TooManyAliases { .. }),
+                                        ) => return Err(e),
                                         Err(e) => node.error = Some(e),
                                     }
                                 }
                             }
+                            Err(e @ Reason::PreviewWorkLimit { .. }) => return Err(e),
                             Err(e) => node.error = Some(e),
                         }
                     }
@@ -436,9 +485,7 @@ impl Parser {
             }
             nodes.push(node);
         }
-        self.stack.pop();
-        self.cache.insert(path, nodes.clone());
-        Ok(nodes)
+        Ok(nodes.into())
     }
 
     fn tokens(&self, raw: &str, alias: &str, endpoint: &SshEndpoint) -> Result<String, Reason> {
@@ -504,7 +551,7 @@ impl Parser {
     }
 
     fn include_paths(
-        &self,
+        &mut self,
         raw: &str,
         alias: &str,
         endpoint: &SshEndpoint,
@@ -512,16 +559,22 @@ impl Parser {
     ) -> Result<Vec<PathBuf>, Reason> {
         let expanded = self.tokens_with_jump(raw, alias, endpoint, jump)?;
         let path = self.path(&expanded, &self.home.join(".ssh"))?;
-        let mut paths = glob::glob(&path.to_string_lossy())
-            .map_err(|e| Reason::InvalidIncludePattern {
+        let matches =
+            glob::glob(&path.to_string_lossy()).map_err(|e| Reason::InvalidIncludePattern {
                 detail: e.to_string(),
-            })?
-            .map(|p| {
-                p.map_err(|e| Reason::IncludePatternRead {
-                    detail: e.to_string(),
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            })?;
+        let mut paths = Vec::new();
+        for path in matches {
+            let path = path.map_err(|e| Reason::IncludePatternRead {
+                detail: e.to_string(),
+            })?;
+            self.charge_work(
+                std::mem::size_of::<PathBuf>() + path.as_os_str().len(),
+                &path.to_string_lossy(),
+                0,
+            )?;
+            paths.push(path);
+        }
         paths.sort();
         Ok(paths)
     }
@@ -570,14 +623,14 @@ impl Parser {
         alias: &str,
         user: Option<&str>,
         port: Option<u16>,
-    ) -> (SshEndpoint, Option<Directive>, Vec<Diagnostic>, bool) {
+    ) -> Result<(SshEndpoint, Option<Directive>, Vec<Diagnostic>, bool), Reason> {
         let mut values = HashMap::<String, Directive>::new();
         let mut identities = Vec::new();
         let mut diagnostics = Vec::new();
         let mut explicit = false;
         let mut includes = nodes
             .first()
-            .map(|n| vec![PathBuf::from(&n.file)])
+            .map(|n| vec![PathBuf::from(n.file.as_ref())])
             .unwrap_or_default();
         evaluate(
             self,
@@ -591,7 +644,7 @@ impl Parser {
             user,
             port,
             &mut includes,
-        );
+        )?;
         let value = |key: &str| values.get(key).and_then(|n| n.args.first()).cloned();
         let mut endpoint = SshEndpoint {
             host: value("hostname").unwrap_or_else(|| alias.into()),
@@ -683,6 +736,7 @@ impl Parser {
             .unwrap_or_default();
         if !identities.is_empty() {
             let mut files = Vec::new();
+            let mut seen_files = HashSet::new();
             for n in identities {
                 let raw = n.args.first().map(String::as_str).unwrap_or("");
                 if raw == "none" {
@@ -694,7 +748,7 @@ impl Parser {
                 {
                     Ok(p) => {
                         let p = p.to_string_lossy().into_owned();
-                        if !files.contains(&p) {
+                        if seen_files.insert(p.clone()) {
                             files.push(p);
                         }
                     }
@@ -723,12 +777,12 @@ impl Parser {
                 }
             }
         }
-        (
+        Ok((
             endpoint,
             values.get("proxyjump").cloned(),
             diagnostics,
             explicit,
-        )
+        ))
     }
 
     fn route(
@@ -761,7 +815,8 @@ impl Parser {
             if stack.len() > MAX_JUMPS + 1 {
                 return Err(Reason::TooManyJumps { limit: MAX_JUMPS });
             }
-            let (endpoint, via, mut notes, _) = self.resolve(nodes, &name, user.as_deref(), port);
+            let (endpoint, via, mut notes, _) =
+                self.resolve(nodes, &name, user.as_deref(), port)?;
             diagnostics.append(&mut notes);
             // Explicit predecessors in a comma-separated chain override the
             // later hop's own ProxyJump (the OpenSSH -J command-line rule).
@@ -916,9 +971,10 @@ fn evaluate(
     user: Option<&str>,
     port: Option<u16>,
     include_stack: &mut Vec<PathBuf>,
-) {
+) -> Result<(), Reason> {
     let mut active = inherited;
     for n in nodes {
+        parser.charge_work(n.work_size(), &n.file, n.line)?;
         if n.option == "host" {
             active = inherited && host_matches(&n.args, alias);
             if active && n.args.iter().any(|a| a.eq_ignore_ascii_case(alias)) {
@@ -934,7 +990,6 @@ fn evaluate(
             continue;
         }
         if n.option == "include" {
-            let mut children = n.include.clone();
             if n.deferred_include {
                 // Expand each pathname in order; earlier included files may
                 // provide defaults used by a later pathname on the same line.
@@ -963,19 +1018,24 @@ fn evaluate(
                                         user,
                                         port,
                                         include_stack,
-                                    ),
+                                    )?,
+                                    Err(
+                                        error @ (Reason::PreviewWorkLimit { .. }
+                                        | Reason::TooManyAliases { .. }),
+                                    ) => return Err(error),
                                     Err(error) => diagnostics.push(n.diagnostic("error", error)),
                                 }
                             }
                         }
+                        Err(error @ Reason::PreviewWorkLimit { .. }) => return Err(error),
                         Err(error) => diagnostics.push(n.diagnostic("error", error)),
                     }
                 }
             } else {
-                for included in children.drain(..) {
+                for included in &n.include {
                     evaluate_include(
                         parser,
-                        &included,
+                        included,
                         n,
                         alias,
                         active,
@@ -986,7 +1046,7 @@ fn evaluate(
                         user,
                         port,
                         include_stack,
-                    );
+                    )?;
                 }
             }
             continue;
@@ -1062,6 +1122,7 @@ fn evaluate(
             diagnostics.push(n.diagnostic("error", Reason::ProxyCommandUnsupported));
         }
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1078,27 +1139,26 @@ fn evaluate_include(
     user: Option<&str>,
     port: Option<u16>,
     stack: &mut Vec<PathBuf>,
-) {
+) -> Result<(), Reason> {
     let Some(first) = nodes.first() else {
-        return;
+        return Ok(());
     };
-    let path = PathBuf::from(&first.file);
+    let path = PathBuf::from(first.file.as_ref());
     if stack.contains(&path) {
         diagnostics.push(source.diagnostic(
             "error",
             Reason::IncludeCycle {
-                path: first.file.clone(),
+                path: first.file.to_string(),
             },
         ));
-        return;
+        return Ok(());
     }
     if stack.len() >= MAX_DEPTH {
         diagnostics.push(source.diagnostic("error", Reason::IncludeDepth { limit: MAX_DEPTH }));
-        return;
+        return Ok(());
     }
-    aliases(nodes, &mut parser.discovered);
     stack.push(path);
-    evaluate(
+    let result = evaluate(
         parser,
         nodes,
         alias,
@@ -1112,21 +1172,26 @@ fn evaluate_include(
         stack,
     );
     stack.pop();
+    result
 }
 
-fn aliases(nodes: &[Directive], result: &mut BTreeSet<String>) {
+// Each file's aliases are discovered once when it enters the syntax cache.
+// Walking the expanded Include tree here would repeat exponential work even
+// when all of its syntax nodes are shared.
+fn aliases(nodes: &[Directive], result: &mut BTreeSet<String>) -> Result<(), Reason> {
     for n in nodes {
         if n.option == "host" {
             for a in &n.args {
                 if !a.starts_with('!') && !a.contains(['*', '?']) {
                     result.insert(a.clone());
+                    if result.len() > 4096 {
+                        return Err(Reason::TooManyAliases { limit: 4096 });
+                    }
                 }
             }
         }
-        for included in &n.include {
-            aliases(included, result);
-        }
     }
+    Ok(())
 }
 
 pub fn preview(path: Option<String>) -> Result<ImportPreview, Reason> {
@@ -1153,14 +1218,14 @@ fn preview_with_home(
         fatal: vec![],
         cache: HashMap::new(),
         discovered: BTreeSet::new(),
+        remaining_work: MAX_PREVIEW_WORK,
     };
     let path = parser.path(path.as_deref().unwrap_or("~/.ssh/config"), &parser.cwd)?;
     let canonical = path
         .canonicalize()
         .map_err(|e| Reason::file_access(&path, e))?;
     let nodes = parser.read(&canonical)?;
-    let mut names = BTreeSet::new();
-    aliases(&nodes, &mut names);
+    let mut names = std::mem::take(&mut parser.discovered);
     let mut entries = Vec::new();
     let mut processed = BTreeSet::new();
     while let Some(alias) = names.pop_first() {
@@ -1171,7 +1236,7 @@ fn preview_with_home(
             return Err(Reason::TooManyAliases { limit: 4096 });
         }
         let (endpoint, jump, mut diagnostics, explicit) =
-            parser.resolve(&nodes, &alias, None, None);
+            parser.resolve(&nodes, &alias, None, None)?;
         names.append(&mut parser.discovered);
         if !explicit {
             continue;
@@ -1182,6 +1247,9 @@ fn preview_with_home(
                 Ok((route, mut notes)) => {
                     jump_hosts = route;
                     diagnostics.append(&mut notes);
+                }
+                Err(e @ (Reason::PreviewWorkLimit { .. } | Reason::TooManyAliases { .. })) => {
+                    return Err(e)
                 }
                 Err(e) => diagnostics.push(jump.diagnostic("error", e)),
             }
@@ -1319,6 +1387,95 @@ mod tests {
                 .importable
         );
     }
+
+    #[test]
+    fn repeated_includes_share_cached_syntax_and_alias_discovery() {
+        let (home, _) = fixture("Host target\nInclude child child\n");
+        std::fs::write(home.path().join(".ssh/child"), "Host other\nUser deploy\n").unwrap();
+        let mut parser = Parser {
+            home: home.path().into(),
+            cwd: home.path().into(),
+            username: "local".into(),
+            bytes: 0,
+            stack: vec![],
+            fatal: vec![],
+            cache: HashMap::new(),
+            discovered: BTreeSet::new(),
+            remaining_work: MAX_PREVIEW_WORK,
+        };
+        let nodes = parser.read(&home.path().join(".ssh/config")).unwrap();
+        assert!(Arc::ptr_eq(&nodes[1].include[0], &nodes[1].include[1]));
+        let cached = parser.read(&home.path().join(".ssh/child")).unwrap();
+        assert!(Arc::ptr_eq(&cached, &nodes[1].include[0]));
+        assert_eq!(parser.cache.len(), 2);
+        assert_eq!(
+            parser.discovered,
+            BTreeSet::from(["other".into(), "target".into()])
+        );
+    }
+
+    #[test]
+    fn expanded_static_and_deferred_includes_have_a_shared_work_limit() {
+        for deferred in [false, true] {
+            let (home, _) = fixture("Host target\n");
+            for level in 0..MAX_DEPTH {
+                let path = if level == 0 {
+                    home.path().join(".ssh/config")
+                } else {
+                    home.path().join(format!(".ssh/target-{level}"))
+                };
+                let text = if level + 1 == MAX_DEPTH {
+                    // Still a tiny source, but an expanded traversal would
+                    // visit over 16 million directives without a work limit.
+                    "User deploy\n".repeat(500)
+                } else {
+                    let next = format!("{}-{}", if deferred { "%n" } else { "target" }, level + 1);
+                    format!(
+                        "{}Include {next} {next}\n",
+                        if level == 0 { "Host target\n" } else { "" }
+                    )
+                };
+                std::fs::write(path, text).unwrap();
+            }
+            let error = preview_with_home(None, home.path().into(), "local".into()).unwrap_err();
+            assert!(matches!(error, Reason::PreviewWorkLimit { .. }), "{error}");
+        }
+    }
+
+    #[test]
+    fn work_limit_counts_large_repeated_values_and_reports_the_source() {
+        let (home, _) = fixture("Host target\nInclude child child\n");
+        std::fs::write(
+            home.path().join(".ssh/child"),
+            format!("IdentityFile {}\n", "a".repeat(1024 * 1024)),
+        )
+        .unwrap();
+        let mut parser = Parser {
+            home: home.path().into(),
+            cwd: home.path().into(),
+            username: "local".into(),
+            bytes: 0,
+            stack: vec![],
+            fatal: vec![],
+            cache: HashMap::new(),
+            discovered: BTreeSet::new(),
+            remaining_work: MAX_PREVIEW_WORK,
+        };
+        let nodes = parser.read(&home.path().join(".ssh/config")).unwrap();
+        // The first copy fits, the second must fail before it is cloned.
+        parser.remaining_work = 2 * 1024 * 1024;
+        let error = parser.resolve(&nodes, "target", None, None).unwrap_err();
+        match error {
+            Reason::PreviewWorkLimit { path, line } => {
+                assert_eq!(
+                    Path::new(&path),
+                    home.path().join(".ssh/child").canonicalize().unwrap()
+                );
+                assert_eq!(line, 1);
+            }
+            other => panic!("unexpected diagnostic: {other}"),
+        }
+    }
     #[test]
     fn jump_hosts_are_self_contained_and_have_independent_identities() {
         let (_, p) = fixture("Host target\n HostName 10.0.0.2\n User app\n ProxyJump one,other@two:2222\nHost one\n HostName bastion\n User admin\n IdentityFile ~/first\nHost two\n HostName gateway\n IdentityFile none\n IdentitiesOnly yes\n IdentityAgent none\n");
@@ -1421,11 +1578,7 @@ mod tests {
         };
         assert!(output.status.success());
         let text = String::from_utf8(output.stdout).unwrap();
-        let host = p
-            .entries
-            .iter()
-            .find(|h| h.alias == "prod")
-            .unwrap();
+        let host = p.entries.iter().find(|h| h.alias == "prod").unwrap();
         let c = &host.config.endpoint;
         let hop = &host.config.jump_hosts[0];
         for expected in [

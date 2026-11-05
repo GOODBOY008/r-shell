@@ -1865,6 +1865,7 @@
       "includeDepth": "Include 嵌套超过 {{limit}} 层文件",
       "notRegularFile": "SSH 配置必须为普通文件",
       "sourceTooLarge": "SSH 配置超过 {{limit}} MiB",
+      "previewWorkLimit": "{{path}}（第 {{line}} 行）的配置展开过于复杂，无法预览。请减少重复的 Include 或拆分来源文件。",
       "matchUnsupported": "无法可靠转换 Match 配置块，不能导入此来源",
       "includePathRequired": "Include 需要指定路径",
       "hostPatternRequired": "Host 需要指定匹配模式",

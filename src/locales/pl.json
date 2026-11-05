@@ -1920,6 +1920,7 @@
       "includeDepth": "Zagnieżdżenie Include przekracza limit {{limit}} plików",
       "notRegularFile": "Konfiguracja SSH musi być zwykłym plikiem",
       "sourceTooLarge": "Konfiguracja SSH przekracza {{limit}} MiB",
+      "previewWorkLimit": "Konfiguracja w {{path}} (wiersz {{line}}) jest zbyt złożona do wyświetlenia podglądu. Ogranicz powtarzające się dyrektywy Include lub podziel plik źródłowy.",
       "matchUnsupported": "Nie można poprawnie przekonwertować bloków Match; tego źródła nie można zaimportować",
       "includePathRequired": "Include wymaga ścieżki",
       "hostPatternRequired": "Host wymaga wzorca",

@@ -9,6 +9,7 @@
 
 let connectTimeoutMs = 15_000; // per backend connect call
 let overallTimeoutMs = 60_000; // entire restore budget
+export const RESTORE_PACING_TIMEOUT_MS = 3_000;
 
 export interface RestoreTiming {
   connectTimeoutMs: number;
@@ -30,16 +31,14 @@ export function effectiveConnectTimeoutMs(configuredSeconds: number | null): num
 }
 
 /**
- * Overall restore budget: at least the default budget, but never smaller
- * than the configured Connection Timeout of every session restored in
- * sequence — a configured timeout above the default must not trip the
- * loop's escape hatch on slow hosts. Deliberately independent of the
- * test-overridable `connectTimeoutMs` so timing overrides in tests keep
- * full control of the budget.
+ * Overall restore budget: cover every eager route's complete allowance and
+ * the PTY-ready wait between connections. Callers supply the same budgets
+ * used by their per-route timers, including imported overrides and hops.
  */
-export function effectiveOverallTimeoutMs(configuredSeconds: number | null, sessionCount: number): number {
-  const configuredMs = configuredSeconds ? configuredSeconds * 1000 : 0;
-  return Math.max(overallTimeoutMs, configuredMs * Math.max(sessionCount, 0));
+export function effectiveOverallTimeoutMs(routeBudgetsMs: readonly number[]): number {
+  const routes = routeBudgetsMs.reduce((sum, budget) => sum + budget, 0);
+  const pacing = Math.max(routeBudgetsMs.length - 1, 0) * RESTORE_PACING_TIMEOUT_MS;
+  return Math.max(overallTimeoutMs, routes + pacing);
 }
 
 /**

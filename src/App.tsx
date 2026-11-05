@@ -82,6 +82,7 @@ import { EditorTabsProvider, useEditorTabs } from './lib/editor-tabs-context';
 import {
   effectiveConnectTimeoutMs,
   effectiveOverallTimeoutMs,
+  RESTORE_PACING_TIMEOUT_MS,
 } from './lib/restore-timing';
 import { isRestoreSessionsOnStartupEnabled } from './lib/startup-restore';
 
@@ -746,7 +747,7 @@ function AppContent() {
     // to finish naturally so a just-succeeding host is not killed mid-handshake.
     let restoreCancelled = false;
 
-    const restoreActiveSessions = async () => {
+    const prepareSessionRestore = async () => {
       // Wait for the one-time legacy-secret encryption so restored
       // connections can decrypt their stored credentials.
       try {
@@ -808,96 +809,106 @@ function AppContent() {
       lazyRestoreTabIdsRef.current = lazy;
 
 
-      let restoredCount = 0;
-      let failedCount = 0;
+      const configuredTimeout = getConnectionTimeoutSetting();
+      const routeBudgets = eager.map(tab => {
+        const connection = ConnectionStorageManager.getConnection(tab.originalConnectionId || tab.id);
+        return connection
+          ? sshRouteTimeoutMs(connection, effectiveConnectTimeoutMs(configuredTimeout), configuredTimeout)
+          : 0;
+      });
+      const restoreEagerTabs = async () => {
+        let restoredCount = 0;
+        let failedCount = 0;
 
-      for (let i = 0; i < eager.length; i++) {
+        for (let i = 0; i < eager.length; i++) {
+          if (restoreCancelled) {
+            // Overall timeout fired: stop initiating new connections. The
+            // remaining eager tabs degrade to lazy — they still reconnect
+            // when activated.
+            for (let j = i; j < eager.length; j++) {
+              lazyRestoreTabIdsRef.current.add(eager[j].id);
+            }
+            console.warn(`[Restore] Cancelled at connection ${i + 1}/${eager.length}; remaining tabs will reconnect when activated`);
+            break;
+          }
+
+          if (await connectRestoredTab(eager[i])) {
+            restoredCount++;
+            // Pace serial PTY attaches so the next connect's WebSocket does
+            // not race this one's PtyStarted handshake.
+            if (i < eager.length - 1) {
+              await registerRestoration(eager[i].id, RESTORE_PACING_TIMEOUT_MS);
+            }
+          } else {
+            failedCount++;
+          }
+        }
+
+        clearAllRestorations();
+
+        const lazyCount = lazyRestoreTabIdsRef.current.size;
         if (restoreCancelled) {
-          // Overall timeout fired: stop initiating new connections. The
-          // remaining eager tabs degrade to lazy — they still reconnect
-          // when activated.
-          for (let j = i; j < eager.length; j++) {
-            lazyRestoreTabIdsRef.current.add(eager[j].id);
-          }
-          console.warn(`[Restore] Cancelled at connection ${i + 1}/${eager.length}; remaining tabs will reconnect when activated`);
-          break;
+          // The overall timeout fired (possibly while the LAST connection was
+          // still in flight, so the loop never saw the flag at a loop head).
+          // The timeout toast already told the user; keep the
+          // active-connections list intact so a manual reconnect of the skipped
+          // hosts is still possible, and do not emit a contradicting success or
+          // "all failed" toast here.
+        } else if (restoredCount > 0) {
+          notify.success(t('app.connectionsRestored'), {
+            duration: RESTORE_TOAST_DURATION_MS,
+            description: lazyCount > 0
+              ? t('app.restoreLazyDesc', { restoredCount, lazyCount })
+              : failedCount > 0
+                ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
+                : t('app.connectionsRestoredAllDesc', { restoredCount }),
+          });
+        } else if (failedCount > 0 && lazyCount === 0) {
+          // Every restored connection failed and no lazy tabs are left to
+          // activate: nothing left to restore.
+          ActiveConnectionsManager.clearActiveConnections();
+          notify.error(t('app.restoreFailed'), {
+            description: t('app.restoreFailedDesc'),
+          });
+        } else if (failedCount > 0) {
+          // The eager set failed but lazy tabs are still open — they retry
+          // when activated, so keep the list and say so.
+          notify.error(t('app.restoreFailed'), {
+            description: t('app.restoreLazyFailedDesc', { lazyCount }),
+          });
+        } else if (lazyCount > 0) {
+          // Only lazy tabs were restored (no tab was active at quit time).
+          notify.info(t('app.restoreLazyTitle'), {
+            duration: RESTORE_TOAST_DURATION_MS,
+            description: t('app.restoreLazyOnlyDesc', { lazyCount }),
+          });
         }
-
-        if (await connectRestoredTab(eager[i])) {
-          restoredCount++;
-          // Pace serial PTY attaches so the next connect's WebSocket does
-          // not race this one's PtyStarted handshake.
-          if (i < eager.length - 1) {
-            await registerRestoration(eager[i].id, 3000);
-          }
-        } else {
-          failedCount++;
-        }
-      }
-
-      clearAllRestorations();
-
-      const lazyCount = lazyRestoreTabIdsRef.current.size;
-      if (restoreCancelled) {
-        // The overall timeout fired (possibly while the LAST connection was
-        // still in flight, so the loop never saw the flag at a loop head).
-        // The timeout toast already told the user; keep the
-        // active-connections list intact so a manual reconnect of the skipped
-        // hosts is still possible, and do not emit a contradicting success or
-        // "all failed" toast here.
-      } else if (restoredCount > 0) {
-        notify.success(t('app.connectionsRestored'), {
-          duration: RESTORE_TOAST_DURATION_MS,
-          description: lazyCount > 0
-            ? t('app.restoreLazyDesc', { restoredCount, lazyCount })
-            : failedCount > 0
-              ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
-              : t('app.connectionsRestoredAllDesc', { restoredCount }),
-        });
-      } else if (failedCount > 0 && lazyCount === 0) {
-        // Every restored connection failed and no lazy tabs are left to
-        // activate: nothing left to restore.
-        ActiveConnectionsManager.clearActiveConnections();
-        notify.error(t('app.restoreFailed'), {
-          description: t('app.restoreFailedDesc'),
-        });
-      } else if (failedCount > 0) {
-        // The eager set failed but lazy tabs are still open — they retry
-        // when activated, so keep the list and say so.
-        notify.error(t('app.restoreFailed'), {
-          description: t('app.restoreLazyFailedDesc', { lazyCount }),
-        });
-      } else if (lazyCount > 0) {
-        // Only lazy tabs were restored (no tab was active at quit time).
-        notify.info(t('app.restoreLazyTitle'), {
-          duration: RESTORE_TOAST_DURATION_MS,
-          description: t('app.restoreLazyOnlyDesc', { lazyCount }),
-        });
-      }
+      };
+      return { run: restoreEagerTabs, timeoutMs: effectiveOverallTimeoutMs(routeBudgets) };
     };
 
-    // Scale the overall budget with the configured Connection Timeout so a
-    // slow host restored in sequence cannot trip the escape hatch early.
-    const sessionCount = ActiveConnectionsManager.getActiveConnections().length;
-    const overallRestoreTimeoutMs = effectiveOverallTimeoutMs(getConnectionTimeoutSetting(), sessionCount);
-    withTimeout(restoreActiveSessions(), overallRestoreTimeoutMs, 'Session restore').catch((err) => {
-      // Distinguish the overall-timeout rejection from an unexpected error
-      // thrown by restoreActiveSessions itself (e.g. storage parse). Only the
-      // former should cancel the loop and show the timeout toast.
-      const isOverallTimeout = err instanceof Error && err.message.startsWith('Timeout:');
-      if (isOverallTimeout) {
-        console.error('Session restore timed out:', err);
-        // Soft-cancel: the in-flight connection may still complete, but the loop
-        // must not start any new connections after this point.
-        restoreCancelled = true;
-        notify.error(t('app.restoreTimedOut'), {
-          description: t('app.restoreTimedOutDesc'),
-        });
-      } else {
-        console.error('Session restore failed:', err);
-      }
-      clearAllRestorations();
-    });
+    // Bound preparation too (including credential migration), then start the
+    // sequence deadline from the actual eager routes and their pacing waits.
+    withTimeout(prepareSessionRestore(), effectiveOverallTimeoutMs([]), 'Session restore')
+      .then(plan => plan && withTimeout(plan.run(), plan.timeoutMs, 'Session restore'))
+      .catch((err) => {
+        // Distinguish the overall-timeout rejection from an unexpected error
+        // thrown by session preparation or restoration (e.g. storage parse). Only the
+        // former should cancel the loop and show the timeout toast.
+        const isOverallTimeout = err instanceof Error && err.message.startsWith('Timeout:');
+        if (isOverallTimeout) {
+          console.error('Session restore timed out:', err);
+          // Soft-cancel: the in-flight connection may still complete, but the loop
+          // must not start any new connections after this point.
+          restoreCancelled = true;
+          notify.error(t('app.restoreTimedOut'), {
+            description: t('app.restoreTimedOutDesc'),
+          });
+        } else {
+          console.error('Session restore failed:', err);
+        }
+        clearAllRestorations();
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
