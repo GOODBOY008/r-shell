@@ -1,3 +1,7 @@
+pub mod auto_auth;
+#[cfg(test)]
+mod ssh_import_e2e;
+
 use crate::proxy::ProxyConfig;
 use anyhow::Result;
 use russh::client::{ChannelOpenHandle, Msg, Session};
@@ -156,6 +160,9 @@ pub(crate) fn auth_timeout_for(connect_timeout_secs: u64) -> Duration {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AuthMethod {
+    AutoKey {
+        options: auto_auth::AutoKeyOptions,
+    },
     Password {
         password: String,
     },
@@ -169,10 +176,22 @@ pub enum AuthMethod {
 /// connection to its final target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunnelConfig {
+    #[serde(default)]
+    pub via: Option<Box<TunnelConfig>>,
+    #[serde(default)]
+    pub options: Option<JumpConnectionOptions>,
     pub host: String,
     pub port: u16,
     pub username: String,
     pub auth_method: AuthMethod,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct JumpConnectionOptions {
+    pub connect_timeout: Option<u64>,
+    pub compression: bool,
+    pub keepalive_interval: Option<u64>,
+    pub keepalive_max: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -352,7 +371,14 @@ impl HostKeyReport {
 ///
 /// Not `russh_keys::check_known_hosts`: on Windows that looks in `~/ssh/`
 /// (no dot), which OpenSSH for Windows does not use.
+#[cfg(test)]
+tokio::task_local! { static TEST_KNOWN_HOSTS: PathBuf; }
+
 pub fn default_known_hosts_path() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Ok(path) = TEST_KNOWN_HOSTS.try_with(Clone::clone) {
+        return Some(path);
+    }
     dirs::home_dir().map(|home| home.join(".ssh").join("known_hosts"))
 }
 
@@ -666,7 +692,7 @@ impl client::Handler for Client {
 /// parks `wait_recv_reply` forever, so `ssh_connect` never returns and the UI
 /// stays "connecting" until the user clicks Stop. Bounding it turns that into
 /// a normal connect error.
-async fn authenticate_session(
+pub(crate) async fn authenticate_session(
     session: &mut client::Handle<Client>,
     username: &str,
     method: &AuthMethod,
@@ -795,6 +821,9 @@ async fn authenticate(
     method: &AuthMethod,
 ) -> Result<()> {
     let authenticated = match method {
+        AuthMethod::AutoKey { options } => {
+            return auto_auth::authenticate(session, username, options).await
+        }
         AuthMethod::Password { password } => {
             // A blank password can mean two things: the host has an
             // empty-password account (PermitEmptyPasswords) or the host needs
@@ -882,48 +911,33 @@ pub async fn connect_via_ssh_tunnel(
     timeout: Duration,
     policy: HostKeyPolicy,
 ) -> Result<SshTunnelStream> {
+    let options = tunnel.options.clone().unwrap_or_default();
+    let timeout = options
+        .connect_timeout
+        .map(Duration::from_secs)
+        .unwrap_or(timeout);
     let ssh_config = client::Config {
         preferred: russh::Preferred {
             key: std::borrow::Cow::Borrowed(PREFERRED_HOST_KEY_ALGOS),
+            compression: std::borrow::Cow::Borrowed(compression_preferences(options.compression)),
             ..russh::Preferred::DEFAULT
         },
-        // The direct-tcpip channel to the final target carries the whole
-        // tunnelled session; give it the same receive window as a direct
-        // connection so tunnelled SFTP downloads aren't window-capped.
+        keepalive_interval: options.keepalive_interval.map(Duration::from_secs),
+        keepalive_max: options.keepalive_max.unwrap_or(3) as usize,
         window_size: CHANNEL_WINDOW_SIZE,
         ..client::Config::default()
     };
-
-    // Jump-host outer session: fresh X11 registry, never the target's —
-    // an inbound X11 channel on the tunneled hop must not be routed into
-    // the target connection's dispatcher (cross-session pollution).
-    let (handler, host_key_error) =
-        Client::new(&tunnel.host, tunnel.port, policy, fresh_x11_registry());
-    let mut session = tokio::time::timeout(
+    let mut session = Box::pin(dial_ssh(
+        ssh_config,
+        &tunnel.host,
+        tunnel.port,
+        policy,
+        tunnel.via.as_deref(),
+        None,
+        fresh_x11_registry(),
         timeout,
-        client::connect(
-            Arc::new(ssh_config),
-            (&tunnel.host[..], tunnel.port),
-            handler,
-        ),
-    )
-    .await
-    .map_err(|_| {
-        anyhow::anyhow!(
-            "SSH tunnel connection to {}:{} timed out after {}s. Please check the tunnel host and network connectivity.",
-            tunnel.host,
-            tunnel.port,
-            timeout.as_secs()
-        )
-    })?
-    .map_err(|e| {
-        host_key_error.explain_or(anyhow::anyhow!(
-            "Failed to connect to SSH tunnel host {}:{}: {}",
-            tunnel.host,
-            tunnel.port,
-            e
-        ))
-    })?;
+    ))
+    .await?;
 
     authenticate_session(
         &mut session,
@@ -931,29 +945,75 @@ pub async fn connect_via_ssh_tunnel(
         &tunnel.auth_method,
         auth_timeout_for(timeout.as_secs()),
     )
-    .await?;
+    .await
+    .map_err(|error| error.context(format!(
+        "Jump host {}@{}:{} authentication failed",
+        tunnel.username, tunnel.host, tunnel.port
+    )))?;
 
     // Open a direct-tcpip channel through the jump host to the final target.
     // The originator is our local end and only reported to the server; the
     // loopback address is the conventional placeholder (as OpenSSH does).
-    let channel = session
-        .channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0)
-        .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to open tunnel to {}:{} through {}:{}: {}",
-                host,
-                port,
-                tunnel.host,
-                tunnel.port,
-                e
-            )
-        })?;
+    let channel = tokio::time::timeout(
+        timeout,
+        session.channel_open_direct_tcpip(host, port as u32, "127.0.0.1", 0),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "Tunnel channel through {}:{} timed out",
+            tunnel.host,
+            tunnel.port
+        )
+    })?
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to open tunnel to {}:{} through {}:{}: {}",
+            host,
+            port,
+            tunnel.host,
+            tunnel.port,
+            e
+        )
+    })?;
 
     Ok(SshTunnelStream {
         _session: session,
         stream: channel.into_stream(),
     })
+}
+
+/// Common transport for terminals, SFTP and additional transfer sessions.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn dial_ssh(
+    config: client::Config,
+    host: &str,
+    port: u16,
+    policy: HostKeyPolicy,
+    tunnel: Option<&TunnelConfig>,
+    proxy: Option<&ProxyConfig>,
+    registry: Arc<crate::x11::X11DispatcherRegistry>,
+    timeout: Duration,
+) -> Result<client::Handle<Client>> {
+    let (handler, report) = Client::new(host, port, policy.clone(), registry);
+    let config = Arc::new(config);
+    let result = if let Some(tunnel) = tunnel {
+        let stream = connect_via_ssh_tunnel(tunnel, host, port, timeout, policy).await?;
+        tokio::time::timeout(timeout, client::connect_stream(config, stream, handler)).await
+    } else if let Some(proxy) = proxy {
+        let stream = crate::proxy::connect_via_proxy(proxy, host, port, timeout).await?;
+        tokio::time::timeout(timeout, client::connect_stream(config, stream, handler)).await
+    } else {
+        tokio::time::timeout(timeout, client::connect(config, (host, port), handler)).await
+    };
+    result
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Connection to {host}:{port} timed out after {} seconds",
+                timeout.as_secs()
+            )
+        })?
+        .map_err(|e| report.explain_or(anyhow::anyhow!("Failed to connect to {host}:{port}: {e}")))
 }
 
 impl SshClient {
@@ -969,7 +1029,7 @@ impl SshClient {
     /// The russh-level client configuration shared by every connection this
     /// client dials (the main one in `connect` and the extra bulk-transfer
     /// connections), so windows/keepalive/limits behave identically.
-    fn build_russh_client_config(config: &SshConfig) -> client::Config {
+    pub(crate) fn build_russh_client_config(config: &SshConfig) -> client::Config {
         let keepalive_interval = config.keepalive_interval.map(Duration::from_secs);
         client::Config {
             preferred: russh::Preferred {
@@ -1010,67 +1070,17 @@ impl SshClient {
         // zero/garbage value can't time out instantly.
         let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
-        let (handler, host_key_error) = Client::new(
+        let mut ssh_session = dial_ssh(
+            ssh_config,
             &config.host,
             config.port,
             config.host_key_policy.clone(),
+            config.tunnel.as_ref(),
+            config.proxy.as_ref(),
             self.x11_registry.clone(),
-        );
-        let mut ssh_session = if let Some(tunnel) = &config.tunnel {
-            // Route the connection through an SSH jump host: connect to the
-            // tunnel host, open a direct-tcpip channel to the final target,
-            // then hand that channel to russh so the target SSH handshake
-            // runs over the tunnel.
-            let stream = connect_via_ssh_tunnel(
-                tunnel,
-                &config.host,
-                config.port,
-                connection_timeout,
-                config.host_key_policy.clone(),
-            )
-            .await
-            .map_err(|e| {
-                // Keep a typed host-key refusal so the UI can offer the dialog.
-                if e.downcast_ref::<HostKeyChanged>().is_some() {
-                    e
-                } else {
-                    anyhow::anyhow!("SSH tunnel failed: {e}")
-                }
-            })?;
-            tokio::time::timeout(
-                connection_timeout,
-                client::connect_stream(Arc::new(ssh_config), stream, handler),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("Connection timed out after {} seconds. Please check the host address and network connectivity.", connection_timeout.as_secs()))?
-            .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
-        } else if let Some(proxy) = &config.proxy {
-            // Tunnel through the proxy first, then hand the established stream
-            // to russh so the SSH handshake runs over the tunnel.
-            let stream = crate::proxy::connect_via_proxy(
-                proxy,
-                &config.host,
-                config.port,
-                connection_timeout,
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("Proxy connection failed: {e}"))?;
-            tokio::time::timeout(
-                connection_timeout,
-                client::connect_stream(Arc::new(ssh_config), stream, handler),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("Connection timed out after {} seconds. Please check the host address and network connectivity.", connection_timeout.as_secs()))?
-            .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
-        } else {
-            tokio::time::timeout(
-                connection_timeout,
-                client::connect(Arc::new(ssh_config), (&config.host[..], config.port), handler),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("Connection timed out after {} seconds. Please check the host address and network connectivity.", connection_timeout.as_secs()))?
-            .map_err(|e| host_key_error.explain_or(anyhow::anyhow!("Failed to connect to {}:{}: {}", config.host, config.port, e)))?
-        };
+            connection_timeout,
+        )
+        .await?;
 
         authenticate_session(
             &mut ssh_session,
@@ -1095,8 +1105,8 @@ impl SshClient {
     /// receive window, so high-RTT links need separate connections, not just
     /// separate channels, to saturate the link.
     ///
-    /// Direct connections only: a jump-host or proxy setup is NOT replicated
-    /// (an empty result just means the transfer runs single-connection).
+    /// Each connection recreates the configured proxy and complete jump chain,
+    /// retaining session-scoped key unlock replies for authentication.
     /// Failures are tolerated per connection — whatever dials and
     /// authenticates in time is returned (possibly fewer than `count`,
     /// possibly none); the transfer falls back to the main session.
@@ -1115,40 +1125,25 @@ impl SshClient {
         let Some(config) = &self.config else {
             return Vec::new();
         };
-        if config.tunnel.is_some() || config.proxy.is_some() || count == 0 {
+        if count == 0 {
             return Vec::new();
         }
         let timeout = Duration::from_secs(config.connect_timeout.max(1));
         let dials = (0..count).map(|_| {
             let mut ssh_config = Self::build_russh_client_config(config);
             ssh_config.window_size = window_size;
-            let ssh_config = Arc::new(ssh_config);
-            // Bulk-transfer dials carry no terminal session: fresh X11
-            // registry so inbound X11 channels are rejected, never routed
-            // into the interactive connection's dispatcher.
-            let (handler, host_key_error) = Client::new(
-                &config.host,
-                config.port,
-                config.host_key_policy.clone(),
-                fresh_x11_registry(),
-            );
-            let host = config.host.clone();
             async move {
-                let mut session = tokio::time::timeout(
+                let mut session = dial_ssh(
+                    ssh_config,
+                    &config.host,
+                    config.port,
+                    config.host_key_policy.clone(),
+                    config.tunnel.as_ref(),
+                    config.proxy.as_ref(),
+                    fresh_x11_registry(),
                     timeout,
-                    client::connect(ssh_config, (&host[..], config.port), handler),
                 )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "extra session connect timed out after {}s",
-                        timeout.as_secs()
-                    )
-                })?
-                .map_err(|e| {
-                    host_key_error
-                        .explain_or(anyhow::anyhow!("extra session connect failed: {}", e))
-                })?;
+                .await?;
                 authenticate_session(
                     &mut session,
                     &config.username,
@@ -1299,6 +1294,8 @@ impl SshClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
+        // Discard session-scoped unlock replies even if disconnecting fails.
+        self.config.take();
         // End this client's X11 dispatchers FIRST: each registry entry holds
         // the only sender its dispatcher's recv() waits on, so dropping the
         // entries lets those tasks observe the disconnect, exit, and release

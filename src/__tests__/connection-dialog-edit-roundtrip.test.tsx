@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConnectionDialog, type ConnectionConfig } from '../components/connection-dialog';
 import { ConnectionStorageManager, type ConnectionData } from '../lib/connection-storage';
+import { toConnectionConfig } from '../lib/connection-config';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -58,6 +59,21 @@ async function switchToAdvancedTab() {
 }
 
 describe('edit advanced options round-trip (real storage)', () => {
+  it.each([false, true])('retains imported identities, source and sealed credentials after a connect attempt: %s', async (decrypted) => {
+    const endpoint = { host: 'prod', port: 22, username: 'deploy', authMethod: 'auto' as const, identityFiles: ['/first', '/second'], identityAgent: 'none', identitiesOnly: true, connectTimeout: 45, password: 'v1:nonce:target', jumpHosts: [{ host: 'jump', port: 2222, username: 'ops', authMethod: 'password' as const, password: 'v1:nonce:ciphertext' }] };
+    const saved = ConnectionStorageManager.saveConnectionWithId('imported', { ...endpoint, name: 'Custom label', notes: 'Keep notes', protocol: 'SSH', sshConfigSource: { path: '/ssh/config', alias: 'prod', snapshot: { ...endpoint, jumpHosts: [] } } });
+    const onSave = vi.fn();
+    const editing = toConnectionConfig(saved);
+    if (decrypted) {
+      editing.password = 'transient-target';
+      editing.jumpHosts = editing.jumpHosts!.map(h => ({ ...h, password: 'transient-hop' }));
+    }
+    render(<ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} onSave={onSave} editingConnection={editing} />);
+    expect(screen.queryByDisplayValue('v1:nonce:ciphertext')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('imported')).toMatchObject({ ...endpoint, name: 'Custom label', notes: 'Keep notes', sshConfigSource: saved.sshConfigSource });
+  });
   it('compression OFF survives save → re-open as OFF', async () => {
     ConnectionStorageManager.saveConnectionWithId('c1', {
       name: 'My Server',

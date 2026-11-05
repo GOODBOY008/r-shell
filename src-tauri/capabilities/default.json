@@ -79,6 +79,7 @@
     "allow-sftp-upload-file",
     "allow-ssh-cancel-connect",
     "allow-ssh-connect",
+    "allow-preview-ssh-config-import",
     "allow-ssh-disconnect",
     "allow-ssh-execute-command",
     "allow-ssh-tab-complete",

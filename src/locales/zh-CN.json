@@ -1753,5 +1753,87 @@
     "logonFailed": "登录失败，请查看 Windows 登录界面。",
     "logonWarning": "Windows 显示了登录警告，请查看远程画面。",
     "serverNotification": "Windows 返回了登录通知，请查看远程画面。"
+  },
+  "openSsh": {
+    "import": {
+      "title": "导入 OpenSSH 配置",
+      "description": "预览主机、处理差异后，将连接保存到 R-Shell。私钥继续引用原文件。",
+      "source": "配置文件",
+      "browse": "选择配置文件",
+      "preview": "预览",
+      "folder": "新连接的目标分组",
+      "search": "搜索别名、地址或用户",
+      "selectVisible": "切换可见主机的选择",
+      "selectHost": "选择 {{alias}}",
+      "diagnostics": "提示：{{count}}",
+      "empty": "没有匹配的主机别名。",
+      "target": "目标主机",
+      "diffHint": "下方仅展示来源发生变化的字段。冲突默认保留本地值，可逐项选择来源值。",
+      "previous": "上次导入的来源",
+      "current": "本地当前配置",
+      "incoming": "本次来源",
+      "useSource": "此冲突使用来源值",
+      "start": "选择配置文件并预览主机。预览不会建立网络连接。",
+      "submit": "导入（{{count}}）",
+      "success": "导入完成：{{count}}",
+      "localChanged": "预览期间已保存的连接发生了变化。请检查更新后的差异并重新选择主机。",
+      "errors": {
+        "corruptStorage": "无法读取已保存的连接。请修复存储数据后再导入。",
+        "missingFolder": "目标分组已不存在，请选择其他分组。",
+        "sourceErrors": "来源配置存在阻止导入的错误。",
+        "invalidHost": "所选主机无法导入，请重新预览来源配置。",
+        "ambiguousSource": "多个已保存连接绑定了相同来源和别名。请先处理重复绑定。"
+      }
+    },
+    "status": {
+      "new": "新增",
+      "unchanged": "已导入",
+      "changed": "来源有变化",
+      "conflict": "冲突",
+      "ambiguous": "来源绑定重复",
+      "blocked": "无法导入"
+    },
+    "fields": {
+      "host": "主机地址",
+      "port": "端口",
+      "username": "用户名",
+      "authMethod": "认证方式",
+      "identityFiles": "身份文件",
+      "identityAgent": "SSH Agent",
+      "identitiesOnly": "仅使用已配置的身份",
+      "connectTimeout": "连接超时（秒）",
+      "compression": "压缩",
+      "keepAlive": "保活",
+      "keepAliveInterval": "保活间隔",
+      "serverAliveCountMax": "保活重试次数",
+      "jumpHosts": "跳板链"
+    },
+    "editor": {
+      "auto": "SSH Agent 与身份文件",
+      "defaultKeys": "默认身份文件",
+      "customKeys": "指定身份文件",
+      "noKeys": "不使用身份文件（none）",
+      "defaultAgent": "系统 SSH Agent",
+      "keyPaths": "每行一个身份文件路径",
+      "keysHint": "按顺序尝试身份文件，加密私钥可在连接时解锁。",
+      "agentHint": "留空使用系统默认，或填写 Socket 路径、none",
+      "identitiesHint": "Agent 仍可为上方配置指定的身份签名。",
+      "chainHint": "按此顺序经过各级跳板，再连接目标。每级使用独立的用户名和认证设置。",
+      "hop": "第 {{number}} 级跳板",
+      "moveUp": "上移跳板",
+      "moveDown": "下移跳板",
+      "removeHop": "移除跳板",
+      "addHop": "添加跳板",
+      "editChain": "改用跳板链编辑",
+      "appDefault": "应用默认值"
+    },
+    "unlock": {
+      "title": "解锁 SSH 私钥",
+      "description": "口令仅在当前连接及其附属传输的生命周期内保留。",
+      "incorrect": "口令未能解锁此私钥，请重试或跳过。",
+      "passphrase": "私钥口令",
+      "skip": "跳过此密钥",
+      "submit": "解锁"
+    }
   }
 }

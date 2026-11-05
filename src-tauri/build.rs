@@ -78,6 +78,7 @@ fn main() {
             "sftp_upload_file",
             "ssh_cancel_connect",
             "ssh_connect",
+            "preview_ssh_config_import",
             "ssh_disconnect",
             "ssh_execute_command",
             "ssh_tab_complete",

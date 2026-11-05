@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShieldAlert } from 'lucide-react';
 import {
@@ -25,24 +25,36 @@ import { HOST_KEY_CHANGED_EVENT, type HostKeyDecisionRequest } from '@/lib/host-
 export function HostKeyChangedDialog() {
   const { t } = useTranslation();
   const [request, setRequest] = useState<HostKeyDecisionRequest | null>(null);
+  const active = useRef<HostKeyDecisionRequest | null>(null);
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<HostKeyDecisionRequest>).detail;
       if (!detail) return;
       detail.claim();
-      setRequest((current) => {
-        // Only one decision at a time; a second request while the dialog is
-        // open is answered "no" rather than silently replacing the first.
-        if (current) {
-          detail.resolve(false);
-          return current;
+      if (active.current || detail.signal?.aborted) {
+        detail.resolve(false);
+        return;
+      }
+      const resolve = detail.resolve;
+      const abort = () => detail.resolve(false);
+      detail.resolve = (trust) => {
+        detail.signal?.removeEventListener('abort', abort);
+        if (active.current === detail) {
+          active.current = null;
+          setRequest(null);
         }
-        return detail;
-      });
+        resolve(trust);
+      };
+      active.current = detail;
+      detail.signal?.addEventListener('abort', abort, { once: true });
+      setRequest(detail);
     };
     window.addEventListener(HOST_KEY_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(HOST_KEY_CHANGED_EVENT, handler);
+    return () => {
+      window.removeEventListener(HOST_KEY_CHANGED_EVENT, handler);
+      active.current?.resolve(false);
+    };
   }, []);
 
   const answer = (trust: boolean) => {
@@ -54,7 +66,12 @@ export function HostKeyChangedDialog() {
   const { info } = request;
 
   return (
-    <AlertDialog open onOpenChange={(open) => { if (!open) answer(false); }}>
+    <AlertDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) answer(false);
+      }}
+    >
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
@@ -68,7 +85,9 @@ export function HostKeyChangedDialog() {
                 <dt className="text-muted-foreground">{t('hostKey.fingerprint')}</dt>
                 <dd className="break-all">{info.fingerprint}</dd>
                 <dt className="text-muted-foreground">{t('hostKey.recordedAt')}</dt>
-                <dd className="break-all">{t('hostKey.recordedAtValue', { line: info.line, file: info.file })}</dd>
+                <dd className="break-all">
+                  {t('hostKey.recordedAtValue', { line: info.line, file: info.file })}
+                </dd>
               </dl>
               <p className="text-destructive">{t('hostKey.warning')}</p>
               <p className="text-muted-foreground">{t('hostKey.trustHint')}</p>

@@ -254,6 +254,8 @@ describe('session restore overall-timeout cancellation', () => {
       if (command === 'ssh_connect') {
         return new Promise(() => {});
       }
+      if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
+      if (command === 'credential_open') return Promise.resolve('secret');
       if (command === 'get_system_locale') return Promise.resolve('en-US');
       return Promise.resolve({});
     });
@@ -302,6 +304,8 @@ describe('session restore overall-timeout cancellation', () => {
         if (sshCalls < 5) return Promise.resolve({ success: true });
         return finalInvoke;
       }
+      if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
+      if (command === 'credential_open') return Promise.resolve('secret');
       if (command === 'get_system_locale') return Promise.resolve('en-US');
       return Promise.resolve({});
     });

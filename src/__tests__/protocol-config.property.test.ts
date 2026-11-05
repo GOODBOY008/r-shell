@@ -93,7 +93,7 @@ describe('protocol-config property tests', () => {
     });
 
     it('every returned method is a valid AuthMethod', () => {
-      const validMethods: AuthMethod[] = ['password', 'publickey', 'keyboard-interactive', 'anonymous'];
+      const validMethods: AuthMethod[] = ['password', 'publickey', 'auto', 'keyboard-interactive', 'anonymous'];
       fc.assert(
         fc.property(arbitraryProtocol, (protocol) => {
           const methods = getAuthMethods(protocol);

@@ -234,14 +234,22 @@ impl ConnectionManager {
             _ = cancel_token.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
         };
 
-        self.clear_pending_connection(&connection_id).await;
-
-        connect_result?;
-
-        let mut connections = self.connections.write().await;
-        connections.insert(connection_id, Arc::new(RwLock::new(client)));
-
-        Ok(())
+        // Keep the token registered until commit. Cancellation and publication
+        // share this lock so a closed tab cannot publish a late connection.
+        let mut pending = self.pending_connections.write().await;
+        let result = if cancel_token.is_cancelled() {
+            Err(anyhow::anyhow!("Connection cancelled by user"))
+        } else {
+            connect_result
+        };
+        if result.is_ok() {
+            self.connections
+                .write()
+                .await
+                .insert(connection_id.clone(), Arc::new(RwLock::new(client)));
+        }
+        pending.remove(&connection_id);
+        result
     }
 
     /// Mark `connection_id` as connecting and return its cancellation token.
@@ -259,14 +267,15 @@ impl ConnectionManager {
         Some(token)
     }
 
+    #[cfg(test)]
     async fn clear_pending_connection(&self, connection_id: &str) {
         let mut pending = self.pending_connections.write().await;
         pending.remove(connection_id);
     }
 
     pub async fn cancel_pending_connection(&self, connection_id: &str) -> bool {
-        let mut pending = self.pending_connections.write().await;
-        if let Some(token) = pending.remove(connection_id) {
+        let pending = self.pending_connections.read().await;
+        if let Some(token) = pending.get(connection_id) {
             token.cancel();
             true
         } else {
@@ -280,6 +289,7 @@ impl ConnectionManager {
     }
 
     pub async fn close_connection(&self, connection_id: &str) -> Result<()> {
+        self.cancel_pending_connection(connection_id).await;
         // Transfers on this connection must stop first: an engine parked on a
         // stalled request otherwise lingers until the per-request timeout,
         // and (pre-fix) it held the client read guard, blocking the disconnect.
@@ -911,12 +921,36 @@ impl ConnectionManager {
         connection_id: String,
         config: crate::sftp_client::SftpConfig,
     ) -> Result<()> {
-        let client = StandaloneSftpClient::connect(&config).await?;
-        let mut sftp_connections = self.sftp_connections.write().await;
-        sftp_connections.insert(connection_id.clone(), client);
-        let mut types = self.connection_types.write().await;
-        types.insert(connection_id, "SFTP".to_string());
-        Ok(())
+        let cancel = self
+            .register_pending_connection(&connection_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("A connection attempt is already in progress"))?;
+        let result = tokio::select! {
+            result = StandaloneSftpClient::connect(&config) => result,
+            _ = cancel.cancelled() => Err(anyhow::anyhow!("Connection cancelled by user")),
+        };
+        let mut pending = self.pending_connections.write().await;
+        let result = if cancel.is_cancelled() {
+            Err(anyhow::anyhow!("Connection cancelled by user"))
+        } else {
+            result
+        };
+        let result = match result {
+            Ok(client) => {
+                self.sftp_connections
+                    .write()
+                    .await
+                    .insert(connection_id.clone(), client);
+                self.connection_types
+                    .write()
+                    .await
+                    .insert(connection_id.clone(), "SFTP".into());
+                Ok(())
+            }
+            Err(e) => Err(e),
+        };
+        pending.remove(&connection_id);
+        result
     }
 
     pub async fn get_sftp_connection(&self) -> Arc<RwLock<HashMap<String, StandaloneSftpClient>>> {
@@ -924,6 +958,7 @@ impl ConnectionManager {
     }
 
     pub async fn close_sftp_connection(&self, connection_id: &str) -> Result<()> {
+        self.cancel_pending_connection(connection_id).await;
         self.cancel_all_connection_transfers(connection_id).await;
         let mut sftp_connections = self.sftp_connections.write().await;
         if let Some(mut client) = sftp_connections.remove(connection_id) {
@@ -1344,8 +1379,10 @@ mod tests {
         mgr.clear_pending_connection("conn-1").await;
         assert!(mgr.register_pending_connection("conn-1").await.is_some());
 
-        // … and a cancel (user-initiated retry) frees the slot the same way.
+        // Cancellation reserves the slot until its owner has stopped.
         assert!(mgr.cancel_pending_connection("conn-1").await);
+        assert!(mgr.register_pending_connection("conn-1").await.is_none());
+        mgr.clear_pending_connection("conn-1").await;
         assert!(mgr.register_pending_connection("conn-1").await.is_some());
     }
 

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use russh::keys::*;
 use russh::*;
 use russh_sftp::client::SftpSession;
 use serde::{Deserialize, Serialize};
@@ -16,6 +15,8 @@ pub struct SftpConfig {
     pub port: u16,
     pub username: String,
     pub auth_method: SftpAuthMethod,
+    #[serde(default)]
+    pub options: Option<crate::ssh::JumpConnectionOptions>,
     /// Optional SSH jump host (bastion) to route the connection through.
     pub tunnel: Option<TunnelConfig>,
     /// Host-key policy for this connection and its jump host (`AcceptNew`
@@ -32,17 +33,7 @@ fn default_sftp_connect_timeout() -> u64 {
     10
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type")]
-pub enum SftpAuthMethod {
-    Password {
-        password: String,
-    },
-    PublicKey {
-        key_path: String,
-        passphrase: Option<String>,
-    },
-}
+pub type SftpAuthMethod = crate::ssh::AuthMethod;
 
 /// A single file/directory entry returned from directory listings.
 /// Used by both local and remote (SFTP/FTP) file operations.
@@ -154,31 +145,33 @@ async fn authenticate_sftp_session_inner(
     session: &mut client::Handle<Client>,
     config: &SftpConfig,
 ) -> Result<()> {
-    let authenticated = match &config.auth_method {
-        SftpAuthMethod::Password { password } => session
-            .authenticate_password(&config.username, password)
-            .await
-            .map_err(|e| anyhow::anyhow!("SFTP password authentication failed: {}", e))?,
-        SftpAuthMethod::PublicKey {
-            key_path,
-            passphrase,
-        } => {
-            return crate::ssh::authenticate_with_key_files(
-                session,
-                &config.username,
-                key_path,
-                passphrase.as_deref(),
-            )
-            .await;
-        }
-    };
+    crate::ssh::authenticate_session(
+        session,
+        &config.username,
+        &config.auth_method,
+        auth_timeout_for(config.connect_timeout),
+    )
+    .await
+}
 
-    if !authenticated.success() {
-        return Err(anyhow::anyhow!(
-            "SFTP authentication failed. Please check your credentials."
-        ));
-    }
-    Ok(())
+fn sftp_transport_config(config: &SftpConfig, window_size: u32) -> client::Config {
+    let options = config.options.clone().unwrap_or_default();
+    let mut transport = crate::ssh::SshClient::build_russh_client_config(&crate::ssh::SshConfig {
+        host: config.host.clone(),
+        port: config.port,
+        username: config.username.clone(),
+        auth_method: config.auth_method.clone(),
+        tunnel: config.tunnel.clone(),
+        proxy: None,
+        compression: options.compression,
+        keepalive_interval: options.keepalive_interval,
+        keepalive_max: options.keepalive_max,
+        host_key_policy: config.host_key_policy.clone(),
+        connect_timeout: config.connect_timeout,
+        x11: None,
+    });
+    transport.window_size = window_size;
+    transport
 }
 
 impl StandaloneSftpClient {
@@ -192,84 +185,22 @@ impl StandaloneSftpClient {
 
     /// Establish an SSH connection, authenticate, and open the SFTP subsystem.
     pub async fn connect(config: &SftpConfig) -> Result<Self> {
-        let ssh_config = client::Config {
-            preferred: russh::Preferred {
-                key: std::borrow::Cow::Borrowed(crate::ssh::PREFERRED_HOST_KEY_ALGOS),
-                ..russh::Preferred::DEFAULT
-            },
-            // The "SFTP" connection type transfers over this session, so it
-            // needs the same large receive window as the terminal-oriented
-            // connections — see crate::ssh::CHANNEL_WINDOW_SIZE.
-            window_size: crate::ssh::CHANNEL_WINDOW_SIZE,
-            ..client::Config::default()
-        };
+        let ssh_config = sftp_transport_config(config, crate::ssh::CHANNEL_WINDOW_SIZE);
         // Floor at 1 s so a zero/garbage value from the settings can't time
         // out instantly.
         let connection_timeout = Duration::from_secs(config.connect_timeout.max(1));
 
-        let (handler, host_key_error) =
-            Client::new(
-                &config.host,
-                config.port,
-                config.host_key_policy.clone(),
-                crate::ssh::fresh_x11_registry(),
-            );
-        let mut ssh_session = if let Some(tunnel) = &config.tunnel {
-            // Route through an SSH jump host, then run the target handshake
-            // over the tunneled channel.
-            let stream = crate::ssh::connect_via_ssh_tunnel(
-                tunnel,
-                &config.host,
-                config.port,
-                connection_timeout,
-                config.host_key_policy.clone(),
-            )
-            .await
-            .map_err(|e| anyhow::anyhow!("SFTP SSH tunnel failed: {e}"))?;
-            tokio::time::timeout(
-                connection_timeout,
-                client::connect_stream(Arc::new(ssh_config), stream, handler),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "SFTP connection timed out after {} seconds. Please check the host and network.",
-                    connection_timeout.as_secs()
-                )
-            })?
-            .map_err(|e| {
-                host_key_error.explain_or(anyhow::anyhow!(
-                    "Failed to connect to {}:{}: {}",
-                    config.host,
-                    config.port,
-                    e
-                ))
-            })?
-        } else {
-            tokio::time::timeout(
-                connection_timeout,
-                client::connect(
-                    Arc::new(ssh_config),
-                    (&config.host[..], config.port),
-                    handler,
-                ),
-            )
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "SFTP connection timed out after {} seconds. Please check the host and network.",
-                    connection_timeout.as_secs()
-                )
-            })?
-            .map_err(|e| {
-                host_key_error.explain_or(anyhow::anyhow!(
-                    "Failed to connect to {}:{}: {}",
-                    config.host,
-                    config.port,
-                    e
-                ))
-            })?
-        };
+        let mut ssh_session = crate::ssh::dial_ssh(
+            ssh_config,
+            &config.host,
+            config.port,
+            config.host_key_policy.clone(),
+            config.tunnel.as_ref(),
+            None,
+            crate::ssh::fresh_x11_registry(),
+            connection_timeout,
+        )
+        .await?;
 
         authenticate_sftp_session(&mut ssh_session, config).await?;
 
@@ -293,7 +224,7 @@ impl StandaloneSftpClient {
     /// Sessions for a large-file upload: the main session plus as many
     /// extra independently-dialed SSH connections as the transfer wants
     /// (see [`crate::sftp_transfer::upload_stream_target`]). Tunnelled
-    /// configurations dial nothing.
+    /// configurations rebuild the same authenticated hop chain.
     pub(crate) async fn prepare_upload_transfer_sessions(
         &self,
         local_path: &str,
@@ -348,43 +279,24 @@ impl StandaloneSftpClient {
         let Some(config) = &self.config else {
             return Vec::new();
         };
-        if config.tunnel.is_some() || count == 0 {
+        if count == 0 {
             return Vec::new();
         }
         let timeout = Duration::from_secs(config.connect_timeout.max(1));
         let dials = (0..count).map(|_| {
-            let ssh_config = Arc::new(client::Config {
-                preferred: russh::Preferred {
-                    key: std::borrow::Cow::Borrowed(crate::ssh::PREFERRED_HOST_KEY_ALGOS),
-                    ..russh::Preferred::DEFAULT
-                },
-                window_size,
-                ..client::Config::default()
-            });
-            let (handler, host_key_error) =
-                Client::new(
-                &config.host,
-                config.port,
-                config.host_key_policy.clone(),
-                crate::ssh::fresh_x11_registry(),
-            );
-            let host = config.host.clone();
+            let ssh_config = sftp_transport_config(config, window_size);
             async move {
-                let mut session = tokio::time::timeout(
+                let mut session = crate::ssh::dial_ssh(
+                    ssh_config,
+                    &config.host,
+                    config.port,
+                    config.host_key_policy.clone(),
+                    config.tunnel.as_ref(),
+                    None,
+                    crate::ssh::fresh_x11_registry(),
                     timeout,
-                    client::connect(ssh_config, (&host[..], config.port), handler),
                 )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "extra session connect timed out after {}s",
-                        timeout.as_secs()
-                    )
-                })?
-                .map_err(|e| {
-                    host_key_error
-                        .explain_or(anyhow::anyhow!("extra session connect failed: {}", e))
-                })?;
+                .await?;
                 authenticate_sftp_session(&mut session, config).await?;
                 Ok::<_, anyhow::Error>(Arc::new(session))
             }
@@ -410,6 +322,7 @@ impl StandaloneSftpClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
+        self.config.take();
         // Drop SFTP session first
         self.sftp.take();
         // Disconnect SSH session

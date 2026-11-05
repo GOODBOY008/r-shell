@@ -1,16 +1,17 @@
+import type { SshExtendedOptions } from '@/lib/ssh-options';
 /**
  * Connection Profile Management
  * Handles saving, loading, and managing SSH connection profiles
  */
-import { SECRET_FIELDS } from './credential-crypto';
+import { withoutSecrets } from './credential-crypto';
 
-export interface ConnectionProfile {
+export interface ConnectionProfile extends SshExtendedOptions {
   id: string;
   name: string;
   host: string;
   port: number;
   username: string;
-  authMethod: 'password' | 'key';
+  authMethod: 'password' | 'key' | 'auto';
   password?: string; // Note: In production, use encrypted storage
   privateKey?: string;
   createdAt: string;
@@ -101,7 +102,7 @@ export class ConnectionProfileManager {
    */
   static exportProfiles(): string {
     const profiles = this.getProfiles();
-    return JSON.stringify(profiles, null, 2);
+    return JSON.stringify(withoutSecrets(profiles), null, 2);
   }
 
   /**
@@ -121,16 +122,13 @@ export class ConnectionProfileManager {
       // predate export sanitization — never persist secrets coming from
       // outside (storage secrets are handled by the startup seal migration).
       imported.forEach(profile => {
-        const clone = { ...profile } as Record<string, unknown>;
-        for (const field of SECRET_FIELDS) {
-          delete clone[field];
-        }
+        const clone = withoutSecrets(profile);
         profiles.push({
           ...clone,
           id: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        } as ConnectionProfile);
+        });
       });
       
       localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));

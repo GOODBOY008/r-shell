@@ -1808,5 +1808,87 @@
     "logonFailed": "Logowanie nie powiodło się. Sprawdź ekran logowania Windows.",
     "logonWarning": "Windows wyświetlił ostrzeżenie logowania. Sprawdź ekran zdalny.",
     "serverNotification": "Windows zgłosił powiadomienie logowania. Sprawdź ekran zdalny."
+  },
+  "openSsh": {
+    "import": {
+      "title": "Importuj konfigurację OpenSSH",
+      "description": "Wyświetl hosty, sprawdź różnice i zapisz połączenia w R-Shell. Klucze prywatne pozostaną w oryginalnych plikach.",
+      "source": "Plik konfiguracji",
+      "browse": "Wybierz plik konfiguracji",
+      "preview": "Podgląd",
+      "folder": "Folder nowych połączeń",
+      "search": "Szukaj aliasu, hosta lub użytkownika",
+      "selectVisible": "Zmień zaznaczenie widocznych hostów",
+      "selectHost": "Zaznacz {{alias}}",
+      "diagnostics": "Uwagi: {{count}}",
+      "empty": "Brak pasujących aliasów hostów.",
+      "target": "Host docelowy",
+      "diffHint": "Poniżej są tylko zmiany źródła. W razie konfliktu zostanie zachowana wartość lokalna, chyba że wybierzesz wartość ze źródła.",
+      "previous": "Poprzednio importowane źródło",
+      "current": "Konfiguracja lokalna",
+      "incoming": "Aktualne źródło",
+      "useSource": "Użyj wartości ze źródła w tym konflikcie",
+      "start": "Wybierz plik konfiguracji i wyświetl hosty. Podgląd nie nawiązuje połączenia sieciowego.",
+      "submit": "Importuj ({{count}})",
+      "success": "Import zakończony: {{count}}",
+      "localChanged": "Zapisane połączenia zmieniły się podczas podglądu. Sprawdź nowe różnice i ponownie zaznacz hosty.",
+      "errors": {
+        "corruptStorage": "Nie można odczytać zapisanych połączeń. Napraw zapisane dane przed importem.",
+        "missingFolder": "Folder docelowy już nie istnieje. Wybierz inny folder.",
+        "sourceErrors": "Konfiguracja źródłowa zawiera błędy uniemożliwiające import.",
+        "invalidHost": "Nie można zaimportować wybranego hosta. Ponownie wyświetl podgląd źródła.",
+        "ambiguousSource": "Wiele zapisanych połączeń ma to samo źródło i alias. Usuń powielone powiązania przed importem."
+      }
+    },
+    "status": {
+      "new": "Nowy",
+      "unchanged": "Już zaimportowano",
+      "changed": "Zmiana źródła",
+      "conflict": "Konflikt",
+      "ambiguous": "Powielone powiązanie źródła",
+      "blocked": "Import niemożliwy"
+    },
+    "fields": {
+      "host": "Host",
+      "port": "Port",
+      "username": "Użytkownik",
+      "authMethod": "Uwierzytelnianie",
+      "identityFiles": "Pliki tożsamości",
+      "identityAgent": "Agent SSH",
+      "identitiesOnly": "Używaj tylko skonfigurowanych tożsamości",
+      "connectTimeout": "Limit czasu połączenia (sekundy)",
+      "compression": "Kompresja",
+      "keepAlive": "Podtrzymywanie połączenia",
+      "keepAliveInterval": "Odstęp podtrzymywania",
+      "serverAliveCountMax": "Liczba prób podtrzymywania",
+      "jumpHosts": "Łańcuch hostów pośredniczących"
+    },
+    "editor": {
+      "auto": "Agent SSH i pliki tożsamości",
+      "defaultKeys": "Domyślne pliki tożsamości",
+      "customKeys": "Wybierz pliki tożsamości",
+      "noKeys": "Bez plików tożsamości (none)",
+      "defaultAgent": "Systemowy agent SSH",
+      "keyPaths": "Jedna ścieżka pliku tożsamości na wiersz",
+      "keysHint": "Klucze są sprawdzane w podanej kolejności. Zaszyfrowane klucze można odblokować podczas łączenia.",
+      "agentHint": "Domyślny agent, ścieżka gniazda lub none",
+      "identitiesHint": "Agent nadal może podpisywać przy użyciu wymienionych tożsamości.",
+      "chainHint": "Hosty są używane w tej kolejności, a następnie host docelowy. Każdy ma własnego użytkownika i uwierzytelnianie.",
+      "hop": "Host pośredniczący {{number}}",
+      "moveUp": "Przesuń host w górę",
+      "moveDown": "Przesuń host w dół",
+      "removeHop": "Usuń host",
+      "addHop": "Dodaj host pośredniczący",
+      "editChain": "Edytuj jako łańcuch hostów",
+      "appDefault": "Domyślne ustawienie aplikacji"
+    },
+    "unlock": {
+      "title": "Odblokuj klucz prywatny SSH",
+      "description": "Hasło jest przechowywane tylko przez czas trwania tego połączenia i jego transferów.",
+      "incorrect": "Hasło nie odblokowało klucza. Spróbuj ponownie lub pomiń klucz.",
+      "passphrase": "Hasło klucza",
+      "skip": "Pomiń ten klucz",
+      "submit": "Odblokuj"
+    }
   }
 }

@@ -72,7 +72,7 @@ describe('sshConnect (changed host key → user decision → accept-new retry)',
     invoke.mockResolvedValueOnce({ success: true });
     await expect(sshConnect(request)).resolves.toEqual({ success: true });
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith('ssh_connect', { request });
+    expect(invoke).toHaveBeenCalledWith('ssh_connect', { request: expect.objectContaining({ ...request, attempt_id: expect.any(String), auth_responses: [] }) });
   });
 
   it('returns an ordinary failure without asking anyone', async () => {
@@ -100,6 +100,7 @@ describe('sshConnect (changed host key → user decision → accept-new retry)',
     expect(invoke).toHaveBeenLastCalledWith('ssh_connect', {
       request: {
         ...request,
+        attempt_id: expect.any(String), auth_responses: [],
         host_key_policy: 'accept-new',
         accept_new_for: { host: changed.host, port: changed.port },
       },

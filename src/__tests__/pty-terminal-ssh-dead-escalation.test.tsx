@@ -277,7 +277,7 @@ describe('PtyTerminal ssh_session_dead escalation', () => {
     );
 
     expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledTimes(1);
-    expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledWith('ssh-dead-1');
+    expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledWith('ssh-dead-1', true);
     // Status flips to disconnected and the socket is closed.
     expect(onStatusChange).toHaveBeenCalledWith('ssh-dead-1', 'disconnected');
     expect(webSocket.close).toHaveBeenCalled();

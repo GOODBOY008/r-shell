@@ -127,6 +127,7 @@ mod tests {
             .create_sftp_connection(
                 "sftp-editor".into(),
                 SftpConfig {
+                    options: None,
                     host: "127.0.0.1".into(),
                     port: std::env::var("RSHELL_EDITOR_SFTP_PORT")
                         .unwrap()

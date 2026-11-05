@@ -1756,5 +1756,87 @@
     "logonFailed": "Sign-in failed. Check the Windows sign-in screen.",
     "logonWarning": "Windows displayed a sign-in warning. Check the remote screen.",
     "serverNotification": "Windows reported a sign-in notification. Check the remote screen."
+  },
+  "openSsh": {
+    "import": {
+      "title": "Import OpenSSH configuration",
+      "description": "Preview hosts, review differences, then save connections in R-Shell. Private keys stay in their original files.",
+      "source": "Configuration file",
+      "browse": "Choose configuration file",
+      "preview": "Preview",
+      "folder": "Folder for new connections",
+      "search": "Search alias, host or user",
+      "selectVisible": "Toggle visible hosts",
+      "selectHost": "Select {{alias}}",
+      "diagnostics": "Notices: {{count}}",
+      "empty": "No matching host aliases.",
+      "target": "Target",
+      "diffHint": "Only source changes appear below. Conflicts keep the local value unless you choose the source.",
+      "previous": "Last imported source",
+      "current": "Local configuration",
+      "incoming": "Current source",
+      "useSource": "Use source value for this conflict",
+      "start": "Choose a configuration file and preview its hosts. No network connection is made.",
+      "submit": "Import ({{count}})",
+      "success": "Import complete: {{count}}",
+      "localChanged": "Saved connections changed while this preview was open. Review the updated differences and select hosts again.",
+      "errors": {
+        "corruptStorage": "Stored connections cannot be read. Repair the stored data before importing.",
+        "missingFolder": "The destination folder no longer exists. Choose another folder.",
+        "sourceErrors": "The source contains errors that prevent import.",
+        "invalidHost": "A selected host cannot be imported. Preview the source again.",
+        "ambiguousSource": "Multiple saved connections have the same source and alias. Resolve the duplicate bindings before importing."
+      }
+    },
+    "status": {
+      "new": "New",
+      "unchanged": "Already imported",
+      "changed": "Source changed",
+      "conflict": "Conflict",
+      "ambiguous": "Duplicate source binding",
+      "blocked": "Cannot import"
+    },
+    "fields": {
+      "host": "Host",
+      "port": "Port",
+      "username": "Username",
+      "authMethod": "Authentication",
+      "identityFiles": "Identity files",
+      "identityAgent": "SSH Agent",
+      "identitiesOnly": "Use only configured identities",
+      "connectTimeout": "Connection timeout (seconds)",
+      "compression": "Compression",
+      "keepAlive": "Keep alive",
+      "keepAliveInterval": "Keep-alive interval",
+      "serverAliveCountMax": "Keep-alive retries",
+      "jumpHosts": "Jump host chain"
+    },
+    "editor": {
+      "auto": "SSH Agent and identity files",
+      "defaultKeys": "Default identity files",
+      "customKeys": "Choose identity files",
+      "noKeys": "No identity files (none)",
+      "defaultAgent": "System SSH Agent",
+      "keyPaths": "One identity file path per line",
+      "keysHint": "Keys are tried in order. Encrypted keys can be unlocked when connecting.",
+      "agentHint": "System default, socket path, or none",
+      "identitiesHint": "The Agent may still sign for identities listed above.",
+      "chainHint": "Hops are used in this order, followed by the target. Each hop uses its own username and authentication.",
+      "hop": "Jump host {{number}}",
+      "moveUp": "Move hop up",
+      "moveDown": "Move hop down",
+      "removeHop": "Remove hop",
+      "addHop": "Add jump host",
+      "editChain": "Edit as a jump host chain",
+      "appDefault": "Application default"
+    },
+    "unlock": {
+      "title": "Unlock SSH private key",
+      "description": "The passphrase is kept only for this connection and its transfers.",
+      "incorrect": "The passphrase did not unlock this key. Try again or skip it.",
+      "passphrase": "Key passphrase",
+      "skip": "Skip this key",
+      "submit": "Unlock"
+    }
   }
 }
