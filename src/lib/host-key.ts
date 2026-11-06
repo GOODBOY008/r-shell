@@ -46,6 +46,7 @@ export const HOST_KEY_CHANGED_EVENT = 'rshell-host-key-changed';
 
 export interface HostKeyDecisionRequest {
   info: HostKeyChangedInfo;
+  signal?: AbortSignal;
   /** Called by a listener that will answer, so the requester does not default to "no". */
   claim: () => void;
   resolve: (trust: boolean) => void;
@@ -55,25 +56,36 @@ export interface HostKeyDecisionRequest {
  * Ask the user whether to trust a changed host key. Resolves `false` when no
  * dialog is mounted to answer (headless contexts, tests).
  */
-export function requestHostKeyDecision(info: HostKeyChangedInfo): Promise<boolean> {
+export function requestHostKeyDecision(
+  info: HostKeyChangedInfo,
+  signal?: AbortSignal
+): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let claimed = false;
     let settled = false;
     const settle = (trust: boolean) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener('abort', abort);
       resolve(trust);
     };
+    const abort = () => settle(false);
+    if (signal?.aborted) {
+      settle(false);
+      return;
+    }
+    signal?.addEventListener('abort', abort, { once: true });
     window.dispatchEvent(
       new CustomEvent<HostKeyDecisionRequest>(HOST_KEY_CHANGED_EVENT, {
         detail: {
           info,
+          signal,
           claim: () => {
             claimed = true;
           },
           resolve: settle,
         },
-      }),
+      })
     );
     if (!claimed) settle(false);
   });

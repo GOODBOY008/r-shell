@@ -46,6 +46,8 @@ mod tests {
             host_key_policy: crate::ssh::HostKeyPolicy::default(),
             connect_timeout: 3,
             tunnel: Some(crate::ssh::TunnelConfig {
+                via: None,
+                options: None,
                 host: "bastion.example.com".to_string(),
                 port: 2222,
                 username: "jumpuser".to_string(),
@@ -569,6 +571,8 @@ mod shell_integration_tests {
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
                 connect_timeout: 3,
                 tunnel: Some(TunnelConfig {
+                    via: None,
+                    options: None,
                     host,
                     port,
                     username: "testuser".to_string(),

@@ -17,6 +17,7 @@ mod sftp_client;
 mod sftp_transfer;
 mod socks_proxy;
 mod ssh;
+mod ssh_config;
 mod vnc_client;
 mod websocket_server;
 mod x11;
@@ -517,6 +518,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::authorize_local_file,
             commands::ssh_connect,
+            commands::preview_ssh_config_import,
             commands::ssh_cancel_connect,
             commands::ssh_disconnect,
             commands::get_session_health,
@@ -599,6 +601,8 @@ pub fn run() {
             commands::editor_dirty_changed,
             commands::credential_seal,
             commands::credential_open,
+            commands::list_ssh_key_passphrases,
+            commands::forget_ssh_key_passphrase,
             // In-app updater (channel endpoints + Homebrew detection)
             commands::get_update_context,
             commands::updater_check,

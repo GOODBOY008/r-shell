@@ -1,3 +1,4 @@
+import { sshExtendedOptions } from './ssh-options';
 /**
  * Mapping helpers between the persisted connection model (ConnectionData)
  * and the dialog form model (ConnectionConfig).
@@ -14,6 +15,7 @@ import type { ConnectionConfig } from '../components/connection-dialog';
  */
 export function toConnectionConfig(data: ConnectionData): ConnectionConfig {
   return {
+    ...sshExtendedOptions(data),
     id: data.id,
     name: data.name,
     protocol: data.protocol as ConnectionConfig['protocol'],

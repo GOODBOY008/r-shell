@@ -229,6 +229,8 @@ describe('pending tab reconnect', () => {
     lifecycle.invoke.mockReset();
     lifecycle.invoke.mockImplementation((command: string) => {
       if (command === 'ssh_connect') return Promise.resolve({ success: true });
+      if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
+      if (command === 'credential_open') return Promise.resolve('secret');
       if (command === 'get_system_locale') return Promise.resolve('en-US');
       return Promise.resolve({});
     });
@@ -240,6 +242,7 @@ describe('pending tab reconnect', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     setRestoreTimingForTests({ connectTimeoutMs: 15_000, overallTimeoutMs: 60_000 });
   });
 
@@ -293,6 +296,8 @@ describe('pending tab reconnect', () => {
           settle = resolve;
         });
       }
+      if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
+      if (command === 'credential_open') return Promise.resolve('secret');
       if (command === 'get_system_locale') return Promise.resolve('en-US');
       return Promise.resolve({});
     });
@@ -330,6 +335,8 @@ describe('pending tab reconnect', () => {
     lifecycle.invoke.mockImplementation((command: string) => {
       // "Authentication" marks the failure as permanent: no backoff retry.
       if (command === 'ssh_connect') return Promise.resolve({ success: false, error: 'Authentication failed' });
+      if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
+      if (command === 'credential_open') return Promise.resolve('secret');
       if (command === 'get_system_locale') return Promise.resolve('en-US');
       return Promise.resolve({});
     });
@@ -355,6 +362,63 @@ describe('pending tab reconnect', () => {
     expect(screen.queryByTestId('pty')).toBeNull();
     expect(sshConnectCalls()).toHaveLength(1);
   }, 15_000);
+
+  it('stops reconnecting when the user cancels private-key unlock', async () => {
+    const original = lifecycle.invoke.getMockImplementation()!;
+    lifecycle.invoke.mockImplementation((command: string, args: { request?: { attempt_id: string } }) => {
+      if (command === 'ssh_connect') return Promise.resolve({
+        success: false,
+        auth_required: {
+          attempt_id: args.request!.attempt_id,
+          endpoint: 'target root@example.com:22',
+          key_path: '/fixture/encrypted',
+          reason: 'encrypted_key',
+        },
+      });
+      return original(command, args);
+    });
+    render(<App />);
+    await reconnectTabFromContextMenu('Server 1');
+    const dialog = await screen.findByRole('dialog');
+    vi.useFakeTimers();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel', exact: true }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(65_000); });
+    expect(sshConnectCalls()).toHaveLength(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getAllByText(CONNECT_FAILED_HINT)).toHaveLength(1);
+    expect(screen.queryByTestId('pty')).toBeNull();
+    expect(lifecycle.toast.error).not.toHaveBeenCalled();
+  });
+
+  it('keeps an automatic retry requiring unlock pending until the user connects', async () => {
+    const original = lifecycle.invoke.getMockImplementation()!;
+    let count = 0;
+    lifecycle.invoke.mockImplementation((command: string, args: { request?: { attempt_id: string } }) => {
+      if (command === 'ssh_connect') return Promise.resolve(++count === 1
+        ? { success: false, error: 'Network unavailable' }
+        : {
+          success: false,
+          auth_required: {
+            attempt_id: args.request!.attempt_id,
+            endpoint: 'target root@example.com:22',
+            key_path: '/fixture/encrypted',
+            reason: 'encrypted_key',
+          },
+        });
+      return original(command, args);
+    });
+    render(<App />);
+    await reconnectTabFromContextMenu('Server 1');
+    await vi.waitFor(() => expect(sshConnectCalls()).toHaveLength(2), { timeout: 5000 });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getAllByText(CONNECT_FAILED_HINT)).toHaveLength(1);
+    expect(screen.queryByTestId('pty')).toBeNull();
+    // Only a new, explicit request is allowed to show the unlock form.
+    await reconnectTabFromContextMenu('Server 1');
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('/fixture/encrypted')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel', exact: true }));
+  });
 
   it('reconnects the exact clicked tab after credentials are supplied in the dialog', async () => {
     // conn-1 is saved without a password: Reconnect must open the credentials

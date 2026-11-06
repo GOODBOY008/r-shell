@@ -43,6 +43,12 @@ jobs:
       - name: Install dependencies (Linux)
         if: matrix.platform == 'ubuntu-latest'
         run: |
+          # Avoid very slow WebKit downloads from the runner's Azure mirror.
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' "$source"
+            fi
+          done
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev \
             build-essential \

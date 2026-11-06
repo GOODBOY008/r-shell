@@ -725,7 +725,7 @@ export function PtyTerminal({
             sshDeadEscalatedRef.current = true;
             if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
               term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
-              void onReconnectTab(connectionId);
+              void onReconnectTab(connectionId, true);
             } else {
               term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
             }
@@ -957,7 +957,7 @@ export function PtyTerminal({
                   sshDeadEscalatedRef.current = true;
                   if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
                     term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
-                    void onReconnectTab(connectionId);
+                    void onReconnectTab(connectionId, true);
                   } else {
                     term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
                   }

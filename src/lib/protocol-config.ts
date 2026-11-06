@@ -7,7 +7,7 @@
 
 export type Protocol = 'SSH' | 'Telnet' | 'Raw' | 'Serial' | 'SFTP' | 'FTP' | 'RDP' | 'VNC';
 
-export type AuthMethod = 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
+export type AuthMethod = 'password' | 'publickey' | 'auto' | 'keyboard-interactive' | 'anonymous';
 
 const DEFAULT_PORTS: Record<Protocol, number> = {
   SSH: 22,
@@ -21,8 +21,8 @@ const DEFAULT_PORTS: Record<Protocol, number> = {
 };
 
 const AUTH_METHODS: Record<Protocol, AuthMethod[]> = {
-  SSH: ['password', 'publickey', 'keyboard-interactive'],
-  SFTP: ['password', 'publickey'],
+  SSH: ['password', 'publickey', 'auto', 'keyboard-interactive'],
+  SFTP: ['password', 'publickey', 'auto'],
   FTP: ['password', 'anonymous'],
   Telnet: ['password'],
   Raw: [],

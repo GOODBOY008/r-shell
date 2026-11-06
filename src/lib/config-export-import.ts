@@ -1,3 +1,4 @@
+import { withoutSecrets } from './credential-crypto';
 /**
  * Config Export / Import
  *
@@ -97,7 +98,7 @@ export async function exportAllConfig(): Promise<boolean> {
     if (connections.length || folders.length) {
       bundle.data.connections = {
         connections: connections.map((c) => {
-          const clone = { ...c } as Record<string, unknown>;
+          const clone = withoutSecrets({ ...c }) as Record<string, unknown>;
           for (const field of EXPORT_STRIPPED_FIELDS) {
             delete clone[field];
           }
@@ -111,7 +112,7 @@ export async function exportAllConfig(): Promise<boolean> {
     const profiles = ConnectionProfileManager.getProfiles();
     if (profiles.length) {
       bundle.data.profiles = profiles.map((p) => {
-        const clone = { ...p } as Record<string, unknown>;
+        const clone = withoutSecrets({ ...p }) as Record<string, unknown>;
         for (const field of EXPORT_STRIPPED_FIELDS) {
           delete clone[field];
         }

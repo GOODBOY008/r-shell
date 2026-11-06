@@ -1,8 +1,10 @@
+import { mergeSshImport, SshImportError, type SshImportPreview, type ImportSelection } from './ssh-config-import';
+import type { SshExtendedOptions } from '@/lib/ssh-options';
 /**
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
  */
-import { SECRET_FIELDS, isSealed } from './credential-crypto';
+import { SECRET_FIELDS, isSealed, withoutSecrets } from './credential-crypto';
 
 /**
  * X11 forwarding options for an SSH connection. Mirrors the Rust-side
@@ -19,7 +21,7 @@ export interface X11Config {
   display?: string;
 }
 
-export interface ConnectionData {
+export interface ConnectionData extends SshExtendedOptions {
   id: string;
   name: string;
   host: string;
@@ -37,7 +39,7 @@ export interface ConnectionData {
   /** Free text kept for the host; plain, travels with exports and imports. */
   notes?: string;
   // Authentication details
-  authMethod?: 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
+  authMethod?: 'password' | 'publickey' | 'auto' | 'keyboard-interactive' | 'anonymous';
   password?: string; // Note: In production, this should be encrypted
   privateKeyPath?: string;
   passphrase?: string;
@@ -112,7 +114,7 @@ export function connectionHasCredentials(data: ConnectionData): boolean {
   }
 
   // Public-key auth can fall back to the user's default SSH key.
-  return authMethod === 'publickey';
+  return authMethod === 'publickey' || authMethod === 'auto';
 }
 
 const CONNECTIONS_STORAGE_KEY = 'r-shell-connections';
@@ -316,15 +318,8 @@ export function clearSealFailed(connectionId: string): void {
 }
 
 function stripUnencryptedSecrets(connection: ConnectionData): ConnectionData {
-  const clone = { ...connection };
-  const protectedRecord = connection.id !== undefined && sealFailedIds.has(connection.id);
-  for (const field of SECRET_FIELDS) {
-    const value = clone[field];
-    if (typeof value === 'string' && value.length > 0 && !isSealed(value) && !protectedRecord) {
-      delete clone[field];
-    }
-  }
-  return clone;
+  if (connection.id !== undefined && sealFailedIds.has(connection.id)) return { ...connection };
+  return stripSecretsDeep(connection) as ConnectionData;
 }
 
 /**
@@ -336,6 +331,18 @@ function persistConnections(connections: ConnectionData[]): void {
 }
 
 export class ConnectionStorageManager {
+  static importSshConfig(preview: SshImportPreview, selections: ImportSelection[], folder: string): number {
+    const connections = this.getConnections();
+    const folders = this.getFolders();
+    const corruption = getStorageCorruption();
+    if (corruption.connections || corruption.folders) throw new SshImportError('corruptStorage');
+    if (folder !== 'All Connections' && !folders.some(f => f.path === folder)) throw new SshImportError('missingFolder');
+    const merged = mergeSshImport(connections, preview, selections, folder);
+    persistConnections(merged);
+    window.dispatchEvent(new Event('storage'));
+    return selections.length;
+  }
+
   /**
    * Migrate data from old session storage to new connection storage
    */
@@ -865,7 +872,7 @@ export class ConnectionStorageManager {
   static exportConnections(): string {
     const connections = this.getConnections();
     const folders = this.getFolders();
-    return JSON.stringify({ connections, folders }, null, 2);
+    return JSON.stringify({ connections: connections.map(withoutSecrets), folders }, null, 2);
   }
 
   /**
@@ -912,7 +919,7 @@ export class ConnectionStorageManager {
       // Import connections with new IDs
       imported.connections.forEach(connection => {
         connections.push({
-          ...connection,
+          ...withoutSecrets(connection),
           id: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
         });

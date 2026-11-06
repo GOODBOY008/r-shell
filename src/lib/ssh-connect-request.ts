@@ -1,3 +1,4 @@
+import { type SshExtendedOptions, type SshIdentityRequest, sshIdentityRequest } from './ssh-options';
 import { getHostKeyPolicy, type HostKeyPolicy } from './host-key';
 import type { X11Config } from './connection-storage';
 import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcuts';
@@ -37,7 +38,7 @@ export function getConnectionTimeoutSetting(): number | null {
 }
 
 /** Subset of ConnectionConfig / ConnectionData that the SSH connect request needs. */
-export interface SshConnectRequestSource {
+export interface SshConnectRequestSource extends SshExtendedOptions {
   host: string;
   port: number;
   username: string;
@@ -67,7 +68,7 @@ export interface SshConnectRequestSource {
   x11?: X11Config;
 }
 
-export interface SshConnectRequest {
+export interface SshConnectRequest extends SshIdentityRequest {
   connection_id: string;
   host: string;
   port: number;
@@ -121,6 +122,7 @@ export function buildSshConnectRequest(
   const tunnelEnabled = source.tunnelEnabled === true;
 
   return {
+    ...sshIdentityRequest(source),
     connection_id: connectionId,
     host: source.host,
     port: source.port || 22,
@@ -132,7 +134,7 @@ export function buildSshConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
-    connect_timeout: getConnectionTimeoutSetting(),
+    connect_timeout: source.connectTimeout ?? getConnectionTimeoutSetting(),
     compression: source.compression !== false,
     keepalive_enabled: keepAlive,
     keepalive_interval: keepAlive ? (source.keepAliveInterval ?? 60) : null,
@@ -155,7 +157,11 @@ export function buildSshConnectRequest(
 }
 
 /** Subset of ConnectionConfig / ConnectionData that the SFTP connect request needs. */
-export interface SftpConnectRequestSource {
+export interface SftpConnectRequestSource extends SshExtendedOptions {
+  compression?: boolean;
+  keepAlive?: boolean;
+  keepAliveInterval?: number;
+  serverAliveCountMax?: number;
   host: string;
   port: number;
   username: string;
@@ -174,7 +180,12 @@ export interface SftpConnectRequestSource {
   tunnelPassphrase?: string;
 }
 
-export interface SftpConnectRequest {
+export interface SftpConnectRequest extends SshIdentityRequest {
+  compression?: boolean;
+  keepalive_enabled?: boolean;
+  keepalive_interval?: number;
+  keepalive_max?: number;
+  accept_new_for?: { host: string; port: number };
   connection_id: string;
   host: string;
   port: number;
@@ -210,6 +221,11 @@ export function buildSftpConnectRequest(
   const tunnelEnabled = source.tunnelEnabled === true;
 
   return {
+    ...sshIdentityRequest(source),
+    compression: source.compression,
+    keepalive_enabled: source.keepAlive,
+    keepalive_interval: source.keepAliveInterval,
+    keepalive_max: source.serverAliveCountMax,
     connection_id: connectionId,
     host: source.host,
     port: source.port || 22,
@@ -219,7 +235,7 @@ export function buildSftpConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
-    connect_timeout: getConnectionTimeoutSetting(),
+    connect_timeout: source.connectTimeout ?? getConnectionTimeoutSetting(),
     tunnel_enabled: tunnelEnabled,
     tunnel_host: tunnelEnabled ? (source.tunnelHost || null) : null,
     tunnel_port: tunnelEnabled ? (source.tunnelPort ?? null) : null,

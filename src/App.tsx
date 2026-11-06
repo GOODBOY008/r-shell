@@ -32,6 +32,8 @@ import type { DetachedSession } from './components/connection-manager';
 import { isDesktopProtocol } from './lib/protocol-config';
 import { buildSftpConnectRequest, buildSshConnectRequest, getConnectionTimeoutSetting } from './lib/ssh-connect-request';
 import { sshConnect } from '@/lib/ssh-connect';
+import { sftpConnect, cancelSshConnect, sshRouteTimeoutMs, SshConnectionError } from '@/lib/ssh-auth-flow';
+import { SshKeyUnlockDialog } from './components/ssh-key-unlock-dialog';
 import { registerRestoration, clearAllRestorations } from './lib/restoration-manager';
 import { requestDetach } from './lib/terminal-detach-registry';
 import { useLayout, LayoutProvider } from './lib/layout-context';
@@ -80,6 +82,7 @@ import { EditorTabsProvider, useEditorTabs } from './lib/editor-tabs-context';
 import {
   effectiveConnectTimeoutMs,
   effectiveOverallTimeoutMs,
+  RESTORE_PACING_TIMEOUT_MS,
 } from './lib/restore-timing';
 import { isRestoreSessionsOnStartupEnabled } from './lib/startup-restore';
 
@@ -337,6 +340,7 @@ function AppContent() {
   // Without the cancel the attempt lingers until its own timeout (30 s
   // against a down host) and can settle after the tab is gone.
   const cancelPendingTerminalConnect = useCallback((tab: TerminalTab) => {
+    cancelSshConnect(tab.id);
     if (
       (tab.connectionStatus === 'pending' || tab.connectionStatus === 'connecting') &&
       tab.tabType !== 'file-browser' &&
@@ -367,7 +371,7 @@ function AppContent() {
     // Editors share their source connection. Only its last user may
     // disconnect it, including a detached terminal or a file browser.
     const connectionId = tab.editorConnectionId ?? tab.id;
-    if (tab.tabType !== 'editor' && tab.tabType !== 'file-browser') cancelPendingTerminalConnect(tab);
+    if (tab.tabType !== 'editor') cancelPendingTerminalConnect(tab);
     if (released.has(connectionId)
       || remainingTabs.some(item => item.id === connectionId || item.editorConnectionId === connectionId)
       || detachedSessions.some(session => session.connectionId === connectionId)
@@ -549,7 +553,7 @@ function AppContent() {
     legacyMigrationRef.current = (async () => {
       const connections = ConnectionStorageManager.getConnections();
       const withPlaintext = connections.filter((c) =>
-        SECRET_FIELDS.some((f) => isLegacyPlaintext(c[f])),
+        SECRET_FIELDS.some((f) => isLegacyPlaintext(c[f])) || c.jumpHosts?.some(h => isLegacyPlaintext(h.password) || isLegacyPlaintext(h.passphrase)),
       );
       for (const conn of withPlaintext) {
         try {
@@ -622,7 +626,10 @@ function AppContent() {
 
     // A configured Connection Timeout above the restore default must not be
     // raced to death by this wrapper — take the larger of the two.
-    const connectTimeout = effectiveConnectTimeoutMs(getConnectionTimeoutSetting());
+    const configuredTimeout = getConnectionTimeoutSetting();
+    const connectTimeout = sshRouteTimeoutMs(
+      connectionData, effectiveConnectTimeoutMs(configuredTimeout), configuredTimeout
+    );
     const isDesktop = tab.tabType === 'desktop';
     const isFileBrowser = tab.tabType === 'file-browser'
       || (!isDesktop && (tab.protocol === 'SFTP' || tab.protocol === 'FTP'));
@@ -651,9 +658,7 @@ function AppContent() {
       } else if (isFileBrowser) {
         if (tab.protocol === 'SFTP' || connectionData.protocol === 'SFTP') {
           await withTimeout(
-            invoke('sftp_connect', {
-              request: buildSftpConnectRequest(tab.id, connectionData)
-            }),
+            sftpConnect(buildSftpConnectRequest(tab.id, connectionData), { interactive: false }),
             connectTimeout,
             `sftp_connect ${connectionData.name}`,
           );
@@ -668,7 +673,7 @@ function AppContent() {
         }
       } else {
         const result = await withTimeout(
-          sshConnect(buildSshConnectRequest(tab.id, connectionData)),
+          sshConnect(buildSshConnectRequest(tab.id, connectionData), { interactive: false }),
           connectTimeout,
           `ssh_connect ${connectionData.name}`,
         );
@@ -693,6 +698,8 @@ function AppContent() {
       });
       return true;
     } catch (error) {
+      cancelSshConnect(tab.id);
+      void invoke('ssh_cancel_connect', { connection_id: tab.id }).catch(() => {});
       console.error(`[Restore] Error restoring connection ${connectionData.name}:`, error);
       markFailed();
       return false;
@@ -740,7 +747,7 @@ function AppContent() {
     // to finish naturally so a just-succeeding host is not killed mid-handshake.
     let restoreCancelled = false;
 
-    const restoreActiveSessions = async () => {
+    const prepareSessionRestore = async () => {
       // Wait for the one-time legacy-secret encryption so restored
       // connections can decrypt their stored credentials.
       try {
@@ -802,96 +809,106 @@ function AppContent() {
       lazyRestoreTabIdsRef.current = lazy;
 
 
-      let restoredCount = 0;
-      let failedCount = 0;
+      const configuredTimeout = getConnectionTimeoutSetting();
+      const routeBudgets = eager.map(tab => {
+        const connection = ConnectionStorageManager.getConnection(tab.originalConnectionId || tab.id);
+        return connection
+          ? sshRouteTimeoutMs(connection, effectiveConnectTimeoutMs(configuredTimeout), configuredTimeout)
+          : 0;
+      });
+      const restoreEagerTabs = async () => {
+        let restoredCount = 0;
+        let failedCount = 0;
 
-      for (let i = 0; i < eager.length; i++) {
+        for (let i = 0; i < eager.length; i++) {
+          if (restoreCancelled) {
+            // Overall timeout fired: stop initiating new connections. The
+            // remaining eager tabs degrade to lazy — they still reconnect
+            // when activated.
+            for (let j = i; j < eager.length; j++) {
+              lazyRestoreTabIdsRef.current.add(eager[j].id);
+            }
+            console.warn(`[Restore] Cancelled at connection ${i + 1}/${eager.length}; remaining tabs will reconnect when activated`);
+            break;
+          }
+
+          if (await connectRestoredTab(eager[i])) {
+            restoredCount++;
+            // Pace serial PTY attaches so the next connect's WebSocket does
+            // not race this one's PtyStarted handshake.
+            if (i < eager.length - 1) {
+              await registerRestoration(eager[i].id, RESTORE_PACING_TIMEOUT_MS);
+            }
+          } else {
+            failedCount++;
+          }
+        }
+
+        clearAllRestorations();
+
+        const lazyCount = lazyRestoreTabIdsRef.current.size;
         if (restoreCancelled) {
-          // Overall timeout fired: stop initiating new connections. The
-          // remaining eager tabs degrade to lazy — they still reconnect
-          // when activated.
-          for (let j = i; j < eager.length; j++) {
-            lazyRestoreTabIdsRef.current.add(eager[j].id);
-          }
-          console.warn(`[Restore] Cancelled at connection ${i + 1}/${eager.length}; remaining tabs will reconnect when activated`);
-          break;
+          // The overall timeout fired (possibly while the LAST connection was
+          // still in flight, so the loop never saw the flag at a loop head).
+          // The timeout toast already told the user; keep the
+          // active-connections list intact so a manual reconnect of the skipped
+          // hosts is still possible, and do not emit a contradicting success or
+          // "all failed" toast here.
+        } else if (restoredCount > 0) {
+          notify.success(t('app.connectionsRestored'), {
+            duration: RESTORE_TOAST_DURATION_MS,
+            description: lazyCount > 0
+              ? t('app.restoreLazyDesc', { restoredCount, lazyCount })
+              : failedCount > 0
+                ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
+                : t('app.connectionsRestoredAllDesc', { restoredCount }),
+          });
+        } else if (failedCount > 0 && lazyCount === 0) {
+          // Every restored connection failed and no lazy tabs are left to
+          // activate: nothing left to restore.
+          ActiveConnectionsManager.clearActiveConnections();
+          notify.error(t('app.restoreFailed'), {
+            description: t('app.restoreFailedDesc'),
+          });
+        } else if (failedCount > 0) {
+          // The eager set failed but lazy tabs are still open — they retry
+          // when activated, so keep the list and say so.
+          notify.error(t('app.restoreFailed'), {
+            description: t('app.restoreLazyFailedDesc', { lazyCount }),
+          });
+        } else if (lazyCount > 0) {
+          // Only lazy tabs were restored (no tab was active at quit time).
+          notify.info(t('app.restoreLazyTitle'), {
+            duration: RESTORE_TOAST_DURATION_MS,
+            description: t('app.restoreLazyOnlyDesc', { lazyCount }),
+          });
         }
-
-        if (await connectRestoredTab(eager[i])) {
-          restoredCount++;
-          // Pace serial PTY attaches so the next connect's WebSocket does
-          // not race this one's PtyStarted handshake.
-          if (i < eager.length - 1) {
-            await registerRestoration(eager[i].id, 3000);
-          }
-        } else {
-          failedCount++;
-        }
-      }
-
-      clearAllRestorations();
-
-      const lazyCount = lazyRestoreTabIdsRef.current.size;
-      if (restoreCancelled) {
-        // The overall timeout fired (possibly while the LAST connection was
-        // still in flight, so the loop never saw the flag at a loop head).
-        // The timeout toast already told the user; keep the
-        // active-connections list intact so a manual reconnect of the skipped
-        // hosts is still possible, and do not emit a contradicting success or
-        // "all failed" toast here.
-      } else if (restoredCount > 0) {
-        notify.success(t('app.connectionsRestored'), {
-          duration: RESTORE_TOAST_DURATION_MS,
-          description: lazyCount > 0
-            ? t('app.restoreLazyDesc', { restoredCount, lazyCount })
-            : failedCount > 0
-              ? t('app.connectionsRestoredDesc', { restoredCount, failedCount })
-              : t('app.connectionsRestoredAllDesc', { restoredCount }),
-        });
-      } else if (failedCount > 0 && lazyCount === 0) {
-        // Every restored connection failed and no lazy tabs are left to
-        // activate: nothing left to restore.
-        ActiveConnectionsManager.clearActiveConnections();
-        notify.error(t('app.restoreFailed'), {
-          description: t('app.restoreFailedDesc'),
-        });
-      } else if (failedCount > 0) {
-        // The eager set failed but lazy tabs are still open — they retry
-        // when activated, so keep the list and say so.
-        notify.error(t('app.restoreFailed'), {
-          description: t('app.restoreLazyFailedDesc', { lazyCount }),
-        });
-      } else if (lazyCount > 0) {
-        // Only lazy tabs were restored (no tab was active at quit time).
-        notify.info(t('app.restoreLazyTitle'), {
-          duration: RESTORE_TOAST_DURATION_MS,
-          description: t('app.restoreLazyOnlyDesc', { lazyCount }),
-        });
-      }
+      };
+      return { run: restoreEagerTabs, timeoutMs: effectiveOverallTimeoutMs(routeBudgets) };
     };
 
-    // Scale the overall budget with the configured Connection Timeout so a
-    // slow host restored in sequence cannot trip the escape hatch early.
-    const sessionCount = ActiveConnectionsManager.getActiveConnections().length;
-    const overallRestoreTimeoutMs = effectiveOverallTimeoutMs(getConnectionTimeoutSetting(), sessionCount);
-    withTimeout(restoreActiveSessions(), overallRestoreTimeoutMs, 'Session restore').catch((err) => {
-      // Distinguish the overall-timeout rejection from an unexpected error
-      // thrown by restoreActiveSessions itself (e.g. storage parse). Only the
-      // former should cancel the loop and show the timeout toast.
-      const isOverallTimeout = err instanceof Error && err.message.startsWith('Timeout:');
-      if (isOverallTimeout) {
-        console.error('Session restore timed out:', err);
-        // Soft-cancel: the in-flight connection may still complete, but the loop
-        // must not start any new connections after this point.
-        restoreCancelled = true;
-        notify.error(t('app.restoreTimedOut'), {
-          description: t('app.restoreTimedOutDesc'),
-        });
-      } else {
-        console.error('Session restore failed:', err);
-      }
-      clearAllRestorations();
-    });
+    // Bound preparation too (including credential migration), then start the
+    // sequence deadline from the actual eager routes and their pacing waits.
+    withTimeout(prepareSessionRestore(), effectiveOverallTimeoutMs([]), 'Session restore')
+      .then(plan => plan && withTimeout(plan.run(), plan.timeoutMs, 'Session restore'))
+      .catch((err) => {
+        // Distinguish the overall-timeout rejection from an unexpected error
+        // thrown by session preparation or restoration (e.g. storage parse). Only the
+        // former should cancel the loop and show the timeout toast.
+        const isOverallTimeout = err instanceof Error && err.message.startsWith('Timeout:');
+        if (isOverallTimeout) {
+          console.error('Session restore timed out:', err);
+          // Soft-cancel: the in-flight connection may still complete, but the loop
+          // must not start any new connections after this point.
+          restoreCancelled = true;
+          notify.error(t('app.restoreTimedOut'), {
+            description: t('app.restoreTimedOutDesc'),
+          });
+        } else {
+          console.error('Session restore failed:', err);
+        }
+        clearAllRestorations();
+      });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -950,9 +967,7 @@ function AppContent() {
 
         try {
           if (isSftp) {
-            await invoke('sftp_connect', {
-              request: buildSftpConnectRequest(sessionId, connectionData)
-            });
+            await sftpConnect(buildSftpConnectRequest(sessionId, connectionData));
           } else {
             await invoke('ftp_connect', {
               request: buildFtpConnectRequest(sessionId, connectionData),
@@ -962,6 +977,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          if (error instanceof SshConnectionError && error.result.cancelled) return;
           notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
@@ -1044,8 +1060,8 @@ function AppContent() {
           } else {
             console.error('SSH connection failed:', result.error);
             dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
-            if (!liveTabIdsRef.current.has(sessionId)) {
-              // The user closed the tab while the attempt was in flight (the
+            if (result.cancelled || !liveTabIdsRef.current.has(sessionId)) {
+              // The user cancelled or closed the tab while the attempt was in flight (the
               // typical case: a down host, the connect failing on timeout).
               // The failure is stale — don't resurface an abandoned
               // connection as a toast plus a reopened connection dialog.
@@ -1150,9 +1166,7 @@ function AppContent() {
 
         try {
           if (isSftp) {
-            await invoke('sftp_connect', {
-              request: buildSftpConnectRequest(duplicateId, connectionData)
-            });
+            await sftpConnect(buildSftpConnectRequest(duplicateId, connectionData));
           } else {
             await invoke('ftp_connect', {
               request: buildFtpConnectRequest(duplicateId, connectionData),
@@ -1164,6 +1178,7 @@ function AppContent() {
           });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: duplicateId, status: 'disconnected' });
+          if (error instanceof SshConnectionError && error.result.cancelled) return;
           notify.error(t('app.duplicationFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
@@ -1189,7 +1204,7 @@ function AppContent() {
           notify.success(t('app.tabDuplicated'), {
             description: t('app.tabDuplicatedDesc', { name: tabToDuplicate.name }),
           });
-        } else {
+        } else if (!result.cancelled) {
           notify.error(t('app.duplicationFailed'), {
             description: result.error || 'Unable to establish connection for the duplicated tab.',
           });
@@ -1215,7 +1230,7 @@ function AppContent() {
   // Reconnect retry timers re-invoke the callback via this ref: the callback's
   // own body can't reference `handleReconnect` directly (TDZ before the const
   // binding exists).
-  const handleReconnectRef = useRef<((tabId: string) => Promise<void>) | null>(null);
+  const handleReconnectRef = useRef<((tabId: string, automatic?: boolean) => Promise<void>) | null>(null);
   const clearReconnectRetry = useCallback((tabId: string) => {
     const entry = reconnectRetryState.current[tabId];
     if (entry?.timer) clearTimeout(entry.timer);
@@ -1224,7 +1239,7 @@ function AppContent() {
     reconnectRetryState.current = next;
   }, []);
 
-  const runReconnect = useCallback(async (tabId: string) => {
+  const runReconnect = useCallback(async (tabId: string, automatic = false) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
     if (!tabToReconnect) {
       clearReconnectRetry(tabId);
@@ -1264,6 +1279,11 @@ function AppContent() {
 
     if (!hasCredentials) {
       clearReconnectRetry(tabId);
+      if (automatic) {
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'pending' });
+        setFailedPendingTabIds(prev => new Set(prev).add(tabId));
+        return;
+      }
       notify.error(t('app.cannotReconnect'), {
         description: t('app.noCredentialsDesc'),
       });
@@ -1348,9 +1368,7 @@ function AppContent() {
         }
 
         if (isSftp) {
-          await invoke('sftp_connect', {
-            request: buildSftpConnectRequest(tabId, connectionData)
-          });
+          await sftpConnect(buildSftpConnectRequest(tabId, connectionData), { interactive: !automatic });
         } else {
           await invoke('ftp_connect', {
             request: buildFtpConnectRequest(tabId, connectionData),
@@ -1372,7 +1390,7 @@ function AppContent() {
           // Ignore errors when disconnecting
         }
 
-        const result = await sshConnect(buildSshConnectRequest(tabId, connectionData));
+        const result = await sshConnect(buildSshConnectRequest(tabId, connectionData), { interactive: !automatic });
 
         if (result.success) {
           clearReconnectRetry(tabId);
@@ -1386,6 +1404,14 @@ function AppContent() {
             description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
           });
         } else {
+          // Decisions belong to an explicit user attempt. Cancellation and
+          // unattended challenges must never schedule another prompt/retry.
+          if (result.cancelled || result.auth_required || result.host_key_changed) {
+            clearReconnectRetry(tabId);
+            dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'pending' });
+            failPending();
+            return;
+          }
           // A transient network outage can outlast one connect attempt: keep
           // retrying with bounded backoff instead of dropping to a dead
           // 'disconnected' tab. Permanent auth failures are not retried.
@@ -1394,7 +1420,7 @@ function AppContent() {
           if (!permanent && failures <= FULL_RECONNECT_BACKOFF_MS.length) {
             const delay = FULL_RECONNECT_BACKOFF_MS[failures - 1];
             const timer = setTimeout(() => {
-              void handleReconnectRef.current?.(tabId);
+              void handleReconnectRef.current?.(tabId, true);
             }, delay);
             reconnectRetryState.current = {
               ...reconnectRetryState.current,
@@ -1415,6 +1441,13 @@ function AppContent() {
         }
       }
     } catch (error) {
+      if (error instanceof SshConnectionError &&
+          (error.result.cancelled || error.result.auth_required || error.result.host_key_changed)) {
+        clearReconnectRetry(tabId);
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'pending' });
+        failPending();
+        return;
+      }
       console.error('Error reconnecting:', error);
       clearReconnectRetry(tabId);
       if (wasPending) {
@@ -1433,10 +1466,10 @@ function AppContent() {
   // firing while a manual reconnect is still running) would start two
   // backend connects for the same tab id; the second replaces the first
   // connection, killing the session the first reconnect just established.
-  const handleReconnect = useCallback(async (tabId: string) => {
+  const handleReconnect = useCallback(async (tabId: string, automatic = false) => {
     if (!beginConnect(tabId)) return;
     try {
-      await runReconnect(tabId);
+      await runReconnect(tabId, automatic);
     } finally {
       endConnect(tabId);
     }
@@ -1643,9 +1676,7 @@ function AppContent() {
       if (isFileBrowser) {
         try {
           if (isSftp) {
-            await invoke('sftp_connect', {
-              request: buildSftpConnectRequest(tabId, config)
-            });
+            await sftpConnect(buildSftpConnectRequest(tabId, config));
           } else {
             await invoke('ftp_connect', {
               request: buildFtpConnectRequest(tabId, config),
@@ -1746,9 +1777,7 @@ function AppContent() {
 
         try {
           if (isSftp) {
-            await invoke('sftp_connect', {
-              request: buildSftpConnectRequest(tabId, config)
-            });
+            await sftpConnect(buildSftpConnectRequest(tabId, config));
           } else {
             await invoke('ftp_connect', {
               request: buildFtpConnectRequest(tabId, config),
@@ -1868,6 +1897,11 @@ function AppContent() {
       if (stored) {
         const withSecrets: Record<string, unknown> = { ...stored };
         await openConnectionSecrets(withSecrets);
+        const previousHops = (withSecrets.jumpHosts as ConnectionConfig['jumpHosts']) ?? [];
+        config.jumpHosts = config.jumpHosts?.map(hop => {
+          const previous = previousHops.find(h => h.host === hop.host && h.port === hop.port && h.username === hop.username);
+          return { ...hop, password: hop.password || previous?.password || (hop.authMethod === 'password' ? '' : undefined), passphrase: hop.passphrase || previous?.passphrase };
+        });
         for (const f of CONNECT_SECRET_FIELDS) {
           if (!config[f] && typeof withSecrets[f] === 'string' && withSecrets[f]) {
             (config as unknown as Record<string, unknown>)[f] = withSecrets[f];
@@ -1973,9 +2007,7 @@ function AppContent() {
 
         try {
           if (isSftp) {
-            await invoke('sftp_connect', {
-              request: buildSftpConnectRequest(sessionId, config)
-            });
+            await sftpConnect(buildSftpConnectRequest(sessionId, config));
           } else {
             await invoke('ftp_connect', {
               request: buildFtpConnectRequest(sessionId, config),
@@ -1985,6 +2017,7 @@ function AppContent() {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
+          if (error instanceof SshConnectionError && error.result.cancelled) return;
           notify.error(t('app.connectionFailed'), {
             description: error instanceof Error ? error.message : String(error),
           });
@@ -2024,7 +2057,7 @@ function AppContent() {
               };
               dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
             }
-          } else {
+          } else if (!result.cancelled) {
             notify.error(t('app.connectionFailed'), {
               description: result.error || 'Unable to connect to the server. Please check your credentials and try again.',
             });
@@ -2118,7 +2151,7 @@ function AppContent() {
           notify.success(t('app.quickConnected'), {
             description: t('app.quickConnectedDesc', { name: connectionData.name }),
           });
-        } else {
+        } else if (!result.cancelled) {
           console.error('Quick connect failed:', result.error);
           notify.error(t('app.connectionFailed'), {
             description: result.error || 'Unable to connect. Please try again.',
@@ -2414,6 +2447,7 @@ function AppContent() {
 
       {/* Modals */}
       <HostKeyChangedDialog />
+      <SshKeyUnlockDialog />
       <ConnectionDialog
         open={connectionDialogOpen}
         onOpenChange={(open) => {

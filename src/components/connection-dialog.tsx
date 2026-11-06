@@ -1,3 +1,4 @@
+import { type SshExtendedOptions, sshExtendedOptions, type SshJumpHost } from '@/lib/ssh-options';
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
@@ -17,11 +18,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/
 import { Separator } from './ui/separator';
 import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connection-profiles';
 import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
-import { SECRET_FIELDS, isSealed, sealSecret, openSecret, type SecretField } from '../lib/credential-crypto';
+import { SECRET_FIELDS, CONNECT_SECRET_FIELDS, isSealed, sealSecret, openSecret, openConnectionSecrets, sealJumpHosts, isPasswordSavingAllowed, type SecretField } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
 import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import { sshConnect } from '@/lib/ssh-connect';
+import { cancelSshConnect } from '@/lib/ssh-auth-flow';
+import { SshIdentityEditor, SshJumpHostsEditor } from './ssh-options-editor';
 import { notify } from '@/lib/notifications';
 import {
   Server,
@@ -43,14 +46,14 @@ interface ConnectionDialogProps {
   initialFolder?: string;
 }
 
-export interface ConnectionConfig {
+export interface ConnectionConfig extends SshExtendedOptions {
   id?: string;
   name: string;
   protocol: 'SSH' | 'Telnet' | 'Raw' | 'Serial' | 'SFTP' | 'FTP' | 'RDP' | 'VNC';
   host: string;
   port: number;
   username: string;
-  authMethod: 'password' | 'publickey' | 'keyboard-interactive' | 'anonymous';
+  authMethod: 'password' | 'publickey' | 'auto' | 'keyboard-interactive' | 'anonymous';
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
@@ -123,6 +126,59 @@ function mergeWithDefaults(defaults: ConnectionConfig, overrides: ConnectionConf
  * connections.
  */
 type StoredSecrets = Record<SecretField, string>;
+type SavedSecrets = Pick<ConnectionConfig, SecretField> & Pick<SshExtendedOptions, 'jumpHosts'>;
+
+function savedSecretsSource(config: ConnectionConfig): ConnectionConfig {
+  // Failed connect callbacks can carry a decrypted in-memory copy. Retain
+  // credentials from storage so saving the edit never replaces sealed values
+  // with that transient plaintext (which persistence would correctly strip).
+  const stored = config.id ? ConnectionStorageManager.getConnection(config.id) : undefined;
+  if (!stored) return { ...config };
+  const source = { ...config };
+  for (const field of SECRET_FIELDS) {
+    source[field] = isSealed(config[field]) ? config[field] : (stored[field] ?? '');
+  }
+  source.jumpHosts = config.jumpHosts?.map(hop => {
+    const previous = stored.jumpHosts?.find(h =>
+      h.host === hop.host && h.port === hop.port && h.username === hop.username,
+    );
+    return {
+      ...hop,
+      password: previous && !isSealed(hop.password) ? (previous.password ?? '') : hop.password,
+      passphrase: previous && !isSealed(hop.passphrase) ? (previous.passphrase ?? '') : hop.passphrase,
+    };
+  });
+  return source;
+}
+
+function legacyJump(config: ConnectionConfig): SshJumpHost[] | undefined {
+  if (config.jumpHosts !== undefined) return config.jumpHosts;
+  if (!config.tunnelEnabled) return undefined;
+  return [{
+    host: config.tunnelHost ?? '',
+    port: config.tunnelPort ?? 22,
+    username: config.tunnelUsername ?? '',
+    authMethod: config.tunnelAuthMethod ?? 'password',
+    password: config.tunnelPassword,
+    privateKeyPath: config.tunnelKeyPath,
+    passphrase: config.tunnelPassphrase,
+  }];
+}
+function retainedJumpSecrets(
+  hops: SshJumpHost[] | undefined,
+  previous: SshJumpHost[] | undefined,
+): SshJumpHost[] | undefined {
+  return hops?.map(hop => {
+    const saved = previous?.find(h =>
+      h.host === hop.host && h.port === hop.port && h.username === hop.username,
+    );
+    return {
+      ...hop,
+      password: hop.password || saved?.password || (hop.authMethod === 'password' ? '' : undefined),
+      passphrase: hop.passphrase || saved?.passphrase,
+    };
+  });
+}
 
 const EMPTY_STORED_SECRETS: StoredSecrets = {
   password: '',
@@ -133,25 +189,6 @@ const EMPTY_STORED_SECRETS: StoredSecrets = {
   tunnelPassphrase: '',
   sudoPassword: '',
 };
-
-/**
- * Password-saving master switch from Settings. Only an explicit `false`
- * disables saving — a missing key or unparsable settings keep the current
- * behaviour (saving allowed). Uses the `allowPasswordSaving` key (not the
- * legacy dead `savePasswords` field) since stale `false` values written by
- * the old dead switch must never flip the gate off for existing users.
- */
-function isPasswordSavingAllowed(): boolean {
-  try {
-    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
-    if (!raw) return true;
-    const parsed: unknown = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return true;
-    return (parsed as Record<string, unknown>).allowPasswordSaving !== false;
-  } catch {
-    return true;
-  }
-}
 
 /**
  * Default protocol for NEW connections, from the Settings "Default Protocol"
@@ -246,6 +283,16 @@ export function ConnectionDialog({
   const [removedSecrets, setRemovedSecrets] = useState<SecretField[]>([]);
   // What a blank field keeps: the stored secret, unless the user removed it.
   const keptSecret = (field: SecretField) => (removedSecrets.includes(field) ? '' : previousSecrets[field]);
+  const previousJumpHosts = () => {
+    if (!editingConnection) return undefined;
+    const saved = savedSecretsSource(editingConnection);
+    // Removing a legacy tunnel secret also removes the retained value when
+    // that tunnel is converted to the ordered jump-host editor.
+    if (saved.jumpHosts === undefined) {
+      for (const field of removedSecrets) saved[field] = '';
+    }
+    return legacyJump(saved);
+  };
 
   // Track number input display values separately from config to allow
   // the field to be empty while editing — React controlled inputs need
@@ -318,25 +365,21 @@ export function ConnectionDialog({
       // connection never stored (advanced/proxy options), matching the
       // pre-filled values a new connection gets.
       if (editingConnection) {
+        const saved = savedSecretsSource(editingConnection);
         // Remember the stored (sealed) secrets so a blank field on save means
         // "keep the stored one". The form itself never shows them. A sealed
         // value handed in is the stored one. For a stored connection anything
         // else may be plaintext App decrypted for a failed connect (#283),
         // which storage would strip on save, deleting the secret: take the
         // sealed value from storage instead.
-        const stored = editingConnection.id ? ConnectionStorageManager.getConnection(editingConnection.id) : undefined;
-        const storedSecret = (field: SecretField) => {
-          const handed = editingConnection[field] ?? '';
-          return stored && !isSealed(handed) ? (stored[field] ?? '') : handed;
-        };
         setPreviousSecrets({
-          password: storedSecret('password'),
-          passphrase: storedSecret('passphrase'),
-          proxyPassword: storedSecret('proxyPassword'),
-          vncPassword: storedSecret('vncPassword'),
-          tunnelPassword: storedSecret('tunnelPassword'),
-          tunnelPassphrase: storedSecret('tunnelPassphrase'),
-          sudoPassword: storedSecret('sudoPassword'),
+          password: saved.password ?? '',
+          passphrase: saved.passphrase ?? '',
+          proxyPassword: saved.proxyPassword ?? '',
+          vncPassword: saved.vncPassword ?? '',
+          tunnelPassword: saved.tunnelPassword ?? '',
+          tunnelPassphrase: saved.tunnelPassphrase ?? '',
+          sudoPassword: saved.sudoPassword ?? '',
         });
         setRemovedSecrets([]);
         const merged = mergeWithDefaults(defaultConfig, editingConnection);
@@ -349,6 +392,7 @@ export function ConnectionDialog({
         merged.tunnelPassword = '';
         merged.tunnelPassphrase = '';
         merged.sudoPassword = '';
+        merged.jumpHosts = merged.jumpHosts?.map(h => ({ ...h, password: '', passphrase: '' }));
         setConfig(merged);
         syncDisplayValues({
           port: editingConnection.port ?? 22,
@@ -394,15 +438,19 @@ export function ConnectionDialog({
     />
   );
 
-  const _handleSaveProfile = () => {
+  const _handleSaveProfile = async () => {
     try {
+      const secrets = await resolveSecretsForSave();
       const profile = ConnectionProfileManager.saveProfile({
+        ...sshExtendedOptions(config),
+        jumpHosts: secrets.jumpHosts,
+        sshConfigSource: undefined,
         name: config.name,
         host: config.host,
         port: config.port,
         username: config.username,
-        authMethod: config.authMethod === 'publickey' ? 'key' : 'password',
-        password: config.password,
+        authMethod: config.authMethod === 'publickey' ? 'key' : config.authMethod === 'auto' ? 'auto' : 'password',
+        password: secrets.password,
         privateKey: config.privateKeyPath,
       });
       setSavedProfiles(ConnectionProfileManager.getProfiles());
@@ -420,7 +468,8 @@ export function ConnectionDialog({
       host: profile.host,
       port: profile.port,
       username: profile.username,
-      authMethod: profile.authMethod === 'key' ? 'publickey' : 'password',
+      ...sshExtendedOptions(profile),
+      authMethod: profile.authMethod === 'key' ? 'publickey' : profile.authMethod,
       password: profile.password,
       privateKeyPath: profile.privateKey,
     });
@@ -457,7 +506,7 @@ export function ConnectionDialog({
    * value means "replace". Returns the secret values ready for persistence — already
    * encrypted (sealed) so plaintext never reaches localStorage.
    */
-  const resolveSecretsForSave = async (): Promise<Pick<ConnectionConfig, SecretField>> => {
+  const resolveSecretsForSave = async (): Promise<SavedSecrets> => {
     // Password-saving master switch (Settings) off → never write NEW
     // secrets: the connect request below still uses the typed value from
     // `config`, so the connection itself works, and an edited connection
@@ -470,7 +519,10 @@ export function ConnectionDialog({
     if (!isPasswordSavingAllowed()) {
       const kept = { ...previousSecrets };
       for (const field of removedSecrets) kept[field] = '';
-      return kept;
+      return {
+        ...kept,
+        jumpHosts: await sealJumpHosts(config.jumpHosts, previousJumpHosts(), false),
+      };
     }
     const result: Pick<ConnectionConfig, SecretField> = {
       password: '',
@@ -500,7 +552,14 @@ export function ConnectionDialog({
         }
       }
     }
-    return result;
+    return {
+      ...result,
+      jumpHosts: await sealJumpHosts(
+        config.jumpHosts,
+        previousJumpHosts(),
+        true,
+      ),
+    };
   };
 
   const handleConnect = async () => {
@@ -537,7 +596,7 @@ export function ConnectionDialog({
     // user's default key (~/.ssh/id_rsa, then id_ed25519).
 
     // Encrypt secrets for persistence (blank field = keep stored value).
-    let sealedSecrets: Pick<ConnectionConfig, SecretField>;
+    let sealedSecrets: SavedSecrets;
     try {
       sealedSecrets = await resolveSecretsForSave();
     } catch {
@@ -550,8 +609,15 @@ export function ConnectionDialog({
     // a blank field while editing means "use the retained credential" — decrypt
     // it here (plaintext exists transiently in memory only). The persisted
     // payload above keeps the sealed form.
-    const connectConfig: ConnectionConfig = { ...config };
-    for (const field of SECRET_FIELDS) {
+    const connectConfig: ConnectionConfig = {
+      ...config,
+      jumpHosts: retainedJumpSecrets(
+        config.jumpHosts,
+        previousJumpHosts(),
+      ),
+    };
+    await openConnectionSecrets(connectConfig as unknown as Record<string, unknown>);
+    for (const field of CONNECT_SECRET_FIELDS) {
       if (connectConfig[field] === '' && keptSecret(field)) {
         try {
           connectConfig[field] = await openSecret(keptSecret(field));
@@ -581,6 +647,8 @@ export function ConnectionDialog({
             authMethod: config.authMethod,
             password: sealedSecrets.password,
             privateKeyPath: config.privateKeyPath,
+            ...sshExtendedOptions(config),
+            jumpHosts: sealedSecrets.jumpHosts,
             passphrase: sealedSecrets.passphrase,
             ftpsEnabled: config.ftpsEnabled,
             ftpsVerifyCert: config.ftpsVerifyCert,
@@ -620,6 +688,8 @@ export function ConnectionDialog({
             authMethod: config.authMethod,
             password: sealedSecrets.password,
             privateKeyPath: config.privateKeyPath,
+            ...sshExtendedOptions(config),
+            jumpHosts: sealedSecrets.jumpHosts,
             passphrase: sealedSecrets.passphrase,
             ftpsEnabled: config.ftpsEnabled,
             ftpsVerifyCert: config.ftpsVerifyCert,
@@ -675,6 +745,8 @@ export function ConnectionDialog({
         authMethod: config.authMethod,
         password: sealedSecrets.password,
         privateKeyPath: config.privateKeyPath,
+        ...sshExtendedOptions(config),
+        jumpHosts: sealedSecrets.jumpHosts,
         passphrase: sealedSecrets.passphrase,
         proxyType: config.proxyType,
         proxyHost: config.proxyHost,
@@ -709,6 +781,8 @@ export function ConnectionDialog({
         authMethod: config.authMethod,
         password: sealedSecrets.password,
         privateKeyPath: config.privateKeyPath,
+        ...sshExtendedOptions(config),
+        jumpHosts: sealedSecrets.jumpHosts,
         passphrase: sealedSecrets.passphrase,
         proxyType: config.proxyType,
         proxyHost: config.proxyHost,
@@ -747,7 +821,7 @@ export function ConnectionDialog({
       } else {
         // Connection failed — config was already saved above, user can retry from sidebar
         console.error('Connection failed:', result.error);
-        if (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled')) {
+        if (result.cancelled || (cancelRequestedRef.current && result.error?.toLowerCase().includes('cancelled'))) {
           notify.info(t('connectionDialog.toast.connectionCancelled'));
         } else {
           notify.error(t('connectionDialog.toast.connectionFailed'), {
@@ -800,6 +874,7 @@ const handleCancelConnectionAttempt = async () => {
     cancelRequestedRef.current = true;
     setIsCancelling(true);
 
+    if (connectionId) cancelSshConnect(connectionId);
     try {
       const response = await invoke<{ success: boolean; error?: string }>('ssh_cancel_connect', {
         connection_id: connectionId
@@ -822,7 +897,7 @@ const handleCancelConnectionAttempt = async () => {
     if (!editingConnection?.id) return;
 
     // Encrypt secrets for persistence (blank field = keep stored value).
-    let sealed: Pick<ConnectionConfig, SecretField>;
+    let sealed: SavedSecrets;
     try {
       sealed = await resolveSecretsForSave();
     } catch {
@@ -840,6 +915,8 @@ const handleCancelConnectionAttempt = async () => {
       authMethod: config.authMethod,
       password: sealed.password,
       privateKeyPath: config.privateKeyPath,
+      ...sshExtendedOptions(config),
+      jumpHosts: sealed.jumpHosts,
       passphrase: sealed.passphrase,
       ftpsEnabled: config.ftpsEnabled,
       ftpsVerifyCert: config.ftpsVerifyCert,
@@ -1154,7 +1231,8 @@ const handleCancelConnectionAttempt = async () => {
                     <SelectContent>
                       {getAuthMethods(config.protocol).map((method) => (
                         <SelectItem key={method} value={method}>
-                          {method === 'password' ? t('connectionDialog.authMethod.password') :
+                          {method === 'auto' ? t('openSsh.editor.auto') :
+                           method === 'password' ? t('connectionDialog.authMethod.password') :
                            method === 'publickey' ? t('connectionDialog.authMethod.publicKey') :
                            method === 'keyboard-interactive' ? t('connectionDialog.authMethod.keyboardInteractive') :
                            method === 'anonymous' ? t('connectionDialog.authMethod.anonymous') : method}
@@ -1163,6 +1241,8 @@ const handleCancelConnectionAttempt = async () => {
                     </SelectContent>
                   </Select>
                 </div>
+
+                {config.authMethod === 'auto' && <SshIdentityEditor value={config} onChange={updateConfig} />}
 
                 {config.authMethod === 'password' && (
                   <div className="space-y-2">
@@ -1377,6 +1457,18 @@ const handleCancelConnectionAttempt = async () => {
                 );
               }
 
+              if (config.jumpHosts !== undefined) return (
+                <Card className="gap-4 rounded-lg shadow-none">
+                  <CardHeader><CardTitle>{t('openSsh.fields.jumpHosts')}</CardTitle></CardHeader>
+                  <CardContent>
+                    <SshJumpHostsEditor
+                      value={config.jumpHosts}
+                      onChange={jumpHosts => updateConfig({ jumpHosts })}
+                    />
+                  </CardContent>
+                </Card>
+              );
+
               return (
                 <Card className="gap-4 rounded-lg shadow-none">
                   <CardHeader className="px-5 pt-5">
@@ -1389,6 +1481,10 @@ const handleCancelConnectionAttempt = async () => {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 px-5 last:pb-5">
+                    <Button variant="outline" onClick={() => updateConfig({ jumpHosts: legacyJump(config) ?? [] })}>
+                      {t('openSsh.editor.editChain')}
+                    </Button>
+
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div className="space-y-0.5">
                         <Label>{t('connectionDialog.tunnel.enable')}</Label>
@@ -1496,6 +1592,20 @@ const handleCancelConnectionAttempt = async () => {
           </TabsContent>
 
           <TabsContent value="advanced" className="configuration-content min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 mt-0 bg-background/50">
+            {(config.protocol === 'SSH' || config.protocol === 'SFTP') && (
+              <div className="space-y-2">
+                <Label htmlFor="ssh-connect-timeout">{t('openSsh.fields.connectTimeout')}</Label>
+                <Input
+                  id="ssh-connect-timeout"
+                  type="number"
+                  min={1}
+                  placeholder={t('openSsh.editor.appDefault')}
+                  value={config.connectTimeout ?? ''}
+                  onChange={e => updateConfig({ connectTimeout: e.target.value ? Number(e.target.value) : undefined })}
+                />
+              </div>
+            )}
+
             {(() => {
               const hiddenFields = getHiddenFields(config.protocol);
               const isCompHidden = hiddenFields.includes('compression');
