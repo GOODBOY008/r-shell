@@ -19,13 +19,19 @@ pub(super) async fn handshake(
 ) -> Result<(u16, u16)> {
     let mut banner = [0; 12];
     stream.read_exact(&mut banner).await?;
-    let version = match &banner {
-        b"RFB 003.003\n" => 3,
-        b"RFB 003.007\n" => 7,
-        b"RFB 003.008\n" => 8,
+    let (version, response) = match &banner {
+        b"RFB 003.007\n" => (7, b"RFB 003.007\n"),
+        b"RFB 003.008\n" => (8, b"RFB 003.008\n"),
+        // RFC 6143 §6: legacy 3.x banners use the 3.3 handshake.
+        _ if banner.starts_with(b"RFB 003.")
+            && banner[8..11].iter().all(u8::is_ascii_digit)
+            && banner[11] == b'\n' =>
+        {
+            (3, b"RFB 003.003\n")
+        }
         _ => bail!("Unsupported VNC protocol version"),
     };
-    stream.write_all(&banner).await?;
+    stream.write_all(response).await?;
 
     let password = password.filter(|value| !value.is_empty());
     let security = if version == 3 {

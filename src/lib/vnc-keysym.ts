@@ -31,6 +31,10 @@ const modifiers = new Map([
   ['Meta', 0xffeb], // Super_L / Super_R.
 ]);
 
+export function isVncModifierKey(key: string): boolean {
+  return modifiers.has(key) || key === 'AltGraph';
+}
+
 export function vncKeysym(key: string, location: number): number | undefined {
   const modifier = modifiers.get(key);
   if (modifier !== undefined) return modifier + (location === 2 ? 1 : 0);

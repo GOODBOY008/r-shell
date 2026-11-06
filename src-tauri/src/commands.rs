@@ -2,7 +2,7 @@ use crate::connection_manager::ConnectionManager;
 use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
 use crate::os_keypath::resolve_private_key_path;
-use crate::proxy::{ProxyConfig, ProxyType};
+use crate::proxy::ProxyRequest;
 use crate::sftp_client::{FileEntry, FileEntryType, SftpConfig};
 use crate::sftp_transfer;
 use crate::ssh::passphrase_store::{PassphraseAttempt, PassphraseStore, SavedKeyPassphrase};
@@ -218,11 +218,8 @@ pub struct ConnectRequest {
     pub keepalive_interval: Option<u64>,
     pub keepalive_max: Option<u32>,
     /// Proxy options — ignored when `proxy_type` is "none" or missing.
-    pub proxy_type: Option<String>,
-    pub proxy_host: Option<String>,
-    pub proxy_port: Option<u16>,
-    pub proxy_username: Option<String>,
-    pub proxy_password: Option<String>,
+    #[serde(flatten)]
+    pub proxy: ProxyRequest,
     /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
     /// false/missing. Legacy callers that omit them connect directly.
     pub tunnel_enabled: Option<bool>,
@@ -323,7 +320,7 @@ pub async fn ssh_connect(
 ) -> Result<SshConnectResponse, String> {
     let passphrases = PassphraseAttempt::for_app(&app);
     request.identity.passphrases = Some(passphrases.clone());
-    let proxy = build_proxy(&request)?;
+    let proxy = request.proxy.to_config()?;
     let tunnel = build_tunnel(&request)?;
 
     // Keepalive defaults match the connection dialog UI: enabled at 60 s / 3.
@@ -395,34 +392,6 @@ pub async fn ssh_connect(
                 .cloned(),
             passphrase_save_failed: false,
         }),
-    }
-}
-
-/// Map the proxy request fields into a `ProxyConfig`, or `None` when the
-/// connection should go direct.
-fn build_proxy(request: &ConnectRequest) -> Result<Option<ProxyConfig>, String> {
-    match request.proxy_type.as_deref() {
-        None | Some("none") | Some("") => Ok(None),
-        Some(kind) => {
-            let host = request
-                .proxy_host
-                .clone()
-                .filter(|h| !h.trim().is_empty())
-                .ok_or("Proxy host is required")?;
-            let proxy_type = match kind {
-                "http" => ProxyType::Http,
-                "socks4" => ProxyType::Socks4,
-                "socks5" => ProxyType::Socks5,
-                other => return Err(format!("Invalid proxy type: {other}")),
-            };
-            Ok(Some(ProxyConfig {
-                proxy_type,
-                host,
-                port: request.proxy_port.unwrap_or(8080),
-                username: request.proxy_username.clone(),
-                password: request.proxy_password.clone(),
-            }))
-        }
     }
 }
 
@@ -5711,6 +5680,7 @@ mod local_fs_tests {
 #[cfg(test)]
 mod proxy_config_tests {
     use super::*;
+    use crate::proxy::ProxyType;
 
     pub(super) fn request(proxy_type: Option<&str>) -> ConnectRequest {
         ConnectRequest {
@@ -5732,11 +5702,10 @@ mod proxy_config_tests {
             keepalive_interval: None,
             keepalive_max: None,
             connect_timeout: None,
-            proxy_type: proxy_type.map(|s| s.to_string()),
-            proxy_host: None,
-            proxy_port: None,
-            proxy_username: None,
-            proxy_password: None,
+            proxy: ProxyRequest {
+                proxy_type: proxy_type.map(str::to_string),
+                ..Default::default()
+            },
             tunnel_enabled: None,
             tunnel_host: None,
             tunnel_port: None,
@@ -5750,48 +5719,54 @@ mod proxy_config_tests {
 
     #[test]
     fn no_proxy_when_type_none_or_none_type() {
-        assert!(build_proxy(&request(None)).unwrap().is_none());
-        assert!(build_proxy(&request(Some("none"))).unwrap().is_none());
-        assert!(build_proxy(&request(Some(""))).unwrap().is_none());
+        for kind in [None, Some("none"), Some("")] {
+            assert!(request(kind).proxy.to_config().unwrap().is_none());
+        }
     }
 
     /// Request with a proxy host set, so type/host validation reaches the type.
     fn request_with_host(proxy_type: &str) -> ConnectRequest {
         let mut req = request(Some(proxy_type));
-        req.proxy_host = Some("proxy.local".to_string());
+        req.proxy.proxy_host = Some("proxy.local".to_string());
         req
     }
 
     #[test]
     fn maps_supported_proxy_types() {
-        let http = build_proxy(&request_with_host("http")).unwrap().unwrap();
-        assert_eq!(http.proxy_type, ProxyType::Http);
-        let socks5 = build_proxy(&request_with_host("socks5")).unwrap().unwrap();
-        assert_eq!(socks5.proxy_type, ProxyType::Socks5);
-        let socks4 = build_proxy(&request_with_host("socks4")).unwrap().unwrap();
-        assert_eq!(socks4.proxy_type, ProxyType::Socks4);
+        for (kind, expected) in [
+            ("http", ProxyType::Http),
+            ("socks5", ProxyType::Socks5),
+            ("socks4", ProxyType::Socks4),
+        ] {
+            let request = request_with_host(kind);
+            let proxy = request.proxy.to_config().unwrap().unwrap();
+            assert_eq!(proxy.proxy_type, expected);
+        }
     }
 
     #[test]
     fn requires_proxy_host() {
-        let err = build_proxy(&request(Some("http"))).unwrap_err();
+        let err = request(Some("http")).proxy.to_config().unwrap_err();
         assert!(err.contains("Proxy host is required"));
     }
 
     #[test]
     fn rejects_unknown_proxy_type() {
-        let err = build_proxy(&request_with_host("ftp")).unwrap_err();
+        let err = request_with_host("ftp").proxy.to_config().unwrap_err();
         assert!(err.contains("Invalid proxy type"));
     }
 
     #[test]
     fn carries_proxy_credentials_and_port() {
         let mut req = request(Some("socks5"));
-        req.proxy_host = Some("proxy.local".to_string());
-        req.proxy_port = Some(1080);
-        req.proxy_username = Some("user".to_string());
-        req.proxy_password = Some("pass".to_string());
-        let cfg = build_proxy(&req).unwrap().unwrap();
+        req.proxy.proxy_host = Some("proxy.local".to_string());
+        req.proxy.proxy_port = Some(1080);
+        req.proxy.proxy_username = Some("user".to_string());
+        req.proxy.proxy_password = Some("pass".to_string());
+        let payload = serde_json::to_value(&req).unwrap();
+        assert_eq!(payload["proxy_type"], "socks5");
+        let req: ConnectRequest = serde_json::from_value(payload).unwrap();
+        let cfg = req.proxy.to_config().unwrap().unwrap();
         assert_eq!(cfg.host, "proxy.local");
         assert_eq!(cfg.port, 1080);
         assert_eq!(cfg.username.as_deref(), Some("user"));
@@ -5801,8 +5776,8 @@ mod proxy_config_tests {
     #[test]
     fn defaults_proxy_port_to_8080() {
         let mut req = request(Some("http"));
-        req.proxy_host = Some("proxy.local".to_string());
-        let cfg = build_proxy(&req).unwrap().unwrap();
+        req.proxy.proxy_host = Some("proxy.local".to_string());
+        let cfg = req.proxy.to_config().unwrap().unwrap();
         assert_eq!(cfg.port, 8080);
     }
 }

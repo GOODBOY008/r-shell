@@ -4,18 +4,20 @@ mod tests;
 
 use crate::desktop_frames::DesktopEventSender;
 use crate::desktop_protocol::{DesktopConnectProgress, DesktopEvent, DesktopProtocol, VncConfig};
+use crate::proxy::{connect_via_proxy, Tunnel};
 use crate::rdp::ConnectProgress;
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
 use rfb::PixelFormat;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{tcp::OwnedWriteHalf, TcpStream};
+use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, WriteHalf};
+use tokio::net::TcpStream;
 use tokio::sync::{MappedMutexGuard, MutexGuard};
 use tokio_util::sync::CancellationToken;
 
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const PROXY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct VncClient {
     session: Arc<Session>,
@@ -33,7 +35,7 @@ struct View {
 }
 
 struct Writer {
-    stream: OwnedWriteHalf,
+    stream: WriteHalf<Tunnel>,
     buttons: u8,
 }
 
@@ -42,15 +44,20 @@ impl VncClient {
         ensure!(!config.host.is_empty(), "VNC host cannot be empty");
         let format = PixelFormat::from_depth(config.color_depth)?;
         progress(DesktopConnectProgress::WaitingForNetwork);
-        let mut stream = TcpStream::connect((config.host.as_str(), config.port))
-            .await
-            .map_err(|error| anyhow::anyhow!("Could not connect to VNC server: {error}"))?;
+        let mut stream = if let Some(proxy) = &config.proxy {
+            connect_via_proxy(proxy, &config.host, config.port, PROXY_TIMEOUT).await?
+        } else {
+            TcpStream::connect((config.host.as_str(), config.port))
+                .await
+                .map_err(|error| anyhow::anyhow!("Could not connect to VNC server: {error}"))?
+                .into()
+        };
         stream.set_nodelay(true)?;
         progress(DesktopConnectProgress::TcpConnected);
         let size = rfb::handshake(&mut stream, config.password.as_deref(), format)
             .await
             .map_err(|error| anyhow::anyhow!("VNC handshake failed: {error}"))?;
-        let (reader, writer) = stream.into_split();
+        let (reader, writer) = io::split(stream);
         let session = Arc::new(Session {
             cancel: CancellationToken::new(),
             view: Mutex::new(View { size, events: None }),

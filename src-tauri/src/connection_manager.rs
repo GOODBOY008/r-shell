@@ -1044,7 +1044,7 @@ impl ConnectionManager {
                 "RDP" => Box::new(
                     RdpClient::connect_with_progress(&request.to_rdp_config(), progress).await?,
                 ),
-                "VNC" => Box::new(VncClient::connect(&request.to_vnc_config(), progress).await?),
+                "VNC" => Box::new(VncClient::connect(&request.to_vnc_config()?, progress).await?),
                 _ => return Err(anyhow::anyhow!("Unknown desktop protocol: {}", protocol)),
             };
             Ok(client)

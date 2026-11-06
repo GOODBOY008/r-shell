@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use crate::proxy::{ProxyConfig, ProxyRequest};
 use crate::rdp::input::InputCommand;
 
 /// Wrapper to allow sending raw window handles across threads.
@@ -172,6 +173,9 @@ pub struct DesktopConnectRequest {
     pub desktop_scale_factor: Option<u32>,
     /// VNC color depth: 24, 16, or 8
     pub color_depth: Option<u8>,
+    /// Proxy options for VNC.
+    #[serde(flatten)]
+    pub proxy: ProxyRequest,
 }
 
 /// Response after a successful desktop connection.
@@ -203,6 +207,7 @@ pub struct VncConfig {
     pub port: u16,
     pub password: Option<String>,
     pub color_depth: u8, // 24, 16, or 8
+    pub proxy: Option<ProxyConfig>,
 }
 
 impl DesktopConnectRequest {
@@ -233,13 +238,14 @@ impl DesktopConnectRequest {
     }
 
     /// Convert to a `VncConfig`.
-    pub fn to_vnc_config(&self) -> VncConfig {
-        VncConfig {
+    pub fn to_vnc_config(&self) -> Result<VncConfig> {
+        Ok(VncConfig {
             host: self.host.clone(),
             port: self.port,
             password: self.password.clone(),
             color_depth: self.color_depth.unwrap_or(24),
-        }
+            proxy: self.proxy.to_config().map_err(anyhow::Error::msg)?,
+        })
     }
 }
 
@@ -247,9 +253,18 @@ impl DesktopConnectRequest {
 mod display_tests {
     use super::*;
     fn request(resolution: Option<&str>, scale: Option<u32>) -> DesktopConnectRequest {
-        DesktopConnectRequest { protocol: "rdp".into(), host: "localhost".into(), port: 3389,
-            username: None, password: None, domain: None, resolution: resolution.map(str::to_string),
-            desktop_scale_factor: scale, color_depth: None }
+        DesktopConnectRequest {
+            protocol: "rdp".into(),
+            host: "localhost".into(),
+            port: 3389,
+            username: None,
+            password: None,
+            domain: None,
+            resolution: resolution.map(str::to_string),
+            desktop_scale_factor: scale,
+            color_depth: None,
+            proxy: ProxyRequest::default(),
+        }
     }
     #[test]
     fn default_and_auto_start_at_1080p_and_retina_preserves_text_scale() {

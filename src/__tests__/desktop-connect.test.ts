@@ -10,7 +10,7 @@ vi.mock('../lib/notifications', () => ({ notify: { info: mocks.info, error: mock
 vi.mock('sonner', () => ({ toast: { dismiss: mocks.dismiss } }));
 vi.mock('../lib/i18n', () => ({ default: { t: (key: string) => key } }));
 
-import { desktopConnect } from '../lib/desktop-connect';
+import { buildDesktopConnectRequest, desktopConnect } from '../lib/desktop-connect';
 import { ChannelStub } from './helpers/tauri-channel-stub';
 
 const args = {
@@ -73,5 +73,34 @@ describe('desktop connection permission UX', () => {
     reject('[desktop-connect-cancelled]');
     await expect(result).rejects.toThrow('desktopConnect.cancelled');
     expect(mocks.dismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends configured VNC proxy routing and credentials to the backend', async () => {
+    const request = buildDesktopConnectRequest({
+      protocol: 'VNC', host: 'vnc.internal', port: 0, username: '',
+      proxyType: 'socks5', proxyHost: 'proxy.local', proxyPort: 1080,
+      proxyUsername: 'proxy-user', proxyPassword: 'proxy-pass',
+    });
+    mocks.invoke.mockResolvedValueOnce({ width: 800, height: 600 });
+    await desktopConnect({ connectionId: 'vnc-tab', request });
+
+    expect(mocks.invoke).toHaveBeenCalledWith('desktop_connect', expect.objectContaining({
+      connectionId: 'vnc-tab',
+      request: expect.objectContaining({
+        protocol: 'vnc', host: 'vnc.internal', port: 5900,
+        proxy_type: 'socks5', proxy_host: 'proxy.local', proxy_port: 1080,
+        proxy_username: 'proxy-user', proxy_password: 'proxy-pass',
+      }),
+    }));
+  });
+
+  it('keeps legacy VNC connections direct and excludes proxy credentials from RDP', () => {
+    const source = { host: 'localhost', port: 0, username: '' };
+    expect(buildDesktopConnectRequest({ ...source, protocol: 'VNC' })).toMatchObject({
+      proxy_type: 'none', proxy_host: null, proxy_password: null,
+    });
+    expect(buildDesktopConnectRequest({
+      ...source, protocol: 'RDP', proxyType: 'http', proxyHost: 'proxy.local', proxyPassword: 'proxy-pass',
+    })).not.toHaveProperty('proxy_password');
   });
 });
