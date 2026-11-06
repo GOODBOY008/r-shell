@@ -130,7 +130,10 @@ async fn authenticate_sftp_session(
     session: &mut client::Handle<Client>,
     config: &SftpConfig,
 ) -> Result<()> {
-    let timeout = auth_timeout_for(config.connect_timeout);
+    let timeout = crate::ssh::auth_timeout_for_method(
+        auth_timeout_for(config.connect_timeout),
+        &config.auth_method,
+    );
     tokio::time::timeout(timeout, authenticate_sftp_session_inner(session, config))
         .await
         .map_err(|_| {

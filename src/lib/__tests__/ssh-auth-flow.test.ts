@@ -223,23 +223,23 @@ describe('unattended SSH route deadlines', () => {
   it('inherits the target timeout and budgets the direct-tcpip channel for each hop', () => {
     expect(sshRouteTimeoutMs({ connectTimeout: 5 }, 1_000)).toBe(15_000);
     expect(sshRouteTimeoutMs({ connectTimeout: 60, jumpHosts: [
-      { host: 'one', port: 22, username: 'one', authMethod: 'auto' },
+      { host: 'one', port: 22, username: 'one', authMethod: 'auto', identityAgent: 'none' },
     ] }, 15_000)).toBe(300_000);
     expect(sshRouteTimeoutMs({ connectTimeout: 60, jumpHosts: [
-      { host: 'one', port: 22, username: 'one', authMethod: 'auto', connectTimeout: 30 },
-      { host: 'two', port: 22, username: 'two', authMethod: 'auto' },
+      { host: 'one', port: 22, username: 'one', authMethod: 'auto', identityAgent: 'none', connectTimeout: 30 },
+      { host: 'two', port: 22, username: 'two', authMethod: 'auto', identityAgent: 'none' },
     ] }, 15_000)).toBe(390_000);
   });
 
   it('inherits from the next hop when that hop overrides the target timeout', () => {
     expect(sshRouteTimeoutMs({ connectTimeout: 60, jumpHosts: [
-      { host: 'one', port: 22, username: 'one', authMethod: 'auto' },
-      { host: 'two', port: 22, username: 'two', authMethod: 'auto', connectTimeout: 30 },
+      { host: 'one', port: 22, username: 'one', authMethod: 'auto', identityAgent: 'none' },
+      { host: 'two', port: 22, username: 'two', authMethod: 'auto', identityAgent: 'none', connectTimeout: 30 },
     ] }, 15_000)).toBe(300_000);
   });
 
   it('uses the application setting when the target has no explicit timeout', () => {
-    const jumpHosts = [{ host: 'one', port: 22, username: 'one', authMethod: 'auto' as const }];
+    const jumpHosts = [{ host: 'one', port: 22, username: 'one', authMethod: 'auto' as const, identityAgent: 'none' }];
     expect(sshRouteTimeoutMs({ jumpHosts }, 60_000, 60)).toBe(300_000);
     expect(sshRouteTimeoutMs({ connectTimeout: 30, jumpHosts }, 60_000, 60)).toBe(150_000);
     expect(sshRouteTimeoutMs({}, 60_000, 60)).toBe(120_000);
@@ -247,8 +247,16 @@ describe('unattended SSH route deadlines', () => {
 
   it('keeps the minimum authentication budget even for short inherited timeouts', () => {
     expect(sshRouteTimeoutMs({ connectTimeout: 5, jumpHosts: [
-      { host: 'one', port: 22, username: 'one', authMethod: 'auto' },
+      { host: 'one', port: 22, username: 'one', authMethod: 'auto', identityAgent: 'none' },
     ] }, 1_000)).toBe(35_000);
+  });
+
+  it('gives agent logins time for a password-manager approval prompt', () => {
+    expect(sshRouteTimeoutMs({ authMethod: 'auto' }, 15_000)).toBe(93_000);
+    expect(sshRouteTimeoutMs({ authMethod: 'auto', identityAgent: 'none' }, 15_000)).toBe(15_000);
+    expect(sshRouteTimeoutMs({ authMethod: 'password', connectTimeout: 5, jumpHosts: [
+      { host: 'one', port: 22, username: 'one', authMethod: 'auto' },
+    ] }, 1_000)).toBe(115_000);
   });
 
   it('preserves the application fallback when no target timeout is specified', () => {
