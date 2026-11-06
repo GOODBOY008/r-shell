@@ -1,4 +1,6 @@
-use crate::desktop_protocol::{DesktopConnectRequest, DesktopProtocol, SendableHandles};
+use crate::desktop_protocol::{
+    ConnectProgress, DesktopConnectRequest, DesktopProtocol, SendableHandles,
+};
 use crate::ftp_client::FtpClient;
 use crate::os_detect::OsInfoCache;
 use crate::rdp::RdpClient;
@@ -1026,7 +1028,7 @@ impl ConnectionManager {
         &self,
         connection_id: String,
         request: &DesktopConnectRequest,
-        progress: crate::rdp::ConnectProgress,
+        progress: ConnectProgress,
     ) -> Result<(u16, u16)> {
         let cancel = CancellationToken::new();
         {

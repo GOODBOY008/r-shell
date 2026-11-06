@@ -1,6 +1,5 @@
 //! BSD sockets can fail before the user answers macOS's Local Network alert.
-//! Retry only the TCP dial, before any RDP negotiation or authentication.
-use super::ConnectProgress;
+//! Retry only the TCP dial, before desktop protocol negotiation or authentication.
 use crate::desktop_protocol::DesktopConnectProgress;
 use std::{future::Future, io, time::Duration};
 use tokio::{
@@ -26,10 +25,10 @@ fn may_be_local_network_privacy(error: &io::Error) -> bool {
     cfg!(target_os = "macos") && error.raw_os_error() == Some(65)
 }
 
-pub(super) async fn connect(
+pub(crate) async fn connect(
     host: &str,
     port: u16,
-    progress: &ConnectProgress,
+    progress: impl Fn(DesktopConnectProgress),
 ) -> anyhow::Result<TcpStream> {
     dial_with_retry(
         || TcpStream::connect((tcp_host(host), port)),
@@ -39,13 +38,12 @@ pub(super) async fn connect(
         RETRY_INTERVAL,
     )
     .await
-    .map_err(|error| anyhow::anyhow!("RDP TCP connect to {}:{} failed: {}", host, port, error))
 }
 
 async fn dial_with_retry<T, F, Fut>(
     mut dial: F,
     retryable: impl Fn(&io::Error) -> bool,
-    progress: &ConnectProgress,
+    progress: impl Fn(DesktopConnectProgress),
     budget: Duration,
     interval: Duration,
 ) -> anyhow::Result<T>
@@ -85,6 +83,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::desktop_protocol::ConnectProgress;
     use std::sync::{Arc, Mutex};
 
     fn progress_log() -> (ConnectProgress, Arc<Mutex<Vec<DesktopConnectProgress>>>) {
@@ -120,7 +119,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (progress, events) = progress_log();
         for host in ["::1", "[::1]"] {
-            let stream = connect(host, port, &progress).await.unwrap();
+            let stream = connect(host, port, progress.as_ref()).await.unwrap();
             let (peer, _) = listener.accept().await.unwrap();
             assert_eq!(stream.peer_addr().unwrap(), listener.local_addr().unwrap());
             drop(peer);
@@ -142,7 +141,7 @@ mod tests {
                 })
             },
             |_| true,
-            &progress,
+            progress.as_ref(),
             CONNECT_TIMEOUT,
             RETRY_INTERVAL,
         )
@@ -166,7 +165,7 @@ mod tests {
         let error = dial_with_retry(
             || std::future::ready(Err::<(), _>(io::Error::from_raw_os_error(65))),
             |_| true,
-            &progress,
+            progress.as_ref(),
             CONNECT_TIMEOUT,
             RETRY_INTERVAL,
         )
@@ -196,7 +195,7 @@ mod tests {
                 }
             },
             |_| true,
-            &progress,
+            progress.as_ref(),
             CONNECT_TIMEOUT,
             RETRY_INTERVAL,
         )
@@ -221,7 +220,7 @@ mod tests {
                 }))
             },
             |error| error.raw_os_error() == Some(65),
-            &progress,
+            progress.as_ref(),
             CONNECT_TIMEOUT,
             RETRY_INTERVAL,
         )
@@ -243,7 +242,7 @@ mod tests {
                     std::future::ready(Err::<(), _>(io::Error::from_raw_os_error(65)))
                 },
                 |_| true,
-                &progress,
+                progress.as_ref(),
                 CONNECT_TIMEOUT,
                 RETRY_INTERVAL,
             )

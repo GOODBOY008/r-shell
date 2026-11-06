@@ -3,16 +3,16 @@ mod rfb;
 mod tests;
 
 use crate::desktop_frames::DesktopEventSender;
-use crate::desktop_protocol::{DesktopConnectProgress, DesktopEvent, DesktopProtocol, VncConfig};
+use crate::desktop_protocol::{
+    ConnectProgress, DesktopConnectProgress, DesktopEvent, DesktopProtocol, VncConfig,
+};
 use crate::proxy::{connect_via_proxy, Tunnel};
-use crate::rdp::ConnectProgress;
 use anyhow::{bail, ensure, Context, Result};
 use async_trait::async_trait;
 use rfb::PixelFormat;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{self, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader, WriteHalf};
-use tokio::net::TcpStream;
 use tokio::sync::{MappedMutexGuard, MutexGuard};
 use tokio_util::sync::CancellationToken;
 
@@ -47,7 +47,8 @@ impl VncClient {
         let mut stream = if let Some(proxy) = &config.proxy {
             connect_via_proxy(proxy, &config.host, config.port, PROXY_TIMEOUT).await?
         } else {
-            TcpStream::connect((config.host.as_str(), config.port))
+            // VNC reports progress around both direct and proxied dials.
+            crate::desktop_tcp::connect(&config.host, config.port, |_| {})
                 .await
                 .map_err(|error| anyhow::anyhow!("Could not connect to VNC server: {error}"))?
                 .into()

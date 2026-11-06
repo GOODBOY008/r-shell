@@ -4,6 +4,7 @@ mod acl_tests;
 mod commands;
 mod connection_manager;
 mod desktop_protocol;
+mod desktop_tcp;
 mod ftp_client;
 mod ls_parser;
 mod os_detect;

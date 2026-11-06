@@ -1,7 +1,7 @@
 use super::*;
 use crate::desktop_frames::desktop_event_channel;
 use crate::desktop_protocol::DesktopConnectRequest;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 const RFB_33: &[u8] = b"RFB 003.003\n";
 const RFB_37: &[u8] = b"RFB 003.007\n";
@@ -167,6 +167,45 @@ async fn rejected_vnc_password_is_reported_before_starting_a_session() {
         assert!(error
             .to_string()
             .contains("VNC authentication failed: Rejected"));
+        server.await.unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn connects_directly_to_a_bracketed_ipv6_host() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let listener = TcpListener::bind("[::1]:0").await.unwrap();
+        let mut config = config(&listener, None);
+        config.host = "[::1]".into();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            stream.write_all(RFB_33).await.unwrap();
+            expect_wire(&mut stream, RFB_33).await;
+            stream.write_u32(1).await.unwrap(); // No authentication.
+            expect_wire(&mut stream, &[1]).await; // ClientInit.
+            stream.write_all(&[0, 2, 0, 1]).await.unwrap();
+            stream.write_all(&[0; 20]).await.unwrap(); // Pixel format and empty name.
+            stream.read_exact(&mut [0; 32]).await.unwrap(); // SetPixelFormat and SetEncodings.
+        });
+
+        let progress_events = Arc::new(Mutex::new(Vec::new()));
+        let events = progress_events.clone();
+        let client = VncClient::connect(
+            &config,
+            Arc::new(move |event| events.lock().unwrap().push(event)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(client.desktop_size(), (2, 1));
+        assert_eq!(
+            *progress_events.lock().unwrap(),
+            [
+                DesktopConnectProgress::WaitingForNetwork,
+                DesktopConnectProgress::TcpConnected,
+            ]
+        );
         server.await.unwrap();
     })
     .await

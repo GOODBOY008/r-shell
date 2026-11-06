@@ -159,6 +159,9 @@ pub enum DesktopConnectProgress {
     WaitingForNetwork,
     TcpConnected,
 }
+
+pub type ConnectProgress = std::sync::Arc<dyn Fn(DesktopConnectProgress) + Send + Sync>;
+
 /// Request to establish an RDP or VNC connection.
 #[derive(Debug, Deserialize)]
 pub struct DesktopConnectRequest {
