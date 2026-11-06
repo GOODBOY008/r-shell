@@ -210,6 +210,26 @@ describe('DesktopViewer window-fit scaling', () => {
     expect(JSON.parse(ws.send.mock.lastCall![0])).toMatchObject({ type: 'DesktopKeyEvent', key_code: 17, down: false });
   });
 
+  it('sends VNC keysyms and releases the original keysym after Shift changes', async () => {
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.keyDown(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyDown(surface, { key: 'A', code: 'KeyA', shiftKey: true });
+    fireEvent.keyUp(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyUp(surface, { key: 'a', code: 'KeyA' });
+    fireEvent.keyDown(surface, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyUp(surface, { key: 'Enter', code: 'Enter' });
+
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual(
+      [[0xffe2, true], [0x41, true], [0xffe2, false], [0x41, false], [0xff0d, true], [0xff0d, false]]
+        .map(([key_code, down]) => ({ type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code, down })),
+    );
+  });
+
   it('releases every held key on window blur and before the frame stream closes', async () => {
     const view = render(<DesktopViewer {...viewerProps()} />);
     await measure(800, 450);

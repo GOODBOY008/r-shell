@@ -195,7 +195,7 @@
     "desktopInfo": {
       "title": "Remote Desktop",
       "rdp": "RDP connects to Windows Remote Desktop. Requires NLA-compatible credentials.",
-      "vnc": "VNC connects to any host running a VNC server. Uses password-only authentication."
+      "vnc": "Supports standard VNC password authentication. Leave the password blank for servers that allow connections without authentication."
     },
     "securityNote": {
       "title": "Security Note",

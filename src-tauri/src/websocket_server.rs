@@ -383,6 +383,15 @@ async fn forward_desktop_frames(
         };
         let Some(ev) = ev else { break; };
         match ev {
+            DesktopEvent::Clipboard(text) => {
+                let msg = WsMessage::ClipboardUpdate { connection_id: cid.clone(), text };
+                let message = Message::Text(serde_json::to_string(&msg).unwrap().into());
+                tokio::select! {
+                    biased;
+                    _ = forward_cancel.cancelled() => return,
+                    result = tx_clone.send(message) => { if result.is_err() { return; } }
+                }
+            }
             DesktopEvent::SessionInfo(info) => {
                 let msg = WsMessage::DesktopSessionInfo { connection_id: cid.clone(), info };
                 let message = Message::Text(serde_json::to_string(&msg).unwrap().into());

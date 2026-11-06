@@ -195,7 +195,7 @@
     "desktopInfo": {
       "title": "远程桌面",
       "rdp": "RDP 连接到 Windows 远程桌面，需要兼容 NLA 的凭据。",
-      "vnc": "VNC 连接到任何运行 VNC 服务器的主机，仅使用密码认证。"
+      "vnc": "支持标准 VNC 密码认证。如果服务器允许无认证连接，请将密码留空。"
     },
     "securityNote": {
       "title": "安全提示",

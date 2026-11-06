@@ -568,7 +568,7 @@ mod e2e_tests {
                 Ok(Some(DesktopEvent::Resized { width, height })) => {
                     println!("Resized: {}x{}", width, height);
                 }
-                Ok(Some(DesktopEvent::SessionInfo(_))) => {}
+                Ok(Some(DesktopEvent::SessionInfo(_) | DesktopEvent::Clipboard(_))) => {}
                 Ok(None) => break,
                 Err(_) => break,
             }

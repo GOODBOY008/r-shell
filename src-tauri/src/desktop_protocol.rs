@@ -49,6 +49,8 @@ pub enum DesktopEvent {
     Resized { width: u16, height: u16 },
     /// Latest RDP logon state; replayed when the canvas reattaches.
     SessionInfo(crate::rdp::diagnostics::SessionInfo),
+    /// Text received from the remote clipboard.
+    Clipboard(String),
 }
 
 /// Unified trait for RDP and VNC remote desktop protocol clients.
