@@ -385,6 +385,7 @@ export function ConnectionDialog({
       value={config[field] ?? ''}
       onChange={(value) => updateConfig({ [field]: value })}
       saved={!!previousSecrets[field]}
+      encrypted={isSealed(previousSecrets[field])}
       removed={removedSecrets.includes(field)}
       onRemovedChange={(removed) =>
         setRemovedSecrets((prev) => (removed ? [...prev, field] : prev.filter((f) => f !== field)))

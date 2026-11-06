@@ -287,6 +287,7 @@
     },
     "storedSecret": {
       "saved": "已保存并加密。该值永远不会显示。",
+      "savedNotEncrypted": "已保存，但尚未加密：系统钥匙串不可用。应用会在下次钥匙串可用时启动后对其加密。",
       "change": "更改",
       "changeNamed": "更改{{name}}",
       "remove": "删除",

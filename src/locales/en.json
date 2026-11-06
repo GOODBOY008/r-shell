@@ -287,6 +287,7 @@
     },
     "storedSecret": {
       "saved": "Saved and encrypted. The value is never shown.",
+      "savedNotEncrypted": "Saved, but not encrypted yet: the system keychain was unavailable. The app encrypts it the next time it starts with the keychain working.",
       "change": "Change",
       "changeNamed": "Change {{name}}",
       "remove": "Remove",

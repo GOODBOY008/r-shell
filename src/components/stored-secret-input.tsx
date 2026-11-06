@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Lock } from 'lucide-react';
+import { AlertTriangle, Lock } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { PasswordInput } from './ui/password-input';
@@ -17,8 +17,13 @@ interface StoredSecretInputProps {
   placeholder?: string;
   value: string;
   onChange: (value: string) => void;
-  /** A sealed value is stored for this field. */
+  /** A value is stored for this field. */
   saved: boolean;
+  /**
+   * The stored value is sealed. Legacy plaintext stays unsealed while the
+   * keychain is unavailable (startup migration failed): never call it encrypted.
+   */
+  encrypted: boolean;
   /** The stored value is marked for deletion on save. */
   removed: boolean;
   onRemovedChange: (removed: boolean) => void;
@@ -39,6 +44,7 @@ export function StoredSecretInput({
   value,
   onChange,
   saved,
+  encrypted,
   removed,
   onRemovedChange,
   savingDisabled,
@@ -154,10 +160,15 @@ export function StoredSecretInput({
         <p id={stateId} className="text-xs text-destructive">
           {t('connectionDialog.storedSecret.removing')}
         </p>
-      ) : (
+      ) : encrypted ? (
         <p id={stateId} className="flex items-center gap-1 text-xs text-muted-foreground">
           <Lock className="h-3 w-3" aria-hidden="true" />
           {t('connectionDialog.storedSecret.saved')}
+        </p>
+      ) : (
+        <p id={stateId} className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+          <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden="true" />
+          {t('connectionDialog.storedSecret.savedNotEncrypted')}
         </p>
       )}
     </div>

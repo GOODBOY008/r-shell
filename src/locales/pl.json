@@ -289,6 +289,7 @@
     },
     "storedSecret": {
       "saved": "Zapisane i zaszyfrowane. Wartość nigdy nie jest pokazywana.",
+      "savedNotEncrypted": "Zapisane, ale jeszcze niezaszyfrowane: systemowy pęk kluczy był niedostępny. Aplikacja zaszyfruje je przy najbliższym starcie z działającym pękiem kluczy.",
       "change": "Zmień",
       "changeNamed": "Zmień: {{name}}",
       "remove": "Usuń",

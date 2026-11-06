@@ -12,7 +12,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConnectionDialog } from '../components/connection-dialog';
-import { ConnectionStorageManager } from '../lib/connection-storage';
+import { ConnectionStorageManager, clearSealFailed, markSealFailed } from '../lib/connection-storage';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 
 beforeAll(() => {
@@ -183,6 +183,29 @@ describe('ConnectionDialog saved-secret controls', () => {
     expect(screen.getByText(/Saved and encrypted/)).toBeTruthy();
     // Rendering the form never decrypts the stored value.
     expect(mockInvoke.mock.calls.some(([cmd]) => cmd === 'credential_open')).toBe(false);
+  });
+
+  it('does not call legacy plaintext encrypted when the keychain migration failed', async () => {
+    // The startup migration keeps plaintext it could not seal and marks the
+    // record so writes do not strip it.
+    markSealFailed('conn-1');
+    try {
+      const legacy = { ...baseConnection, password: 'legacy-plain' };
+      ConnectionStorageManager.saveConnectionWithId('conn-1', legacy);
+      const onSave = vi.fn();
+      renderDialog({ editingConnection: legacy, onSave });
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
+
+      expect(screen.getByText(/not encrypted yet/)).toBeTruthy();
+      expect(screen.queryByText(/Saved and encrypted/)).toBeNull();
+
+      // Saving untouched keeps the only copy.
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalled());
+      expect(ConnectionStorageManager.getConnection('conn-1')?.password).toBe('legacy-plain');
+    } finally {
+      clearSealFailed('conn-1');
+    }
   });
 
   it('keeps the stored password when a change is cancelled', async () => {
