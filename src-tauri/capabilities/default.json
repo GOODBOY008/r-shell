@@ -7,6 +7,8 @@
   ],
   "permissions": [
     "allow-authorize-local-file",
+    "allow-backup-open",
+    "allow-backup-seal",
     "allow-cancel-app-quit",
     "allow-cancel-transfer",
     "allow-close-detached-session",

@@ -599,6 +599,8 @@ pub fn run() {
             commands::editor_dirty_changed,
             commands::credential_seal,
             commands::credential_open,
+            commands::backup_seal,
+            commands::backup_open,
             // In-app updater (channel endpoints + Homebrew detection)
             commands::get_update_context,
             commands::updater_check,

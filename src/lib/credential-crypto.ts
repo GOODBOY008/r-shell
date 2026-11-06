@@ -96,3 +96,21 @@ export async function openConnectionSecrets(
     }
   }
 }
+
+/**
+ * True when the value is a passphrase-protected backup block
+ * (`b1:<salt>:<nonce>:<ciphertext>`, produced by the `backup_seal` command).
+ */
+export function isBackupSealed(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('b1:') && value.split(':').length === 4;
+}
+
+/** Encrypt text under a passphrase so it can travel in a config export. */
+export async function sealForBackup(passphrase: string, plaintext: string): Promise<string> {
+  return invoke<string>('backup_seal', { passphrase, secret: plaintext });
+}
+
+/** Decrypt a `b1:` block; rejects on a wrong passphrase or damaged data. */
+export async function openFromBackup(passphrase: string, sealed: string): Promise<string> {
+  return invoke<string>('backup_open', { passphrase, sealed });
+}

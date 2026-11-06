@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { notify } from '@/lib/notifications';
 import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
@@ -10,14 +10,34 @@ import { Switch } from '../ui/switch';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 import { Separator } from '../ui/separator';
 import { Checkbox } from '../ui/checkbox';
+import { PasswordInput } from '../ui/password-input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog';
 import { Monitor, Upload, Download, RefreshCw, Copy, Info } from 'lucide-react';
-import { exportAllConfig, importAllConfig } from '@/lib/config-export-import';
+import {
+  applyConfigBundle,
+  bundleHasCredentials,
+  exportAllConfig,
+  pickConfigBundle,
+  WrongPassphraseError,
+  type ConfigBundle,
+  type ImportResult,
+} from '@/lib/config-export-import';
 import {
   DEFAULT_UPDATE_CONTEXT,
   isCurrentChannelEligible,
   type UpdateContext,
 } from '@/lib/update-channel';
 import { englishText, settingMatchesQuery } from './shared';
+
+/** Shortest export passphrase accepted; it is the only thing protecting the block. */
+const MIN_PASSPHRASE_LENGTH = 8;
 
 interface AdvancedSectionProps {
   appVersion: string | null;
@@ -48,6 +68,34 @@ export function AdvancedSection({
   const [importMerge, setImportMerge] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [includeCredentials, setIncludeCredentials] = useState(false);
+  const [exportPassphrase, setExportPassphrase] = useState('');
+  const [exportPassphraseRepeat, setExportPassphraseRepeat] = useState('');
+  const [importPassphrase, setImportPassphrase] = useState('');
+  const [passphrasePrompt, setPassphrasePrompt] = useState({ open: false, wrong: false });
+  const passphraseResolver = useRef<((answer: string | null | undefined) => void) | null>(null);
+
+  const passphraseMismatch = includeCredentials && exportPassphrase !== exportPassphraseRepeat;
+  const exportBlocked =
+    includeCredentials && (exportPassphrase.length < MIN_PASSPHRASE_LENGTH || passphraseMismatch);
+
+  /**
+   * Ask for the credentials passphrase. Resolves the passphrase, `null` for
+   * "Skip credentials", or `undefined` when the dialog was dismissed (Esc,
+   * overlay, X), which cancels the import instead of importing without secrets.
+   */
+  const askPassphrase = (wrong: boolean) =>
+    new Promise<string | null | undefined>((resolve) => {
+      passphraseResolver.current = resolve;
+      setImportPassphrase('');
+      setPassphrasePrompt({ open: true, wrong });
+    });
+  const answerPassphrase = (answer: string | null | undefined) => {
+    setPassphrasePrompt({ open: false, wrong: false });
+    setImportPassphrase('');
+    passphraseResolver.current?.(answer);
+    passphraseResolver.current = null;
+  };
 
   const currentChannelEligible = isCurrentChannelEligible(updateContext ?? DEFAULT_UPDATE_CONTEXT);
   const homebrewManaged = updateContext?.homebrewManaged ?? false;
@@ -57,7 +105,9 @@ export function AdvancedSection({
   const handleExportConfig = async () => {
     setIsExporting(true);
     try {
-      const saved = await exportAllConfig();
+      const saved = await exportAllConfig({
+        credentialsPassphrase: includeCredentials ? exportPassphrase : undefined,
+      });
       if (saved) {
         notify.success(t('settings.advanced.exportSuccess'));
       } else {
@@ -69,25 +119,58 @@ export function AdvancedSection({
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
+      // A typed passphrase never outlives the attempt, whatever its outcome.
+      setExportPassphrase('');
+      setExportPassphraseRepeat('');
       setIsExporting(false);
+    }
+  };
+
+  // A wrong passphrase re-opens the prompt; skipping imports everything else;
+  // dismissing the prompt cancels (null result).
+  const applyBundle = async (
+    bundle: ConfigBundle,
+    passphrase: string | null | undefined,
+  ): Promise<ImportResult | null> => {
+    if (passphrase === undefined) return null;
+    try {
+      return await applyConfigBundle(bundle, {
+        merge: importMerge,
+        credentialsPassphrase: passphrase ?? undefined,
+      });
+    } catch (error) {
+      if (error instanceof WrongPassphraseError) {
+        return applyBundle(bundle, await askPassphrase(true));
+      }
+      throw error;
     }
   };
 
   const handleImportConfig = async () => {
     setIsImporting(true);
     try {
-      const result = await importAllConfig(importMerge);
-      if (result) {
-        notify.success(t('settings.advanced.importSuccess'), {
-          description: t('settings.advanced.importSuccessDesc', {
-            connections: result.connections,
-            profiles: result.profiles,
-          }),
-        });
-        onConfigImported();
-      } else {
+      const bundle = await pickConfigBundle();
+      if (!bundle) {
         notify.info(t('settings.advanced.importCancelled'));
+        return;
       }
+      const passphrase = bundleHasCredentials(bundle) ? await askPassphrase(false) : null;
+      const result = await applyBundle(bundle, passphrase);
+      if (!result) {
+        notify.info(t('settings.advanced.importCancelled'));
+        return;
+      }
+      const summary = [
+        t('settings.advanced.importSuccessDesc', {
+          connections: result.connections,
+          profiles: result.profiles,
+        }),
+      ];
+      if (result.credentials > 0) {
+        summary.push(t('settings.advanced.importCredentialsRestored', { n: result.credentials }));
+      }
+      notify.success(t('settings.advanced.importSuccess'), { description: summary.join(' ') });
+      onConfigImported();
     } catch (error) {
       console.error('[import-config]', error);
       notify.error(t('settings.advanced.importFailed'), {
@@ -112,6 +195,7 @@ export function AdvancedSection({
   }
 
   return (
+    <>
     <Card className="gap-4 rounded-lg shadow-none">
       <CardHeader className="px-4 pt-4">
         <CardTitle className="flex items-center gap-2">
@@ -254,23 +338,73 @@ export function AdvancedSection({
               </div>
 
               <div className="flex flex-col gap-3">
-                <div className="flex items-center justify-between gap-4 p-3 rounded-lg border border-border bg-card">
-                  <div className="space-y-0.5">
-                    <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {t('settings.advanced.exportConfigDesc')}
-                    </p>
+                <div className="space-y-3 p-3 rounded-lg border border-border bg-card">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-medium">{t('settings.advanced.exportConfig')}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {t('settings.advanced.exportConfigDesc')}
+                      </p>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleExportConfig}
+                      disabled={isExporting || isImporting || exportBlocked}
+                      className="gap-1.5 shrink-0"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      {t('settings.advanced.exportConfig')}
+                    </Button>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleExportConfig}
-                    disabled={isExporting || isImporting}
-                    className="gap-1.5 shrink-0"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    {t('settings.advanced.exportConfig')}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="export-include-credentials"
+                      checked={includeCredentials}
+                      onCheckedChange={(checked) => setIncludeCredentials(checked === true)}
+                    />
+                    <label
+                      htmlFor="export-include-credentials"
+                      className="text-xs text-muted-foreground cursor-pointer select-none"
+                    >
+                      {t('settings.advanced.exportIncludeCredentials')}
+                    </label>
+                  </div>
+                  {includeCredentials && (
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="export-passphrase" className="text-xs">
+                          {t('settings.advanced.exportPassphrase')}
+                        </Label>
+                        <PasswordInput
+                          id="export-passphrase"
+                          autoComplete="new-password"
+                          value={exportPassphrase}
+                          onChange={(event) => setExportPassphrase(event.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="export-passphrase-repeat" className="text-xs">
+                          {t('settings.advanced.exportPassphraseRepeat')}
+                        </Label>
+                        <PasswordInput
+                          id="export-passphrase-repeat"
+                          autoComplete="new-password"
+                          value={exportPassphraseRepeat}
+                          onChange={(event) => setExportPassphraseRepeat(event.target.value)}
+                        />
+                      </div>
+                      <p
+                        className={`sm:col-span-2 text-xs ${
+                          passphraseMismatch && exportPassphraseRepeat ? 'text-destructive' : 'text-muted-foreground'
+                        }`}
+                      >
+                        {passphraseMismatch && exportPassphraseRepeat
+                          ? t('settings.advanced.exportPassphraseMismatch')
+                          : t('settings.advanced.exportPassphraseHint', { min: MIN_PASSPHRASE_LENGTH })}
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-between gap-4 p-3 rounded-lg border border-border bg-card">
@@ -312,5 +446,39 @@ export function AdvancedSection({
         )}
       </CardContent>
     </Card>
+
+    <Dialog open={passphrasePrompt.open} onOpenChange={(open) => { if (!open) answerPassphrase(undefined); }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t('settings.advanced.importPassphraseTitle')}</DialogTitle>
+          <DialogDescription>{t('settings.advanced.importPassphraseDesc')}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2">
+          <Label htmlFor="import-passphrase">{t('settings.advanced.exportPassphrase')}</Label>
+          <PasswordInput
+            id="import-passphrase"
+            autoFocus
+            autoComplete="off"
+            value={importPassphrase}
+            onChange={(event) => setImportPassphrase(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && importPassphrase) answerPassphrase(importPassphrase);
+            }}
+          />
+          {passphrasePrompt.wrong && (
+            <p className="text-xs text-destructive">{t('settings.advanced.importPassphraseWrong')}</p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => answerPassphrase(null)}>
+            {t('settings.advanced.importWithoutCredentials')}
+          </Button>
+          <Button onClick={() => answerPassphrase(importPassphrase)} disabled={!importPassphrase}>
+            {t('settings.advanced.importConfig')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }
