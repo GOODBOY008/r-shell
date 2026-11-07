@@ -5057,6 +5057,7 @@ dependencies = [
  "async-trait",
  "base64 0.23.1",
  "block2",
+ "des",
  "dirs 7.0.0",
  "env_logger",
  "futures",

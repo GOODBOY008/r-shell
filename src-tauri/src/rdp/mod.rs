@@ -13,10 +13,9 @@ pub mod diagnostics;
 pub(crate) mod display;
 mod connect;
 mod session;
-mod tcp;
 mod tls;
 
-use crate::desktop_protocol::{DesktopProtocol, RdpConfig, SendableHandles};
+use crate::desktop_protocol::{ConnectProgress, DesktopProtocol, RdpConfig, SendableHandles};
 use crate::rdp::input::InputCommand;
 use crate::rdp_keymap;
 use anyhow::Result;
@@ -28,9 +27,6 @@ use tokio_util::sync::CancellationToken;
 
 use self::connect::rdp_connect_inner;
 use self::session::{rdp_session_loop, RenderMode, SessionState};
-
-pub type ConnectProgress =
-    std::sync::Arc<dyn Fn(crate::desktop_protocol::DesktopConnectProgress) + Send + Sync>;
 
 type ErasedStream = Box<dyn AsyncReadWrite + Unpin + Send + Sync>;
 
@@ -568,7 +564,7 @@ mod e2e_tests {
                 Ok(Some(DesktopEvent::Resized { width, height })) => {
                     println!("Resized: {}x{}", width, height);
                 }
-                Ok(Some(DesktopEvent::SessionInfo(_))) => {}
+                Ok(Some(DesktopEvent::SessionInfo(_) | DesktopEvent::Clipboard(_))) => {}
                 Ok(None) => break,
                 Err(_) => break,
             }

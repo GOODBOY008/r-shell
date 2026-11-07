@@ -8,7 +8,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 
-/// Proxy protocol used to tunnel the SSH connection.
+/// Proxy protocol used to tunnel a connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProxyType {
     Http,
@@ -16,7 +16,7 @@ pub enum ProxyType {
     Socks5,
 }
 
-/// Proxy server configuration applied when establishing the SSH connection.
+/// Proxy server configuration applied when establishing a connection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub proxy_type: ProxyType,
@@ -24,6 +24,44 @@ pub struct ProxyConfig {
     pub port: u16,
     pub username: Option<String>,
     pub password: Option<String>,
+}
+
+/// Fields shared by connection requests that can use a proxy.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ProxyRequest {
+    pub proxy_type: Option<String>,
+    pub proxy_host: Option<String>,
+    pub proxy_port: Option<u16>,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
+}
+
+impl ProxyRequest {
+    pub fn to_config(&self) -> Result<Option<ProxyConfig>, String> {
+        match self.proxy_type.as_deref() {
+            None | Some("none" | "") => Ok(None),
+            Some(kind) => {
+                let host = self
+                    .proxy_host
+                    .clone()
+                    .filter(|host| !host.trim().is_empty())
+                    .ok_or("Proxy host is required")?;
+                let proxy_type = match kind {
+                    "http" => ProxyType::Http,
+                    "socks4" => ProxyType::Socks4,
+                    "socks5" => ProxyType::Socks5,
+                    other => return Err(format!("Invalid proxy type: {other}")),
+                };
+                Ok(Some(ProxyConfig {
+                    proxy_type,
+                    host,
+                    port: self.proxy_port.unwrap_or(8080),
+                    username: self.proxy_username.clone(),
+                    password: self.proxy_password.clone(),
+                }))
+            }
+        }
+    }
 }
 
 /// A TCP stream that may already hold bytes read past the proxy handshake.
@@ -34,6 +72,21 @@ pub struct ProxyConfig {
 pub struct Tunnel {
     stream: TcpStream,
     pending: Vec<u8>,
+}
+
+impl From<TcpStream> for Tunnel {
+    fn from(stream: TcpStream) -> Self {
+        Self {
+            stream,
+            pending: Vec::new(),
+        }
+    }
+}
+
+impl Tunnel {
+    pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
+        self.stream.set_nodelay(nodelay)
+    }
 }
 
 impl AsyncRead for Tunnel {

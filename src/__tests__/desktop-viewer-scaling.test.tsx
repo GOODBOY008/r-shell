@@ -20,6 +20,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 const lifecycle = vi.hoisted(() => ({
   invoke: vi.fn(),
+  readClipboard: vi.fn<() => Promise<string>>(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -30,7 +31,7 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: async () => () => {},
 }));
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
-  readText: async () => null,
+  readText: lifecycle.readClipboard,
   writeText: async () => {},
 }));
 vi.mock('@/lib/websocket-endpoint', () => ({
@@ -83,6 +84,12 @@ function resizeRequests() {
   return lifecycle.invoke.mock.calls.filter(([command]) => command === 'desktop_resize').map(([, request]) => request);
 }
 
+function sentKeys(ws: FakeWebSocket) {
+  return ws.send.mock.calls.map(([message]) => JSON.parse(message))
+    .filter(event => event.type === 'DesktopKeyEvent')
+    .map(event => [event.key_code, event.down]);
+}
+
 function viewerProps(overrides: Record<string, unknown> = {}) {
   return {
     connectionId: 'conn-1',
@@ -105,6 +112,7 @@ describe('DesktopViewer window-fit scaling', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     lifecycle.invoke.mockReset();
+    lifecycle.readClipboard.mockReset().mockResolvedValue('');
     // Call sites chain .catch() on the returned value.
     lifecycle.invoke.mockImplementation(async () => {});
     FakeResizeObserver.instances = [];
@@ -208,6 +216,219 @@ describe('DesktopViewer window-fit scaling', () => {
     view.rerender(<DesktopViewer {...viewerProps({ isActive: false })} />);
     expect(document.activeElement).not.toBe(surface);
     expect(JSON.parse(ws.send.mock.lastCall![0])).toMatchObject({ type: 'DesktopKeyEvent', key_code: 17, down: false });
+  });
+
+  it('sends VNC keysyms and releases the original keysym after Shift changes', async () => {
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.keyDown(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyDown(surface, { key: 'A', code: 'KeyA', shiftKey: true });
+    fireEvent.keyUp(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyUp(surface, { key: 'a', code: 'KeyA' });
+    fireEvent.keyDown(surface, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyUp(surface, { key: 'Enter', code: 'Enter' });
+
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual(
+      [[0xffe2, true], [0x41, true], [0xffe2, false], [0x41, false], [0xff0d, true], [0xff0d, false]]
+        .map(([key_code, down]) => ({ type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code, down })),
+    );
+  });
+
+  it.each([
+    { key: 'Control', code: 'ControlLeft', keysym: 0xffe3, platform: 'Win32', modifier: { ctrlKey: true } },
+    { key: 'Meta', code: 'MetaLeft', keysym: 0xffeb, platform: 'MacIntel', modifier: { metaKey: true } },
+  ])('syncs the clipboard before sending the VNC paste chord with $key', async ({ key, code, keysym, platform, modifier }) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
+    lifecycle.readClipboard.mockResolvedValue('local text');
+    let finishSync!: () => void;
+    const syncing = new Promise<void>(resolve => { finishSync = resolve; });
+    lifecycle.invoke.mockImplementation(async (command) => {
+      if (command === 'desktop_set_clipboard') await syncing;
+    });
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    await act(async () => {
+      fireEvent.keyDown(surface, { key, code, ...modifier });
+      fireEvent.keyDown(surface, { key: 'v', code: 'KeyV', ...modifier });
+      if (key === 'Control') fireEvent.keyUp(surface, { key: 'v', code: 'KeyV', ...modifier });
+      fireEvent.keyUp(surface, { key, code });
+      fireEvent.keyDown(surface, { key: 'a', code: 'KeyA' });
+      fireEvent.keyUp(surface, { key: 'a', code: 'KeyA' });
+    });
+    expect(lifecycle.invoke).toHaveBeenCalledWith('desktop_set_clipboard', {
+      connectionId: 'conn-1', text: 'local text',
+    });
+    expect(sentKeys(ws)).toEqual([[keysym, true]]);
+
+    await act(async () => { finishSync(); });
+    expect(sentKeys(ws)).toEqual([
+      [keysym, true], [0x76, true], [0x76, false], [keysym, false],
+      [0x61, true], [0x61, false],
+    ]);
+  });
+
+  it('keeps VNC pointer and key events ordered through clipboard reading and synchronization', async () => {
+    let finishRead!: (text: string) => void;
+    lifecycle.readClipboard.mockReturnValue(new Promise(resolve => { finishRead = resolve; }));
+    let finishSync!: () => void;
+    const syncing = new Promise<void>(resolve => { finishSync = resolve; });
+    lifecycle.invoke.mockImplementation(async (command) => {
+      if (command === 'desktop_set_clipboard') await syncing;
+    });
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(1024, 768);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const canvas = view.container.querySelector('canvas')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.keyDown(surface, { key: 'Control', code: 'ControlLeft', ctrlKey: true });
+    fireEvent.keyDown(surface, { key: 'v', code: 'KeyV', ctrlKey: true });
+    fireEvent.keyUp(surface, { key: 'v', code: 'KeyV', ctrlKey: true });
+    fireEvent.keyUp(surface, { key: 'Control', code: 'ControlLeft' });
+    fireEvent.mouseMove(canvas, { clientX: 100, clientY: 150 });
+    fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 150 });
+    fireEvent.mouseMove(canvas, { buttons: 1, clientX: 200, clientY: 250 });
+    fireEvent.mouseUp(document.body, { button: 0, clientX: 300, clientY: 350 });
+    expect(ws.send).toHaveBeenCalledTimes(1);
+
+    await act(async () => { finishRead('local text'); });
+    expect(lifecycle.invoke).toHaveBeenCalledWith('desktop_set_clipboard', {
+      connectionId: 'conn-1', text: 'local text',
+    });
+    fireEvent.wheel(canvas, { deltaY: 120, clientX: 400, clientY: 450 });
+    fireEvent.mouseMove(canvas, { buttons: 1, clientX: 500, clientY: 550 });
+    fireEvent.keyDown(surface, { key: 'a', code: 'KeyA' });
+    fireEvent.keyUp(surface, { key: 'a', code: 'KeyA' });
+    expect(ws.send).toHaveBeenCalledTimes(1);
+
+    await act(async () => { finishSync(); });
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 0xffe3, down: true },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 0x76, down: true },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 0x76, down: false },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 0xffe3, down: false },
+      { type: 'DesktopPointerEvent', connection_id: 'conn-1', x: 100, y: 150, button_mask: 0 },
+      { type: 'DesktopPointerButton', connection_id: 'conn-1', x: 100, y: 150, button: 0, pressed: true },
+      { type: 'DesktopPointerEvent', connection_id: 'conn-1', x: 200, y: 250, button_mask: 1 },
+      { type: 'DesktopPointerButton', connection_id: 'conn-1', x: 300, y: 350, button: 0, pressed: false },
+      { type: 'DesktopPointerEvent', connection_id: 'conn-1', x: 400, y: 450, button_mask: 16 },
+      { type: 'DesktopPointerEvent', connection_id: 'conn-1', x: 500, y: 550, button_mask: 0 },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 0x61, down: true },
+      { type: 'DesktopKeyEvent', connection_id: 'conn-1', key_code: 0x61, down: false },
+    ]);
+  });
+
+  it('forwards the VNC paste shortcut when clipboard synchronization fails', async () => {
+    lifecycle.readClipboard.mockResolvedValue('unsupported text');
+    lifecycle.invoke.mockImplementation(async (command) => {
+      if (command === 'desktop_set_clipboard') throw 'VNC clipboard supports Latin-1 text';
+    });
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    await act(async () => {
+      fireEvent.keyDown(surface, { key: 'Control', code: 'ControlLeft', ctrlKey: true });
+      fireEvent.keyDown(surface, { key: 'v', code: 'KeyV', ctrlKey: true });
+      fireEvent.keyUp(surface, { key: 'v', code: 'KeyV', ctrlKey: true });
+      fireEvent.keyUp(surface, { key: 'Control', code: 'ControlLeft' });
+    });
+    expect(sentKeys(ws)).toEqual([[0xffe3, true], [0x76, true], [0x76, false], [0xffe3, false]]);
+  });
+
+  it('discards pending VNC input and releases held modifiers and buttons on blur', async () => {
+    let finishRead!: (text: string) => void;
+    lifecycle.readClipboard.mockReturnValue(new Promise(resolve => { finishRead = resolve; }));
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const canvas = view.container.querySelector('canvas')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.mouseDown(canvas, { button: 0 });
+    fireEvent.keyDown(surface, { key: 'Control', code: 'ControlLeft', ctrlKey: true });
+    fireEvent.keyDown(surface, { key: 'v', code: 'KeyV', ctrlKey: true });
+    fireEvent.keyUp(surface, { key: 'Control', code: 'ControlLeft' });
+    fireEvent.mouseUp(document.body, { button: 0 });
+    fireEvent.mouseDown(canvas, { button: 2 });
+    fireEvent.mouseMove(canvas, { buttons: 2 });
+    fireEvent(window, new Event('blur'));
+    await act(async () => { finishRead('local text'); });
+
+    expect(lifecycle.invoke).not.toHaveBeenCalledWith('desktop_set_clipboard', expect.anything());
+    expect(ws.send.mock.calls.map(([message]) => JSON.parse(message))).toEqual([
+      expect.objectContaining({ type: 'DesktopPointerButton', button: 0, pressed: true }),
+      expect.objectContaining({ type: 'DesktopKeyEvent', key_code: 0xffe3, down: true }),
+      expect.objectContaining({ type: 'DesktopKeyEvent', key_code: 0xffe3, down: false }),
+      expect.objectContaining({ type: 'DesktopPointerButton', button: 0, pressed: false }),
+    ]);
+  });
+
+  it('synthesizes a missing macOS Command chord keyup without releasing other modifiers', async () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.keyDown(surface, { key: 'Meta', code: 'MetaLeft', metaKey: true });
+    fireEvent.keyDown(surface, { key: 'Shift', code: 'ShiftLeft', metaKey: true, shiftKey: true });
+    fireEvent.keyDown(surface, { key: 'P', code: 'KeyP', metaKey: true, shiftKey: true });
+    fireEvent.keyUp(surface, { key: 'Shift', code: 'ShiftLeft', metaKey: true });
+    fireEvent.keyUp(surface, { key: 'Meta', code: 'MetaLeft' });
+
+    expect(sentKeys(ws)).toEqual([
+      [0xffeb, true], [0xffe1, true], [0x50, true], [0x50, false], [0xffe1, false], [0xffeb, false],
+    ]);
+  });
+
+  it.each(['MacIntel', 'Win32'])('handles keys held before a Command chord on %s', async (platform) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.keyDown(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyDown(surface, { key: 'AltGraph', code: 'AltRight', location: 2 });
+    fireEvent.keyDown(surface, { key: 'A', code: 'KeyA', shiftKey: true });
+    fireEvent.keyDown(surface, { key: 'Meta', code: 'MetaLeft', metaKey: true });
+    fireEvent.keyDown(surface, { key: 'Meta', code: 'MetaRight', location: 2, metaKey: true });
+    fireEvent.keyUp(surface, { key: 'Meta', code: 'MetaLeft', metaKey: true });
+    expect(sentKeys(ws)).toEqual([
+      [0xffe2, true], [0xfe03, true], [0x41, true], [0xffeb, true], [0xffec, true], [0xffeb, false],
+    ]);
+
+    // macOS can omit the A release while either Command key is held.
+    fireEvent.keyUp(surface, { key: 'Meta', code: 'MetaRight', location: 2 });
+    const expected = [
+      [0xffe2, true], [0xfe03, true], [0x41, true], [0xffeb, true], [0xffec, true], [0xffeb, false],
+    ];
+    if (platform === 'MacIntel') expected.push([0x41, false]);
+    expected.push([0xffec, false]);
+    expect(sentKeys(ws)).toEqual(expected);
+
+    fireEvent.keyUp(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyUp(surface, { key: 'AltGraph', code: 'AltRight', location: 2 });
+    // A late physical release must not duplicate the synthetic release.
+    fireEvent.keyUp(surface, { key: 'a', code: 'KeyA' });
+    expected.push([0xffe2, false], [0xfe03, false]);
+    if (platform === 'Win32') expected.push([0x41, false]);
+    expect(sentKeys(ws)).toEqual(expected);
   });
 
   it('releases every held key on window blur and before the frame stream closes', async () => {

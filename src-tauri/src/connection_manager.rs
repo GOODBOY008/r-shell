@@ -1,4 +1,6 @@
-use crate::desktop_protocol::{DesktopConnectRequest, DesktopProtocol, SendableHandles};
+use crate::desktop_protocol::{
+    ConnectProgress, DesktopConnectRequest, DesktopProtocol, SendableHandles,
+};
 use crate::ftp_client::FtpClient;
 use crate::os_detect::OsInfoCache;
 use crate::rdp::RdpClient;
@@ -1026,7 +1028,7 @@ impl ConnectionManager {
         &self,
         connection_id: String,
         request: &DesktopConnectRequest,
-        progress: crate::rdp::ConnectProgress,
+        progress: ConnectProgress,
     ) -> Result<(u16, u16)> {
         let cancel = CancellationToken::new();
         {
@@ -1044,7 +1046,7 @@ impl ConnectionManager {
                 "RDP" => Box::new(
                     RdpClient::connect_with_progress(&request.to_rdp_config(), progress).await?,
                 ),
-                "VNC" => Box::new(VncClient::connect(&request.to_vnc_config()).await?),
+                "VNC" => Box::new(VncClient::connect(&request.to_vnc_config()?, progress).await?),
                 _ => return Err(anyhow::anyhow!("Unknown desktop protocol: {}", protocol)),
             };
             Ok(client)

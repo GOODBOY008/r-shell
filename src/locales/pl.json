@@ -197,7 +197,7 @@
     "desktopInfo": {
       "title": "Pulpit zdalny",
       "rdp": "RDP łączy się z Pulpitem zdalnym systemu Windows. Wymaga danych logowania zgodnych z NLA.",
-      "vnc": "VNC łączy się z dowolnym hostem z serwerem VNC. Uwierzytelnia wyłącznie hasłem."
+      "vnc": "Obsługuje standardowe uwierzytelnianie hasłem VNC. Pozostaw puste hasło, jeśli serwer zezwala na połączenia bez uwierzytelniania."
     },
     "securityNote": {
       "title": "Uwaga dotycząca bezpieczeństwa",

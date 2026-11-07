@@ -4,8 +4,8 @@
 #[cfg(target_os = "macos")]
 use super::tls::tls_upgrade_native;
 use super::tls::tls_upgrade_openssl;
-use super::{ConnectProgress, ErasedStream};
-use crate::desktop_protocol::RdpConfig;
+use super::ErasedStream;
+use crate::desktop_protocol::{ConnectProgress, RdpConfig};
 use crate::rdp::input::InputCommand;
 use anyhow::Result;
 use ironrdp_connector::{
@@ -13,7 +13,19 @@ use ironrdp_connector::{
     ServerName,
 };
 use std::net::SocketAddr;
-use tokio::sync::mpsc;
+use tokio::{net::TcpStream, sync::mpsc};
+
+async fn connect_tcp(config: &RdpConfig, progress: &ConnectProgress) -> Result<TcpStream> {
+    crate::desktop_tcp::connect(&config.host, config.port, progress.as_ref())
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "RDP TCP connect to {}:{} failed: {error}",
+                config.host,
+                config.port
+            )
+        })
+}
 
 /// Establish an RDP connection with NLA (CredSSP) preferred and automatic
 /// fallback to TLS-only if CredSSP fails.
@@ -130,7 +142,7 @@ async fn rdp_connect_attempt_body(
 
     // ── 1. TCP connect ──────────────────────────────────────────────────
     tracing::info!("RDP: attempting TCP connect to {}", dest);
-    let stream = super::tcp::connect(&config.host, config.port, progress).await?;
+    let stream = connect_tcp(config, progress).await?;
     tracing::info!("RDP: TCP connected to {}", dest);
 
     let client_addr = stream
@@ -163,7 +175,7 @@ async fn rdp_connect_attempt_body(
             tracing::warn!("RDP OpenSSL TLS failed: {:?}, falling back to native-tls", e);
             // Reconnect TCP and redo X.224 negotiation
             tracing::info!("RDP: reconnecting TCP for native-tls fallback");
-            let new_stream = super::tcp::connect(&config.host, config.port, progress).await?;
+            let new_stream = connect_tcp(config, progress).await?;
 
             let mut new_framed = ironrdp_tokio::TokioFramed::new(new_stream);
             let mut new_connector = new_connector(config, client_addr, enable_credssp, enable_tls);

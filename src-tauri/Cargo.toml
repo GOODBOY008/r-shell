@@ -54,6 +54,7 @@ aes-gcm = "0.11"
 tempfile = "3"
 rand = "0.10"
 socket2 = "0.6"
+des = "0.9"
 # Keep the IronRDP subcrates on one release generation: their PDU, graphics,
 # connector and virtual-channel types cross crate boundaries.
 ironrdp-core = "0.3"

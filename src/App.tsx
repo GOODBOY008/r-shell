@@ -1,5 +1,4 @@
-import { rdpConnectDisplay } from '@/lib/rdp-display';
-import { desktopConnect, DesktopConnectCancelledError } from '@/lib/desktop-connect';
+import { buildDesktopConnectRequest, desktopConnect, DesktopConnectCancelledError } from '@/lib/desktop-connect';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
@@ -636,21 +635,8 @@ function AppContent() {
 
     try {
       if (isDesktop) {
-        const proto = connectionData.protocol;
         await withTimeout(
-          desktopConnect({
-            connectionId: tab.id,
-            request: {
-              host: connectionData.host,
-              port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
-              protocol: proto.toLowerCase(),
-              username: connectionData.username || '',
-              password: connectionData.password || '',
-              domain: connectionData.domain || null,
-              ...rdpConnectDisplay(connectionData.rdpResolution),
-              color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
-            }
-          }),
+          desktopConnect({ connectionId: tab.id, request: buildDesktopConnectRequest(connectionData) }),
           // Allow the backend's 60s deadline to include the macOS prompt.
           Math.max(connectTimeout, 65_000),
           `desktop_connect ${connectionData.name}`,
@@ -999,19 +985,7 @@ function AppContent() {
         dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
 
         try {
-          await desktopConnect({
-            connectionId: sessionId,
-            request: {
-              host: connectionData.host,
-              port: connectionData.port || (connectionData.protocol === 'RDP' ? 3389 : 5900),
-              protocol: connectionData.protocol.toLowerCase(),
-              username: connectionData.username || '',
-              password: connectionData.password || '',
-              domain: connectionData.domain || null,
-              ...rdpConnectDisplay(connectionData.rdpResolution),
-              color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
-            }
-          });
+          await desktopConnect({ connectionId: sessionId, request: buildDesktopConnectRequest(connectionData) });
           ConnectionStorageManager.updateLastConnected(connection.id);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected' });
         } catch (error) {
@@ -1332,20 +1306,7 @@ function AppContent() {
           // Ignore errors when disconnecting
         }
 
-        const proto = connectionData.protocol;
-        await desktopConnect({
-          connectionId: tabId,
-          request: {
-            host: connectionData.host,
-            port: connectionData.port || (proto === 'RDP' ? 3389 : 5900),
-            protocol: proto.toLowerCase(),
-            username: connectionData.username || '',
-            password: connectionData.password || '',
-            domain: connectionData.domain || null,
-            ...rdpConnectDisplay(connectionData.rdpResolution),
-            color_depth: connectionData.vncColorDepth ? parseInt(connectionData.vncColorDepth) : 24,
-          }
-        });
+        await desktopConnect({ connectionId: tabId, request: buildDesktopConnectRequest(connectionData) });
 
         clearReconnectRetry(tabId);
         if (!tabToReconnect.originalConnectionId) {
@@ -1692,19 +1653,7 @@ function AppContent() {
       } else if (isDesktop) {
         // RDP/VNC reconnect flow
         try {
-          await desktopConnect({
-            connectionId: tabId,
-            request: {
-              host: config.host,
-              port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
-              protocol: config.protocol.toLowerCase(),
-              username: config.username || '',
-              password: config.password || '',
-              domain: config.domain || null,
-              ...rdpConnectDisplay(config.rdpResolution),
-              color_depth: Number(config.vncColorDepth || 24),
-            }
-          });
+          await desktopConnect({ connectionId: tabId, request: buildDesktopConnectRequest(config) });
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
@@ -1739,19 +1688,7 @@ function AppContent() {
         dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: newTab });
 
         try {
-          await desktopConnect({
-            connectionId: tabId,
-            request: {
-              host: config.host,
-              port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
-              protocol: config.protocol.toLowerCase(),
-              username: config.username || '',
-              password: config.password || '',
-              domain: config.domain || null,
-              ...rdpConnectDisplay(config.rdpResolution),
-              color_depth: Number(config.vncColorDepth || 24),
-            }
-          });
+          await desktopConnect({ connectionId: tabId, request: buildDesktopConnectRequest(config) });
           ConnectionStorageManager.updateLastConnected(config.id || tabId);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
@@ -1964,19 +1901,7 @@ function AppContent() {
         }
 
         try {
-          await desktopConnect({
-            connectionId: sessionId,
-            request: {
-              host: config.host,
-              port: config.port || (config.protocol === 'RDP' ? 3389 : 5900),
-              protocol: config.protocol.toLowerCase(),
-              username: config.username || '',
-              password: config.password || '',
-              domain: config.domain || null,
-              ...rdpConnectDisplay(config.rdpResolution),
-              color_depth: config.vncColorDepth ? parseInt(config.vncColorDepth) : 24,
-            }
-          });
+          await desktopConnect({ connectionId: sessionId, request: buildDesktopConnectRequest(config) });
           ConnectionStorageManager.updateLastConnected(config.id);
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
         } catch (error) {
