@@ -209,7 +209,8 @@ export function sshRouteTimeoutMs(
   let budget = Math.max(
     fallback,
     targetTimeout != null || auth > 10
-      ? (Math.max(1, targetTimeout ?? 3) + auth) * 1000
+      // Cover both backend defaults (SSH: 3 s, SFTP: 10 s).
+      ? (Math.max(1, targetTimeout ?? 10) + auth) * 1000
       : 0
   );
   // dial_ssh builds the route backwards: a hop without its own timeout

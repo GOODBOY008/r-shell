@@ -252,11 +252,20 @@ describe('unattended SSH route deadlines', () => {
   });
 
   it('gives agent logins time for a password-manager approval prompt', () => {
-    expect(sshRouteTimeoutMs({ authMethod: 'auto' }, 15_000)).toBe(93_000);
+    expect(sshRouteTimeoutMs({ authMethod: 'auto' }, 15_000)).toBe(100_000);
     expect(sshRouteTimeoutMs({ authMethod: 'auto', identityAgent: 'none' }, 15_000)).toBe(15_000);
     expect(sshRouteTimeoutMs({ authMethod: 'password', connectTimeout: 5, jumpHosts: [
       { host: 'one', port: 22, username: 'one', authMethod: 'auto' },
     ] }, 1_000)).toBe(115_000);
+  });
+
+  it('covers the default SFTP handshake before a slow agent approval', () => {
+    const sftp = { protocol: 'SFTP', authMethod: 'auto' };
+    const budget = sshRouteTimeoutMs(sftp, 15_000);
+    // Both phases fit their backend deadlines (10 s and 90 s), so restore
+    // must not cancel an 8 s handshake followed by an 88 s approval.
+    expect(budget).toBeGreaterThan(8_000 + 88_000);
+    expect(budget).toBeGreaterThanOrEqual(10_000 + 90_000);
   });
 
   it('preserves the application fallback when no target timeout is specified', () => {
