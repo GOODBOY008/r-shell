@@ -148,6 +148,71 @@ async fn password_vnc_streams_frames_and_delivers_input() {
 }
 
 #[tokio::test]
+async fn replays_the_latest_clipboard_received_before_the_viewer_attaches() {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        for latest in [b"latest".as_slice(), b"".as_slice()] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let config = config(&listener, None);
+            let (processed, received) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                stream.write_all(RFB_33).await.unwrap();
+                expect_wire(&mut stream, RFB_33).await;
+                stream.write_u32(1).await.unwrap(); // No authentication.
+                expect_wire(&mut stream, &[1]).await; // ClientInit.
+                stream.write_all(&[0, 2, 0, 1]).await.unwrap();
+                stream.write_all(&[0; 20]).await.unwrap(); // Pixel format and empty name.
+                for text in [b"stale".as_slice(), latest] {
+                    stream.write_all(&[3, 0, 0, 0]).await.unwrap(); // ServerCutText.
+                    stream.write_u32(text.len() as u32).await.unwrap();
+                    stream.write_all(text).await.unwrap();
+                }
+                // SetPixelFormat and SetEncodings.
+                stream.read_exact(&mut [0; 32]).await.unwrap();
+
+                // The resize request proves the reader consumed both preceding clipboard updates.
+                stream
+                    .write_all(&[0, 0, 0, 1, 0, 0, 0, 0, 0, 3, 0, 2, 255, 255, 255, 33])
+                    .await
+                    .unwrap();
+                expect_wire(&mut stream, &[3, 0, 0, 0, 0, 0, 0, 3, 0, 2]).await;
+                processed.send(()).unwrap();
+                for _ in 0..2 {
+                    expect_wire(&mut stream, &[3, 0, 0, 0, 0, 0, 0, 3, 0, 2]).await;
+                }
+                assert_eq!(stream.read(&mut [0; 1]).await.unwrap(), 0);
+            });
+
+            let client = VncClient::connect(&config, Arc::new(|_| {})).await.unwrap();
+            received.await.unwrap();
+            let cancel = CancellationToken::new();
+            for _ in 0..2 {
+                let (events, mut receiver) = desktop_event_channel();
+                client
+                    .start_frame_loop(events, cancel.clone())
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    receiver.recv().await,
+                    Some(DesktopEvent::Clipboard(text)) if text.as_bytes() == latest
+                ));
+                assert!(matches!(
+                    receiver.recv().await,
+                    Some(DesktopEvent::Resized {
+                        width: 3,
+                        height: 2
+                    })
+                ));
+            }
+            cancel.cancel();
+            server.await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn rejected_vnc_password_is_reported_before_starting_a_session() {
     tokio::time::timeout(Duration::from_secs(5), async {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

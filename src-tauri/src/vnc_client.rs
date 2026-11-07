@@ -31,6 +31,7 @@ struct Session {
 
 struct View {
     size: (u16, u16),
+    clipboard: Option<String>,
     events: Option<DesktopEventSender>,
 }
 
@@ -61,7 +62,11 @@ impl VncClient {
         let (reader, writer) = io::split(stream);
         let session = Arc::new(Session {
             cancel: CancellationToken::new(),
-            view: Mutex::new(View { size, events: None }),
+            view: Mutex::new(View {
+                size,
+                clipboard: None,
+                events: None,
+            }),
             writer: tokio::sync::Mutex::new(Some(Writer {
                 stream: writer,
                 buttons: 0,
@@ -198,7 +203,10 @@ impl Session {
 }
 
 impl View {
-    fn send(&self, event: DesktopEvent) {
+    fn send(&mut self, event: DesktopEvent) {
+        if let DesktopEvent::Clipboard(text) = &event {
+            self.clipboard = Some(text.clone());
+        }
         if let Some(events) = &self.events {
             let _ = events.send(event);
         }
@@ -228,6 +236,11 @@ impl DesktopProtocol for VncClient {
             event_tx
                 .send(DesktopEvent::Resized { width, height })
                 .map_err(|_| anyhow::anyhow!("VNC viewer is closed"))?;
+            if let Some(text) = &view.clipboard {
+                event_tx
+                    .send(DesktopEvent::Clipboard(text.clone()))
+                    .map_err(|_| anyhow::anyhow!("VNC viewer is closed"))?;
+            }
             view.events = Some(event_tx);
         }
         let session_cancel = self.session.cancel.clone();
