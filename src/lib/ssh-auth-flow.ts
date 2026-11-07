@@ -15,7 +15,7 @@ export interface SshConnectResult {
 }
 export class SshConnectionError extends Error {
   constructor(readonly result: SshConnectResult) {
-    super(result.error ?? 'SSH connection failed');
+    super(result.error ?? i18n.t('app.connectionFailed'));
     this.name = 'SshConnectionError';
   }
 }
@@ -103,11 +103,13 @@ export async function connectWithDecisions(
   attempts.set(original.connection_id, attempt);
   const attemptId = crypto.randomUUID();
   let request = { ...original, attempt_id: attemptId, auth_responses: [] as SshAuthReply[] };
-  const cancelled: SshConnectResult = {
+  // Read the current language for each cancellation result: the user may
+  // switch languages while an agent approval or key-unlock request is pending.
+  const cancelled = (): SshConnectResult => ({
     success: false,
     cancelled: true,
-    error: 'Connection cancelled',
-  };
+    error: i18n.t('connectionDialog.toast.connectionCancelled'),
+  });
   const trusted = new Set<string>();
   try {
     // A cancelled predecessor must finish cleaning up its native session before
@@ -121,7 +123,7 @@ export async function connectWithDecisions(
             command === 'ssh_connect' ? 'ssh_disconnect' : 'sftp_standalone_disconnect',
             { connection_id: request.connection_id }
           );
-        return cancelled;
+        return cancelled();
       }
       if (result.passphrase_save_failed) notify.warning(i18n.t('openSsh.unlock.saveFailed'));
       if (result.success || interaction.interactive === false) return result;
@@ -130,7 +132,7 @@ export async function connectWithDecisions(
         const key = `${host}:${port}`;
         if (trusted.has(key)) return result;
         const accepted = await requestHostKeyDecision(result.host_key_changed, controller.signal);
-        if (controller.signal.aborted) return cancelled;
+        if (controller.signal.aborted) return cancelled();
         if (!accepted) return result;
         trusted.add(key);
         request = { ...request, host_key_policy: 'accept-new', accept_new_for: { host, port } };
@@ -139,7 +141,7 @@ export async function connectWithDecisions(
       if (!result.auth_required || result.auth_required.attempt_id !== attemptId) return result;
       const info = result.auth_required;
       const answer = await askForKey(info, controller.signal);
-      if (!answer || controller.signal.aborted) return cancelled;
+      if (!answer || controller.signal.aborted) return cancelled();
       request = {
         ...request,
         // A previous one-host trust decision must never leak into a retry.
@@ -158,9 +160,9 @@ export async function connectWithDecisions(
         ],
       };
     }
-    return cancelled;
+    return cancelled();
   } catch (error) {
-    if (controller.signal.aborted) return cancelled;
+    if (controller.signal.aborted) return cancelled();
     throw error;
   } finally {
     request.auth_responses = [];

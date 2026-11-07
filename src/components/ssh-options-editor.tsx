@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowUp, ArrowDown, Plus, Trash2 } from 'lucide-react';
 import type { SshIdentityOptions, SshJumpHost } from '@/lib/ssh-options';
@@ -18,6 +19,7 @@ export function SshIdentityEditor({
   onChange: (value: Partial<SshIdentityOptions>) => void;
 }) {
   const { t } = useTranslation();
+  const agentDescriptionId = useId();
   return (
     <div className="space-y-4">
       <div className="space-y-2">
@@ -59,10 +61,14 @@ export function SshIdentityEditor({
         <Label>{t('openSsh.fields.identityAgent')}</Label>
         <Input
           aria-label={t('openSsh.fields.identityAgent')}
+          aria-describedby={agentDescriptionId}
           value={value.identityAgent ?? ''}
           placeholder={t('openSsh.editor.agentHint')}
           onChange={(e) => onChange({ identityAgent: e.target.value || undefined })}
         />
+        <p id={agentDescriptionId} className="text-xs text-muted-foreground">
+          {t('openSsh.editor.agentDescription')}
+        </p>
       </div>
       <label className="flex items-center justify-between gap-3">
         <span>{t('openSsh.fields.identitiesOnly')}</span>
