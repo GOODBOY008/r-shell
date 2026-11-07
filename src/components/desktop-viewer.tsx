@@ -15,7 +15,7 @@ import { RdpSessionStatus } from './rdp-session-status';
 import { parseRdpSessionInfo, type RdpSessionInfo } from '@/lib/rdp-session-info';
 import { installRdpKeyboardCapture } from '@/lib/rdp-keyboard-capture';
 import { currentPlatformIsMac } from '@/lib/keyboard-shortcut-model';
-import { isVncModifierKey, vncKeysym } from '@/lib/vnc-keysym';
+import { isVncModifierKey, isVncModifierKeysym, vncKeysym } from '@/lib/vnc-keysym';
 
 const POINTER_BUTTON_MASKS = [1, 4, 2, 8, 16];
 
@@ -515,9 +515,17 @@ export function DesktopViewer({
     e.preventDefault();
     e.stopPropagation();
     const isVnc = protocol.toUpperCase() === 'VNC';
-    const { code, keyCode: domCode } = e;
+    const { key, code, keyCode: domCode, metaKey } = e;
     const id = isVnc ? (code || domCode) : domCode;
     const forward = () => {
+      // Command can swallow keyup even for keys pressed before the chord.
+      if (isVnc && key === 'Meta' && !metaKey && currentPlatformIsMac()) {
+        for (const [pressedId, keysym] of pressedKeysRef.current) {
+          if (isVncModifierKeysym(keysym)) continue;
+          sendKeyEvent(keysym, false);
+          pressedKeysRef.current.delete(pressedId);
+        }
+      }
       // Release the keysym sent on keydown even if Shift changed in the meantime.
       const keyCode = isVnc ? pressedKeysRef.current.get(id) : domCode;
       pressedKeysRef.current.delete(id);

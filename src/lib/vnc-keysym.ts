@@ -31,8 +31,16 @@ const modifiers = new Map([
   ['Meta', 0xffeb], // Super_L / Super_R.
 ]);
 
+const modifierKeysyms = new Set(
+  [...modifiers.values()].flatMap(keysym => [keysym, keysym + 1]),
+);
+
 export function isVncModifierKey(key: string): boolean {
   return modifiers.has(key) || key === 'AltGraph';
+}
+
+export function isVncModifierKeysym(keysym: number): boolean {
+  return modifierKeysyms.has(keysym) || keysym === specialKeys.get('AltGraph');
 }
 
 export function vncKeysym(key: string, location: number): number | undefined {

@@ -395,6 +395,42 @@ describe('DesktopViewer window-fit scaling', () => {
     ]);
   });
 
+  it.each(['MacIntel', 'Win32'])('handles keys held before a Command chord on %s', async (platform) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform);
+    const view = render(<DesktopViewer {...viewerProps({ protocol: 'VNC' })} />);
+    await measure(800, 450);
+    const surface = view.container.querySelector<HTMLElement>('[data-remote-desktop-input]')!;
+    const ws = FakeWebSocket.instances[0];
+    ws.readyState = FakeWebSocket.OPEN;
+
+    fireEvent.keyDown(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyDown(surface, { key: 'AltGraph', code: 'AltRight', location: 2 });
+    fireEvent.keyDown(surface, { key: 'A', code: 'KeyA', shiftKey: true });
+    fireEvent.keyDown(surface, { key: 'Meta', code: 'MetaLeft', metaKey: true });
+    fireEvent.keyDown(surface, { key: 'Meta', code: 'MetaRight', location: 2, metaKey: true });
+    fireEvent.keyUp(surface, { key: 'Meta', code: 'MetaLeft', metaKey: true });
+    expect(sentKeys(ws)).toEqual([
+      [0xffe2, true], [0xfe03, true], [0x41, true], [0xffeb, true], [0xffec, true], [0xffeb, false],
+    ]);
+
+    // macOS can omit the A release while either Command key is held.
+    fireEvent.keyUp(surface, { key: 'Meta', code: 'MetaRight', location: 2 });
+    const expected = [
+      [0xffe2, true], [0xfe03, true], [0x41, true], [0xffeb, true], [0xffec, true], [0xffeb, false],
+    ];
+    if (platform === 'MacIntel') expected.push([0x41, false]);
+    expected.push([0xffec, false]);
+    expect(sentKeys(ws)).toEqual(expected);
+
+    fireEvent.keyUp(surface, { key: 'Shift', code: 'ShiftRight', location: 2 });
+    fireEvent.keyUp(surface, { key: 'AltGraph', code: 'AltRight', location: 2 });
+    // A late physical release must not duplicate the synthetic release.
+    fireEvent.keyUp(surface, { key: 'a', code: 'KeyA' });
+    expected.push([0xffe2, false], [0xfe03, false]);
+    if (platform === 'Win32') expected.push([0x41, false]);
+    expect(sentKeys(ws)).toEqual(expected);
+  });
+
   it('releases every held key on window blur and before the frame stream closes', async () => {
     const view = render(<DesktopViewer {...viewerProps()} />);
     await measure(800, 450);
