@@ -243,4 +243,16 @@ describe('PtyTerminal scrollbar visibility', () => {
     expect(styles).toContain('::-webkit-scrollbar');
     expect(styles).toContain('scrollbar-width: thin');
   });
+
+  it('hides the old scrollbar when the terminal session is rebuilt', () => {
+    const view = renderTerminal();
+    mocks.terminals[0].buffer.active.length = 100;
+    act(() => mocks.getLineFeedCallback()?.());
+    expect(view.container.textContent).toContain('overflow-y: auto');
+
+    view.rerender(<PtyTerminal connectionId="replacement" connectionName="Replacement" />);
+    expect(mocks.terminals).toHaveLength(2);
+    expect(view.container.textContent).toContain('overflow-y: hidden');
+    expect(view.container.textContent).not.toContain('overflow-y: auto');
+  });
 });

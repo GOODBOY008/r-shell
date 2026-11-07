@@ -42,6 +42,8 @@ export function Terminal({ connectionId, connectionName, host = 'localhost', use
 
     const term = new XTerm({
       ...termOptions,
+      // This legacy command-output view receives LF-only text, not PTY data.
+      convertEol: true,
       rows: 24,
       cols: 80,
       allowProposedApi: true,
