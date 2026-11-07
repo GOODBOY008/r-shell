@@ -1,4 +1,6 @@
 pub mod auto_auth;
+#[cfg(all(test, unix))]
+mod bitwarden_e2e;
 pub(crate) mod passphrase_store;
 #[cfg(test)]
 mod ssh_import_e2e;
