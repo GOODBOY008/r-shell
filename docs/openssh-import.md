@@ -167,3 +167,66 @@ OpenSSH Agent service: configured public-only identities, `IdentitiesOnly`,
 unavailable service and file fallback, encrypted-key cancellation, and concurrent
 connections. A Unix-socket test or cross-compilation does not establish named-pipe
 runtime behavior. Live file-backed connection groups remain a separate feature.
+
+### Live Bitwarden desktop agent (interactive)
+
+`scripts/test-bitwarden-agent.sh` runs the actual R-Shell backend against the
+official Bitwarden desktop application's agent. It sets an empty identity-file
+list, so a local private key cannot make an agent failure appear successful.
+These tests are ignored by default and live outside the unattended OpenSSH
+fixture suite.
+
+Use a disposable vault and key. Enable Bitwarden's SSH agent with authorization
+set to **Always**. Start a loopback OpenSSH fixture with a `target` account that
+authorizes the same public key. The default fixture port is 18222; set
+`RSHELL_BITWARDEN_SSH_PORT` to use another port.
+
+```sh
+export RSHELL_BITWARDEN_AGENT_SOCKET="$HOME/.bitwarden-ssh-agent.sock"
+
+# Approve in the real Bitwarden desktop window. For the timeout case, wait
+# at least 15 seconds before approving, beyond the former 10-second limit.
+bash scripts/test-bitwarden-agent.sh ssh
+
+# Standalone SFTP upload/download and byte-for-byte verification.
+bash scripts/test-bitwarden-agent.sh sftp
+
+# Click Deny in Bitwarden; authentication must fail.
+bash scripts/test-bitwarden-agent.sh reject
+
+# Leave approval pending; the connection manager cancels after 8 seconds
+# and must not publish a backend connection. Dismiss the Bitwarden prompt.
+bash scripts/test-bitwarden-agent.sh cancel
+```
+
+Repeat `ssh` with the vault locked to verify the unlock-then-authorize flow.
+For automatic discovery, keep Bitwarden at a well-known socket location, start
+a separate disposable `ssh-agent` holding an unrelated key, and run:
+
+```sh
+SSH_AUTH_SOCK=/path/to/disposable-system-agent.sock \
+  bash scripts/test-bitwarden-agent.sh auto
+```
+
+The nonempty first agent must not hide the matching Bitwarden identity.
+
+Recorded acceptance on 2026-11-07: macOS 27.2, official Bitwarden desktop
+2026.10.4 (release SHA-256 and code signature verified), a disposable local
+Vaultwarden 1.37.5 vault over TLS, and a Docker OpenSSH target. The desktop
+client used an isolated application-data directory; approval and unlock actions
+were performed through its real UI.
+
+| Scenario | Result | Whole-case elapsed time |
+| --- | --- | --- |
+| Delayed approval, SSH command, PTY output, terminal SFTP round trip | Passed | 38.45 s |
+| Standalone SFTP upload/download and cleanup | Passed | 11.07 s |
+| Denied signing request refuses login | Passed | 7.46 s |
+| Locked vault unlocks, then authorizes SSH | Passed | 12.20 s |
+| Nonempty unrelated system agent falls through to Bitwarden | Passed | 9.13 s |
+| Cancellation while approval is pending leaves no connection | Passed | 8.00 s |
+
+Bitwarden retained its already-open approval dialog after cancellation; it
+needed to be dismissed manually. The cancelled R-Shell attempt did not publish
+a connection. This acceptance covers the native agent and backend protocol
+paths, not the R-Shell React GUI, startup restoration, Bitwarden Cloud hosting,
+or Windows/Linux Bitwarden installations.

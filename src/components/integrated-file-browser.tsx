@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -1463,8 +1463,9 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   });
 
   // Reset the Shift+Click range anchor whenever the visible list changes
-  // (files, search, or sort), so stale indexes never mis-select rows.
-  useEffect(() => {
+  // (files, search, or sort), before the rows become interactive. A passive
+  // effect can run after the first click and erase the newly chosen anchor.
+  useLayoutEffect(() => {
     lastSelectedIndexRef.current = null;
   }, [files, searchTerm, sortField, sortDirection]);
 

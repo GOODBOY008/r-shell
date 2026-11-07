@@ -1,4 +1,6 @@
 pub mod auto_auth;
+#[cfg(all(test, unix))]
+mod bitwarden_e2e;
 pub(crate) mod passphrase_store;
 #[cfg(test)]
 mod ssh_import_e2e;
@@ -156,6 +158,17 @@ pub(crate) const MIN_AUTH_TIMEOUT_SECS: u64 = 10;
 /// setting, never below [`MIN_AUTH_TIMEOUT_SECS`].
 pub(crate) fn auth_timeout_for(connect_timeout_secs: u64) -> Duration {
     Duration::from_secs(connect_timeout_secs.max(MIN_AUTH_TIMEOUT_SECS))
+}
+
+/// Agent-backed logins may wait on the user approving the request in a
+/// password manager (Bitwarden, 1Password), so they get a longer deadline.
+pub(crate) fn auth_timeout_for_method(timeout: Duration, method: &AuthMethod) -> Duration {
+    match method {
+        AuthMethod::AutoKey { options } if auto_auth::uses_agent(options) => {
+            timeout.max(auto_auth::AGENT_APPROVAL_TIMEOUT)
+        }
+        _ => timeout,
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -502,13 +515,7 @@ impl Client {
         policy: HostKeyPolicy,
         x11_registry: Arc<crate::x11::X11DispatcherRegistry>,
     ) -> (Self, HostKeyReport) {
-        Self::with_known_hosts(
-            host,
-            port,
-            default_known_hosts_path(),
-            policy,
-            x11_registry,
-        )
+        Self::with_known_hosts(host, port, default_known_hosts_path(), policy, x11_registry)
     }
 
     /// Handler with an explicit known_hosts location (tests).
@@ -699,6 +706,7 @@ pub(crate) async fn authenticate_session(
     method: &AuthMethod,
     timeout: Duration,
 ) -> Result<()> {
+    let timeout = auth_timeout_for_method(timeout, method);
     tokio::time::timeout(timeout, authenticate(session, username, method))
         .await
         .map_err(|_| {
@@ -952,10 +960,12 @@ pub async fn connect_via_ssh_tunnel(
         auth_timeout_for(timeout.as_secs()),
     )
     .await
-    .map_err(|error| error.context(format!(
-        "Jump host {}@{}:{} authentication failed",
-        tunnel.username, tunnel.host, tunnel.port
-    )))?;
+    .map_err(|error| {
+        error.context(format!(
+            "Jump host {}@{}:{} authentication failed",
+            tunnel.username, tunnel.host, tunnel.port
+        ))
+    })?;
 
     // Open a direct-tcpip channel through the jump host to the final target.
     // The originator is our local end and only reported to the server; the
@@ -1335,7 +1345,12 @@ impl SshClient {
 
     /// Create a persistent PTY shell session (like ttyd)
     /// This enables interactive commands like vim, less, more, top, etc.
-    pub async fn create_pty_session(&self, cols: u32, rows: u32, connection_id: &str) -> Result<PtySession> {
+    pub async fn create_pty_session(
+        &self,
+        cols: u32,
+        rows: u32,
+        connection_id: &str,
+    ) -> Result<PtySession> {
         if let Some(session) = &self.session {
             let bash_version = tokio::time::timeout(
                 Duration::from_secs(2),
@@ -1371,7 +1386,9 @@ impl SshClient {
 
             // --- X11 forwarding ---
             if let Some(cfg) = self.x11_config.as_ref().filter(|c| c.enabled) {
-                let display_str = cfg.display.clone()
+                let display_str = cfg
+                    .display
+                    .clone()
                     .or_else(|| std::env::var("DISPLAY").ok())
                     .unwrap_or_else(|| ":0".to_string());
 
@@ -1389,9 +1406,7 @@ impl SshClient {
                         // requires is rejected by standard local X servers.)
                         let real_cookie = crate::x11::read_local_cookie(&parsed)
                             .ok()
-                            .and_then(|hex| {
-                                crate::x11::cookie_hex_to_bytes(&hex)
-                            });
+                            .and_then(|hex| crate::x11::cookie_hex_to_bytes(&hex));
                         if real_cookie.is_none() {
                             tracing::warn!(
                                 "[X11] no local xauth cookie for this display; \
@@ -1422,7 +1437,8 @@ impl SshClient {
                         // we would otherwise have inserted the sender, and the
                         // Handler would drop it. We insert first, then deregister
                         // on request_x11 failure.
-                        let (x11_tx, mut x11_rx) = mpsc::unbounded_channel::<crate::x11::InboundX11Channel>();
+                        let (x11_tx, mut x11_rx) =
+                            mpsc::unbounded_channel::<crate::x11::InboundX11Channel>();
                         let dispatcher_token = crate::x11::next_dispatcher_token();
                         {
                             let mut senders = self.x11_registry.senders.write().await;
@@ -1435,13 +1451,16 @@ impl SshClient {
                             );
                         }
 
-                        match channel.request_x11(
-                            true,                       // want_reply
-                            false,                      // single_connection
-                            "MIT-MAGIC-COOKIE-1",
-                            &cookie,
-                            screen,
-                        ).await {
+                        match channel
+                            .request_x11(
+                                true,  // want_reply
+                                false, // single_connection
+                                "MIT-MAGIC-COOKIE-1",
+                                &cookie,
+                                screen,
+                            )
+                            .await
+                        {
                             Ok(()) => {
                                 tracing::info!("[X11] forwarding requested (trusted)");
 
@@ -1497,7 +1516,9 @@ impl SshClient {
                                                 #[cfg(target_os = "macos")]
                                                 if !hinted {
                                                     hinted = true;
-                                                    crate::connection_manager::emit_x11_unreachable(&cid);
+                                                    crate::connection_manager::emit_x11_unreachable(
+                                                        &cid,
+                                                    );
                                                 }
                                                 bounded_channel_close(&channel).await;
                                             }
@@ -1521,7 +1542,11 @@ impl SshClient {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("[X11] could not parse DISPLAY '{}': {}. Skipping X11.", display_str, e);
+                        tracing::warn!(
+                            "[X11] could not parse DISPLAY '{}': {}. Skipping X11.",
+                            display_str,
+                            e
+                        );
                     }
                 }
             }
@@ -1998,8 +2023,14 @@ mod host_key_tests {
             HostKeyVerdict::Known
         );
         let rewritten = std::fs::read_to_string(&path).unwrap();
-        assert!(!rewritten.contains("example.test ssh-ed25519 "), "{rewritten:?}");
-        assert!(rewritten.contains("example.test ecdsa-sha2-nistp256 "), "{rewritten:?}");
+        assert!(
+            !rewritten.contains("example.test ssh-ed25519 "),
+            "{rewritten:?}"
+        );
+        assert!(
+            rewritten.contains("example.test ecdsa-sha2-nistp256 "),
+            "{rewritten:?}"
+        );
     }
 
     #[tokio::test]
@@ -2052,8 +2083,13 @@ mod host_key_tests {
         .unwrap());
 
         // A different key for the same host: refused, and connect() gets the reason.
-        let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, Some(path), HostKeyPolicy::Strict, fresh_x11_registry());
+        let (mut handler, report) = Client::with_known_hosts(
+            "example.test",
+            22,
+            Some(path),
+            HostKeyPolicy::Strict,
+            fresh_x11_registry(),
+        );
         assert!(!client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -2073,8 +2109,13 @@ mod host_key_tests {
 
     #[tokio::test]
     async fn handler_refuses_everything_without_a_home_directory() {
-        let (mut handler, report) =
-            Client::with_known_hosts("example.test", 22, None, HostKeyPolicy::Strict, fresh_x11_registry());
+        let (mut handler, report) = Client::with_known_hosts(
+            "example.test",
+            22,
+            None,
+            HostKeyPolicy::Strict,
+            fresh_x11_registry(),
+        );
         assert!(!client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {
@@ -2142,7 +2183,8 @@ mod host_key_tests {
     }
 
     /// `example.test` as OpenSSH writes it with HashKnownHosts (`ssh-keygen -H`).
-    const HASHED_EXAMPLE_TEST: &str = "|1|+iII2LuUPiVKbyNv+IOwmC0V7HQ=|vKe8ayfdkEIz3MkpsWhUaTePqz4= \
+    const HASHED_EXAMPLE_TEST: &str =
+        "|1|+iII2LuUPiVKbyNv+IOwmC0V7HQ=|vKe8ayfdkEIz3MkpsWhUaTePqz4= \
         ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAVoXCkVWhZFUzEWkJx5xLDLToCzYXw3xWuSh1wsUmOI\n";
 
     #[test]
@@ -2186,8 +2228,13 @@ mod host_key_tests {
     async fn policy_off_accepts_without_touching_known_hosts() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("known_hosts");
-        let (mut handler, _) =
-            Client::with_known_hosts("example.test", 22, Some(path.clone()), HostKeyPolicy::Off, fresh_x11_registry());
+        let (mut handler, _) = Client::with_known_hosts(
+            "example.test",
+            22,
+            Some(path.clone()),
+            HostKeyPolicy::Off,
+            fresh_x11_registry(),
+        );
         assert!(client::Handler::check_server_key(
             &mut handler,
             &russh::keys::PublicKeyOrCertificate::PublicKey {

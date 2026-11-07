@@ -15,7 +15,7 @@ export interface SshConnectResult {
 }
 export class SshConnectionError extends Error {
   constructor(readonly result: SshConnectResult) {
-    super(result.error ?? 'SSH connection failed');
+    super(result.error ?? i18n.t('app.connectionFailed'));
     this.name = 'SshConnectionError';
   }
 }
@@ -103,11 +103,13 @@ export async function connectWithDecisions(
   attempts.set(original.connection_id, attempt);
   const attemptId = crypto.randomUUID();
   let request = { ...original, attempt_id: attemptId, auth_responses: [] as SshAuthReply[] };
-  const cancelled: SshConnectResult = {
+  // Read the current language for each cancellation result: the user may
+  // switch languages while an agent approval or key-unlock request is pending.
+  const cancelled = (): SshConnectResult => ({
     success: false,
     cancelled: true,
-    error: 'Connection cancelled',
-  };
+    error: i18n.t('connectionDialog.toast.connectionCancelled'),
+  });
   const trusted = new Set<string>();
   try {
     // A cancelled predecessor must finish cleaning up its native session before
@@ -121,7 +123,7 @@ export async function connectWithDecisions(
             command === 'ssh_connect' ? 'ssh_disconnect' : 'sftp_standalone_disconnect',
             { connection_id: request.connection_id }
           );
-        return cancelled;
+        return cancelled();
       }
       if (result.passphrase_save_failed) notify.warning(i18n.t('openSsh.unlock.saveFailed'));
       if (result.success || interaction.interactive === false) return result;
@@ -130,7 +132,7 @@ export async function connectWithDecisions(
         const key = `${host}:${port}`;
         if (trusted.has(key)) return result;
         const accepted = await requestHostKeyDecision(result.host_key_changed, controller.signal);
-        if (controller.signal.aborted) return cancelled;
+        if (controller.signal.aborted) return cancelled();
         if (!accepted) return result;
         trusted.add(key);
         request = { ...request, host_key_policy: 'accept-new', accept_new_for: { host, port } };
@@ -139,7 +141,7 @@ export async function connectWithDecisions(
       if (!result.auth_required || result.auth_required.attempt_id !== attemptId) return result;
       const info = result.auth_required;
       const answer = await askForKey(info, controller.signal);
-      if (!answer || controller.signal.aborted) return cancelled;
+      if (!answer || controller.signal.aborted) return cancelled();
       request = {
         ...request,
         // A previous one-host trust decision must never leak into a retry.
@@ -158,9 +160,9 @@ export async function connectWithDecisions(
         ],
       };
     }
-    return cancelled;
+    return cancelled();
   } catch (error) {
-    if (controller.signal.aborted) return cancelled;
+    if (controller.signal.aborted) return cancelled();
     throw error;
   } finally {
     request.auth_responses = [];
@@ -179,17 +181,38 @@ export async function sftpConnect(
   if (!result.success) throw new SshConnectionError(result);
 }
 
+/**
+ * Mirrors the backend's AGENT_APPROVAL_TIMEOUT: agent logins may wait on the
+ * user approving the request in a password manager (Bitwarden, 1Password).
+ */
+const AGENT_AUTH_SECONDS = 90;
+
+function authSeconds(
+  endpoint: { authMethod?: string; identityAgent?: string },
+  timeout: number
+): number {
+  const agent = endpoint.authMethod === 'auto' && endpoint.identityAgent !== 'none';
+  return Math.max(agent ? AGENT_AUTH_SECONDS : 10, timeout);
+}
+
 /** Whole-route budget for unattended restore; manual unlock has no UI timer. */
 export function sshRouteTimeoutMs(
-  source: { connectTimeout?: number; jumpHosts?: SshJumpHost[] },
+  source: {
+    connectTimeout?: number;
+    jumpHosts?: SshJumpHost[];
+    authMethod?: string;
+    identityAgent?: string;
+  },
   fallback: number,
   configuredTimeout?: number | null
 ): number {
   const targetTimeout = source.connectTimeout ?? configuredTimeout;
+  const auth = authSeconds(source, targetTimeout ?? 0);
   let budget = Math.max(
     fallback,
-    targetTimeout != null
-      ? (Math.max(1, targetTimeout) + Math.max(10, targetTimeout)) * 1000
+    targetTimeout != null || auth > 10
+      // Cover both backend defaults (SSH: 3 s, SFTP: 10 s).
+      ? (Math.max(1, targetTimeout ?? 10) + auth) * 1000
       : 0
   );
   // dial_ssh builds the route backwards: a hop without its own timeout
@@ -201,7 +224,7 @@ export function sshRouteTimeoutMs(
     const timeout = Math.max(1, hops[index].connectTimeout ?? inheritedTimeout);
     // Each hop has separate handshake, authentication and direct-tcpip
     // channel-open deadlines. Authentication always allows at least 10 s.
-    budget += (2 * timeout + Math.max(10, timeout)) * 1000;
+    budget += (2 * timeout + authSeconds(hops[index], timeout)) * 1000;
     inheritedTimeout = timeout;
   }
   return budget;

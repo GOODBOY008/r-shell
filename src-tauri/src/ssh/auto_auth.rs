@@ -61,12 +61,42 @@ pub struct AuthRequired {
 
 type DynamicAgent = AgentClient<Box<dyn AgentStream + Send + Unpin>>;
 
-async fn connect_agent(selector: Option<&str>) -> Result<DynamicAgent> {
+/// Signing may require the user to unlock a vault or approve a request.
+pub(crate) const AGENT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// Discovery must leave time for other agents and local identities. Listing
+/// public keys is a metadata request; the long approval budget is for signing.
+const AGENT_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+
+struct AvailableAgent {
+    path: String,
+    client: DynamicAgent,
+    keys: Vec<PublicKey>,
+}
+
+/// Well-known agent sockets that GUI launches do not learn through the
+/// environment: macOS apps started from Finder/Dock inherit launchd's
+/// `SSH_AUTH_SOCK`, not the one a shell profile exports.
+#[cfg(unix)]
+const WELL_KNOWN_AGENT_SOCKETS: &[&str] = &[
+    // Bitwarden desktop (direct download, AppImage, deb/rpm)
+    ".bitwarden-ssh-agent.sock",
+    // Bitwarden desktop from the Mac App Store (sandboxed)
+    "Library/Containers/com.bitwarden.desktop/Data/.bitwarden-ssh-agent.sock",
+    // Bitwarden desktop as a Snap / Flatpak
+    "snap/bitwarden/current/.bitwarden-ssh-agent.sock",
+    ".var/app/com.bitwarden.desktop/data/.bitwarden-ssh-agent.sock",
+];
+
+/// Agent locations to try, in order. An explicit selector yields exactly one
+/// candidate; the system default tries `SSH_AUTH_SOCK`, then well-known
+/// sockets that exist on disk.
+fn agent_candidates(selector: Option<&str>) -> Result<Vec<String>> {
     let selector = selector.filter(|v| !v.is_empty());
     if selector == Some("none") {
         return Err(anyhow!("SSH Agent is disabled"));
     }
-    let path = match selector {
+    let explicit = match selector {
         Some("SSH_AUTH_SOCK") => Some(std::env::var("SSH_AUTH_SOCK")?),
         Some(s) if s.starts_with('$') && !s.starts_with("${") => {
             let name = &s[1..];
@@ -77,18 +107,130 @@ async fn connect_agent(selector: Option<&str>) -> Result<DynamicAgent> {
         )),
         None => None,
     };
+    if let Some(path) = explicit {
+        return Ok(vec![path]);
+    }
     #[cfg(unix)]
     {
-        let path = path
-            .or_else(|| std::env::var("SSH_AUTH_SOCK").ok())
-            .ok_or_else(|| anyhow!("SSH_AUTH_SOCK is not set"))?;
+        default_agent_candidates(
+            std::env::var("SSH_AUTH_SOCK").ok(),
+            dirs::home_dir().as_deref(),
+        )
+    }
+    #[cfg(windows)]
+    {
+        // Bitwarden, 1Password and Windows OpenSSH share this pipe.
+        Ok(vec![r"\\.\pipe\openssh-ssh-agent".into()])
+    }
+}
+
+#[cfg(unix)]
+fn default_agent_candidates(
+    auth_sock: Option<String>,
+    home: Option<&std::path::Path>,
+) -> Result<Vec<String>> {
+    let mut candidates: Vec<_> = auth_sock.filter(|p| !p.is_empty()).into_iter().collect();
+    if let Some(home) = home {
+        for relative in WELL_KNOWN_AGENT_SOCKETS {
+            let path = home.join(relative);
+            if path.exists() {
+                let path = path.to_string_lossy().into_owned();
+                if !candidates.contains(&path) {
+                    candidates.push(path);
+                }
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Err(anyhow!(
+            "SSH_AUTH_SOCK is not set and no known agent socket was found"
+        ));
+    }
+    Ok(candidates)
+}
+
+async fn connect_agent(path: &str) -> Result<DynamicAgent> {
+    #[cfg(unix)]
+    {
         Ok(AgentClient::connect_uds(path).await?.dynamic())
     }
     #[cfg(windows)]
     {
-        let path = path.unwrap_or_else(|| r"\\.\pipe\openssh-ssh-agent".into());
         Ok(AgentClient::connect_named_pipe(path).await?.dynamic())
     }
+}
+
+/// Collect candidate signers in discovery order. A nonempty system agent may
+/// only hold unrelated keys, so it must not hide a later password-manager agent.
+async fn open_agents(
+    session: &client::Handle<Client>,
+    candidates: Result<Vec<String>>,
+    errors: &mut Vec<String>,
+) -> Vec<AvailableAgent> {
+    let candidates = match candidates {
+        Ok(c) => c,
+        Err(e) => {
+            errors.push(format!("Agent unavailable: {e}"));
+            return Vec::new();
+        }
+    };
+    let mut agents = Vec::new();
+    for path in candidates {
+        let mut agent = match tokio::time::timeout(AGENT_QUERY_TIMEOUT, connect_agent(&path)).await
+        {
+            Ok(Ok(a)) => a,
+            Ok(Err(e)) => {
+                errors.push(format!("Agent {path} unavailable: {e}"));
+                continue;
+            }
+            Err(_) => {
+                errors.push(format!("Agent {path} connection timed out"));
+                continue;
+            }
+        };
+        if let Some(binding) = session.agent_session_binding() {
+            // Older agents do not implement session-bind. Unsupported is
+            // tolerated; constrained agents enforce their own signing policy.
+            // A cancelled read may leave a partial agent frame, so a timed-out
+            // stream is never reused.
+            if tokio::time::timeout(AGENT_QUERY_TIMEOUT, agent.bind_session(binding, false))
+                .await
+                .is_err()
+            {
+                errors.push(format!("Agent {path} session binding timed out"));
+                continue;
+            }
+        }
+        // Never reuse a timed-out stream: its next frame may be a late reply.
+        match tokio::time::timeout(AGENT_QUERY_TIMEOUT, agent.request_identities()).await {
+            Ok(Ok(identities)) => {
+                let keys: Vec<_> = identities
+                    .into_iter()
+                    .filter_map(|identity| match identity {
+                        AgentIdentity::PublicKey { key, .. } => Some(key),
+                        _ => None,
+                    })
+                    .collect();
+                if keys.is_empty() {
+                    errors.push(format!("Agent {path} has no identities"));
+                    continue;
+                }
+                agents.push(AvailableAgent {
+                    path,
+                    client: agent,
+                    keys,
+                });
+            }
+            Ok(Err(e)) => errors.push(format!("Cannot list identities of agent {path}: {e}")),
+            Err(_) => errors.push(format!("Agent {path} identity lookup timed out")),
+        }
+    }
+    agents
+}
+
+/// Whether this method may wait on an SSH agent (and so on user approval).
+pub(crate) fn uses_agent(options: &AutoKeyOptions) -> bool {
+    options.identity_agent.as_deref() != Some("none")
 }
 
 fn fingerprint(key: &PublicKey) -> String {
@@ -268,6 +410,21 @@ pub(super) async fn authenticate(
     username: &str,
     options: &AutoKeyOptions,
 ) -> Result<()> {
+    authenticate_with_candidates(
+        session,
+        username,
+        options,
+        agent_candidates(options.identity_agent.as_deref()),
+    )
+    .await
+}
+
+async fn authenticate_with_candidates(
+    session: &mut client::Handle<Client>,
+    username: &str,
+    options: &AutoKeyOptions,
+    candidates: Result<Vec<String>>,
+) -> Result<()> {
     let paths = options.identity_files.clone().unwrap_or_else(|| {
         dirs::home_dir()
             .map(|home| {
@@ -291,52 +448,7 @@ pub(super) async fn authenticate(
         .filter(|f| f.skipped)
         .filter_map(|f| f.public.as_ref().map(fingerprint))
         .collect();
-    let mut agent = match tokio::time::timeout(
-        Duration::from_secs(2),
-        connect_agent(options.identity_agent.as_deref()),
-    )
-    .await
-    {
-        Ok(Ok(a)) => Some(a),
-        Ok(Err(e)) => {
-            errors.push(format!("Agent unavailable: {e}"));
-            None
-        }
-        Err(_) => {
-            errors.push("Agent connection timed out".into());
-            None
-        }
-    };
-    let mut agent_keys = Vec::new();
-    let mut binding_timed_out = false;
-    if let Some(a) = &mut agent {
-        if let Some(binding) = session.agent_session_binding() {
-            // Older agents do not implement session-bind. Unsupported is
-            // tolerated; constrained agents enforce their own signing policy.
-            binding_timed_out =
-                tokio::time::timeout(Duration::from_secs(2), a.bind_session(binding, false))
-                    .await
-                    .is_err();
-        }
-    }
-    // A cancelled read may leave a partial agent frame. Never reuse that stream.
-    if binding_timed_out {
-        agent = None;
-        errors.push("Agent session binding timed out".into());
-    }
-    if let Some(a) = &mut agent {
-        match tokio::time::timeout(Duration::from_secs(2), a.request_identities()).await {
-            Ok(Ok(identities)) => {
-                for identity in identities {
-                    if let AgentIdentity::PublicKey { key, .. } = identity {
-                        agent_keys.push(key);
-                    }
-                }
-            }
-            Ok(Err(e)) => errors.push(format!("Cannot list agent identities: {e}")),
-            Err(_) => errors.push("Agent identity lookup timed out".into()),
-        }
-    }
+    let mut agents = open_agents(session, candidates, &mut errors).await;
     // Explicit/default identities go first, using their agent signer when
     // available. Unrelated agent identities never bypass IdentitiesOnly.
     for file in &mut files {
@@ -348,16 +460,22 @@ pub(super) async fn authenticate(
             if attempted.contains(&id) {
                 continue;
             }
-            if agent_keys.iter().any(|key| fingerprint(key) == id) {
-                if let Some(a) = &mut agent {
-                    match offer_agent_key(session, username, public, a).await {
+            for agent in &mut agents {
+                if agent.keys.iter().any(|key| fingerprint(key) == id) {
+                    match offer_agent_key(session, username, public, &mut agent.client).await {
                         Ok(accepted) => {
                             attempted.insert(id.clone());
                             if accepted {
                                 return Ok(());
                             }
+                            // The server rejected this identity; another signer
+                            // for the same key cannot change that decision.
+                            break;
                         }
-                        Err(e) => errors.push(format!("Agent could not sign {}: {e}", file.path)),
+                        Err(e) => errors.push(format!(
+                            "Agent {} could not sign {}: {e}",
+                            agent.path, file.path
+                        )),
                     }
                 }
             }
@@ -376,16 +494,20 @@ pub(super) async fn authenticate(
         }
     }
     if !options.identities_only {
-        if let Some(a) = &mut agent {
-            for key in agent_keys {
-                let id = fingerprint(&key);
-                if !attempted.insert(id) {
+        for agent in &mut agents {
+            for key in &agent.keys {
+                let id = fingerprint(key);
+                if attempted.contains(&id) {
                     continue;
                 }
-                match offer_agent_key(session, username, &key, a).await {
+                match offer_agent_key(session, username, key, &mut agent.client).await {
                     Ok(true) => return Ok(()),
-                    Ok(false) => {}
-                    Err(e) => errors.push(format!("Agent signing failed: {e}")),
+                    Ok(false) => {
+                        attempted.insert(id);
+                    }
+                    // A signer-specific refusal must not suppress the same
+                    // identity held by a later agent.
+                    Err(e) => errors.push(format!("Agent {} signing failed: {e}", agent.path)),
                 }
             }
         }
@@ -456,6 +578,38 @@ mod tests {
     }
 
     #[test]
+    fn agent_selectors_resolve_to_candidates() {
+        assert!(agent_candidates(Some("none")).is_err());
+        assert_eq!(
+            agent_candidates(Some("/tmp/explicit.sock")).unwrap(),
+            vec!["/tmp/explicit.sock".to_string()]
+        );
+        assert!(uses_agent(&AutoKeyOptions::default()));
+        assert!(!uses_agent(&AutoKeyOptions {
+            identity_agent: Some("none".into()),
+            ..Default::default()
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn default_agent_candidates_keep_order_and_deduplicate() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(default_agent_candidates(None, Some(home.path())).is_err());
+        let socket = home.path().join(WELL_KNOWN_AGENT_SOCKETS[0]);
+        std::fs::write(&socket, "").unwrap();
+        let socket = socket.to_string_lossy().into_owned();
+        assert_eq!(
+            default_agent_candidates(Some("system.sock".into()), Some(home.path())).unwrap(),
+            vec!["system.sock".to_string(), socket.clone()]
+        );
+        assert_eq!(
+            default_agent_candidates(Some(socket.clone()), Some(home.path())).unwrap(),
+            vec![socket]
+        );
+    }
+
+    #[test]
     fn identity_none_and_agent_replies_are_scoped() {
         let options = AutoKeyOptions {
             identity_files: Some(vec![]),
@@ -478,3 +632,6 @@ mod tests {
         assert!(!format!("{options:?}").contains("passphrase"));
     }
 }
+
+#[cfg(all(test, unix))]
+mod agent_tests;
