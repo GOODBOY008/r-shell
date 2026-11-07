@@ -49,7 +49,7 @@ export function DesktopViewer({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const pressedKeysRef = useRef(new Map<string | number, number>());
-  const queuedVncKeysRef = useRef<(() => void)[] | null>(null);
+  const queuedVncInputRef = useRef<(() => void)[] | null>(null);
   const pressedButtonsRef = useRef(new Set<number>());
   const lastPointerPositionRef = useRef({ x: 0, y: 0 });
 
@@ -235,7 +235,7 @@ export function DesktopViewer({
       ws.onclose = () => {
         painter.dispose();
         if (wsRef.current === socket) {
-          queuedVncKeysRef.current = null;
+          queuedVncInputRef.current = null;
           wsRef.current = null;
         }
         // Unexpected drop (not our own cleanup): reconnect with backoff and
@@ -293,7 +293,7 @@ export function DesktopViewer({
 
     return () => {
       cancelled = true;
-      queuedVncKeysRef.current = null;
+      queuedVncInputRef.current = null;
       activeCloseRef.current = true;
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
@@ -403,7 +403,7 @@ export function DesktopViewer({
   }, [connectionId, sendWsEvent]);
 
   const releaseKeyboard = useCallback(() => {
-    queuedVncKeysRef.current = null;
+    queuedVncInputRef.current = null;
     for (const keyCode of pressedKeysRef.current.values()) {
       sendKeyEvent(keyCode, false);
     }
@@ -438,9 +438,9 @@ export function DesktopViewer({
     return !!el?.closest('button, input, select, textarea, a[href], [role="button"]');
   };
 
-  const forwardVncKey = useCallback((forward: () => void) => {
+  const forwardInput = useCallback((forward: () => void) => {
     if (wsRef.current?.readyState !== WebSocket.OPEN) return;
-    const queued = queuedVncKeysRef.current;
+    const queued = queuedVncInputRef.current;
     if (queued) queued.push(forward);
     else forward();
   }, []);
@@ -448,10 +448,10 @@ export function DesktopViewer({
   const syncVncClipboardAndForward = useCallback(async (forward: () => void) => {
     const socket = wsRef.current;
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
-    // Keep later key events in order, including a modifier released during IPC.
+    // Keep later keyboard and pointer input behind the paste, including releases.
     const queued: (() => void)[] = [];
-    queuedVncKeysRef.current = queued;
-    const isCurrent = () => queuedVncKeysRef.current === queued
+    queuedVncInputRef.current = queued;
+    const isCurrent = () => queuedVncInputRef.current === queued
       && wsRef.current === socket && socket.readyState === WebSocket.OPEN;
     const text = await readClipboardText().catch(() => {
       if (isCurrent()) {
@@ -470,10 +470,10 @@ export function DesktopViewer({
       });
     }
     if (!isCurrent()) return;
-    queuedVncKeysRef.current = null;
+    queuedVncInputRef.current = null;
     forward();
-    for (const keyEvent of queued) forwardVncKey(keyEvent);
-  }, [connectionId, forwardVncKey, t]);
+    for (const inputEvent of queued) forwardInput(inputEvent);
+  }, [connectionId, forwardInput, t]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!isConnected || !isActive || isFromInteractiveControl(e)) return;
@@ -504,11 +504,11 @@ export function DesktopViewer({
       }
     };
     if ((ctrlKey || metaKey) && key === 'v' && !repeat) {
-      forwardVncKey(() => { void syncVncClipboardAndForward(forward); });
+      forwardInput(() => { void syncVncClipboardAndForward(forward); });
     } else {
-      forwardVncKey(forward);
+      forwardInput(forward);
     }
-  }, [isConnected, isActive, protocol, sendKeyEvent, forwardVncKey, syncVncClipboardAndForward]);
+  }, [isConnected, isActive, protocol, sendKeyEvent, forwardInput, syncVncClipboardAndForward]);
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent) => {
     if (!isConnected || !isActive || isFromInteractiveControl(e)) return;
@@ -523,9 +523,9 @@ export function DesktopViewer({
       pressedKeysRef.current.delete(id);
       if (keyCode !== undefined) sendKeyEvent(keyCode, false);
     };
-    if (isVnc) forwardVncKey(forward);
+    if (isVnc) forwardInput(forward);
     else forward();
-  }, [isConnected, isActive, protocol, sendKeyEvent, forwardVncKey]);
+  }, [isConnected, isActive, protocol, sendKeyEvent, forwardInput]);
 
   // Release remote input when focus leaves the desktop.
   const handleBlur = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
@@ -578,44 +578,56 @@ export function DesktopViewer({
     // The desktop bridge has explicit transitions for the three primary buttons.
     if (protocol.toUpperCase() === 'VNC' && e.button > 2) return;
     containerRef.current?.focus();
+    const { button } = e;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    pressedButtonsRef.current.add(e.button);
-    lastPointerPositionRef.current = { x, y };
-    sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: e.button, pressed: true });
-  }, [connectionId, isConnected, protocol, getRemoteCoordsFromEvent, sendWsEvent]);
+    forwardInput(() => {
+      // Track only delivered presses so cancelling queued input can release held buttons.
+      pressedButtonsRef.current.add(button);
+      lastPointerPositionRef.current = { x, y };
+      sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button, pressed: true });
+    });
+  }, [connectionId, isConnected, protocol, getRemoteCoordsFromEvent, sendWsEvent, forwardInput]);
 
   useEffect(() => {
     if (!isConnected || sessionMissing || isPoppedOut) return;
     const releaseButton = (event: MouseEvent) => {
-      if (!pressedButtonsRef.current.delete(event.button)) return;
+      const { button } = event;
       const { x, y } = getRemoteCoordsFromEvent(event.clientX, event.clientY);
-      lastPointerPositionRef.current = { x, y };
-      sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button: event.button, pressed: false });
+      forwardInput(() => {
+        if (!pressedButtonsRef.current.delete(button)) return;
+        lastPointerPositionRef.current = { x, y };
+        sendWsEvent({ type: 'DesktopPointerButton', connection_id: connectionId, x, y, button, pressed: false });
+      });
     };
     // Capture before the toolbar stops bubbling, also covering releases outside
     // the viewer. Untracked buttons (including toolbar-only clicks) are ignored.
     document.addEventListener('mouseup', releaseButton, true);
     return () => document.removeEventListener('mouseup', releaseButton, true);
-  }, [connectionId, isConnected, sessionMissing, isPoppedOut, getRemoteCoordsFromEvent, sendWsEvent]);
+  }, [connectionId, isConnected, sessionMissing, isPoppedOut, getRemoteCoordsFromEvent, sendWsEvent, forwardInput]);
 
   const handleContainerMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isConnected) return;
+    const { buttons } = e;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
-    lastPointerPositionRef.current = { x, y };
-    // DOM buttons are left=1, middle=4, right=2. A drag starting on a local
-    // toolbar control must not become a remote press when it enters the canvas.
-    let buttonMask = 0;
-    for (const button of pressedButtonsRef.current) buttonMask |= POINTER_BUTTON_MASKS[button] ?? 0;
-    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: e.buttons & buttonMask });
-  }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent]);
+    forwardInput(() => {
+      lastPointerPositionRef.current = { x, y };
+      // DOM buttons are left=1, middle=4, right=2. A drag starting on a local
+      // toolbar control must not become a remote press when it enters the canvas.
+      let buttonMask = 0;
+      for (const button of pressedButtonsRef.current) buttonMask |= POINTER_BUTTON_MASKS[button] ?? 0;
+      sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: buttons & buttonMask });
+    });
+  }, [connectionId, isConnected, getRemoteCoordsFromEvent, sendWsEvent, forwardInput]);
 
   const handleContainerWheel = useCallback((e: React.WheelEvent) => {
     if (!isConnected) return;
     if (protocol.toUpperCase() === 'VNC' && e.deltaY === 0) return;
     const { x, y } = getRemoteCoordsFromEvent(e.clientX, e.clientY);
     const buttonMask = e.deltaY < 0 ? 0x08 : 0x10;
-    sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: buttonMask });
-  }, [connectionId, isConnected, protocol, getRemoteCoordsFromEvent, sendWsEvent]);
+    forwardInput(() => {
+      sendWsEvent({ type: 'DesktopPointerEvent', connection_id: connectionId, x, y, button_mask: buttonMask });
+    });
+  }, [connectionId, isConnected, protocol, getRemoteCoordsFromEvent, sendWsEvent, forwardInput]);
 
   // Toolbar actions
   const handleToggleScaling = useCallback(() => {
