@@ -691,6 +691,43 @@ describe('credentials block', () => {
     expect(payload.connections['conn-sealed']).toEqual({ password: 'hunter2', tunnelPassword: 'bastion-pw' });
   });
 
+  it.each(['connection', 'jump host'])(
+    'does not write a partial backup when a %s secret cannot be decrypted',
+    async (location) => {
+      const blocked = 'v1:test:blocked';
+      const source = ConnectionStorageManager.getConnection('conn-sealed')!;
+      if (location === 'connection') {
+        source.password = blocked;
+        delete source.tunnelPassword;
+      } else {
+        source.jumpHosts = [{
+          host: 'jump.example.test', port: 22, username: 'jump',
+          authMethod: 'publickey', passphrase: blocked,
+        }];
+      }
+      localStorage.setItem('r-shell-connections', JSON.stringify([source]));
+      const before = { ...localStorage };
+      const crypto = mockInvoke.getMockImplementation()!;
+      mockInvoke.mockImplementation(async (command: unknown, args: unknown) => {
+        if (command === 'credential_open' && (args as { sealed?: string }).sealed === blocked) {
+          throw new Error('Keychain access denied');
+        }
+        return crypto(command, args);
+      });
+
+      await expect(exportWithPassphrase('correct horse')).rejects.toThrow('Keychain access denied');
+      expect(mockWriteTextFile).not.toHaveBeenCalled();
+      expect(mockInvoke.mock.calls.filter(([command]) => command === 'backup_seal')).toHaveLength(0);
+      expect({ ...localStorage }).toEqual(before);
+
+      const opens = mockInvoke.mock.calls.filter(([command]) => command === 'credential_open').length;
+      const plainBundle = JSON.parse(await exportWithPassphrase());
+      expect(plainBundle.data.credentials).toBeUndefined();
+      expect(mockWriteTextFile).toHaveBeenCalledOnce();
+      expect(mockInvoke.mock.calls.filter(([command]) => command === 'credential_open')).toHaveLength(opens);
+    },
+  );
+
   it('restores the secrets sealed for this machine when the passphrase is right', async () => {
     const text = await exportWithPassphrase('correct horse');
     mockOpen.mockResolvedValue('/tmp/config.json');

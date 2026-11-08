@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { AdvancedSection } from '../components/settings/advanced-section';
 import {
   applyConfigBundle,
+  exportAllConfig,
   pickConfigBundle,
   WrongPassphraseError,
   type ConfigBundle,
@@ -14,6 +15,7 @@ vi.mock('../lib/config-export-import', async (importOriginal) => ({
   ...await importOriginal<typeof import('../lib/config-export-import')>(),
   pickConfigBundle: vi.fn(),
   applyConfigBundle: vi.fn(),
+  exportAllConfig: vi.fn(),
 }));
 
 vi.mock('../lib/notifications', () => ({
@@ -25,18 +27,23 @@ const imported: ImportResult = {
   terminalAppearance: false, editorConfig: false, appSettings: false, language: false,
 };
 
-function renderImport(sealed = 'b1:salt:nonce:ciphertext') {
-  const bundle: ConfigBundle = {
-    version: 1, exportedAt: '2026-11-08T00:00:00Z', appVersion: '3.1.2',
-    data: { credentials: { format: 'r-shell-credentials-v2', sealed } },
-  };
-  vi.mocked(pickConfigBundle).mockResolvedValue(bundle);
+function renderAdvanced() {
   const onConfigImported = vi.fn();
   render(<AdvancedSection
     appVersion="3.1.2" updateContext={null} checkUpdates={false}
     updateChannel="stable" updateProxy="" onChange={vi.fn()}
     onSaveAndCheckForUpdates={vi.fn()} onConfigImported={onConfigImported} query="backup"
   />);
+  return { onConfigImported };
+}
+
+function renderImport(sealed = 'b1:salt:nonce:ciphertext') {
+  const bundle: ConfigBundle = {
+    version: 1, exportedAt: '2026-11-08T00:00:00Z', appVersion: '3.1.2',
+    data: { credentials: { format: 'r-shell-credentials-v2', sealed } },
+  };
+  vi.mocked(pickConfigBundle).mockResolvedValue(bundle);
+  const { onConfigImported } = renderAdvanced();
   fireEvent.click(screen.getByRole('button', { name: 'Import Config' }));
   return { bundle, onConfigImported };
 }
@@ -47,6 +54,23 @@ beforeEach(() => {
 });
 
 describe('encrypted credential import prompt', () => {
+  it('reports credential export failures and clears the passphrase without a success notification', async () => {
+    vi.mocked(exportAllConfig).mockRejectedValue(new Error('Keychain access denied'));
+    renderAdvanced();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Include passwords and other credentials/ }));
+    const passphrase = screen.getByLabelText('Export passphrase');
+    const repeat = screen.getByLabelText('Repeat the passphrase');
+    fireEvent.change(passphrase, { target: { value: 'correct horse' } });
+    fireEvent.change(repeat, { target: { value: 'correct horse' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Export Config' }));
+    await waitFor(() => expect(notify.error).toHaveBeenCalledWith(
+      'Export failed', { description: 'Keychain access denied' },
+    ));
+    expect(notify.success).not.toHaveBeenCalled();
+    expect(passphrase).toHaveProperty('value', '');
+    expect(repeat).toHaveProperty('value', '');
+  });
+
   it('prompts for a damaged block and cancels without applying it when dismissed', async () => {
     const { onConfigImported } = renderImport('damaged');
     const dialog = await screen.findByRole('dialog', { name: 'Encrypted credentials' });

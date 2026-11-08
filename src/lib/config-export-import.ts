@@ -125,16 +125,13 @@ function credentialMetadata(bundle: ConfigBundle): string {
   return JSON.stringify(canonicalize(withoutSecrets({ ...bundle, data })));
 }
 
-async function readBackupSecrets(record: SecretValues, context: string): Promise<SecretValues> {
+async function readBackupSecrets(record: SecretValues): Promise<SecretValues> {
   const secrets: SecretValues = {};
   for (const field of SECRET_FIELDS) {
     const value = record[field];
     if (isSealed(value)) {
-      try {
-        secrets[field] = await openSecret(value);
-      } catch (error) {
-        console.warn(`[config-export] Skipping ${field} of ${context}:`, error);
-      }
+      // An opted-in credential backup must never silently omit a saved secret.
+      secrets[field] = await openSecret(value);
     } else if (typeof value === 'string') {
       // Empty passwords are configured credentials too, unlike absent fields.
       secrets[field] = value;
@@ -217,10 +214,10 @@ export async function exportAllConfig(options: ExportOptions = {}): Promise<bool
     if (options.credentialsPassphrase) {
       const secrets: CredentialsBlock['connections'] = {};
       for (const connection of connections) {
-        const own: ConnectionSecrets = await readBackupSecrets(connection, connection.id);
+        const own: ConnectionSecrets = await readBackupSecrets(connection);
         const hops: SecretValues[] = [];
-        for (const [index, hop] of (connection.jumpHosts ?? []).entries()) {
-          hops.push(await readBackupSecrets(hop, `${connection.id} jump host ${index + 1}`));
+        for (const hop of connection.jumpHosts ?? []) {
+          hops.push(await readBackupSecrets(hop));
         }
         if (hops.some((hop) => Object.keys(hop).length > 0)) {
           own.jumpHosts = hops;
