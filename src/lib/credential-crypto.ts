@@ -45,6 +45,11 @@ export const SECRET_FIELDS = [
 
 export type SecretField = (typeof SECRET_FIELDS)[number];
 
+export type SecretValues = Partial<Record<SecretField, string>>;
+
+/** Connection secrets, with jump-host entries kept in route order. */
+export type ConnectionSecrets = SecretValues & { jumpHosts?: SecretValues[] };
+
 /**
  * Secrets a connect request carries. The sudo password is typed into the
  * terminal on demand, so connect flows leave it sealed: the record they
@@ -120,6 +125,24 @@ export async function openConnectionSecrets(connection: Record<string, unknown>)
       }
     }
   }
+}
+
+/**
+ * True when the value is a passphrase-protected backup block
+ * (`b1:<salt>:<nonce>:<ciphertext>`, produced by the `backup_seal` command).
+ */
+export function isBackupSealed(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('b1:') && value.split(':').length === 4;
+}
+
+/** Encrypt text under a passphrase so it can travel in a config export. */
+export async function sealForBackup(passphrase: string, plaintext: string): Promise<string> {
+  return invoke<string>('backup_seal', { passphrase, secret: plaintext });
+}
+
+/** Decrypt a `b1:` block; rejects on a wrong passphrase or damaged data. */
+export async function openFromBackup(passphrase: string, sealed: string): Promise<string> {
+  return invoke<string>('backup_open', { passphrase, sealed });
 }
 
 /** Export strips credentials recursively, including ciphertext bound to this machine. */

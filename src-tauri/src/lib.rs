@@ -602,6 +602,8 @@ pub fn run() {
             commands::editor_dirty_changed,
             commands::credential_seal,
             commands::credential_open,
+            commands::backup_seal,
+            commands::backup_open,
             commands::list_ssh_key_passphrases,
             commands::forget_ssh_key_passphrase,
             // In-app updater (channel endpoints + Homebrew detection)

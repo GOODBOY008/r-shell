@@ -16,7 +16,17 @@ import {
   type ConnectionData,
   type ConnectionFolder,
 } from './connection-storage';
-import { SECRET_FIELDS } from './credential-crypto';
+import {
+  SECRET_FIELDS,
+  isBackupSealed,
+  isSealed,
+  openFromBackup,
+  openSecret,
+  sealForBackup,
+  sealSecret,
+  type ConnectionSecrets,
+  type SecretValues,
+} from './credential-crypto';
 import { ConnectionProfileManager, type ConnectionProfile } from './connection-profiles';
 import {
   loadAppearanceSettings,
@@ -40,6 +50,7 @@ import { migrateLegacyShortcutBindings } from './shortcut-registry';
 
 const SCHEMA_VERSION = 1;
 const LANGUAGE_STORAGE_KEY = 'r-shell-language';
+const CREDENTIALS_FORMAT = 'r-shell-credentials-v2';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,12 +68,31 @@ export interface ConfigBundle {
     editorConfig?: EditorConfig;
     appSettings?: Record<string, unknown>;
     language?: string;
+    /**
+     * Opt-in: every stored secret, keyed by connection id, encrypted under a
+     * passphrase the user chose at export time (`b1:` block).
+     */
+    credentials?: { format: string; sealed: string };
   };
+}
+
+/** Plaintext layout of the credentials block. */
+interface CredentialsBlock {
+  /** Canonical public configuration, authenticated inside the encrypted block. */
+  metadata: string;
+  connections: Record<string, ConnectionSecrets>;
+}
+
+export interface ExportOptions {
+  /** Include the credentials block, encrypted under this passphrase. */
+  credentialsPassphrase?: string;
 }
 
 export interface ImportResult {
   connections: number;
   profiles: number;
+  /** Connections whose secrets were restored from the credentials block. */
+  credentials: number;
   terminalAppearance: boolean;
   editorConfig: boolean;
   appSettings: boolean;
@@ -76,12 +106,41 @@ export interface ImportResult {
  * JSON bundle to disk.  Returns `true` when the file was written, `false`
  * when the user cancelled the dialog.
  */
-// Secret fields that must never end up in an exported config bundle — not
-// even as ciphertext. Exported files are meant to be shareable; a stolen
-// master key would otherwise decrypt every exported credential.
+// Secret fields that never end up in an exported config bundle as stored —
+// not even as ciphertext. Exported files are meant to be shareable; a stolen
+// master key would otherwise decrypt every exported credential. The opt-in
+// credentials block carries them under the user's own passphrase instead.
 const EXPORT_STRIPPED_FIELDS = SECRET_FIELDS;
 
-export async function exportAllConfig(): Promise<boolean> {
+function credentialMetadata(bundle: ConfigBundle): string {
+  const { credentials: _credentials, ...data } = bundle.data;
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  };
+  // Bind the complete public configuration, including profiles, proxies and
+  // routes, so credentials cannot be redirected through an indirect setting.
+  // Public secret fields are ignored here and always stripped during import.
+  return JSON.stringify(canonicalize(withoutSecrets({ ...bundle, data })));
+}
+
+async function readBackupSecrets(record: SecretValues): Promise<SecretValues> {
+  const secrets: SecretValues = {};
+  for (const field of SECRET_FIELDS) {
+    const value = record[field];
+    if (isSealed(value)) {
+      // An opted-in credential backup must never silently omit a saved secret.
+      secrets[field] = await openSecret(value);
+    } else if (typeof value === 'string') {
+      // Empty passwords are configured credentials too, unlike absent fields.
+      secrets[field] = value;
+    }
+  }
+  return secrets;
+}
+
+export async function exportAllConfig(options: ExportOptions = {}): Promise<boolean> {
   try {
     // 1. Build the bundle -------------------------------------------------------
     const bundle: ConfigBundle = {
@@ -149,6 +208,31 @@ export async function exportAllConfig(): Promise<boolean> {
 
     if (!filePath) return false; // cancelled
 
+    // 2b. Credentials (opt-in) ---------------------------------------------------
+    // Every stored secret, decrypted and re-encrypted under the passphrase,
+    // so the file stays portable yet unreadable without it.
+    if (options.credentialsPassphrase) {
+      const secrets: CredentialsBlock['connections'] = {};
+      for (const connection of connections) {
+        const own: ConnectionSecrets = await readBackupSecrets(connection);
+        const hops: SecretValues[] = [];
+        for (const hop of connection.jumpHosts ?? []) {
+          hops.push(await readBackupSecrets(hop));
+        }
+        if (hops.some((hop) => Object.keys(hop).length > 0)) {
+          own.jumpHosts = hops;
+        }
+        if (Object.keys(own).length > 0) secrets[connection.id] = own;
+      }
+      if (Object.keys(secrets).length > 0) {
+        const block: CredentialsBlock = { metadata: credentialMetadata(bundle), connections: secrets };
+        bundle.data.credentials = {
+          format: CREDENTIALS_FORMAT,
+          sealed: await sealForBackup(options.credentialsPassphrase, JSON.stringify(block)),
+        };
+      }
+    }
+
     // 3. Write ------------------------------------------------------------------
     // The fs plugin may only touch files the user picked, so grant this one.
     await writeLocalTextFile(filePath, JSON.stringify(bundle, null, 2));
@@ -161,16 +245,29 @@ export async function exportAllConfig(): Promise<boolean> {
 
 // ── Import ────────────────────────────────────────────────────────────────────
 
+/** The credentials block did not open: wrong passphrase or damaged data. */
+export class WrongPassphraseError extends Error {
+  constructor() {
+    super('Wrong passphrase or damaged credentials block');
+    this.name = 'WrongPassphraseError';
+  }
+}
+
+export interface ImportOptions {
+  merge?: boolean;
+  /** Passphrase for the bundle's credentials block; absent = skip the block. */
+  credentialsPassphrase?: string;
+  /** Explicit user choice to skip credentials, including a damaged block. */
+  skipCredentials?: boolean;
+}
+
 /**
- * Open a file-dialog, parse the JSON bundle, optionally merge connections,
- * and write every category into localStorage.  Returns a summary of what
- * was imported, or `null` when the user cancelled.
+ * Open a file-dialog and parse the JSON bundle. Returns `null` when the user
+ * cancelled. Nothing is written yet: the caller may first have to ask for
+ * the credentials passphrase (see `bundleHasCredentials`).
  */
-export async function importAllConfig(
-  merge: boolean = false,
-): Promise<ImportResult | null> {
+export async function pickConfigBundle(): Promise<ConfigBundle | null> {
   try {
-    // 1. Pick file --------------------------------------------------------------
     const filePath = await tauriOpen({
       filters: [{ name: 'R-Shell Config', extensions: ['json'] }],
       multiple: false,
@@ -179,7 +276,6 @@ export async function importAllConfig(
 
     if (!filePath) return null; // cancelled
 
-    // 2. Read & parse -----------------------------------------------------------
     // The fs plugin may only touch files the user picked, so grant this one.
     const raw = await readLocalTextFile(filePath);
     const bundle = JSON.parse(raw) as ConfigBundle;
@@ -187,10 +283,75 @@ export async function importAllConfig(
     if (typeof bundle.version !== 'number' || !bundle.data) {
       throw new Error('Invalid config file: missing version or data block.');
     }
+    return bundle;
+  } catch (error) {
+    console.error('[config-import] Failed:', error);
+    throw error;
+  }
+}
 
+/** Presence triggers the prompt even when the credentials block is damaged. */
+export function bundleHasCredentials(bundle: ConfigBundle): boolean {
+  return Object.prototype.hasOwnProperty.call(bundle.data, 'credentials');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseSecretValues(value: unknown): SecretValues {
+  if (!isRecord(value)) throw new WrongPassphraseError();
+  const secrets: SecretValues = {};
+  for (const field of SECRET_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) continue;
+    if (typeof value[field] !== 'string') throw new WrongPassphraseError();
+    secrets[field] = value[field];
+  }
+  return secrets;
+}
+
+function parseCredentialsBlock(json: string): CredentialsBlock {
+  const value: unknown = JSON.parse(json);
+  if (!isRecord(value) || typeof value.metadata !== 'string' || !isRecord(value.connections)) {
+    throw new WrongPassphraseError();
+  }
+  return {
+    metadata: value.metadata,
+    connections: Object.fromEntries(Object.entries(value.connections).map(([id, entry]) => {
+      const secrets: ConnectionSecrets = parseSecretValues(entry);
+      if (isRecord(entry) && Object.prototype.hasOwnProperty.call(entry, 'jumpHosts')) {
+        if (!Array.isArray(entry.jumpHosts)) throw new WrongPassphraseError();
+        secrets.jumpHosts = entry.jumpHosts.map(parseSecretValues);
+      }
+      return [id, secrets];
+    })),
+  };
+}
+
+async function sealBackupSecrets(secrets: SecretValues): Promise<SecretValues> {
+  const localSecrets: SecretValues = {};
+  for (const field of SECRET_FIELDS) {
+    const value = secrets[field];
+    if (typeof value === 'string') localSecrets[field] = await sealSecret(value);
+  }
+  return localSecrets;
+}
+
+/**
+ * Write every category of a parsed bundle into localStorage, optionally
+ * merging connections. Returns a summary of what was imported. Throws
+ * `WrongPassphraseError` before touching storage when the credentials block
+ * does not open with the given passphrase.
+ */
+export async function applyConfigBundle(
+  bundle: ConfigBundle,
+  { merge = false, credentialsPassphrase, skipCredentials = false }: ImportOptions = {},
+): Promise<ImportResult> {
+  try {
     const result: ImportResult = {
       connections: 0,
       profiles: 0,
+      credentials: 0,
       terminalAppearance: false,
       editorConfig: false,
       appSettings: false,
@@ -199,13 +360,57 @@ export async function importAllConfig(
 
     const { data } = bundle;
 
+    // 2. Credentials block first: a wrong passphrase must fail before any write.
+    let restored: CredentialsBlock['connections'] = {};
+    const block = data.credentials;
+    if (bundleHasCredentials(bundle) && !skipCredentials) {
+      if (!isRecord(block) || block.format !== CREDENTIALS_FORMAT || !isBackupSealed(block.sealed)) {
+        throw new WrongPassphraseError();
+      }
+      if (credentialsPassphrase) {
+        try {
+          const decrypted = parseCredentialsBlock(await openFromBackup(credentialsPassphrase, block.sealed));
+          if (decrypted.metadata !== credentialMetadata(bundle)) throw new WrongPassphraseError();
+          restored = decrypted.connections;
+        } catch (error) {
+          console.error('[config-import] Credentials block did not open:', error);
+          throw new WrongPassphraseError();
+        }
+      }
+    }
+
     // 3a. Connections + folders -------------------------------------------------
     if (data.connections) {
-      const importedCount = ConnectionStorageManager.importConnections(
-        JSON.stringify(data.connections),
+      // Re-seal restored secrets with this machine's master key separately
+      // from the untrusted JSON, whose secret fields are stripped on import.
+      // A malformed list is left for importConnections to reject.
+      const payload = data.connections;
+      const locallySealedCredentials = new Map<string, ConnectionSecrets>();
+      if (Object.keys(restored).length > 0 && Array.isArray(payload.connections)) {
+        // Complete key initialization and every seal before writing anything.
+        for (const connection of payload.connections) {
+          if (!Object.prototype.hasOwnProperty.call(restored, connection.id)) continue;
+          const secrets = restored[connection.id];
+          const localSecrets: ConnectionSecrets = await sealBackupSecrets(secrets);
+          if (secrets.jumpHosts) {
+            if (secrets.jumpHosts.length !== connection.jumpHosts?.length) {
+              throw new WrongPassphraseError();
+            }
+            const hops: SecretValues[] = [];
+            for (const hop of secrets.jumpHosts) hops.push(await sealBackupSecrets(hop));
+            if (hops.some((hop) => Object.keys(hop).length > 0)) localSecrets.jumpHosts = hops;
+          }
+          if (Object.keys(localSecrets).length > 0) {
+            locallySealedCredentials.set(connection.id, localSecrets);
+            result.credentials += 1;
+          }
+        }
+      }
+      result.connections = ConnectionStorageManager.importConnections(
+        JSON.stringify(payload),
         merge,
+        locallySealedCredentials,
       );
-      result.connections = importedCount;
     }
 
     // 3b. Connection profiles ---------------------------------------------------
@@ -258,6 +463,19 @@ export async function importAllConfig(
     console.error('[config-import] Failed:', error);
     throw error;
   }
+}
+
+/**
+ * Pick a bundle and apply it in one go. Returns the import summary, or
+ * `null` when the user cancelled the file dialog.
+ */
+export async function importAllConfig(
+  merge: boolean = false,
+  credentialsPassphrase?: string,
+): Promise<ImportResult | null> {
+  const bundle = await pickConfigBundle();
+  if (!bundle) return null;
+  return applyConfigBundle(bundle, { merge, credentialsPassphrase });
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

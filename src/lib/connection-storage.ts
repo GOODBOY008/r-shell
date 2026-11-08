@@ -4,7 +4,7 @@ import type { SshExtendedOptions } from '@/lib/ssh-options';
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
  */
-import { SECRET_FIELDS, isSealed, withoutSecrets } from './credential-crypto';
+import { SECRET_FIELDS, isSealed, withoutSecrets, type ConnectionSecrets } from './credential-crypto';
 
 /**
  * X11 forwarding options for an SSH connection. Mirrors the Rust-side
@@ -876,9 +876,14 @@ export class ConnectionStorageManager {
   }
 
   /**
-   * Import connections from JSON
+   * Import connections from JSON. Optional credentials must already have been
+   * decrypted from a backup and re-sealed for this machine by the caller.
    */
-  static importConnections(json: string, merge: boolean = false): number {
+  static importConnections(
+    json: string,
+    merge: boolean = false,
+    locallySealedCredentials?: ReadonlyMap<string, ConnectionSecrets>,
+  ): number {
     try {
       // Read before writing: this detects a corrupt store and gives merge its
       // base, so a replace-import cannot overwrite the value the guard keeps.
@@ -918,8 +923,20 @@ export class ConnectionStorageManager {
 
       // Import connections with new IDs
       imported.connections.forEach(connection => {
+        const importedConnection = withoutSecrets(connection);
+        const localSecrets = locallySealedCredentials?.get(connection.id);
+        for (const field of SECRET_FIELDS) {
+          const value = localSecrets?.[field];
+          if (isSealed(value)) importedConnection[field] = value;
+        }
+        importedConnection.jumpHosts?.forEach((hop, index) => {
+          for (const field of ['password', 'passphrase'] as const) {
+            const value = localSecrets?.jumpHosts?.[index]?.[field];
+            if (isSealed(value)) hop[field] = value;
+          }
+        });
         connections.push({
-          ...withoutSecrets(connection),
+          ...importedConnection,
           id: crypto.randomUUID(),
           createdAt: new Date().toISOString(),
         });

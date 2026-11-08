@@ -9,8 +9,11 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { version as packageVersion } from '../../package.json';
 import {
   ConnectionStorageManager,
+  connectionHasCredentials,
   type ConnectionData,
 } from '../lib/connection-storage';
+import { openConnectionSecrets } from '../lib/credential-crypto';
+import type { ConfigBundle } from '../lib/config-export-import';
 import { ConnectionProfileManager } from '../lib/connection-profiles';
 import {
   loadAppearanceSettings,
@@ -603,5 +606,444 @@ describe('export/import round-trip', () => {
     expect(appSettings.autoReconnect).toBe(true);
 
     expect(localStorage.getItem(LANGUAGE_KEY)).toBe('zh-CN');
+  });
+});
+
+// ── credentials block (opt-in, passphrase-protected) ─────────────────────────
+
+describe('credentials block', () => {
+  /**
+   * Readable test doubles: `v1:` seals are base64 of the secret, `b1:` blocks
+   * carry the base64 passphrase so a wrong one fails like a GCM tag check.
+   */
+  function installCryptoMocks() {
+    mockInvoke.mockImplementation(async (command: unknown, args: unknown) => {
+      const a = (args ?? {}) as { secret?: string; sealed?: string; passphrase?: string };
+      switch (command) {
+        case 'credential_seal':
+          return `v1:test:${btoa(encodeURIComponent(a.secret ?? ''))}`;
+        case 'credential_open':
+          return decodeURIComponent(atob((a.sealed ?? '').split(':')[2] ?? ''));
+        case 'backup_seal':
+          return `b1:salt:${btoa(a.passphrase ?? '')}:${btoa(encodeURIComponent(a.secret ?? ''))}`;
+        case 'backup_open': {
+          const [, , pass, payload] = (a.sealed ?? '').split(':');
+          if (pass !== btoa(a.passphrase ?? '')) throw new Error('Failed to decrypt secret');
+          return decodeURIComponent(atob(payload ?? ''));
+        }
+        default:
+          return undefined;
+      }
+    });
+  }
+
+  const sealedPassword = `v1:test:${btoa(encodeURIComponent('hunter2'))}`;
+  const sealedTunnel = `v1:test:${btoa(encodeURIComponent('bastion-pw'))}`;
+
+  function seedSealedConnection(): void {
+    const stored = ConnectionStorageManager.getConnections();
+    stored.push({
+      id: 'conn-sealed',
+      name: 'Sealed Server',
+      host: '10.0.0.9',
+      port: 22,
+      username: 'root',
+      protocol: 'SSH',
+      authMethod: 'password',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      password: sealedPassword,
+      tunnelPassword: sealedTunnel,
+    } as ConnectionData);
+    localStorage.setItem('r-shell-connections', JSON.stringify(stored));
+  }
+
+  async function exportWithPassphrase(passphrase?: string): Promise<string> {
+    mockSave.mockResolvedValue('/tmp/config.json');
+    mockWriteTextFile.mockResolvedValue(undefined);
+    const { exportAllConfig } = await import('../lib/config-export-import');
+    await exportAllConfig({ credentialsPassphrase: passphrase });
+    return mockWriteTextFile.mock.calls[0][1] as string;
+  }
+
+  beforeEach(() => {
+    installCryptoMocks();
+    seedSealedConnection();
+  });
+
+  it('is absent unless a passphrase was given', async () => {
+    const bundle = JSON.parse(await exportWithPassphrase());
+    expect(bundle.data.credentials).toBeUndefined();
+  });
+
+  it('moves every stored secret into one passphrase-sealed block', async () => {
+    const text = await exportWithPassphrase('correct horse');
+    const bundle = JSON.parse(text);
+    for (const c of bundle.data.connections.connections as ConnectionData[]) {
+      expect(c.password).toBeUndefined();
+      expect(c.tunnelPassword).toBeUndefined();
+    }
+    expect(bundle.data.credentials.format).toBe('r-shell-credentials-v2');
+    expect(bundle.data.credentials.sealed).toMatch(/^b1:/);
+    // Neither the plaintext nor the machine-bound ciphertext leaks elsewhere.
+    expect(text).not.toContain('hunter2');
+    expect(text).not.toContain(sealedPassword);
+    const payload = JSON.parse(decodeURIComponent(atob(bundle.data.credentials.sealed.split(':')[3])));
+    expect(payload.connections['conn-sealed']).toEqual({ password: 'hunter2', tunnelPassword: 'bastion-pw' });
+  });
+
+  it.each(['connection', 'jump host'])(
+    'does not write a partial backup when a %s secret cannot be decrypted',
+    async (location) => {
+      const blocked = 'v1:test:blocked';
+      const source = ConnectionStorageManager.getConnection('conn-sealed')!;
+      if (location === 'connection') {
+        source.password = blocked;
+        delete source.tunnelPassword;
+      } else {
+        source.jumpHosts = [{
+          host: 'jump.example.test', port: 22, username: 'jump',
+          authMethod: 'publickey', passphrase: blocked,
+        }];
+      }
+      localStorage.setItem('r-shell-connections', JSON.stringify([source]));
+      const before = { ...localStorage };
+      const crypto = mockInvoke.getMockImplementation()!;
+      mockInvoke.mockImplementation(async (command: unknown, args: unknown) => {
+        if (command === 'credential_open' && (args as { sealed?: string }).sealed === blocked) {
+          throw new Error('Keychain access denied');
+        }
+        return crypto(command, args);
+      });
+
+      await expect(exportWithPassphrase('correct horse')).rejects.toThrow('Keychain access denied');
+      expect(mockWriteTextFile).not.toHaveBeenCalled();
+      expect(mockInvoke.mock.calls.filter(([command]) => command === 'backup_seal')).toHaveLength(0);
+      expect({ ...localStorage }).toEqual(before);
+
+      const opens = mockInvoke.mock.calls.filter(([command]) => command === 'credential_open').length;
+      const plainBundle = JSON.parse(await exportWithPassphrase());
+      expect(plainBundle.data.credentials).toBeUndefined();
+      expect(mockWriteTextFile).toHaveBeenCalledOnce();
+      expect(mockInvoke.mock.calls.filter(([command]) => command === 'credential_open')).toHaveLength(opens);
+    },
+  );
+
+  it('restores the secrets sealed for this machine when the passphrase is right', async () => {
+    const text = await exportWithPassphrase('correct horse');
+    mockOpen.mockResolvedValue('/tmp/config.json');
+    mockReadTextFile.mockResolvedValue(text);
+
+    const { importAllConfig, bundleHasCredentials } = await import('../lib/config-export-import');
+    expect(bundleHasCredentials(JSON.parse(text))).toBe(true);
+    const result = await importAllConfig(false, 'correct horse');
+
+    expect(result?.credentials).toBe(1);
+    const imported = ConnectionStorageManager.getConnections().find((c) => c.name === 'Sealed Server');
+    expect(imported?.password).toBe(sealedPassword);
+    expect(imported?.tunnelPassword).toBe(sealedTunnel);
+    expect(JSON.stringify(ConnectionStorageManager.getConnections())).not.toContain('hunter2');
+  });
+
+  it.each([false, true])('round-trips jump-host secrets (target has secrets: %s)', async (hasTargetSecrets) => {
+    const connection = ConnectionStorageManager.getConnection('conn-sealed')!;
+    if (!hasTargetSecrets) {
+      delete connection.password;
+      delete connection.tunnelPassword;
+    }
+    connection.jumpHosts = [
+      { host: 'auto.example.test', port: 22, username: 'auto', authMethod: 'auto' },
+      {
+        host: 'password.example.test', port: 2222, username: 'jump', authMethod: 'password',
+        password: `v1:test:${btoa('jump-password')}`,
+      },
+      {
+        host: 'key.example.test', port: 22, username: 'key', authMethod: 'publickey',
+        passphrase: `v1:test:${btoa('jump-key-passphrase')}`,
+      },
+      { host: 'empty.example.test', port: 22, username: 'empty', authMethod: 'password', password: '' },
+    ];
+    localStorage.setItem('r-shell-connections', JSON.stringify([connection]));
+
+    const text = await exportWithPassphrase('correct horse');
+    const bundle = JSON.parse(text);
+    expect(bundle.data.credentials).toBeDefined();
+    for (const hop of bundle.data.connections.connections[0].jumpHosts) {
+      expect(hop.password).toBeUndefined();
+      expect(hop.passphrase).toBeUndefined();
+    }
+    expect(text).not.toContain('jump-password');
+    expect(text).not.toContain('jump-key-passphrase');
+    const payload = JSON.parse(decodeURIComponent(atob(bundle.data.credentials.sealed.split(':')[3])));
+    expect(payload.connections['conn-sealed'].jumpHosts).toEqual([
+      {}, { password: 'jump-password' }, { passphrase: 'jump-key-passphrase' }, { password: '' },
+    ]);
+
+    const { applyConfigBundle } = await import('../lib/config-export-import');
+    localStorage.clear();
+    const result = await applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' });
+    expect(result.credentials).toBe(1);
+    const imported = ConnectionStorageManager.getConnections()[0];
+    expect(imported.id).not.toBe(connection.id);
+    expect(imported.jumpHosts?.map((hop) => [hop.host, hop.port, hop.username]))
+      .toEqual(connection.jumpHosts.map((hop) => [hop.host, hop.port, hop.username]));
+    expect(imported.jumpHosts?.[1].password).toMatch(/^v1:/);
+    expect(imported.jumpHosts?.[2].passphrase).toMatch(/^v1:/);
+    expect(JSON.stringify(imported)).not.toContain('jump-password');
+    await openConnectionSecrets(imported as unknown as Record<string, unknown>);
+    expect(imported.password).toBe(hasTargetSecrets ? 'hunter2' : undefined);
+    expect(imported.jumpHosts?.[0].password).toBeUndefined();
+    expect(imported.jumpHosts?.[1].password).toBe('jump-password');
+    expect(imported.jumpHosts?.[2].passphrase).toBe('jump-key-passphrase');
+    expect(imported.jumpHosts?.[3].password).toBe('');
+
+    const skipped = await applyConfigBundle(bundle, { skipCredentials: true });
+    expect(skipped.credentials).toBe(0);
+    for (const hop of ConnectionStorageManager.getConnections()[0].jumpHosts ?? []) {
+      expect(hop.password).toBeUndefined();
+      expect(hop.passphrase).toBeUndefined();
+    }
+  });
+
+  it('preserves configured empty passwords while leaving absent passwords unconfigured', async () => {
+    const empty = ConnectionStorageManager.saveConnection({
+      name: 'Empty password', host: 'empty.example.test', port: 22,
+      username: 'empty', protocol: 'SSH', authMethod: 'password', password: '',
+    });
+    const absent = ConnectionStorageManager.saveConnection({
+      name: 'Absent password', host: 'absent.example.test', port: 22,
+      username: 'absent', protocol: 'SSH', authMethod: 'password',
+    });
+    const text = await exportWithPassphrase('correct horse');
+    const bundle = JSON.parse(text);
+    const payload = JSON.parse(decodeURIComponent(atob(bundle.data.credentials.sealed.split(':')[3])));
+    expect(payload.connections[empty.id].password).toBe('');
+    expect(payload.connections[absent.id]).toBeUndefined();
+
+    const { applyConfigBundle } = await import('../lib/config-export-import');
+    await applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' });
+    const imported = ConnectionStorageManager.getConnections();
+    const restoredEmpty = imported.find((c) => c.name === empty.name)!;
+    const restoredAbsent = imported.find((c) => c.name === absent.name)!;
+    expect(connectionHasCredentials(restoredEmpty)).toBe(true);
+    expect(connectionHasCredentials(restoredAbsent)).toBe(false);
+    await openConnectionSecrets(restoredEmpty as unknown as Record<string, unknown>);
+    expect(restoredEmpty.password).toBe('');
+    expect(restoredAbsent.password).toBeUndefined();
+  });
+
+  it('serializes local sealing across connections before writing the import', async () => {
+    const second = { ...ConnectionStorageManager.getConnection('conn-sealed')!, id: 'second' };
+    localStorage.setItem('r-shell-connections', JSON.stringify([
+      ...ConnectionStorageManager.getConnections(), second,
+    ]));
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    const before = { ...localStorage };
+    const crypto = mockInvoke.getMockImplementation()!;
+    let active = 0;
+    let peak = 0;
+    mockInvoke.mockImplementation(async (command: unknown, args: unknown) => {
+      if (command !== 'credential_seal') return crypto(command, args);
+      active += 1;
+      peak = Math.max(peak, active);
+      expect({ ...localStorage }).toEqual(before);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      try {
+        return await crypto(command, args);
+      } finally {
+        active -= 1;
+      }
+    });
+    const { applyConfigBundle } = await import('../lib/config-export-import');
+    const result = await applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' });
+    expect(result.credentials).toBe(2);
+    expect(peak).toBe(1);
+  });
+
+  it.each<[string, (bundle: ConfigBundle) => void]>([
+    ['target host', (bundle) => { bundle.data.connections!.connections[0].host = 'attacker.example.test'; }],
+    ['target port', (bundle) => { bundle.data.connections!.connections[0].port = 2222; }],
+    ['target username', (bundle) => { bundle.data.connections!.connections[0].username = 'attacker'; }],
+    ['target protocol', (bundle) => { bundle.data.connections!.connections[0].protocol = 'FTP'; }],
+    ['proxy host', (bundle) => { bundle.data.connections!.connections[0].proxyHost = 'attacker.example.test'; }],
+    ['legacy tunnel host', (bundle) => { bundle.data.connections!.connections[0].tunnelHost = 'attacker.example.test'; }],
+    ['jump host', (bundle) => { bundle.data.connections!.connections[0].jumpHosts![0].host = 'attacker.example.test'; }],
+    ['jump-host order', (bundle) => { bundle.data.connections!.connections[0].jumpHosts!.reverse(); }],
+    ['profile association', (bundle) => { bundle.data.connections!.connections[0].profileId = 'another-profile'; }],
+    ['profile host', (bundle) => { bundle.data.profiles![0].host = 'attacker.example.test'; }],
+  ])('rejects modified %s before sealing or writing credentials', async (_name, mutate) => {
+    const source = ConnectionStorageManager.getConnection('conn-sealed')!;
+    source.proxyType = 'socks5';
+    source.proxyHost = 'proxy.example.test';
+    source.proxyPort = 1080;
+    source.tunnelEnabled = true;
+    source.tunnelHost = 'tunnel.example.test';
+    source.profileId = ConnectionProfileManager.getProfiles()[0].id;
+    source.jumpHosts = [
+      { host: 'first.example.test', port: 22, username: 'first', authMethod: 'password', password: sealedTunnel },
+      { host: 'second.example.test', port: 22, username: 'second', authMethod: 'publickey', passphrase: sealedPassword },
+    ];
+    localStorage.setItem('r-shell-connections', JSON.stringify([source]));
+    const bundle: ConfigBundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    mutate(bundle);
+    const before = { ...localStorage };
+    const { applyConfigBundle, WrongPassphraseError } = await import('../lib/config-export-import');
+    await expect(applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' }))
+      .rejects.toBeInstanceOf(WrongPassphraseError);
+    expect({ ...localStorage }).toEqual(before);
+    expect(mockInvoke.mock.calls.filter(([command]) => command === 'credential_seal')).toHaveLength(0);
+  });
+
+  it('accepts reordered JSON object keys without changing authenticated metadata', async () => {
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    function reverseKeys(value: unknown): unknown {
+      if (Array.isArray(value)) return value.map(reverseKeys);
+      if (!value || typeof value !== 'object') return value;
+      return Object.fromEntries(Object.entries(value).reverse().map(([key, nested]) => [key, reverseKeys(nested)]));
+    }
+    mockOpen.mockResolvedValue('/tmp/config.json');
+    mockReadTextFile.mockResolvedValue(JSON.stringify(reverseKeys(bundle), null, 4));
+    const { importAllConfig } = await import('../lib/config-export-import');
+    const result = await importAllConfig(false, 'correct horse');
+    expect(result?.credentials).toBe(1);
+    expect(ConnectionStorageManager.getConnections().find((c) => c.name === 'Sealed Server')?.password)
+      .toBe(sealedPassword);
+  });
+
+  it.each(['r-shell-credentials-v1', 'r-shell-credentials-v2'])(
+    'rejects credentials without authenticated metadata even when labeled %s',
+    async (format) => {
+      const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+      const payload = JSON.parse(decodeURIComponent(atob(bundle.data.credentials.sealed.split(':')[3])));
+      const unbound = JSON.stringify({ connections: payload.connections });
+      bundle.data.credentials = {
+        format,
+        sealed: `b1:salt:${btoa('correct horse')}:${btoa(encodeURIComponent(unbound))}`,
+      };
+      const before = { ...localStorage };
+      const { applyConfigBundle, WrongPassphraseError } = await import('../lib/config-export-import');
+      await expect(applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' }))
+        .rejects.toBeInstanceOf(WrongPassphraseError);
+      expect({ ...localStorage }).toEqual(before);
+      const result = await applyConfigBundle(bundle, { skipCredentials: true });
+      expect(result.credentials).toBe(0);
+      expect(ConnectionStorageManager.getConnections().find((c) => c.name === 'Sealed Server')?.password)
+        .toBeUndefined();
+    },
+  );
+
+  it.each([
+    null,
+    'damaged block',
+    {},
+    { format: 'unknown-format', sealed: 'b1:salt:nonce:ciphertext' },
+    { format: 'r-shell-credentials-v2', sealed: 'v1:salt:nonce:ciphertext' },
+    { format: 'r-shell-credentials-v2', sealed: 'b1:salt:ciphertext' },
+  ])('rejects damaged credential envelopes unless explicitly skipped: %j', async (credentials) => {
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    bundle.data.credentials = credentials;
+    const before = { ...localStorage };
+    const { applyConfigBundle, bundleHasCredentials, WrongPassphraseError } = await import('../lib/config-export-import');
+    expect(bundleHasCredentials(bundle)).toBe(true);
+    await expect(applyConfigBundle(bundle)).rejects.toBeInstanceOf(WrongPassphraseError);
+    await expect(applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' }))
+      .rejects.toBeInstanceOf(WrongPassphraseError);
+    expect({ ...localStorage }).toEqual(before);
+
+    const result = await applyConfigBundle(bundle, { skipCredentials: true });
+    expect(result.connections).toBe(3);
+    expect(result.credentials).toBe(0);
+    expect(ConnectionStorageManager.getConnections().find((c) => c.name === 'Sealed Server')?.password)
+      .toBeUndefined();
+  });
+
+  it.each([
+    'not json',
+    '{}',
+    '{"connections":[]}',
+    '{"connections":{"conn-sealed":{"password":5}}}',
+    '{"connections":{"conn-sealed":{"jumpHosts":{}}}}',
+    '{"connections":{"conn-sealed":{"jumpHosts":[null]}}}',
+    '{"connections":{"conn-sealed":{"jumpHosts":[{"password":"unexpected hop"}]}}}',
+  ])('rejects malformed decrypted credentials before writing: %s', async (plaintext) => {
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    const payload = JSON.parse(decodeURIComponent(atob(bundle.data.credentials.sealed.split(':')[3])));
+    const malformed = plaintext === 'not json' ? plaintext : JSON.stringify({
+      metadata: payload.metadata, ...JSON.parse(plaintext),
+    });
+    const before = { ...localStorage };
+    const crypto = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation(async (command: unknown, args: unknown) =>
+      command === 'backup_open' ? malformed : crypto(command, args));
+    const { applyConfigBundle, WrongPassphraseError } = await import('../lib/config-export-import');
+    await expect(applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' }))
+      .rejects.toBeInstanceOf(WrongPassphraseError);
+    expect({ ...localStorage }).toEqual(before);
+  });
+
+  it.each([false, true])(
+    'strips secrets outside the encrypted block (restore credentials: %s)',
+    async (restoreCredentials) => {
+      const stored = ConnectionStorageManager.getConnections();
+      const source = stored.find((c) => c.id === 'conn-sealed')!;
+      source.jumpHosts = [{ host: 'jump.example.test', port: 22, username: 'jump', authMethod: 'password' }];
+      const untrustedSource = { ...source, id: 'conn-untrusted', name: 'Untrusted credentials' };
+      delete untrustedSource.password;
+      delete untrustedSource.tunnelPassword;
+      localStorage.setItem('r-shell-connections', JSON.stringify([...stored, untrustedSource]));
+      const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+      const connections = bundle.data.connections.connections as ConnectionData[];
+      for (const connection of connections.filter((c) => c.id === 'conn-sealed' || c.id === 'conn-untrusted')) {
+        connection.password = 'v1:foreign:password';
+        connection.passphrase = 'untrusted plaintext';
+        connection.jumpHosts![0].password = 'v1:foreign:jump-password';
+        connection.jumpHosts![0].passphrase = 'untrusted jump passphrase';
+      }
+      mockOpen.mockResolvedValue('/tmp/config.json');
+      mockReadTextFile.mockResolvedValue(JSON.stringify(bundle));
+
+      const { importAllConfig } = await import('../lib/config-export-import');
+      const result = await importAllConfig(false, restoreCredentials ? 'correct horse' : undefined);
+
+      expect(result?.credentials).toBe(restoreCredentials ? 1 : 0);
+      const imported = ConnectionStorageManager.getConnections();
+      const restored = imported.find((c) => c.name === 'Sealed Server')!;
+      expect(restored.password).toBe(restoreCredentials ? sealedPassword : undefined);
+      expect(restored.tunnelPassword).toBe(restoreCredentials ? sealedTunnel : undefined);
+      const untrusted = imported.find((c) => c.name === 'Untrusted credentials')!;
+      expect(untrusted.password).toBeUndefined();
+      expect(untrusted.tunnelPassword).toBeUndefined();
+      for (const saved of [restored, untrusted]) {
+        expect(saved.passphrase).toBeUndefined();
+        expect(saved.jumpHosts?.[0].host).toBe('jump.example.test');
+        expect(saved.jumpHosts?.[0].password).toBeUndefined();
+        expect(saved.jumpHosts?.[0].passphrase).toBeUndefined();
+      }
+    },
+  );
+
+  it('rejects a wrong passphrase before writing anything', async () => {
+    const text = await exportWithPassphrase('correct horse');
+    const before = localStorage.getItem('r-shell-connections');
+    mockOpen.mockResolvedValue('/tmp/config.json');
+    mockReadTextFile.mockResolvedValue(text);
+
+    const { importAllConfig, WrongPassphraseError } = await import('../lib/config-export-import');
+    await expect(importAllConfig(false, 'wrong horse')).rejects.toBeInstanceOf(WrongPassphraseError);
+    expect(localStorage.getItem('r-shell-connections')).toBe(before);
+  });
+
+  it('skips the block without a passphrase and imports the rest', async () => {
+    const text = await exportWithPassphrase('correct horse');
+    mockOpen.mockResolvedValue('/tmp/config.json');
+    mockReadTextFile.mockResolvedValue(text);
+
+    const { importAllConfig } = await import('../lib/config-export-import');
+    const result = await importAllConfig(false);
+
+    expect(result?.credentials).toBe(0);
+    expect(result?.connections).toBe(3);
+    const imported = ConnectionStorageManager.getConnections().find((c) => c.name === 'Sealed Server');
+    expect(imported).toBeDefined();
+    expect(imported?.password).toBeUndefined();
   });
 });

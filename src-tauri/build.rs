@@ -6,6 +6,8 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "authorize_local_file",
+            "backup_open",
+            "backup_seal",
             "cancel_app_quit",
             "cancel_transfer",
             "close_detached_session",

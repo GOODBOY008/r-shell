@@ -295,17 +295,18 @@ describe('SettingsModal global search', () => {
 });
 
 describe('SettingsModal config backup credential note', () => {
-  it('states that exports contain no credentials (replacing the stale plaintext warning)', () => {
+  it('states that exports carry no credentials unless the passphrase option is ticked', () => {
     render(<SettingsModal open onOpenChange={vi.fn()} />);
     openSection('Advanced');
 
     expect(
-      screen.getByText(/No passwords or credentials are included in exports/),
+      screen.getByText(/By default exports carry no passwords or credentials/),
     ).toBeTruthy();
     expect(screen.queryByText(/contains passwords in plaintext/)).toBeNull();
-    // The export description mentions the credential exclusion too (#162).
+    // The exclusion (#162) stays the default; including them is an explicit,
+    // passphrase-protected opt-in.
     expect(
-      screen.getByText(/Passwords and other credentials are not included/),
+      screen.getByLabelText(/Include passwords and other credentials, encrypted with an export passphrase/),
     ).toBeTruthy();
   });
 });
