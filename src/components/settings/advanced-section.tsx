@@ -449,7 +449,7 @@ export function AdvancedSection({
     </Card>
 
     <Dialog open={passphrasePrompt.open} onOpenChange={(open) => { if (!open) answerPassphrase(undefined); }}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="inset-0! m-auto! translate-x-0! translate-y-0! h-fit max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{t('settings.advanced.importPassphraseTitle')}</DialogTitle>
           <DialogDescription>{t('settings.advanced.importPassphraseDesc')}</DialogDescription>
@@ -463,6 +463,7 @@ export function AdvancedSection({
             value={importPassphrase}
             onChange={(event) => setImportPassphrase(event.target.value)}
             onKeyDown={(event) => {
+              if (event.nativeEvent.isComposing || event.keyCode === 229) return;
               if (event.key === 'Enter' && importPassphrase) answerPassphrase(importPassphrase);
             }}
           />

@@ -28,7 +28,7 @@ const imported: ImportResult = {
 function renderImport(sealed = 'b1:salt:nonce:ciphertext') {
   const bundle: ConfigBundle = {
     version: 1, exportedAt: '2026-11-08T00:00:00Z', appVersion: '3.1.2',
-    data: { credentials: { format: 'r-shell-credentials-v1', sealed } },
+    data: { credentials: { format: 'r-shell-credentials-v2', sealed } },
   };
   vi.mocked(pickConfigBundle).mockResolvedValue(bundle);
   const onConfigImported = vi.fn();
@@ -89,5 +89,27 @@ describe('encrypted credential import prompt', () => {
     await waitFor(() => expect(notify.success).toHaveBeenCalledWith(
       'Configuration imported successfully', { description: expect.stringContaining(summary) },
     ));
+  });
+
+  it('waits for IME composition to finish before submitting a revealed passphrase', async () => {
+    vi.mocked(applyConfigBundle).mockResolvedValue(imported);
+    const { bundle } = renderImport();
+    const dialog = await screen.findByRole('dialog', { name: 'Encrypted credentials' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Show password' }));
+    const input = within(dialog).getByLabelText('Export passphrase');
+    expect(input).toHaveProperty('type', 'text');
+    fireEvent.change(input, { target: { value: '我的口' } });
+    fireEvent.compositionStart(input);
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, isComposing: true });
+    expect(applyConfigBundle).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    expect(applyConfigBundle).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '我的口令' } });
+    fireEvent.compositionEnd(input);
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, isComposing: false });
+    await waitFor(() => expect(applyConfigBundle).toHaveBeenCalledOnce());
+    expect(applyConfigBundle).toHaveBeenCalledWith(bundle, {
+      merge: false, credentialsPassphrase: '我的口令', skipCredentials: false,
+    });
   });
 });

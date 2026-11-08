@@ -50,7 +50,7 @@ import { migrateLegacyShortcutBindings } from './shortcut-registry';
 
 const SCHEMA_VERSION = 1;
 const LANGUAGE_STORAGE_KEY = 'r-shell-language';
-const CREDENTIALS_FORMAT = 'r-shell-credentials-v1';
+const CREDENTIALS_FORMAT = 'r-shell-credentials-v2';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,6 +78,8 @@ export interface ConfigBundle {
 
 /** Plaintext layout of the credentials block. */
 interface CredentialsBlock {
+  /** Canonical public configuration, authenticated inside the encrypted block. */
+  metadata: string;
   connections: Record<string, ConnectionSecrets>;
 }
 
@@ -109,6 +111,19 @@ export interface ImportResult {
 // master key would otherwise decrypt every exported credential. The opt-in
 // credentials block carries them under the user's own passphrase instead.
 const EXPORT_STRIPPED_FIELDS = SECRET_FIELDS;
+
+function credentialMetadata(bundle: ConfigBundle): string {
+  const { credentials: _credentials, ...data } = bundle.data;
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (!isRecord(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalize(value[key])]));
+  };
+  // Bind the complete public configuration, including profiles, proxies and
+  // routes, so credentials cannot be redirected through an indirect setting.
+  // Public secret fields are ignored here and always stripped during import.
+  return JSON.stringify(canonicalize(withoutSecrets({ ...bundle, data })));
+}
 
 async function readBackupSecrets(record: SecretValues, context: string): Promise<SecretValues> {
   const secrets: SecretValues = {};
@@ -213,7 +228,7 @@ export async function exportAllConfig(options: ExportOptions = {}): Promise<bool
         if (Object.keys(own).length > 0) secrets[connection.id] = own;
       }
       if (Object.keys(secrets).length > 0) {
-        const block: CredentialsBlock = { connections: secrets };
+        const block: CredentialsBlock = { metadata: credentialMetadata(bundle), connections: secrets };
         bundle.data.credentials = {
           format: CREDENTIALS_FORMAT,
           sealed: await sealForBackup(options.credentialsPassphrase, JSON.stringify(block)),
@@ -300,8 +315,11 @@ function parseSecretValues(value: unknown): SecretValues {
 
 function parseCredentialsBlock(json: string): CredentialsBlock {
   const value: unknown = JSON.parse(json);
-  if (!isRecord(value) || !isRecord(value.connections)) throw new WrongPassphraseError();
+  if (!isRecord(value) || typeof value.metadata !== 'string' || !isRecord(value.connections)) {
+    throw new WrongPassphraseError();
+  }
   return {
+    metadata: value.metadata,
     connections: Object.fromEntries(Object.entries(value.connections).map(([id, entry]) => {
       const secrets: ConnectionSecrets = parseSecretValues(entry);
       if (isRecord(entry) && Object.prototype.hasOwnProperty.call(entry, 'jumpHosts')) {
@@ -354,7 +372,9 @@ export async function applyConfigBundle(
       }
       if (credentialsPassphrase) {
         try {
-          restored = parseCredentialsBlock(await openFromBackup(credentialsPassphrase, block.sealed)).connections;
+          const decrypted = parseCredentialsBlock(await openFromBackup(credentialsPassphrase, block.sealed));
+          if (decrypted.metadata !== credentialMetadata(bundle)) throw new WrongPassphraseError();
+          restored = decrypted.connections;
         } catch (error) {
           console.error('[config-import] Credentials block did not open:', error);
           throw new WrongPassphraseError();
