@@ -359,6 +359,31 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     expect(await screen.findByText('3 selected')).toBeTruthy();
   });
 
+  it('keeps an anchor selected as soon as the loaded rows commit', async () => {
+    let clicked = false;
+    render(
+      <React.Profiler id="file-list" onRender={() => {
+        const first = screen.queryByText('a.txt');
+        if (first && !clicked) {
+          clicked = true;
+          // Deliver the first click after the DOM commit, before passive
+          // effects. A delayed list-reset effect must not erase this anchor.
+          queueMicrotask(() => fireEvent.click(first));
+        }
+      }}>
+        <IntegratedFileBrowser
+          connectionId="conn-range-commit"
+          isConnected
+          onClose={() => {}}
+        />
+      </React.Profiler>,
+    );
+
+    expect(await screen.findByText('1 selected')).toBeTruthy();
+    fireEvent.click(screen.getByText('c.txt'), { shiftKey: true });
+    expect(screen.getByText('3 selected')).toBeTruthy();
+  });
+
   it('Delete key with multiple selections opens batch confirm and deletes all', async () => {
     render(
       <IntegratedFileBrowser
@@ -423,13 +448,18 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     // list_files returns 3 real entries; the component prepends a ".." row,
     // which sits at the top of the sorted list (index 0). Ctrl+A must exclude
     // it (the only path where the exclusion is actually exercised).
-    render(
-      <IntegratedFileBrowser
-        connectionId="conn-paren"
-        isConnected
-        onClose={() => {}}
-      />,
-    );
+    // Flush the resolved directory request and its passive keyboard-listener
+    // effect before dispatching a native document event. A visible row alone
+    // does not guarantee that the listener has the loaded files on slow CI.
+    await act(async () => {
+      render(
+        <IntegratedFileBrowser
+          connectionId="conn-paren"
+          isConnected
+          onClose={() => {}}
+        />,
+      );
+    });
 
     await screen.findByText('a.txt');
     fireEvent.keyDown(document.querySelector('[data-shortcut-scope="files"]')!, { key: 'a', ctrlKey: true });

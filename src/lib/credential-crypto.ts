@@ -1,3 +1,5 @@
+import type { SshJumpHost } from './ssh-options';
+import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcut-model';
 /**
  * Credential encryption for locally stored connection secrets.
  *
@@ -16,6 +18,19 @@
  * `credential_seal` Tauri command; `credential_open` reverses it).
  */
 import { invoke } from '@tauri-apps/api/core';
+
+/** Only an explicit false in Security settings disables saving new credentials. */
+export function isPasswordSavingAllowed(): boolean {
+  try {
+    const raw = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
+    if (!raw) return true;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return true;
+    return (parsed as Record<string, unknown>).allowPasswordSaving !== false;
+  } catch {
+    return true;
+  }
+}
 
 /** Secret field names on a connection object that are encrypted at rest. */
 export const SECRET_FIELDS = [
@@ -36,7 +51,9 @@ export type SecretField = (typeof SECRET_FIELDS)[number];
  * decrypt is also what the edit dialog gets after a failed connect, and a
  * plaintext value there would be written back and then stripped as such.
  */
-export const CONNECT_SECRET_FIELDS: readonly SecretField[] = SECRET_FIELDS.filter((f) => f !== 'sudoPassword');
+export const CONNECT_SECRET_FIELDS: readonly SecretField[] = SECRET_FIELDS.filter(
+  (f) => f !== 'sudoPassword'
+);
 
 /** True when the value is an encrypted-at-rest secret (v1 sealed format). */
 export function isSealed(value: unknown): value is string {
@@ -63,7 +80,7 @@ export async function openSecret(sealed: string): Promise<string> {
  * Returns true when at least one field was migrated.
  */
 export async function sealLegacySecrets(
-  connection: Record<string, unknown> & { id: string },
+  connection: Record<string, unknown> & { id: string }
 ): Promise<boolean> {
   let migrated = false;
   for (const field of SECRET_FIELDS) {
@@ -71,6 +88,11 @@ export async function sealLegacySecrets(
     if (isLegacyPlaintext(value)) {
       connection[field] = await sealSecret(value);
       migrated = true;
+    }
+  }
+  if (Array.isArray(connection.jumpHosts)) {
+    for (const hop of connection.jumpHosts as Record<string, unknown>[]) {
+      if (await sealLegacySecrets(hop as Record<string, unknown> & { id: string })) migrated = true;
     }
   }
   return migrated;
@@ -82,9 +104,12 @@ export async function sealLegacySecrets(
  * to decrypt are left as-is (the backend auth will fail with a clear error
  * rather than silently sending a wrong password).
  */
-export async function openConnectionSecrets(
-  connection: Record<string, unknown>,
-): Promise<void> {
+export async function openConnectionSecrets(connection: Record<string, unknown>): Promise<void> {
+  if (Array.isArray(connection.jumpHosts)) {
+    const hops = (connection.jumpHosts as Record<string, unknown>[]).map((h) => ({ ...h }));
+    for (const hop of hops) await openConnectionSecrets(hop);
+    connection.jumpHosts = hops;
+  }
   for (const field of CONNECT_SECRET_FIELDS) {
     const value = connection[field];
     if (isSealed(value)) {
@@ -113,4 +138,41 @@ export async function sealForBackup(passphrase: string, plaintext: string): Prom
 /** Decrypt a `b1:` block; rejects on a wrong passphrase or damaged data. */
 export async function openFromBackup(passphrase: string, sealed: string): Promise<string> {
   return invoke<string>('backup_open', { passphrase, sealed });
+}
+
+/** Export strips credentials recursively, including ciphertext bound to this machine. */
+export function withoutSecrets<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withoutSecrets) as T;
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !SECRET_FIELDS.includes(key as SecretField))
+      .map(([key, nested]) => [key, withoutSecrets(nested)])
+  ) as T;
+}
+
+export async function sealJumpHosts(
+  hops: SshJumpHost[] | undefined,
+  previous: SshJumpHost[] | undefined,
+  allowed: boolean
+): Promise<SshJumpHost[] | undefined> {
+  if (!hops) return undefined;
+  return Promise.all(
+    hops.map(async (hop) => {
+      const saved = previous?.find(
+        (h) => h.host === hop.host && h.port === hop.port && h.username === hop.username
+      );
+      const result = { ...hop };
+      for (const field of ['password', 'passphrase'] as const) {
+        const typed = hop[field];
+        if (!allowed) result[field] = saved?.[field];
+        else if (!typed)
+          result[field] =
+            saved?.[field] ??
+            (field === 'password' && hop.authMethod === 'password' ? '' : undefined);
+        else result[field] = isSealed(typed) ? typed : await sealSecret(typed);
+      }
+      return result;
+    })
+  );
 }

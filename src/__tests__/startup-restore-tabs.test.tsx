@@ -207,6 +207,8 @@ describe('"Reconnect Sessions on Startup" setting', () => {
     lifecycle.invoke.mockReset();
     lifecycle.invoke.mockImplementation((command: string) => {
       if (command === 'ssh_connect') return Promise.resolve({ success: true });
+      if (command === 'credential_seal') return Promise.resolve('v1:test:sealed');
+      if (command === 'credential_open') return Promise.resolve('secret');
       if (command === 'get_system_locale') return Promise.resolve('en-US');
       return Promise.resolve({});
     });

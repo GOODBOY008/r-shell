@@ -57,6 +57,10 @@ const FULL_CONNECTION: ConnectionData = {
   vncColorDepth: '16',
   vncPassword: 'vncsecret',
   sortOrder: 3,
+  identityFiles: ['/keys/one', '/keys/two'],
+  identityAgent: 'SSH_AUTH_SOCK',
+  jumpHosts: [{ host: 'jump', port: 22, username: 'ops', authMethod: 'auto', identityFiles: ['/keys/jump'], password: 'v1:n:c' }],
+  sshConfigSource: { path: '/ssh/config', alias: 'prod', snapshot: { host: 'prod', port: 22, username: 'admin', authMethod: 'auto', jumpHosts: [] } },
 };
 
 describe('ConnectionManager duplicate', () => {
@@ -98,7 +102,7 @@ describe('ConnectionManager duplicate', () => {
     // secrets — plaintext secrets never round-trip through storage (they are
     // stripped on read), so a duplicate cannot carry them either.
     const {
-      id: _srcId, createdAt: _srcCreated, name: _srcName,
+      id: _srcId, createdAt: _srcCreated, name: _srcName, sshConfigSource: _source,
       password: _pw, passphrase: _pp, privateKeyPath: _pkp,
       proxyPassword: _ppw, vncPassword: _vpw,
       ...expected
@@ -110,6 +114,7 @@ describe('ConnectionManager duplicate', () => {
       ...actual
     } = copy!;
     expect(actual).toEqual(expected);
+    expect(copy!.sshConfigSource).toBeUndefined();
   });
 
   it('preserves port 0 (Raw/Serial) instead of falling back to 22', () => {

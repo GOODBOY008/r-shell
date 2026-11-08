@@ -704,6 +704,46 @@ describe('credentials block', () => {
     expect(JSON.stringify(ConnectionStorageManager.getConnections())).not.toContain('hunter2');
   });
 
+  it.each([false, true])(
+    'strips secrets outside the encrypted block (restore credentials: %s)',
+    async (restoreCredentials) => {
+      const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+      const connections = bundle.data.connections.connections as ConnectionData[];
+      const connection = connections.find((c) => c.id === 'conn-sealed')!;
+      connection.password = 'v1:foreign:password';
+      connection.passphrase = 'untrusted plaintext';
+      connection.jumpHosts = [{
+        host: 'jump.example.test',
+        port: 22,
+        username: 'jump',
+        authMethod: 'password',
+        password: 'v1:foreign:jump-password',
+        passphrase: 'untrusted jump passphrase',
+      }];
+      connections.push({ ...connection, id: 'conn-untrusted', name: 'Untrusted credentials' });
+      mockOpen.mockResolvedValue('/tmp/config.json');
+      mockReadTextFile.mockResolvedValue(JSON.stringify(bundle));
+
+      const { importAllConfig } = await import('../lib/config-export-import');
+      const result = await importAllConfig(false, restoreCredentials ? 'correct horse' : undefined);
+
+      expect(result?.credentials).toBe(restoreCredentials ? 1 : 0);
+      const imported = ConnectionStorageManager.getConnections();
+      const restored = imported.find((c) => c.name === 'Sealed Server')!;
+      expect(restored.password).toBe(restoreCredentials ? sealedPassword : undefined);
+      expect(restored.tunnelPassword).toBe(restoreCredentials ? sealedTunnel : undefined);
+      const untrusted = imported.find((c) => c.name === 'Untrusted credentials')!;
+      expect(untrusted.password).toBeUndefined();
+      expect(untrusted.tunnelPassword).toBeUndefined();
+      for (const saved of [restored, untrusted]) {
+        expect(saved.passphrase).toBeUndefined();
+        expect(saved.jumpHosts?.[0].host).toBe('jump.example.test');
+        expect(saved.jumpHosts?.[0].password).toBeUndefined();
+        expect(saved.jumpHosts?.[0].passphrase).toBeUndefined();
+      }
+    },
+  );
+
   it('rejects a wrong passphrase before writing anything', async () => {
     const text = await exportWithPassphrase('correct horse');
     const before = localStorage.getItem('r-shell-connections');

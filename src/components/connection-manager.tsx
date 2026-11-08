@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock, Search, X, ArrowUpRight } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock, Search, X, ArrowUpRight, FileDown } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
@@ -34,6 +34,7 @@ import {
   AlertDialogTitle,
 } from './ui/alert-dialog';
 import { ConnectionStorageManager, getStorageCorruption } from '../lib/connection-storage';
+import { SshConfigImportDialog } from './ssh-config-import-dialog';
 import { ConnectionNotes } from './connection-notes';
 import {
   applyCollapsedState,
@@ -154,6 +155,7 @@ export function ConnectionManager({
 
   const [connections, setConnections] = useState<ConnectionNode[]>(loadConnections());
 
+  const [sshImportOpen, setSshImportOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Folder management state
@@ -221,7 +223,7 @@ export function ConnectionManager({
         // silently dropping ftpsEnabled, SSH keepalive/compression, RDP/VNC
         // settings, and favorite/color/tags/description). saveConnection is a
         // full spread of Omit<ConnectionData,'id'|'createdAt'>.
-        const { id: _id, createdAt: _createdAt, ...rest } = connectionData;
+        const { id: _id, createdAt: _createdAt, sshConfigSource: _source, ...rest } = connectionData;
         const duplicated = ConnectionStorageManager.saveConnection({
           ...rest,
           name: `${connectionData.name}${t('connectionManager.copySuffix')}`,
@@ -922,6 +924,7 @@ export function ConnectionManager({
 
   return (
     <>
+    {sshImportOpen && <SshConfigImportDialog initialFolder={selectedConnectionId ? ConnectionStorageManager.getConnection(selectedConnectionId)?.folder ?? ConnectionStorageManager.getFolders().find(f => f.id === selectedConnectionId)?.path : undefined} onClose={() => setSshImportOpen(false)} onImported={() => setConnections(loadConnections())} />}
     <div className="bg-sidebar text-sidebar-foreground h-full flex flex-col">
       {/* Connection Browser */}
       <div className="flex-1 min-h-0 flex flex-col">
@@ -971,6 +974,8 @@ export function ConnectionManager({
                 )}
               </DropdownMenuContent>
             </DropdownMenu>
+
+            <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="sm" className="h-7 w-7 p-0" aria-label={t('openSsh.import.title')} onClick={() => setSshImportOpen(true)}><FileDown className="w-3.5 h-3.5" /></Button></TooltipTrigger><TooltipContent>{t('openSsh.import.title')}</TooltipContent></Tooltip>
 
             {/* New Folder */}
             <Tooltip>

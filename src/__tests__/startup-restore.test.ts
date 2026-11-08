@@ -66,15 +66,13 @@ describe('effectiveConnectTimeoutMs', () => {
     expect(effectiveConnectTimeoutMs(10)).toBe(15_000);
   });
 
-  it('scales the overall budget with the configured timeout and session count', () => {
+  it('covers full route budgets and pacing between eager sessions', () => {
     setRestoreTimingForTests({ overallTimeoutMs: 60_000 });
-    // One slow host configured at 120 s gets a 120 s budget…
-    expect(effectiveOverallTimeoutMs(120, 1)).toBe(120_000);
-    // …two need twice that…
-    expect(effectiveOverallTimeoutMs(120, 2)).toBe(240_000);
-    // …and an empty list or no configuration keeps the default budget.
-    expect(effectiveOverallTimeoutMs(120, 0)).toBe(60_000);
-    expect(effectiveOverallTimeoutMs(null, 5)).toBe(60_000);
+    expect(effectiveOverallTimeoutMs([240_000])).toBe(240_000);
+    expect(effectiveOverallTimeoutMs([240_000, 15_000])).toBe(258_000);
+    expect(effectiveOverallTimeoutMs([300_000, 390_000])).toBe(693_000);
+    expect(effectiveOverallTimeoutMs([])).toBe(60_000);
+    expect(effectiveOverallTimeoutMs([15_000, 15_000])).toBe(60_000);
   });
 
   it('reports the timing defaults it falls back on', () => {

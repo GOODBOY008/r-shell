@@ -21,12 +21,12 @@ describe('Connection Dialog protocol-specific behavior', () => {
   describe('auth method options per protocol', () => {
     it('SSH has password, publickey, keyboard-interactive', () => {
       const methods = getAuthMethods('SSH');
-      expect(methods).toEqual(['password', 'publickey', 'keyboard-interactive']);
+      expect(methods).toEqual(['password', 'publickey', 'auto', 'keyboard-interactive']);
     });
 
     it('SFTP has password and publickey', () => {
       const methods = getAuthMethods('SFTP');
-      expect(methods).toEqual(['password', 'publickey']);
+      expect(methods).toEqual(['password', 'publickey', 'auto']);
     });
 
     it('FTP has password and anonymous', () => {

@@ -45,6 +45,7 @@ suppaftp = { version = "12.1", features = ["tokio-async-native-tls"] }
 async-native-tls = { version = "0.6", default-features = false, features = ["runtime-tokio"] }
 futures-lite = "2"
 dirs = "7"
+glob = "0.3"
 open = "5"
 base64 = "0.23"
 sys-locale = "0.3"
@@ -52,8 +53,10 @@ keyring = "4"
 aes-gcm = "0.11"
 # Passphrase-protected credential backups (already a transitive dependency via ssh-key).
 argon2 = "0.6"
+tempfile = "3"
 rand = "0.10"
 socket2 = "0.6"
+des = "0.9"
 # Keep the IronRDP subcrates on one release generation: their PDU, graphics,
 # connector and virtual-channel types cross crate boundaries.
 ironrdp-core = "0.3"
@@ -80,6 +83,9 @@ objc2-app-kit = { version = "0.3", features = ["NSEvent"] }
 objc2-foundation = "0.3"
 block2 = "0.6"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [features]
 default = []
 # Enables the X11-forwarding E2E integration tests in ssh/tests.rs. These
@@ -89,7 +95,6 @@ x11-e2e = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }
-tempfile = "3"
 env_logger = "0.11"
 png = "0.18"
 rand = "0.10"

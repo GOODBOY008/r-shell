@@ -1,3 +1,4 @@
+import { type SshExtendedOptions, type SshIdentityRequest, sshIdentityRequest } from './ssh-options';
 import { getHostKeyPolicy, type HostKeyPolicy } from './host-key';
 import type { X11Config } from './connection-storage';
 import { APP_SETTINGS_STORAGE_KEY } from './keyboard-shortcuts';
@@ -36,8 +37,36 @@ export function getConnectionTimeoutSetting(): number | null {
   }
 }
 
+export interface ProxyConnectSource {
+  proxyType?: string;
+  proxyHost?: string;
+  proxyPort?: number;
+  proxyUsername?: string;
+  proxyPassword?: string;
+}
+
+export interface ProxyConnectFields {
+  proxy_type: string;
+  proxy_host: string | null;
+  proxy_port: number | null;
+  proxy_username: string | null;
+  proxy_password: string | null;
+}
+
+export function buildProxyConnectFields(source: ProxyConnectSource): ProxyConnectFields {
+  const proxyType = source.proxyType ?? 'none';
+  const proxyEnabled = proxyType !== 'none';
+  return {
+    proxy_type: proxyType,
+    proxy_host: proxyEnabled ? (source.proxyHost || null) : null,
+    proxy_port: proxyEnabled ? (source.proxyPort ?? null) : null,
+    proxy_username: proxyEnabled ? (source.proxyUsername || null) : null,
+    proxy_password: proxyEnabled ? (source.proxyPassword || null) : null,
+  };
+}
+
 /** Subset of ConnectionConfig / ConnectionData that the SSH connect request needs. */
-export interface SshConnectRequestSource {
+export interface SshConnectRequestSource extends SshExtendedOptions, ProxyConnectSource {
   host: string;
   port: number;
   username: string;
@@ -49,11 +78,6 @@ export interface SshConnectRequestSource {
   keepAlive?: boolean;
   keepAliveInterval?: number;
   serverAliveCountMax?: number;
-  proxyType?: string;
-  proxyHost?: string;
-  proxyPort?: number;
-  proxyUsername?: string;
-  proxyPassword?: string;
   // SSH tunnel (jump host)
   tunnelEnabled?: boolean;
   tunnelHost?: string;
@@ -67,7 +91,7 @@ export interface SshConnectRequestSource {
   x11?: X11Config;
 }
 
-export interface SshConnectRequest {
+export interface SshConnectRequest extends SshIdentityRequest, ProxyConnectFields {
   connection_id: string;
   host: string;
   port: number;
@@ -86,11 +110,6 @@ export interface SshConnectRequest {
   keepalive_enabled: boolean;
   keepalive_interval: number | null;
   keepalive_max: number | null;
-  proxy_type: string;
-  proxy_host: string | null;
-  proxy_port: number | null;
-  proxy_username: string | null;
-  proxy_password: string | null;
   tunnel_enabled: boolean;
   tunnel_host: string | null;
   tunnel_port: number | null;
@@ -116,11 +135,10 @@ export function buildSshConnectRequest(
   source: SshConnectRequestSource,
 ): SshConnectRequest {
   const keepAlive = source.keepAlive !== false;
-  const proxyType = source.proxyType ?? 'none';
-  const proxyEnabled = proxyType !== 'none';
   const tunnelEnabled = source.tunnelEnabled === true;
 
   return {
+    ...sshIdentityRequest(source),
     connection_id: connectionId,
     host: source.host,
     port: source.port || 22,
@@ -132,16 +150,12 @@ export function buildSshConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
-    connect_timeout: getConnectionTimeoutSetting(),
+    connect_timeout: source.connectTimeout ?? getConnectionTimeoutSetting(),
     compression: source.compression !== false,
     keepalive_enabled: keepAlive,
     keepalive_interval: keepAlive ? (source.keepAliveInterval ?? 60) : null,
     keepalive_max: keepAlive ? (source.serverAliveCountMax ?? 3) : null,
-    proxy_type: proxyType,
-    proxy_host: proxyEnabled ? (source.proxyHost || null) : null,
-    proxy_port: proxyEnabled ? (source.proxyPort ?? null) : null,
-    proxy_username: proxyEnabled ? (source.proxyUsername || null) : null,
-    proxy_password: proxyEnabled ? (source.proxyPassword || null) : null,
+    ...buildProxyConnectFields(source),
     tunnel_enabled: tunnelEnabled,
     tunnel_host: tunnelEnabled ? (source.tunnelHost || null) : null,
     tunnel_port: tunnelEnabled ? (source.tunnelPort ?? null) : null,
@@ -155,7 +169,11 @@ export function buildSshConnectRequest(
 }
 
 /** Subset of ConnectionConfig / ConnectionData that the SFTP connect request needs. */
-export interface SftpConnectRequestSource {
+export interface SftpConnectRequestSource extends SshExtendedOptions {
+  compression?: boolean;
+  keepAlive?: boolean;
+  keepAliveInterval?: number;
+  serverAliveCountMax?: number;
   host: string;
   port: number;
   username: string;
@@ -174,7 +192,12 @@ export interface SftpConnectRequestSource {
   tunnelPassphrase?: string;
 }
 
-export interface SftpConnectRequest {
+export interface SftpConnectRequest extends SshIdentityRequest {
+  compression?: boolean;
+  keepalive_enabled?: boolean;
+  keepalive_interval?: number;
+  keepalive_max?: number;
+  accept_new_for?: { host: string; port: number };
   connection_id: string;
   host: string;
   port: number;
@@ -210,6 +233,11 @@ export function buildSftpConnectRequest(
   const tunnelEnabled = source.tunnelEnabled === true;
 
   return {
+    ...sshIdentityRequest(source),
+    compression: source.compression,
+    keepalive_enabled: source.keepAlive,
+    keepalive_interval: source.keepAliveInterval,
+    keepalive_max: source.serverAliveCountMax,
     connection_id: connectionId,
     host: source.host,
     port: source.port || 22,
@@ -219,7 +247,7 @@ export function buildSftpConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
-    connect_timeout: getConnectionTimeoutSetting(),
+    connect_timeout: source.connectTimeout ?? getConnectionTimeoutSetting(),
     tunnel_enabled: tunnelEnabled,
     tunnel_host: tunnelEnabled ? (source.tunnelHost || null) : null,
     tunnel_port: tunnelEnabled ? (source.tunnelPort ?? null) : null,

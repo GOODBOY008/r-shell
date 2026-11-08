@@ -23,7 +23,9 @@ vi.mock('sonner', () => ({
 
 vi.mock('../lib/connection-storage', () => ({
   ConnectionStorageManager: {
+    getConnection: vi.fn(() => undefined),
     getValidFolders: vi.fn(() => [{ path: 'All Connections' }]),
+    getConnection: vi.fn(() => undefined),
     saveConnectionWithId: vi.fn(() => null),
     updateConnection: vi.fn(() => null),
   },

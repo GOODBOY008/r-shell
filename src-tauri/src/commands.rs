@@ -2,9 +2,10 @@ use crate::connection_manager::ConnectionManager;
 use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
 use crate::os_keypath::resolve_private_key_path;
-use crate::proxy::{ProxyConfig, ProxyType};
-use crate::sftp_client::{FileEntry, FileEntryType, SftpAuthMethod, SftpConfig};
+use crate::proxy::ProxyRequest;
+use crate::sftp_client::{FileEntry, FileEntryType, SftpConfig};
 use crate::sftp_transfer;
+use crate::ssh::passphrase_store::{PassphraseAttempt, PassphraseStore, SavedKeyPassphrase};
 use crate::ssh::{
     AuthMethod, HostKeyChanged, HostKeyPolicy, SshConfig, TunnelConfig,
     DEFAULT_COMMAND_TIMEOUT_SECS,
@@ -17,8 +18,182 @@ use tauri_plugin_fs::FsExt;
 use tauri_plugin_updater::UpdaterExt;
 use tokio_util::sync::CancellationToken;
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct IdentityRequest {
+    pub identity_files: Option<Vec<String>>,
+    pub identity_agent: Option<String>,
+    #[serde(default)]
+    pub identities_only: bool,
+    #[serde(default)]
+    pub attempt_id: String,
+    #[serde(default)]
+    pub auth_responses: Vec<crate::ssh::auto_auth::AuthReply>,
+    #[serde(skip)]
+    passphrases: Option<PassphraseAttempt>,
+}
+impl std::fmt::Debug for IdentityRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdentityRequest").finish_non_exhaustive()
+    }
+}
+
+fn build_auth(
+    method: &str,
+    password: Option<String>,
+    key_path: Option<String>,
+    passphrase: Option<String>,
+    identity: &IdentityRequest,
+    endpoint: String,
+) -> Result<AuthMethod, String> {
+    match method {
+        "password" => Ok(AuthMethod::Password {
+            password: password.ok_or("Password required")?,
+        }),
+        "publickey" => {
+            let key_path = resolve_private_key_path(key_path.as_deref())?;
+            if identity.attempt_id.is_empty() {
+                return Ok(AuthMethod::PublicKey {
+                    key_path,
+                    passphrase,
+                });
+            }
+            let files = if key_path.is_empty() {
+                crate::os_keypath::default_key_candidates()
+            } else {
+                vec![key_path]
+            };
+            let mut replies = Vec::new();
+            if let Some(passphrase) = passphrase {
+                for file in &files {
+                    replies.push(crate::ssh::auto_auth::AuthReply {
+                        endpoint: endpoint.clone(),
+                        key_path: file.clone(),
+                        passphrase: Some(passphrase.clone()),
+                        ..Default::default()
+                    });
+                }
+            }
+            replies.extend(
+                identity
+                    .auth_responses
+                    .iter()
+                    .filter(|r| r.endpoint == endpoint)
+                    .cloned(),
+            );
+            Ok(AuthMethod::AutoKey {
+                options: crate::ssh::auto_auth::AutoKeyOptions {
+                    identity_files: Some(files),
+                    identity_agent: Some("none".into()),
+                    identities_only: true,
+                    attempt_id: identity.attempt_id.clone(),
+                    endpoint,
+                    replies,
+                    passphrases: identity.passphrases.clone(),
+                },
+            })
+        }
+        "auto" => Ok(AuthMethod::AutoKey {
+            options: crate::ssh::auto_auth::AutoKeyOptions {
+                identity_files: identity.identity_files.clone(),
+                identity_agent: identity.identity_agent.clone(),
+                identities_only: identity.identities_only,
+                attempt_id: identity.attempt_id.clone(),
+                endpoint,
+                replies: identity.auth_responses.clone(),
+                passphrases: identity.passphrases.clone(),
+            },
+        }),
+        _ => Err("Invalid SSH auth method".into()),
+    }
+}
+
+fn upgrade_legacy_tunnel(
+    mut tunnel: Option<TunnelConfig>,
+    identity: &IdentityRequest,
+) -> Result<Option<TunnelConfig>, String> {
+    if identity.attempt_id.is_empty() {
+        return Ok(tunnel);
+    }
+    if let Some(hop) = &mut tunnel {
+        if let AuthMethod::PublicKey {
+            key_path,
+            passphrase,
+        } = &hop.auth_method
+        {
+            hop.auth_method = build_auth(
+                "publickey",
+                None,
+                Some(key_path.clone()),
+                passphrase.clone(),
+                identity,
+                format!("jump 1 {}@{}:{}", hop.username, hop.host, hop.port),
+            )?;
+        }
+    }
+    Ok(tunnel)
+}
+
+fn build_jump_chain(
+    hops: &[crate::ssh_config::SshEndpoint],
+    identity: &IdentityRequest,
+) -> Result<Option<TunnelConfig>, String> {
+    if hops.len() > crate::ssh_config::MAX_JUMPS {
+        return Err("ProxyJump exceeds 8 hops".into());
+    }
+    let mut chain = None;
+    for (index, hop) in hops.iter().enumerate() {
+        if hop.host.trim().is_empty() || hop.username.trim().is_empty() || hop.port == 0 {
+            return Err(format!(
+                "Jump host {} requires a host, username and valid port",
+                index + 1
+            ));
+        }
+        let hop_identity = IdentityRequest {
+            identity_files: hop.identity_files.clone(),
+            identity_agent: hop.identity_agent.clone(),
+            identities_only: hop.identities_only,
+            ..identity.clone()
+        };
+        let auth_method = build_auth(
+            &hop.auth_method,
+            hop.password.clone(),
+            hop.private_key_path.clone(),
+            hop.passphrase.clone(),
+            &hop_identity,
+            format!(
+                "jump {} {}@{}:{}",
+                index + 1,
+                hop.username,
+                hop.host,
+                hop.port
+            ),
+        )?;
+        chain = Some(TunnelConfig {
+            host: hop.host.clone(),
+            port: hop.port,
+            username: hop.username.clone(),
+            auth_method,
+            via: chain.map(Box::new),
+            options: Some(crate::ssh::JumpConnectionOptions {
+                connect_timeout: hop.connect_timeout,
+                compression: hop.compression,
+                keepalive_interval: if hop.keep_alive && hop.keep_alive_interval > 0 {
+                    Some(hop.keep_alive_interval)
+                } else {
+                    None
+                },
+                keepalive_max: Some(hop.server_alive_count_max),
+            }),
+        });
+    }
+    Ok(chain)
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConnectRequest {
+    #[serde(flatten)]
+    pub identity: IdentityRequest,
+    pub jump_hosts: Option<Vec<crate::ssh_config::SshEndpoint>>,
     pub connection_id: String,
     pub host: String,
     pub port: u16,
@@ -43,11 +218,8 @@ pub struct ConnectRequest {
     pub keepalive_interval: Option<u64>,
     pub keepalive_max: Option<u32>,
     /// Proxy options — ignored when `proxy_type` is "none" or missing.
-    pub proxy_type: Option<String>,
-    pub proxy_host: Option<String>,
-    pub proxy_port: Option<u16>,
-    pub proxy_username: Option<String>,
-    pub proxy_password: Option<String>,
+    #[serde(flatten)]
+    pub proxy: ProxyRequest,
     /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
     /// false/missing. Legacy callers that omit them connect directly.
     pub tunnel_enabled: Option<bool>,
@@ -105,6 +277,9 @@ pub struct SshConnectResponse {
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host_key_changed: Option<HostKeyChanged>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_required: Option<crate::ssh::auto_auth::AuthRequired>,
+    pub passphrase_save_failed: bool,
 }
 
 /// Endpoint named by an "accept-new" request: the host whose changed key the
@@ -127,11 +302,25 @@ fn parse_host_key_policy(value: Option<&str>, accept_new_for: AcceptNewFor) -> H
 }
 
 #[tauri::command]
+pub async fn preview_ssh_config_import(
+    path: Option<String>,
+) -> Result<crate::ssh_config::ImportPreview, crate::ssh_config::Reason> {
+    tauri::async_runtime::spawn_blocking(move || crate::ssh_config::preview(path))
+        .await
+        .map_err(|e| crate::ssh_config::Reason::PreviewFailed {
+            detail: e.to_string(),
+        })?
+}
+
+#[tauri::command]
 pub async fn ssh_connect(
-    request: ConnectRequest,
+    app: tauri::AppHandle,
+    mut request: ConnectRequest,
     state: State<'_, Arc<ConnectionManager>>,
 ) -> Result<SshConnectResponse, String> {
-    let proxy = build_proxy(&request)?;
+    let passphrases = PassphraseAttempt::for_app(&app);
+    request.identity.passphrases = Some(passphrases.clone());
+    let proxy = request.proxy.to_config()?;
     let tunnel = build_tunnel(&request)?;
 
     // Keepalive defaults match the connection dialog UI: enabled at 60 s / 3.
@@ -147,16 +336,17 @@ pub async fn ssh_connect(
         None
     };
 
-    let auth_method = match request.auth_method.as_str() {
-        "password" => AuthMethod::Password {
-            password: request.password.ok_or("Password required")?,
-        },
-        "publickey" => AuthMethod::PublicKey {
-            key_path: resolve_private_key_path(request.key_path.as_deref())?,
-            passphrase: request.passphrase,
-        },
-        _ => return Err("Invalid auth method".to_string()),
-    };
+    let auth_method = build_auth(
+        &request.auth_method,
+        request.password,
+        request.key_path,
+        request.passphrase,
+        &request.identity,
+        format!(
+            "target {}@{}:{}",
+            request.username, request.host, request.port
+        ),
+    )?;
 
     let host_key_policy = parse_host_key_policy(
         request.host_key_policy.as_deref(),
@@ -189,48 +379,29 @@ pub async fn ssh_connect(
             output: Some(format!("Connected: {}", request.connection_id)),
             error: None,
             host_key_changed: None,
+            auth_required: None,
+            passphrase_save_failed: !passphrases.save().await,
         }),
         Err(e) => Ok(SshConnectResponse {
             success: false,
             output: None,
-            error: Some(e.to_string()),
+            error: Some(format!("{e:#}")),
             host_key_changed: e.downcast_ref::<HostKeyChanged>().cloned(),
+            auth_required: e
+                .downcast_ref::<crate::ssh::auto_auth::AuthRequired>()
+                .cloned(),
+            passphrase_save_failed: false,
         }),
-    }
-}
-
-/// Map the proxy request fields into a `ProxyConfig`, or `None` when the
-/// connection should go direct.
-fn build_proxy(request: &ConnectRequest) -> Result<Option<ProxyConfig>, String> {
-    match request.proxy_type.as_deref() {
-        None | Some("none") | Some("") => Ok(None),
-        Some(kind) => {
-            let host = request
-                .proxy_host
-                .clone()
-                .filter(|h| !h.trim().is_empty())
-                .ok_or("Proxy host is required")?;
-            let proxy_type = match kind {
-                "http" => ProxyType::Http,
-                "socks4" => ProxyType::Socks4,
-                "socks5" => ProxyType::Socks5,
-                other => return Err(format!("Invalid proxy type: {other}")),
-            };
-            Ok(Some(ProxyConfig {
-                proxy_type,
-                host,
-                port: request.proxy_port.unwrap_or(8080),
-                username: request.proxy_username.clone(),
-                password: request.proxy_password.clone(),
-            }))
-        }
     }
 }
 
 /// Map the tunnel request fields into a `TunnelConfig` (SSH jump host), or
 /// `None` when the tunnel is disabled.
 fn build_tunnel(request: &ConnectRequest) -> Result<Option<TunnelConfig>, String> {
-    build_tunnel_config(
+    if let Some(hops) = &request.jump_hosts {
+        return build_jump_chain(hops, &request.identity);
+    }
+    let tunnel = build_tunnel_config(
         request.tunnel_enabled,
         request.tunnel_host.clone(),
         request.tunnel_port,
@@ -239,7 +410,8 @@ fn build_tunnel(request: &ConnectRequest) -> Result<Option<TunnelConfig>, String
         request.tunnel_password.clone(),
         request.tunnel_key_path.clone(),
         request.tunnel_passphrase.clone(),
-    )
+    )?;
+    upgrade_legacy_tunnel(tunnel, &request.identity)
 }
 
 /// Shared tunnel-config builder, used by both the SSH and SFTP commands.
@@ -278,6 +450,8 @@ fn build_tunnel_config(
                 }
             };
             Ok(Some(TunnelConfig {
+                via: None,
+                options: None,
                 host,
                 port: port.unwrap_or(22),
                 username,
@@ -2623,6 +2797,10 @@ pub async fn get_websocket_endpoint() -> Result<WebSocketEndpoint, String> {
 
 #[derive(Debug, Deserialize)]
 pub struct SftpConnectRequest {
+    #[serde(flatten)]
+    pub identity: IdentityRequest,
+    pub jump_hosts: Option<Vec<crate::ssh_config::SshEndpoint>>,
+    pub accept_new_for: Option<AcceptNewFor>,
     pub connection_id: String,
     pub host: String,
     pub port: u16,
@@ -2636,6 +2814,10 @@ pub struct SftpConnectRequest {
     /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
     /// Timeout" slider. `None` keeps the backend default (10 s).
     pub connect_timeout: Option<u64>,
+    pub compression: Option<bool>,
+    pub keepalive_enabled: Option<bool>,
+    pub keepalive_interval: Option<u64>,
+    pub keepalive_max: Option<u32>,
     /// SSH tunnel (jump host) options — ignored when `tunnel_enabled` is
     /// false/missing. Legacy callers that omit them connect directly.
     pub tunnel_enabled: Option<bool>,
@@ -2650,43 +2832,60 @@ pub struct SftpConnectRequest {
 
 #[tauri::command]
 pub async fn sftp_connect(
-    request: SftpConnectRequest,
+    app: tauri::AppHandle,
+    mut request: SftpConnectRequest,
     state: State<'_, Arc<ConnectionManager>>,
-) -> Result<CommandResponse, String> {
-    let auth = match request.auth_method.as_str() {
-        "password" => SftpAuthMethod::Password {
-            password: request.password.unwrap_or_default(),
-        },
-        "publickey" => SftpAuthMethod::PublicKey {
-            key_path: resolve_private_key_path(request.key_path.as_deref())?,
-            passphrase: request.passphrase,
-        },
-        _ => return Err("Invalid SFTP auth method".to_string()),
-    };
-
-    let tunnel = build_tunnel_config(
-        request.tunnel_enabled,
-        request.tunnel_host.clone(),
-        request.tunnel_port,
-        request.tunnel_username.clone(),
-        request.tunnel_auth_method.clone(),
-        request.tunnel_password.clone(),
-        request.tunnel_key_path.clone(),
-        request.tunnel_passphrase.clone(),
+) -> Result<SshConnectResponse, String> {
+    let passphrases = PassphraseAttempt::for_app(&app);
+    request.identity.passphrases = Some(passphrases.clone());
+    let auth = build_auth(
+        &request.auth_method,
+        Some(request.password.unwrap_or_default()),
+        request.key_path,
+        request.passphrase,
+        &request.identity,
+        format!(
+            "target {}@{}:{}",
+            request.username, request.host, request.port
+        ),
     )?;
+    let tunnel = if let Some(hops) = &request.jump_hosts {
+        build_jump_chain(hops, &request.identity)?
+    } else {
+        let tunnel = build_tunnel_config(
+            request.tunnel_enabled,
+            request.tunnel_host,
+            request.tunnel_port,
+            request.tunnel_username,
+            request.tunnel_auth_method,
+            request.tunnel_password,
+            request.tunnel_key_path,
+            request.tunnel_passphrase,
+        )?;
+        upgrade_legacy_tunnel(tunnel, &request.identity)?
+    };
 
     let host_key_policy = parse_host_key_policy(
         request.host_key_policy.as_deref(),
-        AcceptNewFor {
+        request.accept_new_for.unwrap_or(AcceptNewFor {
             host: request.host.clone(),
             port: request.port,
-        },
+        }),
     );
     let config = SftpConfig {
         host: request.host,
         port: request.port,
         username: request.username,
         auth_method: auth,
+        options: Some(crate::ssh::JumpConnectionOptions {
+            connect_timeout: request.connect_timeout,
+            compression: request.compression.unwrap_or(false),
+            keepalive_interval: request
+                .keepalive_enabled
+                .unwrap_or(false)
+                .then_some(request.keepalive_interval.unwrap_or(60)),
+            keepalive_max: request.keepalive_max,
+        }),
         tunnel,
         host_key_policy,
         connect_timeout: request.connect_timeout.unwrap_or(10),
@@ -2696,21 +2895,24 @@ pub async fn sftp_connect(
         .create_sftp_connection(request.connection_id.clone(), config)
         .await
     {
-        Ok(_) => Ok(CommandResponse {
+        Ok(_) => Ok(SshConnectResponse {
             success: true,
-            output: Some(format!("SFTP connected: {}", request.connection_id)),
+            output: None,
             error: None,
+            host_key_changed: None,
+            auth_required: None,
+            passphrase_save_failed: !passphrases.save().await,
         }),
-        Err(e) => {
-            // The SFTP path has no "trust new key" dialog; point the user at
-            // the SSH terminal, which does, and shares the same known_hosts.
-            let hint = if e.downcast_ref::<HostKeyChanged>().is_some() {
-                " Open an SSH terminal to this host to review and trust the new key, or fix the entry in known_hosts."
-            } else {
-                ""
-            };
-            Err(format!("SFTP connection failed: {}{}", e, hint))
-        }
+        Err(e) => Ok(SshConnectResponse {
+            success: false,
+            output: None,
+            error: Some(format!("{e:#}")),
+            host_key_changed: e.downcast_ref::<HostKeyChanged>().cloned(),
+            auth_required: e
+                .downcast_ref::<crate::ssh::auto_auth::AuthRequired>()
+                .cloned(),
+            passphrase_save_failed: false,
+        }),
     }
 }
 
@@ -4644,7 +4846,7 @@ pub fn editor_dirty_changed(app: tauri::AppHandle, label: String, dirty: bool) {
 const MASTER_KEY_SERVICE: &str = "com.aiden.r-shell.dataprotection";
 const MASTER_KEY_USER: &str = "connection-secrets";
 
-use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -4669,11 +4871,15 @@ fn keychain_disabled() -> bool {
 /// Tauri-resolved app-data dir (`app_data_dir()` — the same dir the app
 /// already uses for localStorage), so the key persists across dev relaunches
 /// and follows tauri.conf.json's identifier instead of a hardcoded copy.
-fn file_master_key_path(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|dir| dir.join("dev-master-key.dat"))
-        .map_err(|e| format!("Cannot resolve the app data directory: {e}"))
+pub(crate) fn dev_master_key_path(app: &tauri::AppHandle) -> Result<Option<std::path::PathBuf>, String> {
+    if keychain_disabled() {
+        app.path()
+            .app_data_dir()
+            .map(|dir| Some(dir.join("dev-master-key.dat")))
+            .map_err(|e| format!("Cannot resolve the app data directory: {e}"))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Decode a previously persisted 32-byte file master key.
@@ -4734,22 +4940,20 @@ fn load_or_create_file_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
 /// Load (or first-use create) the 32-byte master key. Stored in the OS
 /// keychain normally; in a local file in dev/e2e runs so automation never
 /// trips a keychain authorization prompt.
-fn master_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
-    if let Some(key) = MASTER_KEY_CACHE
+pub(crate) fn master_key(dev_key_path: Option<&std::path::Path>) -> Result<Vec<u8>, String> {
+    let mut cache = MASTER_KEY_CACHE
         .lock()
-        .map_err(|e| format!("Key cache lock poisoned: {e}"))?
-        .as_ref()
-    {
+        .map_err(|e| format!("Key cache lock poisoned: {e}"))?;
+    if let Some(key) = cache.as_ref() {
         return Ok(key.clone());
     }
 
-    let key = if keychain_disabled() {
-        let path = file_master_key_path(app)?;
+    let key = if let Some(path) = dev_key_path {
         tracing::info!(
             "Dev/e2e run: OS keychain bypassed, master key file at {}",
             path.display()
         );
-        load_or_create_file_key(&path)?
+        load_or_create_file_key(path)?
     } else {
         let entry = keyring::Entry::new(MASTER_KEY_SERVICE, MASTER_KEY_USER)
             .map_err(|e| format!("Failed to open keychain entry: {e}"))?;
@@ -4777,15 +4981,13 @@ fn master_key(app: &tauri::AppHandle) -> Result<Vec<u8>, String> {
         key
     };
 
-    if let Ok(mut cache) = MASTER_KEY_CACHE.lock() {
-        *cache = Some(key.clone());
-    }
+    *cache = Some(key.clone());
     Ok(key)
 }
 
 /// Encrypt a secret with the given master key (AES-256-GCM).
 /// Returns a base64 string: `v1:<nonce>:<ciphertext>` (both parts base64).
-fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
+pub(crate) fn seal_with_key(key: &[u8], secret: &str, aad: &[u8]) -> Result<String, String> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
 
@@ -4794,7 +4996,10 @@ fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
     rand::rng().fill_bytes(&mut nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce_bytes), secret.as_bytes())
+        .encrypt(
+            &Nonce::from(nonce_bytes),
+            Payload { msg: secret.as_bytes(), aad },
+        )
         .map_err(|e| format!("Failed to encrypt secret: {e}"))?;
 
     Ok(format!(
@@ -4805,17 +5010,16 @@ fn seal_with_key(key: &[u8], secret: &str) -> Result<String, String> {
 }
 
 /// Decrypt a value produced by `seal_with_key`.
-fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
+pub(crate) fn open_with_key(key: &[u8], sealed: &str, aad: &[u8]) -> Result<String, String> {
     let parts: Vec<&str> = sealed.splitn(3, ':').collect();
     if parts.len() != 3 || parts[0] != "v1" {
         return Err("Unrecognized sealed secret format".to_string());
     }
-    let nonce_bytes = BASE64
+    let nonce_bytes: [u8; 12] = BASE64
         .decode(parts[1])
-        .map_err(|e| format!("Corrupt nonce: {e}"))?;
-    if nonce_bytes.len() != 12 {
-        return Err("Corrupt nonce: invalid length".to_string());
-    }
+        .map_err(|e| format!("Corrupt nonce: {e}"))?
+        .try_into()
+        .map_err(|_| "Corrupt nonce: invalid length".to_string())?;
     let ciphertext = BASE64
         .decode(parts[2])
         .map_err(|e| format!("Corrupt ciphertext: {e}"))?;
@@ -4823,7 +5027,7 @@ fn open_with_key(key: &[u8], sealed: &str) -> Result<String, String> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
     let plaintext = cipher
-        .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
+        .decrypt(&Nonce::from(nonce_bytes), Payload { msg: &ciphertext, aad })
         .map_err(|e| format!("Failed to decrypt secret: {e}"))?;
 
     String::from_utf8(plaintext).map_err(|e| format!("Decrypted secret is not UTF-8: {e}"))
@@ -4857,7 +5061,7 @@ fn seal_for_backup(passphrase: &str, secret: &str) -> Result<String, String> {
     use rand::Rng;
     let mut salt = [0u8; BACKUP_SALT_LEN];
     rand::rng().fill_bytes(&mut salt);
-    let sealed = seal_with_key(&backup_key(passphrase, &salt)?, secret)?;
+    let sealed = seal_with_key(&backup_key(passphrase, &salt)?, secret, b"")?;
     Ok(format!(
         "b1:{}:{}",
         BASE64.encode(salt),
@@ -4879,7 +5083,7 @@ fn open_from_backup(passphrase: &str, sealed: &str) -> Result<String, String> {
         return Err("Corrupt salt: invalid length".to_string());
     }
     let key = backup_key(passphrase, &salt)?;
-    open_with_key(&key, &format!("v1:{}:{}", parts[2], parts[3]))
+    open_with_key(&key, &format!("v1:{}:{}", parts[2], parts[3]), b"")
 }
 
 /// Encrypt a config export's credentials block under the user's passphrase.
@@ -4905,13 +5109,25 @@ pub async fn backup_open(passphrase: String, sealed: String) -> Result<String, S
 /// I/O, which must not block the main thread. The `AppHandle` is injected.
 #[tauri::command]
 pub async fn credential_seal(app: tauri::AppHandle, secret: String) -> Result<String, String> {
-    seal_with_key(&master_key(&app)?, &secret)
+    let key = master_key(dev_master_key_path(&app)?.as_deref())?;
+    seal_with_key(&key, &secret, b"")
 }
 
 /// Decrypt a value produced by `credential_seal`.
 #[tauri::command]
 pub async fn credential_open(app: tauri::AppHandle, sealed: String) -> Result<String, String> {
-    open_with_key(&master_key(&app)?, &sealed)
+    let key = master_key(dev_master_key_path(&app)?.as_deref())?;
+    open_with_key(&key, &sealed, b"")
+}
+
+#[tauri::command]
+pub async fn list_ssh_key_passphrases(app: tauri::AppHandle) -> Result<Vec<SavedKeyPassphrase>, String> {
+    PassphraseStore::for_app(&app)?.list()
+}
+
+#[tauri::command]
+pub async fn forget_ssh_key_passphrase(app: tauri::AppHandle, digest: String) -> Result<(), String> {
+    PassphraseStore::for_app(&app)?.forget(&digest)
 }
 
 #[cfg(test)]
@@ -4963,10 +5179,10 @@ mod credential_key_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("dev-master-key.dat");
         let key = load_or_create_file_key(&path).expect("key");
-        let sealed = seal_with_key(&key, "s3cret-パスワード").expect("seal");
+        let sealed = seal_with_key(&key, "s3cret-パスワード", b"").expect("seal");
         assert!(sealed.starts_with("v1:"));
         assert_eq!(
-            open_with_key(&key, &sealed).expect("open"),
+            open_with_key(&key, &sealed, b"").expect("open"),
             "s3cret-パスワード"
         );
     }
@@ -5561,9 +5777,12 @@ mod local_fs_tests {
 #[cfg(test)]
 mod proxy_config_tests {
     use super::*;
+    use crate::proxy::ProxyType;
 
     pub(super) fn request(proxy_type: Option<&str>) -> ConnectRequest {
         ConnectRequest {
+            identity: IdentityRequest::default(),
+            jump_hosts: None,
             x11: None,
             connection_id: "c1".to_string(),
             host: "example.com".to_string(),
@@ -5580,11 +5799,10 @@ mod proxy_config_tests {
             keepalive_interval: None,
             keepalive_max: None,
             connect_timeout: None,
-            proxy_type: proxy_type.map(|s| s.to_string()),
-            proxy_host: None,
-            proxy_port: None,
-            proxy_username: None,
-            proxy_password: None,
+            proxy: ProxyRequest {
+                proxy_type: proxy_type.map(str::to_string),
+                ..Default::default()
+            },
             tunnel_enabled: None,
             tunnel_host: None,
             tunnel_port: None,
@@ -5598,48 +5816,54 @@ mod proxy_config_tests {
 
     #[test]
     fn no_proxy_when_type_none_or_none_type() {
-        assert!(build_proxy(&request(None)).unwrap().is_none());
-        assert!(build_proxy(&request(Some("none"))).unwrap().is_none());
-        assert!(build_proxy(&request(Some(""))).unwrap().is_none());
+        for kind in [None, Some("none"), Some("")] {
+            assert!(request(kind).proxy.to_config().unwrap().is_none());
+        }
     }
 
     /// Request with a proxy host set, so type/host validation reaches the type.
     fn request_with_host(proxy_type: &str) -> ConnectRequest {
         let mut req = request(Some(proxy_type));
-        req.proxy_host = Some("proxy.local".to_string());
+        req.proxy.proxy_host = Some("proxy.local".to_string());
         req
     }
 
     #[test]
     fn maps_supported_proxy_types() {
-        let http = build_proxy(&request_with_host("http")).unwrap().unwrap();
-        assert_eq!(http.proxy_type, ProxyType::Http);
-        let socks5 = build_proxy(&request_with_host("socks5")).unwrap().unwrap();
-        assert_eq!(socks5.proxy_type, ProxyType::Socks5);
-        let socks4 = build_proxy(&request_with_host("socks4")).unwrap().unwrap();
-        assert_eq!(socks4.proxy_type, ProxyType::Socks4);
+        for (kind, expected) in [
+            ("http", ProxyType::Http),
+            ("socks5", ProxyType::Socks5),
+            ("socks4", ProxyType::Socks4),
+        ] {
+            let request = request_with_host(kind);
+            let proxy = request.proxy.to_config().unwrap().unwrap();
+            assert_eq!(proxy.proxy_type, expected);
+        }
     }
 
     #[test]
     fn requires_proxy_host() {
-        let err = build_proxy(&request(Some("http"))).unwrap_err();
+        let err = request(Some("http")).proxy.to_config().unwrap_err();
         assert!(err.contains("Proxy host is required"));
     }
 
     #[test]
     fn rejects_unknown_proxy_type() {
-        let err = build_proxy(&request_with_host("ftp")).unwrap_err();
+        let err = request_with_host("ftp").proxy.to_config().unwrap_err();
         assert!(err.contains("Invalid proxy type"));
     }
 
     #[test]
     fn carries_proxy_credentials_and_port() {
         let mut req = request(Some("socks5"));
-        req.proxy_host = Some("proxy.local".to_string());
-        req.proxy_port = Some(1080);
-        req.proxy_username = Some("user".to_string());
-        req.proxy_password = Some("pass".to_string());
-        let cfg = build_proxy(&req).unwrap().unwrap();
+        req.proxy.proxy_host = Some("proxy.local".to_string());
+        req.proxy.proxy_port = Some(1080);
+        req.proxy.proxy_username = Some("user".to_string());
+        req.proxy.proxy_password = Some("pass".to_string());
+        let payload = serde_json::to_value(&req).unwrap();
+        assert_eq!(payload["proxy_type"], "socks5");
+        let req: ConnectRequest = serde_json::from_value(payload).unwrap();
+        let cfg = req.proxy.to_config().unwrap().unwrap();
         assert_eq!(cfg.host, "proxy.local");
         assert_eq!(cfg.port, 1080);
         assert_eq!(cfg.username.as_deref(), Some("user"));
@@ -5649,8 +5873,8 @@ mod proxy_config_tests {
     #[test]
     fn defaults_proxy_port_to_8080() {
         let mut req = request(Some("http"));
-        req.proxy_host = Some("proxy.local".to_string());
-        let cfg = build_proxy(&req).unwrap().unwrap();
+        req.proxy.proxy_host = Some("proxy.local".to_string());
+        let cfg = req.proxy.to_config().unwrap().unwrap();
         assert_eq!(cfg.port, 8080);
     }
 }

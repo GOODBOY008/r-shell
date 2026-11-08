@@ -1,3 +1,4 @@
+import { withoutSecrets } from './credential-crypto';
 /**
  * Config Export / Import
  *
@@ -23,6 +24,7 @@ import {
   openSecret,
   sealForBackup,
   sealSecret,
+  type SecretField,
 } from './credential-crypto';
 import { ConnectionProfileManager, type ConnectionProfile } from './connection-profiles';
 import {
@@ -124,7 +126,7 @@ export async function exportAllConfig(options: ExportOptions = {}): Promise<bool
     if (connections.length || folders.length) {
       bundle.data.connections = {
         connections: connections.map((c) => {
-          const clone = { ...c } as Record<string, unknown>;
+          const clone = withoutSecrets({ ...c }) as Record<string, unknown>;
           for (const field of EXPORT_STRIPPED_FIELDS) {
             delete clone[field];
           }
@@ -138,7 +140,7 @@ export async function exportAllConfig(options: ExportOptions = {}): Promise<bool
     const profiles = ConnectionProfileManager.getProfiles();
     if (profiles.length) {
       bundle.data.profiles = profiles.map((p) => {
-        const clone = { ...p } as Record<string, unknown>;
+        const clone = withoutSecrets({ ...p }) as Record<string, unknown>;
         for (const field of EXPORT_STRIPPED_FIELDS) {
           delete clone[field];
         }
@@ -308,30 +310,34 @@ export async function applyConfigBundle(
 
     // 3a. Connections + folders -------------------------------------------------
     if (data.connections) {
-      // Re-seal restored secrets with this machine's master key before they
-      // reach storage: plaintext is stripped on write. A malformed list is
-      // left for importConnections to reject with its own message.
-      let payload = data.connections;
+      // Re-seal restored secrets with this machine's master key separately
+      // from the untrusted JSON, whose secret fields are stripped on import.
+      // A malformed list is left for importConnections to reject.
+      const payload = data.connections;
+      const locallySealedCredentials = new Map<string, Partial<Record<SecretField, string>>>();
       if (Object.keys(restored).length > 0 && Array.isArray(payload.connections)) {
-        const connections = await Promise.all(
+        await Promise.all(
           payload.connections.map(async (connection) => {
             const secrets = restored[connection.id];
-            if (!secrets) return connection;
-            const withSecrets = { ...connection } as Record<string, unknown>;
-            let sealedAny = false;
+            if (!secrets) return;
+            const localSecrets: Partial<Record<SecretField, string>> = {};
             for (const field of SECRET_FIELDS) {
               const value = secrets[field];
               if (typeof value !== 'string') continue;
-              withSecrets[field] = await sealSecret(value);
-              sealedAny = true;
+              localSecrets[field] = await sealSecret(value);
             }
-            if (sealedAny) result.credentials += 1;
-            return withSecrets as unknown as ConnectionData;
+            if (Object.keys(localSecrets).length > 0) {
+              locallySealedCredentials.set(connection.id, localSecrets);
+              result.credentials += 1;
+            }
           }),
         );
-        payload = { ...payload, connections };
       }
-      result.connections = ConnectionStorageManager.importConnections(JSON.stringify(payload), merge);
+      result.connections = ConnectionStorageManager.importConnections(
+        JSON.stringify(payload),
+        merge,
+        locallySealedCredentials,
+      );
     }
 
     // 3b. Connection profiles ---------------------------------------------------

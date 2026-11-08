@@ -76,7 +76,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 | **FTP** | Password, Anonymous | Plain FTP file transfers |
 | **FTPS** | Password, Anonymous | FTP over TLS |
 | **RDP** | Password | Remote Desktop Protocol |
-| **VNC** | Password | Virtual Network Computing |
+| **VNC** | Standard VNC password or None | RFB 3.3, 3.7, and 3.8 over TCP |
 
 - **Connection Manager** — Tree-view sidebar with folders, favorites, tags, and drag-and-drop reordering
 - **SSH Tunnel (Jump Host)** — Route connections through a bastion or jump server
@@ -215,7 +215,7 @@ contexts, conflict rules, and saved-binding migration.
 
 - **Quick Commands** — Right-sidebar panel for saving and running reusable command snippets
 - **VS Code-like layout** — Resizable left/right sidebars + bottom panel with 5 layout presets (Default, Minimal, Focus, Full Stack, Zen) and layout persistence
-- **Remote Desktop** — Built-in RDP and VNC viewer with clipboard sync and dynamic resizing
+- **Remote Desktop** — Built-in RDP and VNC viewers. VNC supports keyboard, mouse, Latin-1 clipboard transfer, and canvas scaling. VNC uses an unencrypted RFB connection, so use an SSH tunnel when connecting over an untrusted network.
 - **Launch at login** — Start R-Shell automatically when you sign in
 - **Auto-update** — Check for updates with download progress and install-and-relaunch
 - **Menu bar** — File, Edit, Tools, Connection menus with full keyboard shortcuts

@@ -13,12 +13,14 @@ struct Framebuffer {
     dirty: Option<(u16, u16, u16, u16)>, // left, top, right, bottom (exclusive)
     resized: bool,
     session_info: Option<crate::rdp::diagnostics::SessionInfo>,
+    clipboard: Option<String>,
 }
 
 impl Framebuffer {
     fn update(&mut self, event: DesktopEvent) {
         match event {
             DesktopEvent::SessionInfo(info) => self.session_info = Some(info),
+            DesktopEvent::Clipboard(text) => self.clipboard = Some(text),
             DesktopEvent::Resized { width, height } => {
                 if width == 0 || height == 0 || width > 8192 || height > 8192 {
                     return;
@@ -65,6 +67,9 @@ impl Framebuffer {
     fn take(&mut self) -> Option<DesktopEvent> {
         if let Some(info) = self.session_info.take() {
             return Some(DesktopEvent::SessionInfo(info));
+        }
+        if let Some(text) = self.clipboard.take() {
+            return Some(DesktopEvent::Clipboard(text));
         }
         if self.resized {
             self.resized = false;

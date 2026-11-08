@@ -183,7 +183,6 @@
       "tunnelPassword": "Enter tunnel password",
       "tunnelKeyPath": "~/.ssh/id_ed25519",
       "tunnelPassphrase": "Enter passphrase if key is encrypted",
-      "savedPassword": "Leave blank to keep saved password",
       "sudoPassword": "Typed into the terminal on request",
       "notes": "Anything you want at hand for this host"
     },
@@ -196,7 +195,7 @@
     "desktopInfo": {
       "title": "Remote Desktop",
       "rdp": "RDP connects to Windows Remote Desktop. Requires NLA-compatible credentials.",
-      "vnc": "VNC connects to any host running a VNC server. Uses password-only authentication."
+      "vnc": "Supports standard VNC password authentication. Leave the password blank for servers that allow connections without authentication."
     },
     "securityNote": {
       "title": "Security Note",
@@ -277,7 +276,6 @@
       "enableDesc": "Forward the connection through a jump host (bastion) to reach the target."
     },
     "hint": {
-      "savedPasswordKept": "A password is saved for this connection. Leave the field blank to keep it, or type a new password to replace it.",
       "sudoPassword": "Sent to the terminal via right-click → Type sudo password. Never shown back here."
     },
     "passwordSavingDisabledHint": "Password saving is turned off in Settings — the connection will work, but credentials won't be stored.",
@@ -286,6 +284,21 @@
       "enableDesc": "Forward remote X11 apps to your local X server. Trusted mode (-Y): the remote host only ever sees a per-session fake cookie — your real xauth cookie stays local",
       "displayOverride": "DISPLAY override",
       "displayPlaceholder": "Auto-detected if blank"
+    },
+    "storedSecret": {
+      "saved": "Saved and encrypted. The value is never shown.",
+      "savedNotEncrypted": "Saved, but not encrypted yet: the system keychain was unavailable. The app encrypts it the next time it starts with the keychain working.",
+      "change": "Change",
+      "changeNamed": "Change {{name}}",
+      "remove": "Remove",
+      "removeNamed": "Remove {{name}}",
+      "undo": "Undo",
+      "undoNamed": "Undo removing {{name}}",
+      "cancelNamed": "Cancel changing {{name}}",
+      "newValue": "Type the new value",
+      "replacing": "Replaces the saved value when you save. Cancel keeps the saved one.",
+      "replacingNotStored": "Password saving is turned off in Settings: the new value is not stored, and the saved one stays.",
+      "removing": "The saved value will be deleted when you save."
     }
   },
   "settings": {
@@ -365,7 +378,17 @@
       "hostKeyVerification": "Host Key Verification",
       "hostKeyVerificationDesc": "Verify SSH host keys for enhanced security",
       "allowPasswordSaving": "Allow saving passwords locally",
-      "allowPasswordSavingDesc": "Controls whether the connection dialog offers to save credentials. Already-saved credentials are unaffected and always stored AES-256-GCM encrypted."
+      "allowPasswordSavingDesc": "Offer to save credentials in the connection and key unlock dialogs. Saved credentials are encrypted with AES-256-GCM.",
+      "sshPassphrases": {
+        "title": "Saved SSH key passphrases",
+        "description": "Manage passphrases remembered on this device. Forgetting a passphrase applies to every connection that uses that key.",
+        "empty": "No SSH key passphrases saved.",
+        "loadFailed": "Could not load saved SSH key passphrases.",
+        "unknownKey": "Unknown key path",
+        "forget": "Forget",
+        "forgetKey": "Forget saved passphrase for {{key}}",
+        "forgetFailed": "Could not forget the saved passphrase."
+      }
     },
     "interface": {
       "title": "Interface Settings",
@@ -1766,5 +1789,136 @@
     "logonFailed": "Sign-in failed. Check the Windows sign-in screen.",
     "logonWarning": "Windows displayed a sign-in warning. Check the remote screen.",
     "serverNotification": "Windows reported a sign-in notification. Check the remote screen."
+  },
+  "openSsh": {
+    "import": {
+      "title": "Import OpenSSH configuration",
+      "description": "Preview hosts, review differences, then save connections in R-Shell. Private keys stay in their original files.",
+      "source": "Configuration file",
+      "browse": "Choose configuration file",
+      "preview": "Preview",
+      "folder": "Folder for new connections",
+      "search": "Search alias, host or user",
+      "selectVisible": "Toggle visible hosts",
+      "selectHost": "Select {{alias}}",
+      "diagnostics": "Notices: {{count}}",
+      "empty": "No matching host aliases.",
+      "target": "Target",
+      "diffHint": "Only source changes appear below. Conflicts keep the local value unless you choose the source.",
+      "previous": "Last imported source",
+      "current": "Local configuration",
+      "incoming": "Current source",
+      "useSource": "Use source value for this conflict",
+      "start": "Choose a configuration file and preview its hosts. No network connection is made.",
+      "submit": "Import ({{count}})",
+      "success": "Import complete: {{count}}",
+      "localChanged": "Saved connections changed while this preview was open. Review the updated differences and select hosts again.",
+      "errors": {
+        "corruptStorage": "Stored connections cannot be read. Repair the stored data before importing.",
+        "missingFolder": "The destination folder no longer exists. Choose another folder.",
+        "sourceErrors": "The source contains errors that prevent import.",
+        "invalidHost": "A selected host cannot be imported. Preview the source again.",
+        "ambiguousSource": "Multiple saved connections have the same source and alias. Resolve the duplicate bindings before importing."
+      }
+    },
+    "status": {
+      "new": "New",
+      "unchanged": "Already imported",
+      "changed": "Source changed",
+      "conflict": "Conflict",
+      "ambiguous": "Duplicate source binding",
+      "blocked": "Cannot import"
+    },
+    "fields": {
+      "host": "Host",
+      "port": "Port",
+      "username": "Username",
+      "authMethod": "Authentication",
+      "identityFiles": "Identity files",
+      "identityAgent": "SSH Agent",
+      "identitiesOnly": "Use only configured identities",
+      "connectTimeout": "Connection timeout (seconds)",
+      "compression": "Compression",
+      "keepAlive": "Keep alive",
+      "keepAliveInterval": "Keep-alive interval",
+      "serverAliveCountMax": "Keep-alive retries",
+      "jumpHosts": "Jump host chain"
+    },
+    "editor": {
+      "auto": "SSH Agent and identity files",
+      "defaultKeys": "Default identity files",
+      "customKeys": "Choose identity files",
+      "noKeys": "No identity files (none)",
+      "defaultAgent": "System SSH Agent",
+      "keyPaths": "One identity file path per line",
+      "keysHint": "Keys are tried in order. Encrypted keys can be unlocked when connecting.",
+      "agentHint": "Automatic discovery, socket path, or none",
+      "agentDescription": "By default, R-Shell tries the system SSH agent and Bitwarden. Enter a socket path to use a specific agent, or none to disable agents. Unlock your vault or approve signing requests in your password manager when prompted.",
+      "identitiesHint": "The Agent may still sign for identities listed above.",
+      "chainHint": "Hops are used in this order, followed by the target. Each hop uses its own username and authentication.",
+      "hop": "Jump host {{number}}",
+      "moveUp": "Move hop up",
+      "moveDown": "Move hop down",
+      "removeHop": "Remove hop",
+      "addHop": "Add jump host",
+      "editChain": "Edit as a jump host chain",
+      "appDefault": "Application default"
+    },
+    "unlock": {
+      "title": "Unlock SSH private key",
+      "description": "By default, R-Shell keeps the passphrase for this connection and its transfers.",
+      "incorrect": "The passphrase did not unlock this key. Try again or skip it.",
+      "passphrase": "Key passphrase",
+      "skip": "Skip this key",
+      "submit": "Unlock",
+      "remember": "Remember passphrase on this device",
+      "rememberHint": "Reuse the passphrase for this key across connections. Manage saved passphrases in Settings → Security.",
+      "saveFailed": "Connected, but R-Shell could not save the key passphrase on this device."
+    },
+    "diagnostic": {
+      "homeUnavailable": "Cannot determine the user's home directory",
+      "usernameUnavailable": "Cannot determine the local username",
+      "previewFailed": "Could not preview the configuration: {{detail}}",
+      "unterminatedQuote": "Unterminated quoted value",
+      "unterminatedEnvironmentVariable": "Unterminated environment variable",
+      "missingEnvironmentVariable": "Environment variable {{name}} is not set",
+      "invalidLocalUsername": "Invalid local username",
+      "unknownUserHome": "Cannot resolve the named user's home directory",
+      "namedUserHomeUnsupported": "Named-user home expansion is not supported on this platform",
+      "localHostnameUnavailable": "Cannot determine the local hostname",
+      "userIdUnsupported": "The %i token is not supported on Windows",
+      "fileAccess": "Cannot read configuration file {{path}}: {{detail}}",
+      "includeCycle": "Include cycle at {{path}}",
+      "includeDepth": "Include nesting exceeds {{limit}} files",
+      "notRegularFile": "SSH configuration must be a regular file",
+      "sourceTooLarge": "SSH configuration exceeds {{limit}} MiB",
+      "previewWorkLimit": "Configuration at {{path}} (line {{line}}) is too complex to preview. Reduce repeated Includes or split the source.",
+      "matchUnsupported": "Match blocks cannot be converted reliably; this source cannot be imported",
+      "includePathRequired": "Include requires a path",
+      "hostPatternRequired": "Host requires a pattern",
+      "unsupportedToken": "Unsupported SSH path token: {{token}}",
+      "invalidIncludePattern": "Invalid Include pattern: {{detail}}",
+      "includePatternRead": "Cannot read Include matches: {{detail}}",
+      "expectedBoolean": "Expected yes or no",
+      "invalidNumber": "Invalid numeric value",
+      "jumpCycle": "ProxyJump cycle involving {{host}}",
+      "tooManyJumps": "ProxyJump exceeds {{limit}} hops",
+      "jumpTargetsSelf": "ProxyJump points back to the target",
+      "jumpRepeated": "ProxyJump repeats a hop",
+      "invalidJumpBrackets": "Invalid bracketed jump host",
+      "invalidJumpPort": "Invalid ProxyJump port",
+      "unbracketedIpv6": "IPv6 jump addresses must be bracketed",
+      "invalidJumpHost": "Invalid ProxyJump host",
+      "invalidJumpEscape": "Invalid ProxyJump URI escape",
+      "invalidJumpUsername": "Invalid ProxyJump username",
+      "missingValue": "Missing option value",
+      "identityPathRequired": "IdentityFile expects one path",
+      "expectedSingleValue": "Expected one option value",
+      "unsupportedOption": "This connection or authentication option cannot be converted",
+      "ignoredOption": "This option is not imported",
+      "proxyCommandUnsupported": "ProxyCommand is not supported",
+      "tooManyAliases": "SSH configuration exceeds {{limit}} aliases",
+      "currentDirectoryUnavailable": "Cannot determine the current directory: {{detail}}"
+    }
   }
 }

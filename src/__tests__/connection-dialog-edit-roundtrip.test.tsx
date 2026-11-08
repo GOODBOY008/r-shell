@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConnectionDialog, type ConnectionConfig } from '../components/connection-dialog';
 import { ConnectionStorageManager, type ConnectionData } from '../lib/connection-storage';
+import { toConnectionConfig } from '../lib/connection-config';
+import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -58,6 +60,56 @@ async function switchToAdvancedTab() {
 }
 
 describe('edit advanced options round-trip (real storage)', () => {
+  it.each([false, true])('removes a target secret while retaining jump credentials (saving enabled: %s)', async (savePassword) => {
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ allowPasswordSaving: savePassword }));
+    const jumpHosts = [{ host: 'jump', port: 22, username: 'ops', authMethod: 'password' as const, password: 'v1:nonce:jump' }];
+    const saved = ConnectionStorageManager.saveConnectionWithId('remove-target', {
+      name: 'Imported', host: 'target', port: 22, username: 'app', protocol: 'SSH',
+      authMethod: 'password', password: 'v1:nonce:target', jumpHosts,
+    });
+    const onSave = vi.fn();
+    render(<ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} onSave={onSave} editingConnection={toConnectionConfig(saved)} />);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('remove-target')).toMatchObject({ password: '', jumpHosts });
+  });
+
+  it.each([false, true])('keeps a removed tunnel secret removed when converting to a jump chain (saving enabled: %s)', async (allowPasswordSaving) => {
+    localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ allowPasswordSaving }));
+    const saved = ConnectionStorageManager.saveConnectionWithId('convert-tunnel', {
+      name: 'Legacy', host: 'target', port: 22, username: 'app', protocol: 'SSH', authMethod: 'auto',
+      tunnelEnabled: true, tunnelHost: 'jump', tunnelPort: 22, tunnelUsername: 'ops',
+      tunnelAuthMethod: 'password', tunnelPassword: 'v1:nonce:jump',
+    });
+    const onSave = vi.fn();
+    render(<ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} onSave={onSave} editingConnection={toConnectionConfig(saved)} />);
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Tunnel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Tunnel Password' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit as a jump host chain' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('convert-tunnel')).toMatchObject({
+      tunnelPassword: '', jumpHosts: [{ host: 'jump', username: 'ops', password: '' }],
+    });
+  });
+
+  it.each([false, true])('retains imported identities, source and sealed credentials after a connect attempt: %s', async (decrypted) => {
+    const endpoint = { host: 'prod', port: 22, username: 'deploy', authMethod: 'auto' as const, identityFiles: ['/first', '/second'], identityAgent: 'none', identitiesOnly: true, connectTimeout: 45, password: 'v1:nonce:target', jumpHosts: [{ host: 'jump', port: 2222, username: 'ops', authMethod: 'password' as const, password: 'v1:nonce:ciphertext' }] };
+    const saved = ConnectionStorageManager.saveConnectionWithId('imported', { ...endpoint, name: 'Custom label', notes: 'Keep notes', protocol: 'SSH', sshConfigSource: { path: '/ssh/config', alias: 'prod', snapshot: { ...endpoint, jumpHosts: [] } } });
+    const onSave = vi.fn();
+    const editing = toConnectionConfig(saved);
+    if (decrypted) {
+      editing.password = 'transient-target';
+      editing.jumpHosts = editing.jumpHosts!.map(h => ({ ...h, password: 'transient-hop' }));
+    }
+    render(<ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} onSave={onSave} editingConnection={editing} />);
+    expect(screen.queryByDisplayValue('v1:nonce:ciphertext')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(ConnectionStorageManager.getConnection('imported')).toMatchObject({ ...endpoint, name: 'Custom label', notes: 'Keep notes', sshConfigSource: saved.sshConfigSource });
+  });
   it('compression OFF survives save → re-open as OFF', async () => {
     ConnectionStorageManager.saveConnectionWithId('c1', {
       name: 'My Server',
