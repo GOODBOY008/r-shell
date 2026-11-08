@@ -434,7 +434,6 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                 letterSpacing: `${appearance.letterSpacing}px`,
                 backgroundColor: terminalThemes[appearance.theme]?.background || '#1e1e1e',
                 color: terminalThemes[appearance.theme]?.foreground || '#d4d4d4',
-                opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1,
               }}
             >
               {/* Background image layer */}
@@ -451,7 +450,13 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                   }}
                 />
               )}
-              <div className="relative z-10">
+              {/* Opacity applies to the text only: in the app the wallpaper
+                  sits behind the whole shell and the terminal's transparency
+                  never dims it. */}
+              <div
+                className="relative z-10"
+                style={{ opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1 }}
+              >
                 <div style={{ color: terminalThemes[appearance.theme]?.green }}>user@host</div>
                 <div>$ ls -la</div>
                 <div style={{ color: terminalThemes[appearance.theme]?.blue }}>drwxr-xr-x</div>
