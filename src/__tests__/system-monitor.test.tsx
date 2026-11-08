@@ -1,5 +1,5 @@
 import React from 'react';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SystemMonitor } from '../components/system-monitor';
 import { pickDefaultNetworkInterface, resolveActiveInterface } from '../lib/network-interface';
@@ -24,21 +24,19 @@ vi.mock('sonner', () => ({
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   AreaChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  LineChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  LineChart: ({ children, data, 'aria-label': label }: { children: React.ReactNode; data: unknown; 'aria-label'?: string }) => <div aria-label={label} data-history={JSON.stringify(data)}>{children}</div>,
   Area: () => null,
   Line: () => null,
   XAxis: () => null,
   YAxis: () => null,
   CartesianGrid: () => null,
   Tooltip: () => null,
+  DefaultTooltipContent: () => null,
   ReferenceLine: () => null,
 }));
 
-// Backend contract (src-tauri/src/commands.rs get_system_stats): when a
-// remote stat command fails transiently the memory fields come back as 0.
-// A zero `used` used to short-circuit `{used && total && (...)}` into a bare
-// "0" text node; the tests below cover both zero shapes — used=0 with a
-// valid total, and the all-zeros frame where total is 0 as well.
+// Backend failure frames may contain zero capacity. They must not look like
+// a healthy, empty memory reading, while genuine zero usage stays visible.
 function makeStats(overrides: Record<string, unknown> = {}) {
   return {
     cpu_percent: 0.2,
@@ -74,82 +72,53 @@ function setupInvoke(
   });
 }
 
-describe('SystemMonitor zero-value frames and card padding', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
+describe('SystemMonitor overview', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
   afterEach(cleanup);
 
-  it('keeps the memory MB row when memory.used is 0 (no bare "0" text)', async () => {
-    setupInvoke({ memory: { total: 11995, used: 0, free: 11995, available: 0 } });
-    const { container } = render(<SystemMonitor connectionId="conn-1" />);
-
-    // Before the fix `0 && total` evaluated to the number 0 and React rendered
-    // a bare "0" text node instead of the MB row — layout jumped every time a
-    // remote stat command failed transiently.
-    await waitFor(() => {
-      expect(screen.getByText('0MB / 11995MB')).toBeTruthy();
-    });
-    const mbRow = screen.getByText('0MB / 11995MB');
-    expect(mbRow.tagName).toBe('DIV');
-
-    // The memory Progress track must still be mounted (fixed height, no jump).
-    const progressRoots = container.querySelectorAll('[data-slot="progress"]');
-    expect(progressRoots.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it('renders 0MB / 0MB when the whole stats frame is all zeros', async () => {
-    setupInvoke({
-      memory: { total: 0, used: 0, free: 0, available: 0 },
-      swap: { total: 0, used: 0, free: 0, available: 0 },
-    });
+  it('keeps real zero usage visible with a readable capacity', async () => {
+    setupInvoke({ memory: { total: 11995, used: 0 } });
     render(<SystemMonitor connectionId="conn-1" />);
-
-    // The other zero shape: total is 0 too. The MB row must still render
-    // (as "0MB / 0MB") instead of leaking a bare "0" text node, and the
-    // swap section must stay hidden (guarded by swapTotal > 0).
-    await waitFor(() => {
-      expect(screen.getByText('0MB / 0MB')).toBeTruthy();
-    });
+    expect(await screen.findByText('0 MiB / 11.7 GiB')).toBeTruthy();
+    expect(screen.getByRole('meter', { name: 'Memory' }).getAttribute('aria-valuenow')).toBe('0');
   });
 
-  it('renders the memory MB row for normal (non-zero) usage', async () => {
-    setupInvoke();
+  it('shows unavailable capacity instead of reporting a healthy zero', async () => {
+    setupInvoke({ memory: { total: 0, used: 0 }, swap: { total: 0, used: 0 } });
     render(<SystemMonitor connectionId="conn-1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('6547MB / 11995MB')).toBeTruthy();
-    });
+    expect(await screen.findByText('Unavailable')).toBeTruthy();
+    const overview = screen.getByRole('region', { name: 'System Overview' });
+    expect(within(overview).queryByRole('meter', { name: 'Memory' })).toBeNull();
+    expect(within(overview).queryByText('Swap')).toBeNull();
+    expect(overview.textContent).not.toContain('NaN');
   });
 
-  it('gives the progress track a visible bg-muted base (lost /20 alpha class)', async () => {
-    setupInvoke();
-    const { container } = render(<SystemMonitor connectionId="conn-1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('6547MB / 11995MB')).toBeTruthy();
-    });
-
-    const track = container.querySelector('[data-slot="progress"]');
-    expect(track).not.toBeNull();
-    expect(track?.className).toContain('bg-muted');
-    expect(track?.className).not.toContain('bg-primary/20');
+  it('formats memory and swap independently and replaces the overview bars', async () => {
+    setupInvoke({ swap: { total: 2048, used: 128 } });
+    render(<SystemMonitor connectionId="conn-1" />);
+    expect(await screen.findByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
+    expect(screen.getByText('128 MiB / 2 GiB')).toBeTruthy();
+    const overview = screen.getByRole('region', { name: 'System Overview' });
+    expect(within(overview).getAllByRole('meter')).toHaveLength(4);
+    expect(overview.querySelector('[data-slot="progress"]')).toBeNull();
   });
 
-  it('overrides the default last-child pb-6 on every card content', async () => {
+  it('shows placeholders until the first reading arrives', () => {
+    setupInvoke();
+    render(<SystemMonitor connectionId="conn-1" active={false} />);
+    const overview = screen.getByRole('region', { name: 'System Overview' });
+    expect(within(overview).getByText('Loading')).toBeTruthy();
+    expect(within(overview).queryByRole('meter')).toBeNull();
+    expect(overview.textContent).not.toContain('0%');
+  });
+
+  it('keeps compact bottom padding on the monitor cards', async () => {
     setupInvoke();
     const { container } = render(<SystemMonitor connectionId="conn-1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('6547MB / 11995MB')).toBeTruthy();
-    });
-
+    await screen.findByText('6.4 GiB / 11.7 GiB');
     const contents = container.querySelectorAll('[data-slot="card-content"]');
     expect(contents.length).toBeGreaterThanOrEqual(5);
-    contents.forEach((content) => {
-      // twMerge must have resolved the card default `last:pb-6`
-      // against the local override — pb-6 must not survive in the merged class.
+    contents.forEach(content => {
       expect(content.className).not.toContain('pb-6');
       expect(content.className).toContain('last:pb-');
     });
@@ -371,21 +340,142 @@ describe('SystemMonitor hidden panel', () => {
       setupInvoke();
       const { rerender } = render(<SystemMonitor connectionId="conn-1" active />);
 
-      await vi.advanceTimersByTimeAsync(0);
+      await act(() => vi.advanceTimersByTimeAsync(0));
       expect(mocks.invoke).toHaveBeenCalledWith('get_system_stats', { connectionId: 'conn-1' });
-      expect(screen.getByText('6547MB / 11995MB')).toBeTruthy();
+      expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
 
       rerender(<SystemMonitor connectionId="conn-1" active={false} />);
       const callsAtSwitch = mocks.invoke.mock.calls.length;
 
       // Well past the 5 s stats/process/GPU interval and the 10 s latency one.
-      await vi.advanceTimersByTimeAsync(30_000);
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
 
       // The reading stays put rather than blanking out, and nothing is fetched.
-      expect(screen.getByText('6547MB / 11995MB')).toBeTruthy();
+      expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
       expect(mocks.invoke.mock.calls.length).toBe(callsAtSwitch);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+
+describe('SystemMonitor overview lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-09T08:00:00Z'));
+    setupInvoke();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
+  const statsCalls = () => mocks.invoke.mock.calls.filter(([command]) => command === 'get_system_stats');
+  const chart = () => JSON.parse(screen.getByLabelText('CPU and memory usage history').getAttribute('data-history') || '[]');
+
+  it('samples at five seconds, retains history while hidden, and breaks after a pause', async () => {
+    const { rerender } = render(<SystemMonitor connectionId="conn-1" />);
+    await tick();
+    expect(statsCalls()).toHaveLength(1);
+    await tick(5000);
+    expect(statsCalls()).toHaveLength(2);
+    expect(chart()).toHaveLength(2);
+    rerender(<SystemMonitor connectionId="conn-1" active={false} />);
+    await tick(30_000);
+    expect(chart()).toHaveLength(2);
+    expect(statsCalls()).toHaveLength(2);
+    rerender(<SystemMonitor connectionId="conn-1" />);
+    await tick();
+    expect(statsCalls()).toHaveLength(3);
+    expect(chart()).toHaveLength(4);
+    expect(chart()[2]).toMatchObject({ cpu: null, memory: null });
+  });
+
+  it('keeps the last reading on failure and starts a new segment on recovery', async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    let fail = false;
+    mocks.invoke.mockImplementation((command, args) => command === 'get_system_stats' && fail
+      ? Promise.reject(new Error('Disconnected')) : original(command, args));
+    render(<SystemMonitor connectionId="conn-1" />);
+    await tick();
+    fail = true;
+    await tick(5000);
+    expect(screen.getByText('Update failed')).toBeTruthy();
+    expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
+    fail = false;
+    await tick(5000);
+    expect(screen.queryByText('Update failed')).toBeNull();
+    expect(chart()[1]).toMatchObject({ cpu: null, memory: null });
+  });
+
+  it('discards late responses when switching away and back to the same connection', async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    let resolveOld!: (value: unknown) => void;
+    let first = true;
+    mocks.invoke.mockImplementation((command, args) => {
+      if (command === 'get_system_stats' && first) {
+        first = false;
+        return new Promise(resolve => { resolveOld = resolve; });
+      }
+      return original(command, args);
+    });
+    const { rerender } = render(<SystemMonitor connectionId="conn-1" />);
+    await tick();
+    rerender(<SystemMonitor connectionId="conn-2" active={false} />);
+    expect(screen.queryByText('6.4 GiB / 11.7 GiB')).toBeNull();
+    rerender(<SystemMonitor connectionId="conn-1" />);
+    await tick();
+    expect(screen.getByRole('meter', { name: 'CPU' }).getAttribute('aria-valuenow')).toBe('0.2');
+    await act(async () => { resolveOld(makeStats({ cpu_percent: 99 })); });
+    expect(screen.getByRole('meter', { name: 'CPU' }).getAttribute('aria-valuenow')).toBe('0.2');
+    expect(screen.queryByLabelText('CPU and memory usage history')).toBeNull();
+  });
+
+  it('clears loaded history on a different connection, including a hidden switch', async () => {
+    const { rerender } = render(<SystemMonitor connectionId="conn-1" />);
+    await tick();
+    await tick(5000);
+    expect(chart()).toHaveLength(2);
+    rerender(<SystemMonitor connectionId="conn-2" active={false} />);
+    expect(screen.queryByText('6.4 GiB / 11.7 GiB')).toBeNull();
+    expect(screen.queryByLabelText('CPU and memory usage history')).toBeNull();
+    rerender(<SystemMonitor connectionId="conn-2" />);
+    await tick();
+    expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
+    expect(screen.queryByLabelText('CPU and memory usage history')).toBeNull();
+  });
+
+  it('does not overlap slow probes or request extra samples when sorting processes', async () => {
+    const original = mocks.invoke.getMockImplementation()!;
+    let finish!: (value: unknown) => void;
+    mocks.invoke.mockImplementation((command, args) => command === 'get_system_stats'
+      ? new Promise(resolve => { finish = resolve; }) : original(command, args));
+    render(<SystemMonitor connectionId="conn-1" />);
+    await tick(15_000);
+    expect(statsCalls()).toHaveLength(1);
+    await act(async () => { finish(makeStats()); });
+    fireEvent.click(screen.getByText('Mem'));
+    await tick();
+    expect(statsCalls()).toHaveLength(1);
+  });
+
+  it('does not issue a deferred idle probe after hiding or unmounting', async () => {
+    const idleCallbacks: IdleRequestCallback[] = [];
+    vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => { idleCallbacks.push(callback); return idleCallbacks.length; });
+    try {
+      const { rerender, unmount } = render(<SystemMonitor connectionId="conn-1" />);
+      await tick();
+      await tick(5000);
+      rerender(<SystemMonitor connectionId="conn-1" active={false} />);
+      unmount();
+      const count = statsCalls().length;
+      await act(async () => { idleCallbacks.forEach(callback => callback({ didTimeout: false, timeRemaining: () => 50 })); });
+      expect(statsCalls()).toHaveLength(count);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });
