@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.3] - 2026-11-08
+
+### 🔖 R-Shell 3.1.3 — Encrypted Backups & Remote Access
+
+This patch release adds optional passphrase-encrypted credentials to configuration exports, OpenSSH configuration import with jump chains, and Bitwarden SSH Agent support. VNC connections now provide a working remote desktop, saved credentials have explicit Change and Remove controls, and hosts can store notes and a sudo password. Remote editing uses reusable workspace tabs, while keyboard shortcuts follow focus and preserve terminal input.
+
+### New Features 🎉
+
+- feat(settings): optional passphrase-encrypted credentials in config exports by @twkrol in #287
+- feat(ssh): support Bitwarden SSH agents by @imbyoe in #293
+- feat(ssh): import OpenSSH configurations with jump chains by @GOODBOY008 in #290
+- feat(connection): show stored secrets as saved, with Change and Remove by @twkrol in #289
+- feat(connection): per-host notes and a saved sudo password typed from the terminal menu by @twkrol in #286
+- feat(editor): unify remote editing in reusable workspace tabs by @GOODBOY008 in #280
+
+### Bug Fixes 🐛
+
+- fix(vnc): implement remote desktop connections by @htazq in #292
+- fix(editor): reveal main window before confirming offline quit by @GOODBOY008 in #281
+
+### Other Changes
+
+- refactor(shortcuts): route commands by focus and preserve terminal input by @GOODBOY008 in #282
+
+### Contributors
+
+Thanks to [@twkrol](https://github.com/twkrol), [@imbyoe](https://github.com/imbyoe), [@htazq](https://github.com/htazq), and [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.1.2...v3.1.3
+
 ## [3.1.2] - 2026-11-03
 
 ### 🔖 R-Shell 3.1.2 — RDP Input & Connection Hardening
