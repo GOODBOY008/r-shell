@@ -7,7 +7,7 @@ updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       npm-minor-patch:
         update-types:
@@ -17,7 +17,7 @@ updates:
   - package-ecosystem: cargo
     directory: "/src-tauri"
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       # IronRDP shares types across subcrates. Its pre-1.0 minor bumps are
       # classified as major updates and must move with the rest of the family.
@@ -34,7 +34,7 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
+      interval: monthly
     groups:
       actions-minor-patch:
         update-types:
