@@ -442,9 +442,9 @@
       "exportPassphraseMismatch": "两次输入的口令不一致",
       "importPassphraseTitle": "加密的凭据",
       "importPassphraseDesc": "此文件包含使用导出口令加密的密码和其他凭据。输入口令以恢复它们，或跳过以导入其余内容。",
-      "importPassphraseWrong": "口令错误。请重试或跳过凭据。",
+      "importPassphraseWrong": "口令错误或凭据数据已损坏。请重试或跳过凭据。",
       "importWithoutCredentials": "跳过凭据",
-      "importCredentialsRestored": "已为 {{n}} 个连接恢复凭据。"
+      "importCredentialsRestored_other": "已为 {{count}} 个连接恢复凭据。"
     },
     "language": {
       "label": "语言",

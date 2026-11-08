@@ -45,6 +45,11 @@ export const SECRET_FIELDS = [
 
 export type SecretField = (typeof SECRET_FIELDS)[number];
 
+export type SecretValues = Partial<Record<SecretField, string>>;
+
+/** Connection secrets, with jump-host entries kept in route order. */
+export type ConnectionSecrets = SecretValues & { jumpHosts?: SecretValues[] };
+
 /**
  * Secrets a connect request carries. The sudo password is typed into the
  * terminal on demand, so connect flows leave it sealed: the record they

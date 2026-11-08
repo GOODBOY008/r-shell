@@ -444,9 +444,12 @@
       "exportPassphraseMismatch": "Hasła eksportu nie są takie same",
       "importPassphraseTitle": "Zaszyfrowane poświadczenia",
       "importPassphraseDesc": "Ten plik zawiera hasła i inne poświadczenia zaszyfrowane hasłem eksportu. Wpisz je, aby je przywrócić, albo pomiń, aby zaimportować resztę.",
-      "importPassphraseWrong": "Nieprawidłowe hasło eksportu. Spróbuj ponownie albo pomiń poświadczenia.",
+      "importPassphraseWrong": "Nieprawidłowe hasło eksportu lub uszkodzone poświadczenia. Spróbuj ponownie albo pomiń poświadczenia.",
       "importWithoutCredentials": "Pomiń poświadczenia",
-      "importCredentialsRestored": "Przywrócono poświadczenia dla połączeń: {{n}}."
+      "importCredentialsRestored_one": "Przywrócono poświadczenia: {{count}} połączenie.",
+      "importCredentialsRestored_few": "Przywrócono poświadczenia: {{count}} połączenia.",
+      "importCredentialsRestored_many": "Przywrócono poświadczenia: {{count}} połączeń.",
+      "importCredentialsRestored_other": "Przywrócono poświadczenia: {{count}} połączenia."
     },
     "language": {
       "label": "Język",

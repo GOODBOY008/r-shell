@@ -442,9 +442,10 @@
       "exportPassphraseMismatch": "The passphrases do not match",
       "importPassphraseTitle": "Encrypted credentials",
       "importPassphraseDesc": "This file carries passwords and other credentials encrypted with an export passphrase. Enter it to restore them, or skip to import everything else.",
-      "importPassphraseWrong": "Wrong passphrase. Try again or skip the credentials.",
+      "importPassphraseWrong": "Wrong passphrase or damaged credentials. Try again or skip the credentials.",
       "importWithoutCredentials": "Skip credentials",
-      "importCredentialsRestored": "Credentials restored for {{n}} connections."
+      "importCredentialsRestored_one": "Credentials restored for {{count}} connection.",
+      "importCredentialsRestored_other": "Credentials restored for {{count}} connections."
     },
     "language": {
       "label": "Language",

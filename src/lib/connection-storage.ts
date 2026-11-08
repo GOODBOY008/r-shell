@@ -4,7 +4,7 @@ import type { SshExtendedOptions } from '@/lib/ssh-options';
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
  */
-import { SECRET_FIELDS, isSealed, withoutSecrets, type SecretField } from './credential-crypto';
+import { SECRET_FIELDS, isSealed, withoutSecrets, type ConnectionSecrets } from './credential-crypto';
 
 /**
  * X11 forwarding options for an SSH connection. Mirrors the Rust-side
@@ -882,7 +882,7 @@ export class ConnectionStorageManager {
   static importConnections(
     json: string,
     merge: boolean = false,
-    locallySealedCredentials?: ReadonlyMap<string, Partial<Record<SecretField, string>>>,
+    locallySealedCredentials?: ReadonlyMap<string, ConnectionSecrets>,
   ): number {
     try {
       // Read before writing: this detects a corrupt store and gives merge its
@@ -929,6 +929,12 @@ export class ConnectionStorageManager {
           const value = localSecrets?.[field];
           if (isSealed(value)) importedConnection[field] = value;
         }
+        importedConnection.jumpHosts?.forEach((hop, index) => {
+          for (const field of ['password', 'passphrase'] as const) {
+            const value = localSecrets?.jumpHosts?.[index]?.[field];
+            if (isSealed(value)) hop[field] = value;
+          }
+        });
         connections.push({
           ...importedConnection,
           id: crypto.randomUUID(),

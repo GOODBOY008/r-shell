@@ -24,7 +24,8 @@ import {
   openSecret,
   sealForBackup,
   sealSecret,
-  type SecretField,
+  type ConnectionSecrets,
+  type SecretValues,
 } from './credential-crypto';
 import { ConnectionProfileManager, type ConnectionProfile } from './connection-profiles';
 import {
@@ -77,7 +78,7 @@ export interface ConfigBundle {
 
 /** Plaintext layout of the credentials block. */
 interface CredentialsBlock {
-  connections: Record<string, Record<string, string>>;
+  connections: Record<string, ConnectionSecrets>;
 }
 
 export interface ExportOptions {
@@ -108,6 +109,24 @@ export interface ImportResult {
 // master key would otherwise decrypt every exported credential. The opt-in
 // credentials block carries them under the user's own passphrase instead.
 const EXPORT_STRIPPED_FIELDS = SECRET_FIELDS;
+
+async function readBackupSecrets(record: SecretValues, context: string): Promise<SecretValues> {
+  const secrets: SecretValues = {};
+  for (const field of SECRET_FIELDS) {
+    const value = record[field];
+    if (isSealed(value)) {
+      try {
+        secrets[field] = await openSecret(value);
+      } catch (error) {
+        console.warn(`[config-export] Skipping ${field} of ${context}:`, error);
+      }
+    } else if (typeof value === 'string') {
+      // Empty passwords are configured credentials too, unlike absent fields.
+      secrets[field] = value;
+    }
+  }
+  return secrets;
+}
 
 export async function exportAllConfig(options: ExportOptions = {}): Promise<boolean> {
   try {
@@ -183,21 +202,13 @@ export async function exportAllConfig(options: ExportOptions = {}): Promise<bool
     if (options.credentialsPassphrase) {
       const secrets: CredentialsBlock['connections'] = {};
       for (const connection of connections) {
-        const record = connection as unknown as Record<string, unknown>;
-        const own: Record<string, string> = {};
-        for (const field of SECRET_FIELDS) {
-          const value = record[field];
-          if (isSealed(value)) {
-            try {
-              own[field] = await openSecret(value);
-            } catch (error) {
-              // A value this machine can no longer open cannot be exported; keep the rest.
-              console.warn(`[config-export] Skipping ${field} of ${connection.id}:`, error);
-            }
-          } else if (typeof value === 'string' && value.length > 0) {
-            // Legacy plaintext still waiting for the startup seal migration.
-            own[field] = value;
-          }
+        const own: ConnectionSecrets = await readBackupSecrets(connection, connection.id);
+        const hops: SecretValues[] = [];
+        for (const [index, hop] of (connection.jumpHosts ?? []).entries()) {
+          hops.push(await readBackupSecrets(hop, `${connection.id} jump host ${index + 1}`));
+        }
+        if (hops.some((hop) => Object.keys(hop).length > 0)) {
+          own.jumpHosts = hops;
         }
         if (Object.keys(own).length > 0) secrets[connection.id] = own;
       }
@@ -234,6 +245,8 @@ export interface ImportOptions {
   merge?: boolean;
   /** Passphrase for the bundle's credentials block; absent = skip the block. */
   credentialsPassphrase?: string;
+  /** Explicit user choice to skip credentials, including a damaged block. */
+  skipCredentials?: boolean;
 }
 
 /**
@@ -265,10 +278,48 @@ export async function pickConfigBundle(): Promise<ConfigBundle | null> {
   }
 }
 
-/** True when the bundle carries a passphrase-protected credentials block. */
+/** Presence triggers the prompt even when the credentials block is damaged. */
 export function bundleHasCredentials(bundle: ConfigBundle): boolean {
-  const block = bundle.data.credentials;
-  return block?.format === CREDENTIALS_FORMAT && isBackupSealed(block.sealed);
+  return Object.prototype.hasOwnProperty.call(bundle.data, 'credentials');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function parseSecretValues(value: unknown): SecretValues {
+  if (!isRecord(value)) throw new WrongPassphraseError();
+  const secrets: SecretValues = {};
+  for (const field of SECRET_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(value, field)) continue;
+    if (typeof value[field] !== 'string') throw new WrongPassphraseError();
+    secrets[field] = value[field];
+  }
+  return secrets;
+}
+
+function parseCredentialsBlock(json: string): CredentialsBlock {
+  const value: unknown = JSON.parse(json);
+  if (!isRecord(value) || !isRecord(value.connections)) throw new WrongPassphraseError();
+  return {
+    connections: Object.fromEntries(Object.entries(value.connections).map(([id, entry]) => {
+      const secrets: ConnectionSecrets = parseSecretValues(entry);
+      if (isRecord(entry) && Object.prototype.hasOwnProperty.call(entry, 'jumpHosts')) {
+        if (!Array.isArray(entry.jumpHosts)) throw new WrongPassphraseError();
+        secrets.jumpHosts = entry.jumpHosts.map(parseSecretValues);
+      }
+      return [id, secrets];
+    })),
+  };
+}
+
+async function sealBackupSecrets(secrets: SecretValues): Promise<SecretValues> {
+  const localSecrets: SecretValues = {};
+  for (const field of SECRET_FIELDS) {
+    const value = secrets[field];
+    if (typeof value === 'string') localSecrets[field] = await sealSecret(value);
+  }
+  return localSecrets;
 }
 
 /**
@@ -279,7 +330,7 @@ export function bundleHasCredentials(bundle: ConfigBundle): boolean {
  */
 export async function applyConfigBundle(
   bundle: ConfigBundle,
-  { merge = false, credentialsPassphrase }: ImportOptions = {},
+  { merge = false, credentialsPassphrase, skipCredentials = false }: ImportOptions = {},
 ): Promise<ImportResult> {
   try {
     const result: ImportResult = {
@@ -297,15 +348,18 @@ export async function applyConfigBundle(
     // 2. Credentials block first: a wrong passphrase must fail before any write.
     let restored: CredentialsBlock['connections'] = {};
     const block = data.credentials;
-    if (credentialsPassphrase && block && bundleHasCredentials(bundle)) {
-      let json: string;
-      try {
-        json = await openFromBackup(credentialsPassphrase, block.sealed);
-      } catch (error) {
-        console.error('[config-import] Credentials block did not open:', error);
+    if (bundleHasCredentials(bundle) && !skipCredentials) {
+      if (!isRecord(block) || block.format !== CREDENTIALS_FORMAT || !isBackupSealed(block.sealed)) {
         throw new WrongPassphraseError();
       }
-      restored = (JSON.parse(json) as Partial<CredentialsBlock>).connections ?? {};
+      if (credentialsPassphrase) {
+        try {
+          restored = parseCredentialsBlock(await openFromBackup(credentialsPassphrase, block.sealed)).connections;
+        } catch (error) {
+          console.error('[config-import] Credentials block did not open:', error);
+          throw new WrongPassphraseError();
+        }
+      }
     }
 
     // 3a. Connections + folders -------------------------------------------------
@@ -314,24 +368,26 @@ export async function applyConfigBundle(
       // from the untrusted JSON, whose secret fields are stripped on import.
       // A malformed list is left for importConnections to reject.
       const payload = data.connections;
-      const locallySealedCredentials = new Map<string, Partial<Record<SecretField, string>>>();
+      const locallySealedCredentials = new Map<string, ConnectionSecrets>();
       if (Object.keys(restored).length > 0 && Array.isArray(payload.connections)) {
-        await Promise.all(
-          payload.connections.map(async (connection) => {
-            const secrets = restored[connection.id];
-            if (!secrets) return;
-            const localSecrets: Partial<Record<SecretField, string>> = {};
-            for (const field of SECRET_FIELDS) {
-              const value = secrets[field];
-              if (typeof value !== 'string') continue;
-              localSecrets[field] = await sealSecret(value);
+        // Complete key initialization and every seal before writing anything.
+        for (const connection of payload.connections) {
+          if (!Object.prototype.hasOwnProperty.call(restored, connection.id)) continue;
+          const secrets = restored[connection.id];
+          const localSecrets: ConnectionSecrets = await sealBackupSecrets(secrets);
+          if (secrets.jumpHosts) {
+            if (secrets.jumpHosts.length !== connection.jumpHosts?.length) {
+              throw new WrongPassphraseError();
             }
-            if (Object.keys(localSecrets).length > 0) {
-              locallySealedCredentials.set(connection.id, localSecrets);
-              result.credentials += 1;
-            }
-          }),
-        );
+            const hops: SecretValues[] = [];
+            for (const hop of secrets.jumpHosts) hops.push(await sealBackupSecrets(hop));
+            if (hops.some((hop) => Object.keys(hop).length > 0)) localSecrets.jumpHosts = hops;
+          }
+          if (Object.keys(localSecrets).length > 0) {
+            locallySealedCredentials.set(connection.id, localSecrets);
+            result.credentials += 1;
+          }
+        }
       }
       result.connections = ConnectionStorageManager.importConnections(
         JSON.stringify(payload),

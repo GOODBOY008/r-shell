@@ -9,8 +9,10 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { version as packageVersion } from '../../package.json';
 import {
   ConnectionStorageManager,
+  connectionHasCredentials,
   type ConnectionData,
 } from '../lib/connection-storage';
+import { openConnectionSecrets } from '../lib/credential-crypto';
 import { ConnectionProfileManager } from '../lib/connection-profiles';
 import {
   loadAppearanceSettings,
@@ -702,6 +704,166 @@ describe('credentials block', () => {
     expect(imported?.password).toBe(sealedPassword);
     expect(imported?.tunnelPassword).toBe(sealedTunnel);
     expect(JSON.stringify(ConnectionStorageManager.getConnections())).not.toContain('hunter2');
+  });
+
+  it.each([false, true])('round-trips jump-host secrets (target has secrets: %s)', async (hasTargetSecrets) => {
+    const connection = ConnectionStorageManager.getConnection('conn-sealed')!;
+    if (!hasTargetSecrets) {
+      delete connection.password;
+      delete connection.tunnelPassword;
+    }
+    connection.jumpHosts = [
+      { host: 'auto.example.test', port: 22, username: 'auto', authMethod: 'auto' },
+      {
+        host: 'password.example.test', port: 2222, username: 'jump', authMethod: 'password',
+        password: `v1:test:${btoa('jump-password')}`,
+      },
+      {
+        host: 'key.example.test', port: 22, username: 'key', authMethod: 'publickey',
+        passphrase: `v1:test:${btoa('jump-key-passphrase')}`,
+      },
+      { host: 'empty.example.test', port: 22, username: 'empty', authMethod: 'password', password: '' },
+    ];
+    localStorage.setItem('r-shell-connections', JSON.stringify([connection]));
+
+    const text = await exportWithPassphrase('correct horse');
+    const bundle = JSON.parse(text);
+    expect(bundle.data.credentials).toBeDefined();
+    for (const hop of bundle.data.connections.connections[0].jumpHosts) {
+      expect(hop.password).toBeUndefined();
+      expect(hop.passphrase).toBeUndefined();
+    }
+    expect(text).not.toContain('jump-password');
+    expect(text).not.toContain('jump-key-passphrase');
+    const payload = JSON.parse(decodeURIComponent(atob(bundle.data.credentials.sealed.split(':')[3])));
+    expect(payload.connections['conn-sealed'].jumpHosts).toEqual([
+      {}, { password: 'jump-password' }, { passphrase: 'jump-key-passphrase' }, { password: '' },
+    ]);
+
+    const { applyConfigBundle } = await import('../lib/config-export-import');
+    localStorage.clear();
+    const result = await applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' });
+    expect(result.credentials).toBe(1);
+    const imported = ConnectionStorageManager.getConnections()[0];
+    expect(imported.id).not.toBe(connection.id);
+    expect(imported.jumpHosts?.map((hop) => [hop.host, hop.port, hop.username]))
+      .toEqual(connection.jumpHosts.map((hop) => [hop.host, hop.port, hop.username]));
+    expect(imported.jumpHosts?.[1].password).toMatch(/^v1:/);
+    expect(imported.jumpHosts?.[2].passphrase).toMatch(/^v1:/);
+    expect(JSON.stringify(imported)).not.toContain('jump-password');
+    await openConnectionSecrets(imported as unknown as Record<string, unknown>);
+    expect(imported.password).toBe(hasTargetSecrets ? 'hunter2' : undefined);
+    expect(imported.jumpHosts?.[0].password).toBeUndefined();
+    expect(imported.jumpHosts?.[1].password).toBe('jump-password');
+    expect(imported.jumpHosts?.[2].passphrase).toBe('jump-key-passphrase');
+    expect(imported.jumpHosts?.[3].password).toBe('');
+
+    const skipped = await applyConfigBundle(bundle, { skipCredentials: true });
+    expect(skipped.credentials).toBe(0);
+    for (const hop of ConnectionStorageManager.getConnections()[0].jumpHosts ?? []) {
+      expect(hop.password).toBeUndefined();
+      expect(hop.passphrase).toBeUndefined();
+    }
+  });
+
+  it('preserves configured empty passwords while leaving absent passwords unconfigured', async () => {
+    const empty = ConnectionStorageManager.saveConnection({
+      name: 'Empty password', host: 'empty.example.test', port: 22,
+      username: 'empty', protocol: 'SSH', authMethod: 'password', password: '',
+    });
+    const absent = ConnectionStorageManager.saveConnection({
+      name: 'Absent password', host: 'absent.example.test', port: 22,
+      username: 'absent', protocol: 'SSH', authMethod: 'password',
+    });
+    const text = await exportWithPassphrase('correct horse');
+    const bundle = JSON.parse(text);
+    const payload = JSON.parse(decodeURIComponent(atob(bundle.data.credentials.sealed.split(':')[3])));
+    expect(payload.connections[empty.id].password).toBe('');
+    expect(payload.connections[absent.id]).toBeUndefined();
+
+    const { applyConfigBundle } = await import('../lib/config-export-import');
+    await applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' });
+    const imported = ConnectionStorageManager.getConnections();
+    const restoredEmpty = imported.find((c) => c.name === empty.name)!;
+    const restoredAbsent = imported.find((c) => c.name === absent.name)!;
+    expect(connectionHasCredentials(restoredEmpty)).toBe(true);
+    expect(connectionHasCredentials(restoredAbsent)).toBe(false);
+    await openConnectionSecrets(restoredEmpty as unknown as Record<string, unknown>);
+    expect(restoredEmpty.password).toBe('');
+    expect(restoredAbsent.password).toBeUndefined();
+  });
+
+  it('serializes local sealing across connections before writing the import', async () => {
+    const second = { ...ConnectionStorageManager.getConnection('conn-sealed')!, id: 'second' };
+    localStorage.setItem('r-shell-connections', JSON.stringify([
+      ...ConnectionStorageManager.getConnections(), second,
+    ]));
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    const before = { ...localStorage };
+    const crypto = mockInvoke.getMockImplementation()!;
+    let active = 0;
+    let peak = 0;
+    mockInvoke.mockImplementation(async (command: unknown, args: unknown) => {
+      if (command !== 'credential_seal') return crypto(command, args);
+      active += 1;
+      peak = Math.max(peak, active);
+      expect({ ...localStorage }).toEqual(before);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      try {
+        return await crypto(command, args);
+      } finally {
+        active -= 1;
+      }
+    });
+    const { applyConfigBundle } = await import('../lib/config-export-import');
+    const result = await applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' });
+    expect(result.credentials).toBe(2);
+    expect(peak).toBe(1);
+  });
+
+  it.each([
+    null,
+    'damaged block',
+    {},
+    { format: 'unknown-format', sealed: 'b1:salt:nonce:ciphertext' },
+    { format: 'r-shell-credentials-v1', sealed: 'v1:salt:nonce:ciphertext' },
+    { format: 'r-shell-credentials-v1', sealed: 'b1:salt:ciphertext' },
+  ])('rejects damaged credential envelopes unless explicitly skipped: %j', async (credentials) => {
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    bundle.data.credentials = credentials;
+    const before = { ...localStorage };
+    const { applyConfigBundle, bundleHasCredentials, WrongPassphraseError } = await import('../lib/config-export-import');
+    expect(bundleHasCredentials(bundle)).toBe(true);
+    await expect(applyConfigBundle(bundle)).rejects.toBeInstanceOf(WrongPassphraseError);
+    await expect(applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' }))
+      .rejects.toBeInstanceOf(WrongPassphraseError);
+    expect({ ...localStorage }).toEqual(before);
+
+    const result = await applyConfigBundle(bundle, { skipCredentials: true });
+    expect(result.connections).toBe(3);
+    expect(result.credentials).toBe(0);
+    expect(ConnectionStorageManager.getConnections().find((c) => c.name === 'Sealed Server')?.password)
+      .toBeUndefined();
+  });
+
+  it.each([
+    'not json',
+    '{}',
+    '{"connections":[]}',
+    '{"connections":{"conn-sealed":{"password":5}}}',
+    '{"connections":{"conn-sealed":{"jumpHosts":{}}}}',
+    '{"connections":{"conn-sealed":{"jumpHosts":[null]}}}',
+    '{"connections":{"conn-sealed":{"jumpHosts":[{"password":"unexpected hop"}]}}}',
+  ])('rejects malformed decrypted credentials before writing: %s', async (plaintext) => {
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+    const before = { ...localStorage };
+    const crypto = mockInvoke.getMockImplementation()!;
+    mockInvoke.mockImplementation(async (command: unknown, args: unknown) =>
+      command === 'backup_open' ? plaintext : crypto(command, args));
+    const { applyConfigBundle, WrongPassphraseError } = await import('../lib/config-export-import');
+    await expect(applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' }))
+      .rejects.toBeInstanceOf(WrongPassphraseError);
+    expect({ ...localStorage }).toEqual(before);
   });
 
   it.each([false, true])(

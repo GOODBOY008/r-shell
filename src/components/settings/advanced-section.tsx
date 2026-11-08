@@ -137,6 +137,7 @@ export function AdvancedSection({
       return await applyConfigBundle(bundle, {
         merge: importMerge,
         credentialsPassphrase: passphrase ?? undefined,
+        skipCredentials: passphrase === null,
       });
     } catch (error) {
       if (error instanceof WrongPassphraseError) {
@@ -167,7 +168,7 @@ export function AdvancedSection({
         }),
       ];
       if (result.credentials > 0) {
-        summary.push(t('settings.advanced.importCredentialsRestored', { n: result.credentials }));
+        summary.push(t('settings.advanced.importCredentialsRestored', { count: result.credentials }));
       }
       notify.success(t('settings.advanced.importSuccess'), { description: summary.join(' ') });
       onConfigImported();
