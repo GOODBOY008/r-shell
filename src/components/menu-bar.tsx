@@ -193,7 +193,7 @@ export function MenuBar({
 
   return (
     <div
-      className="border-b border-border bg-sidebar min-h-11 py-1.5 flex items-center gap-1"
+      className="relative z-10 border-b border-border bg-sidebar min-h-11 py-1.5 flex items-center gap-1"
       data-shortcut-menu
       style={{ paddingLeft: isMac ? '80px' : '8px' }}
     >

@@ -317,7 +317,7 @@
     },
     "terminal": {
       "appearance": "Wygląd terminala",
-      "appearanceDesc": "Skonfiguruj wygląd i zachowanie terminala.",
+      "appearanceDesc": "Skonfiguruj wygląd terminala i tapetę tła całej aplikacji.",
       "fontFamily": "Krój pisma",
       "fontSize": "Rozmiar czcionki: {{size}} px",
       "lineHeight": "Wysokość wiersza: {{height}}",
@@ -334,7 +334,7 @@
       "changeImage": "Zmień obraz",
       "uploadImage": "Wgraj obraz",
       "remove": "Usuń",
-      "imagePreviewDesc": "Obraz tła będzie wyświetlany pod tekstem terminala. Dostosuj krycie i rozmycie, aby poprawić czytelność.",
+      "imagePreviewDesc": "Obraz tła jest wyświetlany za całą aplikacją, w tym terminalem. Dostosuj krycie i rozmycie, aby poprawić czytelność.",
       "imageOpacity": "Krycie obrazu: {{opacity}}%",
       "imageBlur": "Rozmycie obrazu: {{blur}} px",
       "imagePosition": "Położenie obrazu",

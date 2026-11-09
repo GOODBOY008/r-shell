@@ -315,7 +315,7 @@
     },
     "terminal": {
       "appearance": "终端外观",
-      "appearanceDesc": "配置终端的显示和行为。",
+      "appearanceDesc": "配置终端外观和应用级背景壁纸。",
       "fontFamily": "字体",
       "fontSize": "字号：{{size}}px",
       "lineHeight": "行高：{{height}}",
@@ -332,7 +332,7 @@
       "changeImage": "更换图片",
       "uploadImage": "上传图片",
       "remove": "移除",
-      "imagePreviewDesc": "背景图片将显示在终端文本后方，调整不透明度和模糊度以获得更好的可读性。",
+      "imagePreviewDesc": "背景图片会显示在整个应用后方（包括终端），调整不透明度和模糊度以获得更好的可读性。",
       "imageOpacity": "图片不透明度：{{opacity}}%",
       "imageBlur": "图片模糊度：{{blur}}px",
       "imagePosition": "图片位置",
