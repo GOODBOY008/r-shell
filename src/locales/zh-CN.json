@@ -1452,7 +1452,20 @@
     "failedToKillProcessWithError": "终止进程失败：{{error}}",
     "unknownError": "未知错误",
     "failedToKillProcess": "终止进程失败：{{error}}",
-    "gpuIndex": "GPU {{index}}"
+    "gpuIndex": "GPU {{index}}",
+    "overview": {
+      "unavailable": "暂无数据",
+      "capacity": "{{used}} / {{total}}",
+      "updatedAt": "更新于 {{time}}",
+      "refreshFailed": "更新失败",
+      "loading": "加载中",
+      "lastFiveMinutes": "最近 5 分钟",
+      "chartHelp": "聚焦图表后，使用左右方向键查看采样时间以及 CPU 和内存使用率。",
+      "chartLabel": "CPU 和内存使用率历史",
+      "collecting": "正在收集采样数据…",
+      "fiveMinutesAgo": "5 分钟前",
+      "now": "现在"
+    }
   },
   "logMonitor": {
     "clearSearch": "清除搜索",

@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useReducer } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { withRetry, CancelledError } from '@/lib/async-retry';
 import { resolveActiveInterface } from '@/lib/network-interface';
-import { Activity, Terminal, HardDrive, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
+import { Terminal, HardDrive, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Progress } from './ui/progress';
@@ -23,19 +23,8 @@ import {
 } from './ui/alert-dialog';
 import { notify } from '@/lib/notifications';
 
-interface SystemStats {
-  cpu: number;
-  memory: number;
-  memoryTotal?: number;
-  memoryUsed?: number;
-  swap?: number;
-  swapTotal?: number;
-  swapUsed?: number;
-  diskUsage: number;
-  diskTotal?: string;
-  diskUsed?: string;
-  uptime: string;
-}
+import { SystemOverview } from './system-overview';
+import { createOverviewState, overviewReducer, OVERVIEW_POLL_MS, type SystemStatsResponse } from '@/lib/system-overview';
 
 interface SystemMonitorProps {
   connectionId?: string;
@@ -165,12 +154,9 @@ const getProgressColor = (usage: number): string => {
 
 export function SystemMonitor({ connectionId, active = true }: SystemMonitorProps) {
   const { t } = useTranslation();
-  const [stats, setStats] = useState<SystemStats>({
-    cpu: 0,
-    memory: 0,
-    diskUsage: 0,
-    uptime: '0:00:00'
-  });
+  const [overview, dispatchOverview] = useReducer(overviewReducer, connectionId, createOverviewState);
+  // Do not paint the previous host's reading while the new effect is starting.
+  const visibleOverview = overview.connectionId === connectionId ? overview : createOverviewState(connectionId);
   const [processes, setProcesses] = useState<Process[]>([]);
   const [processToKill, setProcessToKill] = useState<Process | null>(null);
   const [processSortBy, setProcessSortBy] = useState<'cpu' | 'mem'>('cpu');
@@ -186,48 +172,45 @@ export function SystemMonitor({ connectionId, active = true }: SystemMonitorProp
   // GPU colors for multi-GPU chart
   const GPU_COLORS = ['#8b5cf6', '#06b6d4', '#f97316', '#22c55e', '#ec4899', '#eab308'];
 
-  // Fetch system stats from backend.
-  // Accepts an optional `isCancelled` guard so callers can prevent stale
-  // state updates after a connection switch or component unmount.
-  // Throws on invoke failure so that withRetry can decide whether to retry.
-  const fetchSystemStats = async (isCancelled: () => boolean = () => false): Promise<void> => {
-    if (!connectionId) return;
+  // Stats have their own polling lifecycle: sorting processes must not add
+  // samples or restart this connection's history. A slow probe never overlaps.
+  useEffect(() => {
+    dispatchOverview({ type: 'reset', connectionId });
+    if (!connectionId || !active) return;
 
-    const stats = await invoke<{
-      cpu_percent: number;
-      memory: { total: number; used: number; free: number; available: number };
-      swap: { total: number; used: number; free: number; available: number };
-      disk: { total: string; used: string; available: string; use_percent: number };
-      uptime: string;
-      load_average?: string;
-    }>('get_system_stats', { connectionId });
+    let cancelled = false;
+    let inFlight = false;
+    const fetchSystemStats = async () => {
+      // requestIdleCallback may run after this effect has been cleaned up.
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const response = await invoke<SystemStatsResponse>('get_system_stats', { connectionId });
+        if (!cancelled) {
+          dispatchOverview({ type: 'success', connectionId, response, timestamp: Date.now() });
+        }
+      } catch (error) {
+        if (!cancelled) dispatchOverview({ type: 'failure', connectionId });
+        throw error;
+      } finally {
+        inFlight = false;
+      }
+    };
 
-    if (isCancelled()) return; // discard stale result
+    void withRetry(fetchSystemStats, () => cancelled, { maxRetries: 2 })
+      .catch(error => { if (!(error instanceof CancelledError)) console.error('Stats initial fetch failed:', error); });
+    const interval = setInterval(() => {
+      const poll = () => { void fetchSystemStats().catch(() => {}); };
+      if ('requestIdleCallback' in window) requestIdleCallback(poll);
+      else poll();
+    }, OVERVIEW_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [connectionId, active]);
 
-    const memoryPercent = stats.memory.total > 0
-      ? (stats.memory.used / stats.memory.total) * 100
-      : 0;
-    const swapPercent = stats.swap.total > 0
-      ? (stats.swap.used / stats.swap.total) * 100
-      : 0;
-
-    setStats({
-      cpu: stats.cpu_percent,
-      memory: memoryPercent,
-      memoryTotal: stats.memory.total,
-      memoryUsed: stats.memory.used,
-      swap: swapPercent,
-      swapTotal: stats.swap.total,
-      swapUsed: stats.swap.used,
-      diskUsage: stats.disk.use_percent,
-      diskTotal: stats.disk.total,
-      diskUsed: stats.disk.used,
-      uptime: stats.uptime,
-    });
-  };
-
-  // Fetch process list from backend.
-  // Same isCancelled / throw-on-error contract as fetchSystemStats.
+  // Fetch processes with the same cancellation and retry contract.
   const fetchProcesses = async (isCancelled: () => boolean = () => false): Promise<void> => {
     if (!connectionId) return;
 
@@ -288,53 +271,27 @@ export function SystemMonitor({ connectionId, active = true }: SystemMonitorProp
     setProcessToKill(null);
   };
 
-  // Poll system stats every 5 s and processes every 10 s.
-  // The initial fetch uses withRetry (up to 2 extra attempts, 1 s / 2 s backoff)
-  // to survive transient SSH unavailability right after session restore.
-  // Subsequent interval calls rely on natural retry via the next tick.
+  // Processes refresh independently every 10 s and when their sort changes.
   useEffect(() => {
     if (!connectionId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setStats({ cpu: 0, memory: 0, diskUsage: 0, uptime: '0:00:00' });
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setProcesses([]);
       return;
     }
-    // Hidden panel: keep the last reading on screen, stop polling. The visible
-    // tab is whichever one the user is actually looking at.
     if (!active) return;
-
     let cancelled = false;
-
-    // Initial fetch with retry
-    void withRetry(() => fetchSystemStats(() => cancelled), () => cancelled, { maxRetries: 2 })
-      .catch(err => { if (!(err instanceof CancelledError)) console.error('Stats initial fetch failed:', err); });
     void withRetry(() => fetchProcesses(() => cancelled), () => cancelled, { maxRetries: 2 })
       .catch(err => { if (!(err instanceof CancelledError)) console.error('Processes initial fetch failed:', err); });
-
-    // Subsequent polling (self-healing via next interval tick)
-    const statsInterval = setInterval(() => {
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchSystemStats(() => cancelled).catch(() => {}); });
-      } else {
-        void fetchSystemStats(() => cancelled).catch(() => {});
-      }
-    }, 5000);
-
-    const processInterval = setInterval(() => {
-      if ('requestIdleCallback' in window) {
-        requestIdleCallback(() => { void fetchProcesses(() => cancelled).catch(() => {}); });
-      } else {
-        void fetchProcesses(() => cancelled).catch(() => {});
-      }
+    const interval = setInterval(() => {
+      const poll = () => { if (!cancelled) void fetchProcesses(() => cancelled).catch(() => {}); };
+      if ('requestIdleCallback' in window) requestIdleCallback(poll);
+      else poll();
     }, 10000);
-
     return () => {
       cancelled = true;
-      clearInterval(statsInterval);
-      clearInterval(processInterval);
+      clearInterval(interval);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchSystemStats/fetchProcesses are stable inline fns; adding them causes infinite re-renders
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the inline fetch uses the connection and sort captured by this effect
   }, [connectionId, processSortBy, active]);
 
   // Fetch disk usage data.
@@ -738,79 +695,7 @@ export function SystemMonitor({ connectionId, active = true }: SystemMonitorProp
   return (
     <ScrollArea className="h-full">
       <div className="space-y-4 pb-2 tabular-nums">
-        {/* System Overview */}
-        <div className="space-y-1">
-          <div className="flex items-center gap-1.5">
-            <Activity className="w-3 h-3 shrink-0" />
-            <h3 className="text-xs font-semibold truncate">{t('systemMonitor.systemOverview')}</h3>
-          </div>
-          <Card className="rounded-lg shadow-none">
-            <CardContent className="p-3 space-y-3 last:pb-3">
-              <div className="space-y-1">
-                <div className="flex justify-between items-center gap-1">
-                  <span className="text-xs font-medium">{t('systemMonitor.cpu')}</span>
-                  <span className={`text-xs font-semibold ${getUsageColor(stats.cpu)}`}>
-                    {stats.cpu.toFixed(1)}%
-                  </span>
-                </div>
-                <Progress value={stats.cpu} className={`h-1.5 ${getProgressColor(stats.cpu)}`} />
-              </div>
-              
-              <div className="space-y-1">
-                <div className="flex justify-between items-center gap-1">
-                  <span className="text-xs font-medium">{t('systemMonitor.memory')}</span>
-                  <span className={`text-xs font-semibold ${getUsageColor(stats.memory)} truncate`} title={stats.memoryUsed !== undefined && stats.memoryTotal !== undefined ? `${stats.memoryUsed}MB / ${stats.memoryTotal}MB` : ''}>
-                    {stats.memory.toFixed(1)}%
-                  </span>
-                </div>
-                <Progress value={stats.memory} className={`h-1.5 ${getProgressColor(stats.memory)}`} />
-                {stats.memoryUsed !== undefined && stats.memoryTotal !== undefined && (
-                  <div className="text-[11px] text-muted-foreground text-right leading-tight">
-                    {stats.memoryUsed}MB / {stats.memoryTotal}MB
-                  </div>
-                )}
-              </div>
-
-              {/* Disk — the volume the backend's disk_cmd targets (the data
-                  volume on macOS, / elsewhere). Hidden until the first poll
-                  delivers a reading. */}
-              {stats.diskTotal !== undefined && (
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center gap-1">
-                    <span className="text-xs font-medium">{t('systemMonitor.disk')}</span>
-                    <span className={`text-xs font-semibold ${getUsageColor(stats.diskUsage)} truncate`} title={stats.diskUsed !== undefined && stats.diskTotal ? `${stats.diskUsed} / ${stats.diskTotal}` : ''}>
-                      {stats.diskUsage.toFixed(1)}%
-                    </span>
-                  </div>
-                  <Progress value={stats.diskUsage} className={`h-1.5 ${getProgressColor(stats.diskUsage)}`} />
-                  {stats.diskUsed !== undefined && stats.diskTotal && (
-                    <div className="text-[11px] text-muted-foreground text-right leading-tight">
-                      {stats.diskUsed} / {stats.diskTotal}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Swap Space - Only show if swap exists */}
-              {stats.swapTotal !== undefined && stats.swapTotal > 0 && (
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center gap-1">
-                    <span className="text-xs font-medium">{t('systemMonitor.swap')}</span>
-                    <span className={`text-xs font-semibold ${getUsageColor(stats.swap || 0)} truncate`} title={stats.swapUsed !== undefined && stats.swapTotal ? `${stats.swapUsed}MB / ${stats.swapTotal}MB` : ''}>
-                      {(stats.swap || 0).toFixed(1)}%
-                    </span>
-                  </div>
-                  <Progress value={stats.swap || 0} className={`h-1.5 ${getProgressColor(stats.swap || 0)}`} />
-                  {stats.swapUsed !== undefined && stats.swapTotal && (
-                    <div className="text-[11px] text-muted-foreground text-right leading-tight">
-                      {stats.swapUsed}MB / {stats.swapTotal}MB
-                    </div>
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+        <SystemOverview key={connectionId} state={visibleOverview} />
 
         {/* GPU Monitor */}
         {gpuDetectionDone && (

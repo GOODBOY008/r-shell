@@ -1505,7 +1505,20 @@
     "failedToKillProcessWithError": "Nie udało się zakończyć procesu: {{error}}",
     "unknownError": "Nieznany błąd",
     "failedToKillProcess": "Nie udało się zakończyć procesu: {{error}}",
-    "gpuIndex": "GPU {{index}}"
+    "gpuIndex": "GPU {{index}}",
+    "overview": {
+      "unavailable": "Brak danych",
+      "capacity": "{{used}} / {{total}}",
+      "updatedAt": "Zaktualizowano o {{time}}",
+      "refreshFailed": "Błąd aktualizacji",
+      "loading": "Wczytywanie",
+      "lastFiveMinutes": "Ostatnie 5 minut",
+      "chartHelp": "Ustaw fokus na wykresie i użyj strzałek w lewo i w prawo, aby sprawdzić czas próbek oraz użycie CPU i pamięci.",
+      "chartLabel": "Historia użycia CPU i pamięci",
+      "collecting": "Zbieranie próbek…",
+      "fiveMinutesAgo": "5 min temu",
+      "now": "Teraz"
+    }
   },
   "logMonitor": {
     "clearSearch": "Wyczyść wyszukiwanie",
