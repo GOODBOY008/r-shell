@@ -332,9 +332,14 @@ async function sealBackupSecrets(secrets: SecretValues): Promise<SecretValues> {
   const localSecrets: SecretValues = {};
   for (const field of SECRET_FIELDS) {
     const value = secrets[field];
-    if (typeof value === 'string') localSecrets[field] = await sealSecret(value);
+    // Storage keeps an empty value unsealed: a sealed '' reads as a saved secret.
+    if (typeof value === 'string') localSecrets[field] = value === '' ? '' : await sealSecret(value);
   }
   return localSecrets;
+}
+
+function hasSecret(secrets: SecretValues): boolean {
+  return SECRET_FIELDS.some((field) => !!secrets[field]);
 }
 
 /**
@@ -402,7 +407,8 @@ export async function applyConfigBundle(
           }
           if (Object.keys(localSecrets).length > 0) {
             locallySealedCredentials.set(connection.id, localSecrets);
-            result.credentials += 1;
+            // Empty fields alone (the dialog stores every blank one) restore nothing.
+            if (hasSecret(localSecrets) || localSecrets.jumpHosts?.some(hasSecret)) result.credentials += 1;
           }
         }
       }

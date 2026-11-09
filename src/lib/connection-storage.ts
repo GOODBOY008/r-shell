@@ -927,12 +927,12 @@ export class ConnectionStorageManager {
         const localSecrets = locallySealedCredentials?.get(connection.id);
         for (const field of SECRET_FIELDS) {
           const value = localSecrets?.[field];
-          if (isSealed(value)) importedConnection[field] = value;
+          if (value === '' || isSealed(value)) importedConnection[field] = value;
         }
         importedConnection.jumpHosts?.forEach((hop, index) => {
           for (const field of ['password', 'passphrase'] as const) {
             const value = localSecrets?.jumpHosts?.[index]?.[field];
-            if (isSealed(value)) hop[field] = value;
+            if (value === '' || isSealed(value)) hop[field] = value;
           }
         });
         connections.push({

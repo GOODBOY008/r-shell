@@ -831,6 +831,38 @@ describe('credentials block', () => {
     expect(restoredAbsent.password).toBeUndefined();
   });
 
+  it('restores blank secret fields as blank, not as saved secrets', async () => {
+    // The connection dialog stores every secret field, the blank ones as ''.
+    const blank = { passphrase: '', proxyPassword: '', tunnelPassphrase: '', vncPassword: '', sudoPassword: '' };
+    localStorage.setItem('r-shell-connections', JSON.stringify([
+      { ...ConnectionStorageManager.getConnection('conn-sealed')!, ...blank },
+      {
+        id: 'conn-blank', name: 'Blank Server', host: '10.0.0.10', port: 22, username: 'root',
+        protocol: 'SSH', authMethod: 'password', createdAt: '2026-01-01T00:00:00.000Z',
+        ...blank, password: '', tunnelPassword: '',
+      },
+    ]));
+    const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+
+    const { applyConfigBundle } = await import('../lib/config-export-import');
+    const result = await applyConfigBundle(bundle, { credentialsPassphrase: 'correct horse' });
+
+    // Only the connection with a real secret counts as restored.
+    expect(result.credentials).toBe(1);
+    const imported = ConnectionStorageManager.getConnections();
+    const sealedServer = imported.find((c) => c.name === 'Sealed Server')!;
+    expect(sealedServer.password).toBe(sealedPassword);
+    expect(sealedServer.tunnelPassword).toBe(sealedTunnel);
+    const blankServer = imported.find((c) => c.name === 'Blank Server')!;
+    for (const field of ['passphrase', 'proxyPassword', 'sudoPassword'] as const) {
+      // A sealed '' would show as "Saved and encrypted" and type a bare Enter as the sudo password.
+      expect(sealedServer[field]).toBe('');
+      expect(blankServer[field]).toBe('');
+    }
+    expect(blankServer.password).toBe('');
+    expect(connectionHasCredentials(blankServer)).toBe(true);
+  });
+
   it('serializes local sealing across connections before writing the import', async () => {
     const second = { ...ConnectionStorageManager.getConnection('conn-sealed')!, id: 'second' };
     localStorage.setItem('r-shell-connections', JSON.stringify([
