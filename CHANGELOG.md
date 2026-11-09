@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.4] - 2026-11-09
+
+### 🔖 R-Shell 3.1.4 — System Overview & Workspace Polish
+
+This patch refreshes System Overview with compact gauges, CPU and memory history, and readable memory capacity units. Background images now span the whole workspace, blank secret fields restore correctly, and the main window closes cleanly on Windows and Linux.
+
+### New Features 🎉
+
+- feat(monitor): redesign System Overview by @GOODBOY008 in #302
+- feat(ui): render the background image across the whole app by @sunxiaobin89 in #296
+
+### Bug Fixes 🐛
+
+- fix(settings): restore blank secret fields as blank, not sealed by @twkrol in #294
+- fix(window): allow clean main-window close on Windows and Linux by @GOODBOY008 in #298
+
+### Other Changes
+
+- chore(deps): run Dependabot updates monthly by @GOODBOY008
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008), [@sunxiaobin89](https://github.com/sunxiaobin89), and [@twkrol](https://github.com/twkrol) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.1.3...v3.1.4
+
+
 ## [3.1.3] - 2026-11-08
 
 ### 🔖 R-Shell 3.1.3 — Encrypted Backups & Remote Access
