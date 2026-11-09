@@ -392,11 +392,12 @@ html {
   instead of losing contrast.
 */
 @supports (background-color: color-mix(in srgb, red 50%, transparent)) {
-  [data-wallpaper] .bg-background {
+  /* Sticky surfaces must cover scrolling content rather than reveal it. */
+  [data-wallpaper] .bg-background:not(.sticky) {
     background-color: color-mix(in srgb, var(--background) 78%, transparent);
   }
 
-  [data-wallpaper] .bg-sidebar {
+  [data-wallpaper] .bg-sidebar:not(.sticky) {
     background-color: color-mix(in srgb, var(--sidebar) 78%, transparent);
   }
 }
