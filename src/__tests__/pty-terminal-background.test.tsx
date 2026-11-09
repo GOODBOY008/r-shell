@@ -2,8 +2,9 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import { PtyTerminal } from '../components/pty-terminal';
+import { TerminalSection } from '../components/settings/terminal-section';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
-import { getThemeAwareTerminalOptions, type TerminalAppearanceSettings } from '../lib/terminal-config';
+import { getThemeAwareTerminalOptions, loadAppearanceSettings, type TerminalAppearanceSettings } from '../lib/terminal-config';
 
 const mocks = vi.hoisted(() => {
   const appearance = {
@@ -189,6 +190,7 @@ describe('PtyTerminal workspace background', () => {
       'ResizeObserver',
       class {
         observe = vi.fn();
+        unobserve = vi.fn();
         disconnect = vi.fn();
       },
     );
@@ -229,7 +231,7 @@ describe('PtyTerminal workspace background', () => {
     ['dark', 'vs-code-light'],
     ['light', 'vs-code-dark'],
     ['dark', 'vs-code-dark'],
-  ])('preserves %s app / %s terminal contrast over the shared wallpaper', async (appTheme, terminalTheme) => {
+  ])('preserves %s app / %s terminal contrast over the shared wallpaper', (appTheme, terminalTheme) => {
     document.documentElement.classList.toggle('dark', appTheme === 'dark');
     mocks.appearance.current = {
       theme: terminalTheme,
@@ -240,7 +242,6 @@ describe('PtyTerminal workspace background', () => {
     const tint = container.querySelector<HTMLElement>('[data-testid="terminal-wallpaper-tint"]');
     expect(tint).not.toBeNull();
 
-    const { loadAppearanceSettings } = await import('../lib/terminal-config');
     const theme = getThemeAwareTerminalOptions(loadAppearanceSettings()).theme!;
     expect(theme.background).toBe('#00000000');
     const foreground = rgb(theme.foreground!);
@@ -256,6 +257,42 @@ describe('PtyTerminal workspace background', () => {
         const background = composite(rgb(tint!.style.backgroundColor), wallpaper, tintOpacity);
         expect(contrast(foreground, background)).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+
+  it.each([true, false])('previews terminal opacity with wallpaper=%s without overstating contrast', (hasWallpaper) => {
+    mocks.appearance.current = {
+      theme: 'dracula',
+      backgroundImage: hasWallpaper ? 'data:image/png;base64,AAAA' : '',
+      backgroundImageOpacity: 5,
+      allowTransparency: true,
+      opacity: 65,
+    };
+    const { container: terminal } = renderTerminal();
+    const { container: preview, getByText } = render(
+      <TerminalSection appearance={loadAppearanceSettings()} onChange={vi.fn()} query="" />,
+    );
+    const sample = getByText('$ ls -la');
+    const previewGroup = sample.closest<HTMLElement>('div[style*="opacity:"]');
+    expect(previewGroup).not.toBeNull();
+    expect(previewGroup!.style.opacity).toBe(terminalContainer(terminal).style.opacity);
+
+    if (hasWallpaper) {
+      // The theme tint must belong to the same opacity group as the text.
+      // Fading text alone makes the preview falsely promise better contrast.
+      const previewTint = previewGroup!.querySelector<HTMLElement>('div[aria-hidden="true"]');
+      const terminalTint = terminal.querySelector<HTMLElement>('[data-testid="terminal-wallpaper-tint"]')!;
+      expect(previewTint).not.toBeNull();
+      expect(previewTint!.style.backgroundColor).toBe(terminalTint.style.backgroundColor);
+      expect(previewTint!.style.opacity).toBe(terminalTint.style.opacity);
+
+      const image = Array.from(preview.querySelectorAll<HTMLElement>('div'))
+        .find((element) => element.style.backgroundImage !== '');
+      expect(image).toBeDefined();
+      expect(previewGroup!.contains(image!)).toBe(false);
+      expect(image!.style.opacity).toBe('0.05');
+    } else {
+      expect(previewGroup!.style.backgroundColor).toBe(terminalContainer(terminal).style.backgroundColor);
     }
   });
 });

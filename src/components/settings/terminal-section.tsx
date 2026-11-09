@@ -427,13 +427,13 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
         {showPreview && (
           <div className="p-4 bg-muted rounded-lg">
             <div
-              className="font-mono text-sm p-3 rounded relative overflow-hidden"
+              className="font-mono text-sm rounded relative overflow-hidden"
               style={{
                 fontFamily: appearance.fontFamily,
                 fontSize: `${appearance.fontSize}px`,
                 lineHeight: appearance.lineHeight,
                 letterSpacing: `${appearance.letterSpacing}px`,
-                backgroundColor: appearance.backgroundImage ? 'var(--background)' : previewTheme.background,
+                backgroundColor: 'var(--background)',
                 color: previewTheme.foreground,
               }}
             >
@@ -451,25 +451,28 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                   }}
                 />
               )}
-              {/* Match PtyTerminal's theme tint over the shared wallpaper. */}
-              {appearance.backgroundImage && (
-                <div
-                  aria-hidden="true"
-                  className="absolute inset-0 pointer-events-none"
-                  style={{ backgroundColor: previewTheme.background, opacity: 0.85 }}
-                />
-              )}
-              {/* Opacity applies to the text only: in the app the wallpaper
-                  sits behind the whole shell and the terminal's transparency
-                  never dims it. */}
+              {/* Fade the backdrop and text together, just like PtyTerminal's
+                  container. The shell wallpaper stays outside this group. */}
               <div
-                className="relative z-10"
-                style={{ opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1 }}
+                className="relative z-10 p-3"
+                style={{
+                  opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1,
+                  backgroundColor: appearance.backgroundImage ? 'transparent' : previewTheme.background,
+                }}
               >
-                <div style={{ color: previewTheme.green }}>user@host</div>
-                <div>$ ls -la</div>
-                <div style={{ color: previewTheme.blue }}>drwxr-xr-x</div>
-                <div style={{ color: previewTheme.yellow }}>-rw-r--r--</div>
+                {appearance.backgroundImage && (
+                  <div
+                    aria-hidden="true"
+                    className="absolute inset-0 pointer-events-none"
+                    style={{ backgroundColor: previewTheme.background, opacity: 0.85 }}
+                  />
+                )}
+                <div className="relative">
+                  <div style={{ color: previewTheme.green }}>user@host</div>
+                  <div>$ ls -la</div>
+                  <div style={{ color: previewTheme.blue }}>drwxr-xr-x</div>
+                  <div style={{ color: previewTheme.yellow }}>-rw-r--r--</div>
+                </div>
               </div>
             </div>
           </div>
