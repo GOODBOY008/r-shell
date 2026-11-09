@@ -66,6 +66,13 @@ it('normalizes imported appearance/editor settings before persisting them', () =
   expect(JSON.parse(localStorage.getItem('rshell-editor-config')!)).toEqual(DEFAULT_EDITOR_CONFIG);
 });
 
+it.each([29, 30, 31, 32])('preserves the editor toolbar font size %ipx on load and save', fontSize => {
+  localStorage.setItem('rshell-editor-config', JSON.stringify({ ...DEFAULT_EDITOR_CONFIG, fontSize }));
+  expect(loadEditorConfig().fontSize).toBe(fontSize);
+  saveEditorConfig({ ...DEFAULT_EDITOR_CONFIG, fontSize });
+  expect(JSON.parse(localStorage.getItem('rshell-editor-config')!).fontSize).toBe(fontSize);
+});
+
 it.each(['', '   ', 'unknown'])('falls back to the system language for an invalid preference: %j', value => {
   localStorage.setItem('r-shell-language', value);
   expect(getLanguagePreference()).toBe(AUTO);

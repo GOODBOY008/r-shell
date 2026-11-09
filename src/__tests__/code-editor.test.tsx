@@ -172,6 +172,24 @@ describe("CodeEditor", () => {
     expect(view.state.sliceDoc()).toBe("    hello");
   });
 
+  it("keeps toolbar font sizes from 29 through 32px after settings reload and remount", async () => {
+    localStorage.setItem("rshell-editor-config", JSON.stringify({ ...DEFAULT_EDITOR_CONFIG, fontSize: 28 }));
+    const { container, unmount } = render(<CodeEditor value="hello" />);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "Editor options" }));
+    const increase = screen.getByRole("button", { name: "Increase font size" });
+    for (const fontSize of [29, 30, 31, 32]) {
+      fireEvent.click(increase);
+      expect(viewIn(container).dom.parentElement!.style.fontSize).toBe(`${fontSize}px`);
+      expect(JSON.parse(localStorage.getItem("rshell-editor-config")!).fontSize).toBe(fontSize);
+    }
+    expect(increase).toHaveProperty("disabled", true);
+    unmount();
+    const reopened = render(<CodeEditor value="hello" />);
+    await act(async () => {});
+    expect(viewIn(reopened.container).dom.parentElement!.style.fontSize).toBe("32px");
+  });
+
   it("preserves CRLF when the user edits a Windows file", async () => {
     const onChange = vi.fn();
     const { container } = render(

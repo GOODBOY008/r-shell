@@ -35,6 +35,9 @@ export interface EditorConfig {
 
 // ---------- Defaults ----------
 
+export const MIN_EDITOR_FONT_SIZE = 10;
+export const MAX_EDITOR_FONT_SIZE = 32;
+
 export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
   theme: "oneDark",
   fontSize: 14,
@@ -58,7 +61,7 @@ export function normalizeEditorConfig(value: unknown): EditorConfig {
     ...config,
     fontFamily: normalizeFontFamily(config.fontFamily, EDITOR_FONT_FAMILIES),
     theme: enumSetting(config.theme, EDITOR_THEMES.map(theme => theme.id), DEFAULT_EDITOR_CONFIG.theme),
-    fontSize: numberSetting(config.fontSize, DEFAULT_EDITOR_CONFIG.fontSize, 10, 28, true),
+    fontSize: numberSetting(config.fontSize, DEFAULT_EDITOR_CONFIG.fontSize, MIN_EDITOR_FONT_SIZE, MAX_EDITOR_FONT_SIZE, true),
     tabSize: enumSetting(config.tabSize, [2, 4, 8], DEFAULT_EDITOR_CONFIG.tabSize),
   };
 }

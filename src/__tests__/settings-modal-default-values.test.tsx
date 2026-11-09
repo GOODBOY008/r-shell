@@ -162,4 +162,15 @@ describe('SettingsModal default values', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
     expect(JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY)!)).toMatchObject(DEFAULT_SETTINGS);
   });
+
+  it('shows and preserves a 32px editor font selected through the toolbar', () => {
+    localStorage.setItem('rshell-editor-config', JSON.stringify({ fontSize: 32 }));
+    render(<SettingsModal open onOpenChange={vi.fn()} />);
+    section('Editor');
+    const slider = screen.getByRole('slider', { name: 'Font Size: 32px' });
+    expect(slider.getAttribute('aria-valuenow')).toBe('32');
+    expect(slider.getAttribute('aria-valuemax')).toBe('32');
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    expect(JSON.parse(localStorage.getItem('rshell-editor-config')!).fontSize).toBe(32);
+  });
 });

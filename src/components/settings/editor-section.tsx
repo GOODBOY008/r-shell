@@ -8,6 +8,8 @@ import { Slider } from '../ui/slider';
 import { Code2 } from 'lucide-react';
 import {
   EDITOR_THEMES,
+  MAX_EDITOR_FONT_SIZE,
+  MIN_EDITOR_FONT_SIZE,
   type EditorConfig,
 } from '@/lib/editor-config';
 import { englishText, settingMatchesQuery } from './shared';
@@ -99,8 +101,8 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
                 <Slider aria-label={t('settings.editor.fontSize', { size: config.fontSize })}
                   value={[config.fontSize]}
                   onValueChange={([value]) => onChange(prev => ({ ...prev, fontSize: value }))}
-                  min={10}
-                  max={28}
+                  min={MIN_EDITOR_FONT_SIZE}
+                  max={MAX_EDITOR_FONT_SIZE}
                   step={1}
                 />
               </div>
