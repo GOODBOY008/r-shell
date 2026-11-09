@@ -254,7 +254,7 @@ fn classify_family(id: &str, id_like: &str, uname: &str) -> OsFamily {
 // ─── Distro-aware command builders ───────────────────────────────────────────
 
 impl OsInfo {
-    /// CPU usage percentage command.
+    /// CPU sampling command, decoded by `cpu_stats::parse_cpu_stats`.
     ///
     /// Linux: two `/proc/stat` reads with a short gap between them; usage is
     /// computed from the delta, so the reading tracks the current load. The
@@ -265,27 +265,12 @@ impl OsInfo {
     /// internal second sample, but the command still depended on top's
     /// output wording, and its `|| cat /proc/stat` fallback was a single
     /// read — a since-boot average by construction on every host that hit it.
-    /// macOS uses `top -l2` with a different format.
+    /// Linux returns aggregate and per-CPU counters from both snapshots.
+    /// macOS uses `top -l2` for the aggregate and sysctl for its logical count.
     pub fn cpu_cmd(&self) -> &'static str {
         match self.family {
-            // `top -l1`'s only sample is an average since the previous
-            // snapshot rather than an instantaneous reading, so idle sits at
-            // ~0% and the result pins to 100%. `-l2 -s1` yields a second sample
-            // measured over a real one-second window; the awk rule overwrites
-            // `c` per line so the last one survives into END.
-            OsFamily::MacOS => {
-                "top -l2 -s1 -n0 | awk '/CPU usage/{gsub(/%/,\"\"); c=$7} END{print 100-c}'"
-            }
-            _ => {
-                // The trailing space in `/^cpu /` matches only the aggregate
-                // line, never the per-core `cpu0`… entries. t sums the same
-                // tick columns procps top counts (user..softirq + steal;
-                // missing trailing columns read as 0 on old kernels), i is
-                // idle, and usage is 1 - idle% — the same definition as the
-                // macOS branch. If the second read failed or no ticks elapsed
-                // between the samples, emit 0.0 instead of dividing by zero.
-                "( cat /proc/stat; sleep 0.5; cat /proc/stat ) | awk '/^cpu /{t=$2+$3+$4+$5+$6+$7+$8+$9; i=$5; if(!s){t1=t;i1=i;s=1} else {t2=t;i2=i}} END{if(t2>t1) printf \"%.1f\\n\", (t2-t1-i2+i1)*100/(t2-t1); else print \"0.0\"}'"
-            }
+            OsFamily::MacOS => crate::cpu_stats::MACOS_CPU_COMMAND,
+            _ => crate::cpu_stats::LINUX_CPU_COMMAND,
         }
     }
 
@@ -787,17 +772,13 @@ mod tests {
                 ..Default::default()
             };
             let cmd = info.cpu_cmd();
-            // Two reads with a gap, diffed by awk — the shape of a correct
-            // instantaneous reading.
-            let read_count = cmd.matches("cat /proc/stat").count();
+            // Two reads with a gap, diffed by parse_cpu_stats rather than
+            // reporting a since-boot average.
+            let read_count = cmd.matches("/proc/stat").count();
             assert_eq!(read_count, 2, "{family:?} must read /proc/stat twice");
             assert!(
                 cmd.contains("sleep"),
                 "{family:?} needs a gap between reads"
-            );
-            assert!(
-                cmd.contains("t2>t1"),
-                "{family:?} must guard against a zero-tick delta"
             );
             // No dependency on top's wording — the reason the old command
             // broke between procps and BusyBox phrasings in the first place.

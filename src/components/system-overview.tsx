@@ -1,18 +1,73 @@
-import { useId, useMemo } from 'react';
+import { useId, useMemo, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CartesianGrid, DefaultTooltipContent, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Card, CardContent } from './ui/card';
+import { Tooltip as CoreTooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import {
   formatMemoryMiB,
   overviewChartData,
   OVERVIEW_WINDOW_MS,
   type OverviewSample,
   type OverviewState,
+  type OverviewReading,
 } from '@/lib/system-overview';
 import './system-overview.css';
 
 const CPU_COLOR = 'var(--chart-1)';
 const MEMORY_COLOR = 'var(--chart-2)';
+const CPU_PREVIEW_LIMIT = 16;
+
+function CpuCoreGrid({ cores, formatPercent }: {
+  cores: OverviewReading['cpuCores'];
+  formatPercent: (value: number | null) => string;
+}) {
+  const { t, i18n } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const gridId = useId();
+  const helpId = useId();
+  const hasMore = cores.length > CPU_PREVIEW_LIMIT;
+  // Surface a saturated CPU even when its ID is outside the preview.
+  const visibleCores = hasMore && !expanded
+    ? [...cores].sort((a, b) => (b.percent ?? -1) - (a.percent ?? -1) || a.id - b.id)
+      .slice(0, CPU_PREVIEW_LIMIT).sort((a, b) => a.id - b.id)
+    : cores;
+  const heading = t(hasMore && !expanded ? 'systemMonitor.overview.busiestCpus' : 'systemMonitor.overview.perCpuUsage');
+  return (
+    <div className="overview-cpu-cores">
+      <div className={hasMore ? 'overview-cpu-heading' : 'sr-only'}>
+        <span>{heading}</span>
+        {hasMore && <button type="button" className="overview-cpu-toggle" aria-expanded={expanded} aria-controls={gridId} onClick={() => setExpanded(value => !value)}>
+          {expanded ? t('systemMonitor.overview.showFewerCpus') : t('systemMonitor.overview.showAllCpus', { count: cores.length, formattedCount: new Intl.NumberFormat(i18n.resolvedLanguage || i18n.language).format(cores.length) })}
+        </button>}
+      </div>
+      <p id={helpId} className="sr-only">{t('systemMonitor.overview.cpuHelp')}</p>
+      <div id={gridId} className="overview-cpu-grid" role="group" aria-label={heading} aria-describedby={helpId} tabIndex={expanded ? 0 : undefined}>
+        {visibleCores.map(core => {
+          const label = t('systemMonitor.overview.cpuIndex', { index: core.id });
+          const valueText = core.percent === null ? t('systemMonitor.overview.unavailable') : formatPercent(core.percent);
+          const severity = core.percent !== null && core.percent >= 90 ? 'critical' : core.percent !== null && core.percent >= 75 ? 'warning' : undefined;
+          return (
+            <CoreTooltip key={core.id} delayDuration={150}>
+              <TooltipTrigger asChild>
+                <div className="overview-cpu-bar" data-severity={severity} data-unavailable={core.percent === null || undefined}
+                  style={{ '--cpu-usage': `${core.percent ?? 0}%` } as CSSProperties}
+                  tabIndex={0} role={core.percent === null ? 'img' : 'meter'}
+                  aria-label={t('systemMonitor.overview.logicalCpuLabel', { index: core.id, value: valueText })}
+                  aria-valuemin={core.percent === null ? undefined : 0} aria-valuemax={core.percent === null ? undefined : 100}
+                  aria-valuenow={core.percent ?? undefined} aria-valuetext={core.percent === null ? undefined : valueText}>
+                  {core.percent !== null && core.percent > 0 && <span className="overview-cpu-bar-fill" aria-hidden="true" />}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent className="overview-cpu-tooltip">
+                <span>{label}</span><strong>{valueText}</strong>
+              </TooltipContent>
+            </CoreTooltip>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function UsageGauge({ label, value, valueText, color }: {
   label: string;
@@ -140,9 +195,16 @@ export function SystemOverview({ state }: { state: OverviewState }) {
       <Card className="overview-surface shadow-none">
         <CardContent className="px-3 py-0 last:pb-3">
           <div className="overview-metrics" aria-busy={status === 'loading'}>
-            <MetricRow label={t('systemMonitor.cpu')} value={reading?.cpu ?? null} color={CPU_COLOR} loading={!reading} formatPercent={formatPercent}>
-              <Sparkline data={chartData} metric="cpu" color={CPU_COLOR} domain={domain} />
-            </MetricRow>
+            <div className="overview-cpu">
+              <MetricRow label={t('systemMonitor.cpu')} value={reading?.cpu ?? null}
+                detail={reading?.cpuCount ? t('systemMonitor.overview.cpuSummary', { count: reading.cpuCount, formattedCount: numberFormat.format(reading.cpuCount) }) : t('systemMonitor.overview.cpuOverall')}
+                color={CPU_COLOR} loading={!reading} formatPercent={formatPercent}>
+                <Sparkline data={chartData} metric="cpu" color={CPU_COLOR} domain={domain} />
+              </MetricRow>
+              {reading && reading.cpuCores.length > 0
+                ? <CpuCoreGrid key={state.connectionId} cores={reading.cpuCores} formatPercent={formatPercent} />
+                : reading?.cpuCount ? <p className="overview-cpu-unavailable">{t('systemMonitor.overview.perCpuUnavailable')}</p> : null}
+            </div>
             <MetricRow label={t('systemMonitor.memory')} value={reading?.memory.percent ?? null} detail={capacity(reading?.memory)} color={MEMORY_COLOR} loading={!reading} formatPercent={formatPercent}>
               <Sparkline data={chartData} metric="memory" color={MEMORY_COLOR} domain={domain} />
             </MetricRow>

@@ -790,20 +790,23 @@ mod shell_integration_tests {
             assert!(process.mem.parse::<f64>().unwrap().is_finite());
         }
 
-        // CPU: the two-read /proc/stat delta must produce a plain bounded
-        // number on BusyBox (the old top-based command smeared since-boot).
+        // CPU: parse the same pair of snapshots as get_system_stats, including
+        // individual logical CPUs on BusyBox.
         let cpu_out = client
             .execute_command(os_info.cpu_cmd())
             .await
             .expect("cpu_cmd executes");
-        let cpu: f64 = cpu_out
-            .trim()
-            .parse()
-            .unwrap_or_else(|_| panic!("cpu_cmd output must be a number: {cpu_out:?}"));
+        let stats = crate::cpu_stats::parse_cpu_stats(&cpu_out);
+        let cpu = stats.percent.expect("aggregate CPU usage");
         assert!(
             (0.0..=100.0).contains(&cpu),
             "cpu reading out of range: {cpu}"
         );
+        assert!(!stats.cores.is_empty());
+        assert_eq!(stats.logical_count, Some(stats.cores.len()));
+        assert!(stats.cores.iter().all(|core| core
+            .percent
+            .is_some_and(|value| (0.0..=100.0).contains(&value))));
 
         // Swap: `Swap:`-token selection must yield `total used free` numbers.
         // Empty output is ALSO valid: BusyBox free omits the Swap: row on

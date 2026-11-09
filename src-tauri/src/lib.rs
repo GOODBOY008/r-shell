@@ -3,6 +3,7 @@ mod desktop_frames;
 mod acl_tests;
 mod commands;
 mod connection_manager;
+mod cpu_stats;
 mod desktop_protocol;
 mod desktop_tcp;
 mod ftp_client;

@@ -6,6 +6,8 @@ import {
 
 const response: SystemStatsResponse = {
   cpu_percent: 27.4,
+  cpu_logical_count: 2,
+  cpu_cores: [{ id: 0, percent: 54.8 }, { id: 1, percent: 0 }],
   memory: { total: 16384, used: 6554 },
   swap: { total: 2048, used: 128 },
   disk: { total: '500G', used: '226G', use_percent: 45.2 },
@@ -41,6 +43,25 @@ describe('overview measurements', () => {
     expect(reading.memory.percent).toBe(100);
     expect(reading.disk).toEqual({ total: '500G', used: '226G', percent: 45.2 });
   });
+
+  it('keeps logical CPU IDs and zero usage while rejecting invalid readings', () => {
+    const reading = normalizeOverviewReading({ cpu_logical_count: 0, cpu_cores: [
+      { id: 10, percent: 105 }, { id: 2, percent: 0 }, { id: 7, percent: null },
+      { id: 8, percent: Infinity }, { id: -1, percent: 40 }, { id: 1.5, percent: 30 },
+      { id: 2, percent: 0 },
+    ] });
+    expect(reading.cpuCount).toBe(4);
+    expect(reading.cpuCores).toEqual([
+      { id: 2, percent: 0 }, { id: 7, percent: null }, { id: 8, percent: null }, { id: 10, percent: 100 },
+    ]);
+  });
+
+  it('does not fabricate per-CPU values for count-only or legacy responses', () => {
+    expect(normalizeOverviewReading({ cpu_percent: 50, cpu_logical_count: 16 }))
+      .toMatchObject({ cpu: 50, cpuCount: 16, cpuCores: [] });
+    expect(normalizeOverviewReading({ cpu_percent: 50 }))
+      .toMatchObject({ cpu: 50, cpuCount: null, cpuCores: [] });
+  });
 });
 
 describe('overview sampling', () => {
@@ -69,6 +90,7 @@ describe('overview sampling', () => {
     const original = sample(createOverviewState('host'), 0);
     const failed = overviewReducer(original, { type: 'failure', connectionId: 'host' });
     expect(failed.reading).toBe(original.reading);
+    expect(failed.reading?.cpuCores).toEqual(response.cpu_cores);
     expect(failed.history).toBe(original.history);
     expect(failed.status).toBe('error');
     const recovered = sample(failed, 5000);

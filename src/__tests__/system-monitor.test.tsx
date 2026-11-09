@@ -83,6 +83,45 @@ describe('SystemMonitor overview', () => {
     expect(screen.getByRole('meter', { name: 'Memory' }).getAttribute('aria-valuenow')).toBe('0');
   });
 
+  it('shows the overall average and individual logical CPUs separately', async () => {
+    setupInvoke({ cpu_percent: 50, cpu_logical_count: 2, cpu_cores: [{ id: 0, percent: 100 }, { id: 1, percent: 0 }] });
+    render(<SystemMonitor connectionId="conn-1" />);
+    expect(await screen.findByText('Overall · 2 logical CPUs')).toBeTruthy();
+    expect(screen.getByRole('meter', { name: 'CPU' }).getAttribute('aria-valuenow')).toBe('50');
+    expect(screen.getByRole('meter', { name: 'Logical CPU 0: 100%' }).getAttribute('aria-valuenow')).toBe('100');
+    expect(screen.getByRole('meter', { name: 'Logical CPU 1: 0%' }).getAttribute('aria-valuenow')).toBe('0');
+  });
+
+  it('surfaces busy high-numbered CPUs and lets users expand and collapse all readings', async () => {
+    setupInvoke({ cpu_logical_count: 64, cpu_cores: Array.from({ length: 64 }, (_, id) => ({ id, percent: id === 63 ? 100 : id })) });
+    render(<SystemMonitor connectionId="conn-1" />);
+    const group = await screen.findByRole('group', { name: 'Busiest CPUs' });
+    expect(within(group).getAllByRole('meter')).toHaveLength(16);
+    expect(within(group).getByRole('meter', { name: 'Logical CPU 63: 100%' })).toBeTruthy();
+    const expand = screen.getByRole('button', { name: 'Show all 64' });
+    expect(expand.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(expand);
+    expect(within(screen.getByRole('group', { name: 'Per-CPU usage' })).getAllByRole('meter')).toHaveLength(64);
+    expect(screen.getByRole('button', { name: 'Show fewer' }).getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Show fewer' }));
+    expect(within(screen.getByRole('group', { name: 'Busiest CPUs' })).getAllByRole('meter')).toHaveLength(16);
+  });
+
+  it('shows unavailable per-CPU usage without copying the average to every CPU', async () => {
+    setupInvoke({ cpu_percent: 25, cpu_logical_count: 16 });
+    render(<SystemMonitor connectionId="conn-1" />);
+    expect(await screen.findByText('Overall · 16 logical CPUs')).toBeTruthy();
+    expect(screen.getByText('Per-CPU usage unavailable on this host')).toBeTruthy();
+    expect(screen.queryByRole('meter', { name: /Logical CPU/ })).toBeNull();
+  });
+
+  it('keeps an unsampled CPU distinct from a genuinely idle one', async () => {
+    setupInvoke({ cpu_logical_count: 2, cpu_cores: [{ id: 0, percent: null }, { id: 1, percent: 0 }] });
+    render(<SystemMonitor connectionId="conn-1" />);
+    expect(await screen.findByRole('img', { name: 'Logical CPU 0: Unavailable' })).toBeTruthy();
+    expect(screen.getByRole('meter', { name: 'Logical CPU 1: 0%' })).toBeTruthy();
+  });
+
   it('shows unavailable capacity instead of reporting a healthy zero', async () => {
     setupInvoke({ memory: { total: 0, used: 0 }, swap: { total: 0, used: 0 } });
     render(<SystemMonitor connectionId="conn-1" />);
@@ -365,7 +404,7 @@ describe('SystemMonitor overview lifecycle', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-11-09T08:00:00Z'));
-    setupInvoke();
+    setupInvoke({ cpu_logical_count: 2, cpu_cores: [{ id: 0, percent: 0.4 }, { id: 1, percent: 0 }] });
   });
   afterEach(() => {
     cleanup();
@@ -387,6 +426,7 @@ describe('SystemMonitor overview lifecycle', () => {
     await tick(30_000);
     expect(chart()).toHaveLength(2);
     expect(statsCalls()).toHaveLength(2);
+    expect(screen.getByRole('meter', { name: 'Logical CPU 0: 0.4%' })).toBeTruthy();
     rerender(<SystemMonitor connectionId="conn-1" />);
     await tick();
     expect(statsCalls()).toHaveLength(3);
@@ -405,6 +445,7 @@ describe('SystemMonitor overview lifecycle', () => {
     await tick(5000);
     expect(screen.getByText('Update failed')).toBeTruthy();
     expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
+    expect(screen.getByRole('meter', { name: 'Logical CPU 0: 0.4%' })).toBeTruthy();
     fail = false;
     await tick(5000);
     expect(screen.queryByText('Update failed')).toBeNull();
@@ -429,8 +470,9 @@ describe('SystemMonitor overview lifecycle', () => {
     rerender(<SystemMonitor connectionId="conn-1" />);
     await tick();
     expect(screen.getByRole('meter', { name: 'CPU' }).getAttribute('aria-valuenow')).toBe('0.2');
-    await act(async () => { resolveOld(makeStats({ cpu_percent: 99 })); });
+    await act(async () => { resolveOld(makeStats({ cpu_percent: 99, cpu_cores: [{ id: 99, percent: 100 }] })); });
     expect(screen.getByRole('meter', { name: 'CPU' }).getAttribute('aria-valuenow')).toBe('0.2');
+    expect(screen.queryByRole('meter', { name: /Logical CPU 99/ })).toBeNull();
     expect(screen.queryByLabelText('CPU and memory usage history')).toBeNull();
   });
 
@@ -442,6 +484,7 @@ describe('SystemMonitor overview lifecycle', () => {
     rerender(<SystemMonitor connectionId="conn-2" active={false} />);
     expect(screen.queryByText('6.4 GiB / 11.7 GiB')).toBeNull();
     expect(screen.queryByLabelText('CPU and memory usage history')).toBeNull();
+    expect(screen.queryByRole('meter', { name: /Logical CPU/ })).toBeNull();
     rerender(<SystemMonitor connectionId="conn-2" />);
     await tick();
     expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();

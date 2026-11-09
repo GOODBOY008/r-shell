@@ -6,6 +6,8 @@ const MAX_CONTINUOUS_GAP_MS = 10_000;
 /** The existing get_system_stats payload reports memory and swap in MiB. */
 export interface SystemStatsResponse {
   cpu_percent?: number;
+  cpu_logical_count?: number | null;
+  cpu_cores?: { id: number; percent?: number | null }[];
   memory?: { total?: number; used?: number };
   swap?: { total?: number; used?: number };
   disk?: { total?: string; used?: string; use_percent?: number };
@@ -19,6 +21,8 @@ interface MemoryReading {
 
 export interface OverviewReading {
   cpu: number | null;
+  cpuCount: number | null;
+  cpuCores: { id: number; percent: number | null }[];
   memory: MemoryReading;
   swap: MemoryReading;
   disk: { total: string | null; used: string | null; percent: number | null };
@@ -48,11 +52,11 @@ export function createOverviewState(connectionId?: string): OverviewState {
   return { connectionId, reading: null, history: [], status: 'loading', updatedAt: null };
 }
 
-function nonnegative(value: number | undefined): number | null {
-  return value !== undefined && Number.isFinite(value) && value >= 0 ? value : null;
+function nonnegative(value: number | null | undefined): number | null {
+  return value != null && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function percent(value: number | undefined): number | null {
+function percent(value: number | null | undefined): number | null {
   const valid = nonnegative(value);
   return valid === null ? null : Math.min(100, valid);
 }
@@ -70,8 +74,16 @@ function memoryReading(memory: SystemStatsResponse['memory']): MemoryReading {
 /** Keep zero usage distinct from a missing/failed capacity measurement. */
 export function normalizeOverviewReading(response: SystemStatsResponse): OverviewReading {
   const diskTotal = response.disk?.total || null;
+  const cpuCores = Array.from(new Map((response.cpu_cores ?? [])
+    .filter(core => Number.isSafeInteger(core.id) && core.id >= 0)
+    .map(core => [core.id, { id: core.id, percent: percent(core.percent) }])).values())
+    .sort((a, b) => a.id - b.id);
+  const reportedCount = response.cpu_logical_count;
+  const cpuCount = reportedCount != null && Number.isSafeInteger(reportedCount) && reportedCount > 0 ? reportedCount : 0;
   return {
     cpu: percent(response.cpu_percent),
+    cpuCount: Math.max(cpuCount, cpuCores.length) || null,
+    cpuCores,
     memory: memoryReading(response.memory),
     swap: memoryReading(response.swap),
     disk: {
