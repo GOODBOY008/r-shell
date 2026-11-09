@@ -38,7 +38,7 @@ describe('WelcomeScreen wallpaper', () => {
     cleanup();
   });
 
-  it('lets the app background show through when a wallpaper is configured', () => {
+  it('keeps the theme surface that wallpaper CSS makes translucent', () => {
     localStorage.setItem('terminalAppearance', JSON.stringify({
       backgroundImage: 'data:image/png;base64,AAAA',
     }));
@@ -46,8 +46,8 @@ describe('WelcomeScreen wallpaper', () => {
     renderWelcome();
 
     const main = screen.getByRole('main');
-    expect(main.className).toContain('bg-transparent');
-    expect(main.className).not.toContain('bg-background');
+    expect(main.className).toContain('bg-background');
+    expect(main.className).not.toContain('bg-transparent');
   });
 
   it('keeps the opaque surface without a wallpaper', () => {

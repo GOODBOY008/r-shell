@@ -4,7 +4,6 @@ import { ArrowRight, ArrowUpRight, FolderTree, History, Keyboard, LayoutGrid, Mo
 import { Button } from './ui/button';
 import { formatKeyboardShortcut } from '@/lib/keyboard-shortcuts';
 import { useShortcutBindings } from '@/lib/shortcut-registry';
-import { useAppearanceSettings } from '@/lib/use-appearance-settings';
 import { ConnectionStorageManager } from '@/lib/connection-storage';
 import { quickConnectConnection } from '@/lib/app-events';
 import { useLayout } from '@/lib/layout-context';
@@ -19,7 +18,6 @@ interface WelcomeScreenProps {
 export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
   const { t } = useTranslation();
   const { layout, toggleLeftSidebar } = useLayout();
-  const appearance = useAppearanceSettings();
   const shortcuts = useShortcutBindings();
   const isMac = navigator.platform.toUpperCase().includes('MAC');
   const shortcut = (value: string) => formatKeyboardShortcut(value, isMac);
@@ -48,10 +46,10 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
     { icon: Settings, title: t('welcome.preferences'), binding: shortcuts.openSettings, action: onOpenSettings },
   ];
 
-  // Let the workspace background image show through; the opaque background is
-  // only needed when no image is configured.
+  // The wallpaper CSS makes bg-background translucent while retaining enough
+  // of the app theme behind the welcome text and controls for contrast.
   return (
-    <main className={`workspace-home h-full overflow-auto ${appearance.backgroundImage ? 'bg-transparent' : 'bg-background'}`}>
+    <main className="workspace-home h-full overflow-auto bg-background">
       <div className="workspace-home-inner">
         <div className="mb-10 flex items-center justify-between gap-4">
           <div className="flex items-center gap-2.5">
