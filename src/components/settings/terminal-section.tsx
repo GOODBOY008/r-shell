@@ -13,7 +13,7 @@ import { Slider } from '../ui/slider';
 import { Image as ImageIcon, Upload, X, Terminal as TerminalIcon } from 'lucide-react';
 import {
   TerminalAppearanceSettings,
-  terminalThemes,
+  getThemeAwareTerminalTheme,
   MIN_TERMINAL_SCROLLBACK,
   MAX_TERMINAL_SCROLLBACK,
 } from '../../lib/terminal-config';
@@ -51,6 +51,7 @@ interface TerminalSectionProps {
 
 export function TerminalSection({ appearance, onChange, query }: TerminalSectionProps) {
   const { t } = useTranslation();
+  const previewTheme = getThemeAwareTerminalTheme(appearance);
 
   // t() is strictly keyed off en.json; the search helper takes dynamic keys,
   // so widen it once at this boundary.
@@ -432,8 +433,8 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                 fontSize: `${appearance.fontSize}px`,
                 lineHeight: appearance.lineHeight,
                 letterSpacing: `${appearance.letterSpacing}px`,
-                backgroundColor: terminalThemes[appearance.theme]?.background || '#1e1e1e',
-                color: terminalThemes[appearance.theme]?.foreground || '#d4d4d4',
+                backgroundColor: appearance.backgroundImage ? 'var(--background)' : previewTheme.background,
+                color: previewTheme.foreground,
               }}
             >
               {/* Background image layer */}
@@ -450,6 +451,14 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                   }}
                 />
               )}
+              {/* Match PtyTerminal's theme tint over the shared wallpaper. */}
+              {appearance.backgroundImage && (
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ backgroundColor: previewTheme.background, opacity: 0.85 }}
+                />
+              )}
               {/* Opacity applies to the text only: in the app the wallpaper
                   sits behind the whole shell and the terminal's transparency
                   never dims it. */}
@@ -457,10 +466,10 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
                 className="relative z-10"
                 style={{ opacity: appearance.allowTransparency ? appearance.opacity / 100 : 1 }}
               >
-                <div style={{ color: terminalThemes[appearance.theme]?.green }}>user@host</div>
+                <div style={{ color: previewTheme.green }}>user@host</div>
                 <div>$ ls -la</div>
-                <div style={{ color: terminalThemes[appearance.theme]?.blue }}>drwxr-xr-x</div>
-                <div style={{ color: terminalThemes[appearance.theme]?.yellow }}>-rw-r--r--</div>
+                <div style={{ color: previewTheme.blue }}>drwxr-xr-x</div>
+                <div style={{ color: previewTheme.yellow }}>-rw-r--r--</div>
               </div>
             </div>
           </div>

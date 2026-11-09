@@ -1637,6 +1637,20 @@ export function PtyTerminal({
           : (getThemeAwareTerminalTheme(appearance).background || (terminalThemes[appearance.theme] || defaultTerminalTheme).background || '#1e1e1e'),
       }}
     >
+      {/* Keep the selected terminal palette readable over either app theme.
+          This tint preserves the single shared image without drawing another
+          copy in each pane. */}
+      {appearance.backgroundImage && (
+        <div
+          data-testid="terminal-wallpaper-tint"
+          aria-hidden="true"
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundColor: getThemeAwareTerminalTheme(appearance).background || '#1e1e1e',
+            opacity: 0.85,
+          }}
+        />
+      )}
       {/* Search bar */}
       {searchRef.current && (
         <TerminalSearchBar

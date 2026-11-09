@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render } from '@testing-library/react';
 import { PtyTerminal } from '../components/pty-terminal';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
-import type { TerminalAppearanceSettings } from '../lib/terminal-config';
+import { getThemeAwareTerminalOptions, type TerminalAppearanceSettings } from '../lib/terminal-config';
 
 const mocks = vi.hoisted(() => {
   const appearance = {
@@ -100,35 +100,16 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../lib/terminal-config', () => ({
-  defaultTerminalTheme: { background: '#000000' },
-  terminalThemes: { 'vs-code-dark': { background: '#000000' } },
-  loadAppearanceSettings: vi.fn(() => ({
-    fontSize: 14,
-    fontFamily: 'monospace',
-    lineHeight: 1.2,
-    letterSpacing: 0,
-    cursorStyle: 'block',
-    cursorBlink: true,
-    theme: 'vs-code-dark',
-    scrollback: 10000,
-    allowTransparency: false,
-    opacity: 100,
-    backgroundImageOpacity: 30,
-    backgroundImageBlur: 0,
-    backgroundImagePosition: 'cover',
-    ...mocks.appearance.current,
-  })),
-  getThemeAwareTerminalOptions: vi.fn(() => ({
-    cursorBlink: true,
-    cursorStyle: 'block',
-    fontFamily: 'monospace',
-    fontSize: 14,
-    scrollback: 10000,
-    theme: {},
-  })),
-  getThemeAwareTerminalTheme: vi.fn(() => ({ background: '#000000' })),
-}));
+vi.mock('../lib/terminal-config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/terminal-config')>();
+  return {
+    ...actual,
+    loadAppearanceSettings: vi.fn(() => ({
+      ...actual.defaultAppearanceSettings,
+      ...mocks.appearance.current,
+    })),
+  };
+});
 
 vi.mock('../components/terminal/terminal-context-menu', () => ({
   TerminalContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -168,10 +149,36 @@ function terminalContainer(container: HTMLElement): HTMLElement {
   return element as HTMLElement;
 }
 
+function rgb(color: string): number[] {
+  if (color.startsWith('#')) {
+    return [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16));
+  }
+  return color.match(/[\d.]+/g)!.slice(0, 3).map(Number);
+}
+
+function composite(front: number[], back: number[], opacity: number): number[] {
+  return front.map((channel, index) => channel * opacity + back[index] * (1 - opacity));
+}
+
+function luminance(color: number[]): number {
+  const linear = color.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+}
+
+function contrast(first: number[], second: number[]): number {
+  const a = luminance(first);
+  const b = luminance(second);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
 describe('PtyTerminal workspace background', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.appearance.current = {};
+    document.documentElement.classList.remove('dark');
     localStorage.removeItem(APP_SETTINGS_STORAGE_KEY);
 
     Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 });
@@ -196,12 +203,14 @@ describe('PtyTerminal workspace background', () => {
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    document.documentElement.classList.remove('dark');
   });
 
   it('keeps the themed background when no image is configured', () => {
     const { container } = renderTerminal();
 
-    expect(terminalContainer(container).style.backgroundColor).toBe('rgb(0, 0, 0)');
+    expect(terminalContainer(container).style.backgroundColor).toBe('rgb(255, 255, 255)');
+    expect(container.querySelector('[data-testid="terminal-wallpaper-tint"]')).toBeNull();
   });
 
   it('is transparent over the workspace background and draws no image of its own', () => {
@@ -213,5 +222,40 @@ describe('PtyTerminal workspace background', () => {
     const imageLayers = Array.from(container.querySelectorAll<HTMLElement>('div'))
       .filter((element) => element.style.backgroundImage !== '');
     expect(imageLayers).toHaveLength(0);
+  });
+
+  it.each([
+    ['light', 'dracula'],
+    ['dark', 'vs-code-light'],
+    ['light', 'vs-code-dark'],
+    ['dark', 'vs-code-dark'],
+  ])('preserves %s app / %s terminal contrast over the shared wallpaper', async (appTheme, terminalTheme) => {
+    document.documentElement.classList.toggle('dark', appTheme === 'dark');
+    mocks.appearance.current = {
+      theme: terminalTheme,
+      backgroundImage: 'data:image/png;base64,AAAA',
+      backgroundImageOpacity: 5,
+    };
+    const { container } = renderTerminal();
+    const tint = container.querySelector<HTMLElement>('[data-testid="terminal-wallpaper-tint"]');
+    expect(tint).not.toBeNull();
+
+    const { loadAppearanceSettings } = await import('../lib/terminal-config');
+    const theme = getThemeAwareTerminalOptions(loadAppearanceSettings()).theme!;
+    expect(theme.background).toBe('#00000000');
+    const foreground = rgb(theme.foreground!);
+    const shell = rgb(appTheme === 'dark' ? '#1e1e1e' : '#f5f7f8');
+    const tintOpacity = Number(tint!.style.opacity);
+    expect(tintOpacity).toBeLessThan(1);
+
+    // Check both extremes of image content, at the review's 5% setting and
+    // at full opacity. Read the actual rendered tint and production palette.
+    for (const image of ['#000000', '#ffffff']) {
+      for (const imageOpacity of [0.05, 1]) {
+        const wallpaper = composite(rgb(image), shell, imageOpacity);
+        const background = composite(rgb(tint!.style.backgroundColor), wallpaper, tintOpacity);
+        expect(contrast(foreground, background)).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 });
