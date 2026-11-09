@@ -381,6 +381,27 @@ html {
   .workspace-recent-time { display: none; }
 }
 
+/*
+  App-wide wallpaper: the shell sets data-wallpaper when a background image is
+  configured, and the surfaces that would otherwise paint an opaque panel turn
+  translucent so the single image behind the whole window stays visible.
+  Portaled dialogs, menus and toasts mount under <body>, outside this subtree,
+  so they keep their opaque surfaces for readability.
+
+  color-mix is guarded: browsers without support keep their solid panels
+  instead of losing contrast.
+*/
+@supports (background-color: color-mix(in srgb, red 50%, transparent)) {
+  /* Sticky surfaces must cover scrolling content rather than reveal it. */
+  [data-wallpaper] .bg-background:not(.sticky) {
+    background-color: color-mix(in srgb, var(--background) 78%, transparent);
+  }
+
+  [data-wallpaper] .bg-sidebar:not(.sticky) {
+    background-color: color-mix(in srgb, var(--sidebar) 78%, transparent);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

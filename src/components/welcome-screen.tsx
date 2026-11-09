@@ -46,6 +46,8 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
     { icon: Settings, title: t('welcome.preferences'), binding: shortcuts.openSettings, action: onOpenSettings },
   ];
 
+  // The wallpaper CSS makes bg-background translucent while retaining enough
+  // of the app theme behind the welcome text and controls for contrast.
   return (
     <main className="workspace-home h-full overflow-auto bg-background">
       <div className="workspace-home-inner">

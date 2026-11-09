@@ -364,6 +364,10 @@ export async function applyConfigBundle(
     };
 
     const { data } = bundle;
+    // Appearance lives in its own storage key but shares the settings-changed
+    // broadcast with app settings. Track whether either was imported so the
+    // event fires once, after every write has landed.
+    let settingsChanged = false;
 
     // 2. Credentials block first: a wrong passphrase must fail before any write.
     let restored: CredentialsBlock['connections'] = {};
@@ -431,6 +435,7 @@ export async function applyConfigBundle(
     // 3c. Terminal appearance ---------------------------------------------------
     if (data.terminalAppearance) {
       saveAppearanceSettings(data.terminalAppearance);
+      settingsChanged = true;
       result.terminalAppearance = true;
     }
 
@@ -454,7 +459,7 @@ export async function applyConfigBundle(
         APP_SETTINGS_STORAGE_KEY,
         JSON.stringify(data.appSettings),
       );
-      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
+      settingsChanged = true;
       result.appSettings = true;
     }
 
@@ -462,6 +467,13 @@ export async function applyConfigBundle(
     if (data.language) {
       localStorage.setItem(LANGUAGE_STORAGE_KEY, data.language);
       result.language = true;
+    }
+
+    // The shell, welcome screen and terminals re-read appearance/app settings
+    // on this event. Dispatch once for the whole import, including bundles
+    // that carry only terminalAppearance (no appSettings).
+    if (settingsChanged) {
+      window.dispatchEvent(new Event(APP_SETTINGS_CHANGED_EVENT));
     }
 
     return result;

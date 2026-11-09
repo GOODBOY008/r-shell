@@ -410,8 +410,9 @@ describe('pending tab reconnect', () => {
     render(<App />);
     await reconnectTabFromContextMenu('Server 1');
     await vi.waitFor(() => expect(sshConnectCalls()).toHaveLength(2), { timeout: 5000 });
+    // The invoke is recorded before React commits the resulting pending state.
+    expect(await screen.findAllByText(CONNECT_FAILED_HINT)).toHaveLength(1);
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getAllByText(CONNECT_FAILED_HINT)).toHaveLength(1);
     expect(screen.queryByTestId('pty')).toBeNull();
     // Only a new, explicit request is allowed to show the unlock form.
     await reconnectTabFromContextMenu('Server 1');

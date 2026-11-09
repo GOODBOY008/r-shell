@@ -20,6 +20,8 @@ import { SettingsModal } from './components/settings-modal';
 import { IntegratedFileBrowser } from './components/integrated-file-browser';
 import { QuickCommandsPanel } from './components/quick-commands-panel';
 import { WelcomeScreen } from './components/welcome-screen';
+import { AppBackground } from './components/app-background';
+import { useAppearanceSettings } from './lib/use-appearance-settings';
 import { UpdateChecker, type UpdateAnnouncement } from './components/update-checker';
 import { toConnectionConfig } from './lib/connection-config';
 import { buildFtpConnectRequest } from './lib/ftp-connect-request';
@@ -130,6 +132,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 function AppContent() {
   const { t } = useTranslation();
+  const appearance = useAppearanceSettings();
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   useEffect(() => {
     const updateWidth = () => setWindowWidth(window.innerWidth);
@@ -2138,7 +2141,13 @@ function AppContent() {
     || activeConnection?.protocol === 'SFTP' || activeConnection?.protocol === 'FTP';
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background">
+    <div
+      className="relative h-screen flex flex-col overflow-hidden bg-background"
+      // Panels turn translucent while this attribute is set (see globals.css),
+      // so the single wallpaper shows through the whole shell.
+      data-wallpaper={appearance.backgroundImage ? 'true' : undefined}
+    >
+      <AppBackground appearance={appearance} />
       <UpdateChecker
         checkSignal={updateCheckSignal}
         openDialogSignal={updateDialogSignal}
@@ -2182,7 +2191,7 @@ function AppContent() {
         zenMode={layout.zenMode}
       />
 
-      <div className="flex-1 flex overflow-hidden">
+      <div className="relative z-10 flex-1 flex overflow-hidden">
         <ResizablePanelGroup
           direction="horizontal"
           autoSaveId="r-shell-main-layout"
@@ -2233,62 +2242,64 @@ function AppContent() {
             defaultSize={100 - (layout.leftSidebarVisible ? Math.max(layout.leftSidebarSize, leftSidebarMinSize) : 0) - ((layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels) ? Math.max(layout.rightSidebarSize, rightSidebarMinSize) : 0)}
             minSize={30}
           >
-            <div className="h-full flex flex-col">
-              {showWelcomeInMainArea ? (
-                <WelcomeScreen
-                  onNewConnection={handleNewTab}
-                  onOpenSettings={handleOpenSettings}
-                />
-              ) : (
-                <ResizablePanelGroup direction="vertical" className="flex-1" onLayout={handleVerticalLayout}>
-                  {/* Terminal Grid Panel */}
-                  <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
-                    <TerminalCallbacksProvider value={{
-                      onDuplicateTab: handleDuplicateTab,
-                      onNewTab: handleNewTab,
-                      onReconnectTab: handleReconnect,
-                      closeTabShortcut: shortcutBindings.closeSession,
-                      onWorkingDirectoryChange: handleWorkingDirectoryChange,
-                      onCloseTab: handleCloseTab,
-                      onCloseAllTabs: handleCloseAllTabs,
-                      onCloseTabs: handleCloseTabs,
-                      onDetachTab: handleDetachTab,
-                      failedPendingTabIds,
-                    }}>
-                      <ErrorBoundary label={t('app.terminal')}>
-                        <GridRenderer node={state.gridLayout} path={[]} />
-                      </ErrorBoundary>
-                    </TerminalCallbacksProvider>
-                  </ResizablePanel>
-
-                  {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (
-                    <>
-                      <ResizableHandle />
-
-                      {/* File Browser Panel - uses activeConnection from context */}
-                      <ResizablePanel
-                        id="file-browser"
-                        order={2}
-                        defaultSize={layout.bottomPanelSize}
-                        minSize={20}
-                        maxSize={50}
-                      >
-                        <ErrorBoundary label={t('app.fileBrowser')}>
-                          <IntegratedFileBrowser
-                          connectionId={activeConnection.connectionId}
-                          host={activeConnection.host}
-                          isConnected={activeConnection.status === 'connected'}
-                          terminalWorkingDirectory={terminalWorkingDirectories[activeConnection.connectionId]}
-                          onClose={() => {}}
-                          onOpenInLogMonitor={handleOpenInLogMonitor}
-                          onOpenInEditor={handleOpenInEditor}
-                        />
+            <div className="relative h-full flex flex-col">
+              <div className="flex min-h-0 flex-1 flex-col">
+                {showWelcomeInMainArea ? (
+                  <WelcomeScreen
+                    onNewConnection={handleNewTab}
+                    onOpenSettings={handleOpenSettings}
+                  />
+                ) : (
+                  <ResizablePanelGroup direction="vertical" className="flex-1" onLayout={handleVerticalLayout}>
+                    {/* Terminal Grid Panel */}
+                    <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
+                      <TerminalCallbacksProvider value={{
+                        onDuplicateTab: handleDuplicateTab,
+                        onNewTab: handleNewTab,
+                        onReconnectTab: handleReconnect,
+                        closeTabShortcut: shortcutBindings.closeSession,
+                        onWorkingDirectoryChange: handleWorkingDirectoryChange,
+                        onCloseTab: handleCloseTab,
+                        onCloseAllTabs: handleCloseAllTabs,
+                        onCloseTabs: handleCloseTabs,
+                        onDetachTab: handleDetachTab,
+                        failedPendingTabIds,
+                      }}>
+                        <ErrorBoundary label={t('app.terminal')}>
+                          <GridRenderer node={state.gridLayout} path={[]} />
                         </ErrorBoundary>
-                      </ResizablePanel>
-                    </>
-                  )}
-                </ResizablePanelGroup>
-              )}
+                      </TerminalCallbacksProvider>
+                    </ResizablePanel>
+
+                    {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (
+                      <>
+                        <ResizableHandle />
+
+                        {/* File Browser Panel - uses activeConnection from context */}
+                        <ResizablePanel
+                          id="file-browser"
+                          order={2}
+                          defaultSize={layout.bottomPanelSize}
+                          minSize={20}
+                          maxSize={50}
+                        >
+                          <ErrorBoundary label={t('app.fileBrowser')}>
+                            <IntegratedFileBrowser
+                            connectionId={activeConnection.connectionId}
+                            host={activeConnection.host}
+                            isConnected={activeConnection.status === 'connected'}
+                            terminalWorkingDirectory={terminalWorkingDirectories[activeConnection.connectionId]}
+                            onClose={() => {}}
+                            onOpenInLogMonitor={handleOpenInLogMonitor}
+                            onOpenInEditor={handleOpenInEditor}
+                          />
+                          </ErrorBoundary>
+                        </ResizablePanel>
+                      </>
+                    )}
+                  </ResizablePanelGroup>
+                )}
+              </div>
             </div>
           </ResizablePanel>
 

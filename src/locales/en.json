@@ -315,7 +315,7 @@
     },
     "terminal": {
       "appearance": "Terminal Appearance",
-      "appearanceDesc": "Configure how the terminal looks and behaves.",
+      "appearanceDesc": "Configure the terminal's appearance and the app-wide background wallpaper.",
       "fontFamily": "Font Family",
       "fontSize": "Font Size: {{size}}px",
       "lineHeight": "Line Height: {{height}}",
@@ -332,7 +332,7 @@
       "changeImage": "Change Image",
       "uploadImage": "Upload Image",
       "remove": "Remove",
-      "imagePreviewDesc": "Background image will be displayed behind the terminal text. Adjust opacity and blur for better readability.",
+      "imagePreviewDesc": "The background image is shown behind the entire app, including the terminal. Adjust opacity and blur for better readability.",
       "imageOpacity": "Image Opacity: {{opacity}}%",
       "imageBlur": "Image Blur: {{blur}}px",
       "imagePosition": "Image Position",

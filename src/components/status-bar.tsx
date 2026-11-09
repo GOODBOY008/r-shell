@@ -17,7 +17,7 @@ interface StatusBarProps {
 export function StatusBar({ activeConnection }: StatusBarProps) {
   const { t } = useTranslation();
   return (
-    <div className="bg-sidebar border-t border-border px-3 min-h-8 py-1 flex shrink-0 items-center justify-between gap-3 text-[11px]">
+    <div className="relative z-10 bg-sidebar border-t border-border px-3 min-h-8 py-1 flex shrink-0 items-center justify-between gap-3 text-[11px]">
       <div className="flex min-w-0 items-center gap-3">
         {!activeConnection && (
           <span className="flex items-center gap-2 text-muted-foreground"><Terminal className="size-3.5" aria-hidden="true" />{t('statusBar.workspace')}</span>
