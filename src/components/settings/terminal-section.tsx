@@ -18,6 +18,8 @@ import {
   MAX_TERMINAL_SCROLLBACK,
 } from '../../lib/terminal-config';
 import { englishText, settingMatchesQuery } from './shared';
+import { FontFamilySelect } from '../font-family-select';
+import { TERMINAL_FONT_FAMILIES } from '@/lib/font-families';
 
 // Background image picker: MIME type for the data URL derived from the file extension.
 const IMAGE_MIME: Record<string, string> = {
@@ -133,26 +135,12 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
             {showFontFamily && (
               <div className="space-y-2">
                 <Label>{t('settings.terminal.fontFamily')}</Label>
-                <Select
+                <FontFamilySelect
                   value={appearance.fontFamily}
+                  options={TERMINAL_FONT_FAMILIES}
                   onValueChange={(value) => onChange('fontFamily', value)}
-                >
-                  <SelectTrigger aria-label={t('settings.terminal.fontFamily')}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {/* Menlo's value must match the stored default spelling
-                        in terminal-config ("Courier New" double-quoted) or
-                        the default renders as a blank SelectValue. */}
-                    <SelectItem value='Menlo, Monaco, "Courier New", monospace'>Menlo</SelectItem>
-                    <SelectItem value="'JetBrains Mono', monospace">JetBrains Mono</SelectItem>
-                    <SelectItem value="'Fira Code', monospace">Fira Code</SelectItem>
-                    <SelectItem value="'Source Code Pro', monospace">Source Code Pro</SelectItem>
-                    <SelectItem value="Consolas, monospace">Consolas</SelectItem>
-                    <SelectItem value="Monaco, monospace">Monaco</SelectItem>
-                    <SelectItem value="'Courier New', monospace">Courier New</SelectItem>
-                  </SelectContent>
-                </Select>
+                  aria-label={t('settings.terminal.fontFamily')}
+                />
               </div>
             )}
             {showFontSize && (

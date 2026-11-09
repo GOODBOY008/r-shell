@@ -43,7 +43,7 @@ import {
   type EditorConfig,
 } from '@/lib/editor-config';
 import { normalizeUpdateProxy } from '@/lib/update-proxy';
-import { loadConnectionListAppearance, normalizeConnectionListAppearance } from '@/lib/connection-list-appearance';
+import { normalizeConnectionListAppearance } from '@/lib/connection-list-appearance';
 import { isTauri, invoke } from '@tauri-apps/api/core';
 import { getVersion } from '@tauri-apps/api/app';
 import {
@@ -54,6 +54,7 @@ import {
 import { enable as enableAutostart, disable as disableAutostart, isEnabled as isAutostartEnabled } from '@tauri-apps/plugin-autostart';
 import {
   DEFAULT_SETTINGS,
+  loadSettings,
   SETTINGS_SECTION_IDS,
   type SettingsSectionId,
   type SettingsState,
@@ -65,7 +66,7 @@ import { SecuritySection } from './settings/security-section';
 import { InterfaceSection } from './settings/interface-section';
 import { KeyboardSection } from './settings/keyboard-section';
 import { AdvancedSection } from './settings/advanced-section';
-import { getLanguagePreference, changeLanguage } from '@/lib/i18n';
+import { AUTO, getLanguagePreference, changeLanguage, applyLanguageFromPreference } from '@/lib/i18n';
 
 interface SettingsModalProps {
   open: boolean;
@@ -139,21 +140,10 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
       setShortcutOverrides(loadShortcutOverrides());
       setSearchQuery('');
 
-      // Load other settings from localStorage
-      try {
-        const savedSettings = localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
-        if (savedSettings) {
-          const parsed = JSON.parse(savedSettings) as Record<string, unknown>;
-          // Drop fields whose controls no longer exist so saving this session
-          // writes a clean blob instead of resurrecting the removed keys.
-          stripRemovedSettingsKeys(parsed);
-          setSettings(prev => ({ ...prev, ...parsed, ...normalizeConnectionListAppearance(parsed) }));
-        } else {
-          setSettings(prev => ({ ...prev, ...loadConnectionListAppearance() }));
-        }
-      } catch {
-        setSettings(prev => ({ ...prev, ...loadConnectionListAppearance() }));
-      }
+      // Start from persisted values and defaults on every open; cancelled
+      // edits must not survive when a stored field is absent or invalid.
+      setSettings(loadSettings());
+      setLanguagePref(getLanguagePreference());
 
       // Load the real autostart state from the OS so the toggle reflects
       // the actual launch-at-login configuration, not a cached value.
@@ -211,7 +201,11 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     setTerminalAppearance(loadAppearanceSettings());
     setEditorConfig(loadEditorConfig());
     setShortcutOverrides(loadShortcutOverrides());
-    setSettings(prev => ({ ...prev, ...loadConnectionListAppearance() }));
+    // Launch-at-login is owned by the OS. Importing a cached value must not
+    // overwrite the queried state (or a deliberate unsaved toggle change).
+    setSettings(prev => ({ ...loadSettings(), ...(isTauri() ? { autostart: prev.autostart } : {}) }));
+    setLanguagePref(getLanguagePreference());
+    void applyLanguageFromPreference();
   };
 
   const handleSave = (): boolean => {
@@ -309,6 +303,8 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
       setEditorConfig(DEFAULT_EDITOR_CONFIG);
       setShortcutOverrides({});
       setSettings(DEFAULT_SETTINGS);
+      setLanguagePref(AUTO);
+      void changeLanguage(AUTO);
 
       // Resetting is a deliberate change — don't let a pending OS query undo it
       if (settings.autostart) {

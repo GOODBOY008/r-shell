@@ -11,6 +11,8 @@ import {
   type EditorConfig,
 } from '@/lib/editor-config';
 import { englishText, settingMatchesQuery } from './shared';
+import { FontFamilySelect } from '../font-family-select';
+import { EDITOR_FONT_FAMILIES } from '@/lib/font-families';
 
 interface EditorSectionProps {
   config: EditorConfig;
@@ -78,23 +80,12 @@ export function EditorSection({ config, onChange, query }: EditorSectionProps) {
             {show('settings.editor.fontFamily', 'font') && (
               <div className="space-y-2">
                 <Label>{t('settings.editor.fontFamily')}</Label>
-                <Select
+                <FontFamilySelect
                   value={config.fontFamily}
+                  options={EDITOR_FONT_FAMILIES}
                   onValueChange={(value) => onChange(prev => ({ ...prev, fontFamily: value }))}
-                >
-                  <SelectTrigger aria-label={t('settings.editor.fontFamily')}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="'JetBrains Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace">JetBrains Mono</SelectItem>
-                    <SelectItem value="'Fira Code', Menlo, Monaco, 'Courier New', monospace">Fira Code</SelectItem>
-                    <SelectItem value="'Source Code Pro', Menlo, Monaco, 'Courier New', monospace">Source Code Pro</SelectItem>
-                    <SelectItem value="Menlo, Monaco, 'Courier New', monospace">Menlo</SelectItem>
-                    <SelectItem value="Consolas, monospace">Consolas</SelectItem>
-                    <SelectItem value="Monaco, monospace">Monaco</SelectItem>
-                    <SelectItem value="'Courier New', monospace">Courier New</SelectItem>
-                  </SelectContent>
-                </Select>
+                  aria-label={t('settings.editor.fontFamily')}
+                />
               </div>
             )}
           </div>

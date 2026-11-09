@@ -5,6 +5,9 @@
  * Consumed by `CodeEditor` and surfaced in Settings → Editor tab.
  */
 
+import { EDITOR_FONT_FAMILIES, normalizeFontFamily } from './font-families';
+import { enumSetting, numberSetting, withSettingDefaults } from './settings-validation';
+
 // ---------- Types ----------
 
 export interface EditorConfig {
@@ -35,7 +38,7 @@ export interface EditorConfig {
 export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
   theme: "oneDark",
   fontSize: 14,
-  fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Monaco, 'Courier New', monospace",
+  fontFamily: EDITOR_FONT_FAMILIES[0].value,
   lineNumbers: true,
   wordWrap: true,
   tabSize: 2,
@@ -49,12 +52,22 @@ export const DEFAULT_EDITOR_CONFIG: EditorConfig = {
 
 const STORAGE_KEY = "rshell-editor-config";
 
+export function normalizeEditorConfig(value: unknown): EditorConfig {
+  const config = withSettingDefaults(value, DEFAULT_EDITOR_CONFIG);
+  return {
+    ...config,
+    fontFamily: normalizeFontFamily(config.fontFamily, EDITOR_FONT_FAMILIES),
+    theme: enumSetting(config.theme, EDITOR_THEMES.map(theme => theme.id), DEFAULT_EDITOR_CONFIG.theme),
+    fontSize: numberSetting(config.fontSize, DEFAULT_EDITOR_CONFIG.fontSize, 10, 28, true),
+    tabSize: enumSetting(config.tabSize, [2, 4, 8], DEFAULT_EDITOR_CONFIG.tabSize),
+  };
+}
+
 export function loadEditorConfig(): EditorConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Partial<EditorConfig>;
-      return { ...DEFAULT_EDITOR_CONFIG, ...parsed };
+      return normalizeEditorConfig(JSON.parse(raw));
     }
   } catch {
     // Fall through to defaults
@@ -63,7 +76,7 @@ export function loadEditorConfig(): EditorConfig {
 }
 
 export function saveEditorConfig(config: EditorConfig): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizeEditorConfig(config)));
 }
 
 // ---------- Event ----------
