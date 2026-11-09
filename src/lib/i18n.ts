@@ -62,7 +62,11 @@ function resolveCode(raw: string): string {
 /** Read the stored language preference, defaulting to {@link AUTO}. */
 function readPreference(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY) ?? AUTO;
+    const saved = localStorage.getItem(STORAGE_KEY)?.trim();
+    if (!saved || saved === AUTO) return AUTO;
+    // Older/imported preferences may use an OS locale (zh-Hans, pl-PL).
+    // Resolve those to a picker option; unknown values follow the system.
+    return /^(en|zh|pl)(-|$)/i.test(saved) ? resolveCode(saved.toLowerCase()) : AUTO;
   } catch {
     return AUTO;
   }

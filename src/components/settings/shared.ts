@@ -1,6 +1,8 @@
 import i18n from '@/lib/i18n';
 import type { ThemeMode } from '@/lib/utils';
-import { DEFAULT_CONNECTION_LIST_APPEARANCE, type ConnectionListAppearance } from '@/lib/connection-list-appearance';
+import { DEFAULT_CONNECTION_LIST_APPEARANCE, normalizeConnectionListAppearance, type ConnectionListAppearance } from '@/lib/connection-list-appearance';
+import { APP_SETTINGS_STORAGE_KEY, stripRemovedSettingsKeys } from '@/lib/keyboard-shortcuts';
+import { enumSetting, numberSetting, withSettingDefaults } from '@/lib/settings-validation';
 
 /**
  * Shared shape of the Settings modal's persisted app-settings state
@@ -52,6 +54,28 @@ export const DEFAULT_SETTINGS: SettingsState = {
   updateProxy: '',
   autostart: false,
 };
+
+export function normalizeSettings(value: unknown): SettingsState {
+  const settings = { ...withSettingDefaults(value, DEFAULT_SETTINGS) };
+  stripRemovedSettingsKeys(settings);
+  return {
+    ...settings,
+    ...normalizeConnectionListAppearance(settings),
+    defaultProtocol: enumSetting(settings.defaultProtocol, ['SSH', 'Telnet', 'Raw'], DEFAULT_SETTINGS.defaultProtocol),
+    connectionTimeout: numberSetting(settings.connectionTimeout, DEFAULT_SETTINGS.connectionTimeout, 5, 120, true),
+    keepAliveInterval: numberSetting(settings.keepAliveInterval, DEFAULT_SETTINGS.keepAliveInterval, 30, 300, true),
+    theme: enumSetting(settings.theme, ['auto', 'dark', 'light'], DEFAULT_SETTINGS.theme),
+    updateChannel: enumSetting(settings.updateChannel, ['stable', 'current'], DEFAULT_SETTINGS.updateChannel),
+  };
+}
+
+export function loadSettings(): SettingsState {
+  try {
+    return normalizeSettings(JSON.parse(localStorage.getItem(APP_SETTINGS_STORAGE_KEY) ?? '{}'));
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
 
 /**
  * Case-insensitive substring match for the Settings global search. A row

@@ -1,5 +1,7 @@
 // Terminal configuration and utilities
 import { ITerminalOptions, ITheme } from '@xterm/xterm';
+import { normalizeFontFamily, TERMINAL_FONT_FAMILIES } from './font-families';
+import { enumSetting, numberSetting, withSettingDefaults } from './settings-validation';
 
 export interface TerminalConfig {
   rendererType: 'webgl' | 'canvas' | 'dom';
@@ -46,11 +48,22 @@ export function normalizeScrollbackLines(value: unknown): number {
 }
 
 export function normalizeAppearanceSettings(
-  settings: TerminalAppearanceSettings,
+  value: unknown,
 ): TerminalAppearanceSettings {
+  const settings = withSettingDefaults(value, defaultAppearanceSettings);
   return {
     ...settings,
+    fontFamily: normalizeFontFamily(settings.fontFamily, TERMINAL_FONT_FAMILIES),
+    fontSize: numberSetting(settings.fontSize, defaultAppearanceSettings.fontSize, 8, 32, true),
+    lineHeight: numberSetting(settings.lineHeight, defaultAppearanceSettings.lineHeight, 1, 2),
+    letterSpacing: numberSetting(settings.letterSpacing, defaultAppearanceSettings.letterSpacing, -2, 5),
+    cursorStyle: enumSetting(settings.cursorStyle, ['block', 'underline', 'bar'], defaultAppearanceSettings.cursorStyle),
+    theme: enumSetting(settings.theme, Object.keys(terminalThemes), defaultAppearanceSettings.theme),
     scrollback: normalizeScrollbackLines(settings.scrollback),
+    opacity: numberSetting(settings.opacity, defaultAppearanceSettings.opacity, 10, 100),
+    backgroundImageOpacity: numberSetting(settings.backgroundImageOpacity, defaultAppearanceSettings.backgroundImageOpacity, 5, 100),
+    backgroundImageBlur: numberSetting(settings.backgroundImageBlur, defaultAppearanceSettings.backgroundImageBlur, 0, 20),
+    backgroundImagePosition: enumSetting(settings.backgroundImagePosition, ['cover', 'contain', 'center', 'tile'], defaultAppearanceSettings.backgroundImagePosition),
   };
 }
 
@@ -310,7 +323,7 @@ export const terminalThemes: Record<string, ITheme> = {
 
 export const defaultAppearanceSettings: TerminalAppearanceSettings = {
   fontSize: 14,
-  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+  fontFamily: TERMINAL_FONT_FAMILIES[0].value,
   lineHeight: 1.2,
   letterSpacing: 0,
   cursorStyle: 'block',
@@ -370,18 +383,12 @@ export function loadAppearanceSettings(): TerminalAppearanceSettings {
   try {
     const saved = localStorage.getItem('terminalAppearance');
     if (saved) {
-      const parsed = JSON.parse(saved) as unknown;
-      if (parsed && typeof parsed === 'object') {
-        return normalizeAppearanceSettings({
-          ...defaultAppearanceSettings,
-          ...(parsed as Partial<TerminalAppearanceSettings>),
-        });
-      }
+      return normalizeAppearanceSettings(JSON.parse(saved));
     }
   } catch (e) {
     console.error('Failed to load terminal appearance settings:', e);
   }
-  return defaultAppearanceSettings;
+  return { ...defaultAppearanceSettings };
 }
 
 export function saveAppearanceSettings(settings: TerminalAppearanceSettings): void {

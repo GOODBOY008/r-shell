@@ -30,7 +30,7 @@ import {
   CommandItem,
   CommandList,
 } from "./ui/command";
-import type { EditorConfig } from "@/lib/editor-config";
+import { MAX_EDITOR_FONT_SIZE, MIN_EDITOR_FONT_SIZE, type EditorConfig } from "@/lib/editor-config";
 import {
   EDITOR_LANGUAGE_IDS,
   type EditorLanguageId,
@@ -159,10 +159,10 @@ export function EditorToolbar({
                 type="button"
                 className="editor-tool"
                 aria-label={t("codeEditor.decreaseFontSize")}
-                disabled={config.fontSize <= 10}
+                disabled={config.fontSize <= MIN_EDITOR_FONT_SIZE}
                 onClick={() =>
                   onConfigChange({
-                    fontSize: Math.max(10, config.fontSize - 1),
+                    fontSize: Math.max(MIN_EDITOR_FONT_SIZE, config.fontSize - 1),
                   })
                 }
               >
@@ -173,10 +173,10 @@ export function EditorToolbar({
                 type="button"
                 className="editor-tool"
                 aria-label={t("codeEditor.increaseFontSize")}
-                disabled={config.fontSize >= 32}
+                disabled={config.fontSize >= MAX_EDITOR_FONT_SIZE}
                 onClick={() =>
                   onConfigChange({
-                    fontSize: Math.min(32, config.fontSize + 1),
+                    fontSize: Math.min(MAX_EDITOR_FONT_SIZE, config.fontSize + 1),
                   })
                 }
               >
