@@ -29,13 +29,14 @@ function permissionIdentifiers(capability: Capability): string[] {
 }
 
 describe('window capabilities cover the IPC the frontend performs', () => {
-  it('file-viewer windows may close and destroy themselves', () => {
+  it.each(['default', 'file-viewer'])('%s windows may close and destroy themselves', (capability) => {
     // close(): Ctrl+W / discard-and-close.
     // destroy(): the onCloseRequested wrapper calls destroy() whenever the
     // handler does not preventDefault — without allow-destroy the X button
     // leaves the window unclosable (tauri refuses the native close because
-    // a JS listener exists).
-    const perms = permissionIdentifiers(loadCapability('file-viewer'));
+    // a JS listener exists). EditorTabsProvider also registers this listener
+    // for main on Windows/Linux, even when there are no dirty editors (#297).
+    const perms = permissionIdentifiers(loadCapability(capability));
     expect(perms).toContain('core:window:allow-close');
     expect(perms).toContain('core:window:allow-destroy');
   });
@@ -50,10 +51,5 @@ describe('window capabilities cover the IPC the frontend performs', () => {
     expect(perms).toContain('core:window:allow-show');
     expect(perms).toContain('core:window:allow-unminimize');
     expect(perms).toContain('core:window:allow-set-focus');
-  });
-
-  it('the main window may close itself (Ctrl+W with no terminal tabs)', () => {
-    const perms = permissionIdentifiers(loadCapability('default'));
-    expect(perms).toContain('core:window:allow-close');
   });
 });
