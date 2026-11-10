@@ -22,7 +22,9 @@ export function MonitorError({ error, result }: { error: unknown; result?: Monit
 }
 export function MonitorValue({ module, data, samples = [] }: { module: CommandMonitor; data?: MonitorData; samples?: MonitorSample[] }) {
   const { t, i18n } = useTranslation();
-  const format = (value: number) => `${new Intl.NumberFormat(i18n.resolvedLanguage, { minimumFractionDigits: module.decimals, maximumFractionDigits: module.decimals }).format(value)}${module.unit ? ` ${module.unit}` : ''}`;
+  // Preview drafts can be temporarily invalid; keep form validation separate from rendering.
+  const decimals = Number.isFinite(module.decimals) ? Math.max(0, Math.min(10, Math.trunc(module.decimals))) : 0;
+  const format = (value: number) => `${new Intl.NumberFormat(i18n.resolvedLanguage, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(value)}${module.unit ? ` ${module.unit}` : ''}`;
   if (!data) return <p className="text-xs text-muted-foreground">{t('monitor.noData')}</p>;
   if (data.kind === 'text') return <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs font-mono">{data.text || t('monitor.emptyOutput')}</pre>;
   if (data.kind === 'table') return <MonitorTable module={module} data={data} />;

@@ -175,6 +175,29 @@ describe('monitor layout and editor', () => {
     await waitFor(() => expect(mocks.invoke.mock.calls.filter(([name]) => name === 'run_monitor_command')).toHaveLength(2));
     expect(mocks.invoke.mock.calls[1][1].command).toBe('printf 7');
   });
+
+  it.each(['number', 'chart'] as const)('preserves the %s preview and draft while decimal precision is invalid', async display => {
+    const initial = { ...newCommandMonitor(), name: 'Unsaved metric', command: 'printf 42', display };
+    const onSave = vi.fn();
+    render(<MonitorEditDialog initial={initial} connectionId="session" active scopeLabel="Default" onSave={onSave} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Test command' }));
+    await screen.findByText(/42\.0/);
+    const decimals = screen.getByLabelText('Decimal places') as HTMLInputElement;
+    const form = screen.getByRole('button', { name: 'Save' }).closest('form')!;
+    for (const value of ['-1', '101', '1.5']) {
+      fireEvent.change(decimals, { target: { value } });
+      expect(decimals.value).toBe(value);
+      expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('Unsaved metric');
+      fireEvent.submit(form);
+      expect(screen.getByRole('alert')).toBeTruthy();
+      expect(onSave).not.toHaveBeenCalled();
+    }
+    fireEvent.change(decimals, { target: { value: '2' } });
+    expect(screen.getByText(/42\.00/)).toBeTruthy();
+    fireEvent.submit(form);
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ decimals: 2, name: 'Unsaved metric' }));
+    expect(mocks.invoke.mock.calls.filter(([name]) => name === 'run_monitor_command')).toHaveLength(1);
+  });
   it('carries the original saved connection into an editor tab', () => {
     expect(createEditorTab({ connectionId: 'saved-dup-123', savedConnectionId: 'saved', name: 'Host', status: 'connected' }, '/tmp/a', 'a'))
       .toMatchObject({ editorConnectionId: 'saved-dup-123', originalConnectionId: 'saved' });
