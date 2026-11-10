@@ -1852,10 +1852,10 @@ function AppContent() {
       }
     }
 
-    // Update any open tab name for this connection
+    // Editor tabs share the saved connection identity, but their names are filenames.
     for (const group of Object.values(state.groups)) {
       for (const tab of group.tabs) {
-        if (tab.id === config.id || tab.originalConnectionId === config.id) {
+        if (tab.tabType !== 'editor' && (tab.id === config.id || tab.originalConnectionId === config.id)) {
           dispatch({ type: 'UPDATE_TAB_NAME', tabId: tab.id, name: config.name });
         }
       }
