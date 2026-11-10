@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, ChevronDown, Folder, FolderOpen, Monitor, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock, Search, X, ArrowUpRight, FileDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, Folder, FolderOpen, FolderSync, FolderLock, Monitor, MonitorUp, ScreenShare, Server, HardDrive, Plus, Pencil, Copy, Trash2, FolderPlus, FolderEdit, Zap, Clock, Search, X, ArrowUpRight, FileDown } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Separator } from './ui/separator';
@@ -680,6 +680,14 @@ export function ConnectionManager({
     switch (node.protocol) {
       case 'SSH':
         return <Server className="w-4 h-4 text-primary" />;
+      case 'RDP':
+        return <MonitorUp className="w-4 h-4 text-sky-600 dark:text-sky-400" />;
+      case 'VNC':
+        return <ScreenShare className="w-4 h-4 text-violet-600 dark:text-violet-400" />;
+      case 'FTP':
+        return <FolderSync className="w-4 h-4 text-amber-600 dark:text-amber-400" />;
+      case 'SFTP':
+        return <FolderLock className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />;
       case 'CMD':
       case 'PowerShell':
       case 'Shell':
