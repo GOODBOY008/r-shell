@@ -2,6 +2,8 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newCommandMonitor } from '../lib/monitor-config';
 import { useMonitorCommand, type MonitorCommandResult } from '../lib/use-monitor-command';
+import { TerminalGroupProvider, useTerminalGroups } from '../lib/terminal-group-context';
+import { createEditorTab } from '../lib/editor-tabs';
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
@@ -9,8 +11,8 @@ const response = (stdout = '42'): MonitorCommandResult => ({ stdout, stderr: '',
 const module = { ...newCommandMonitor(), name: 'Metric', command: 'printf 42', display: 'chart' as const };
 const calls = () => mocks.invoke.mock.calls.filter(([name]) => name === 'run_monitor_command');
 const tick = (ms = 0) => act(() => vi.advanceTimersByTimeAsync(ms));
-beforeEach(() => { vi.useFakeTimers(); mocks.invoke.mockReset().mockResolvedValue(response()); });
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+beforeEach(() => { localStorage.clear(); vi.useFakeTimers(); mocks.invoke.mockReset().mockResolvedValue(response()); });
+afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.clear(); });
 describe('custom monitor lifecycle', () => {
   it('sends the exact command only when active and cancels on hide', async () => {
     const { rerender, result } = renderHook(({ active }) => useMonitorCommand(module, 'session', active), { initialProps: { active: false } });
@@ -94,5 +96,42 @@ describe('custom monitor lifecycle', () => {
     await tick();
     expect(calls()).toHaveLength(2);
     expect(result.current.data).toEqual({ kind: 'numbers', values: [7] });
+  });
+
+  it.each(['connected', 'disconnected'] as const)('collects for an editor using its owner session rather than its stale %s snapshot', async status => {
+    const { result } = renderHook(() => {
+      const groups = useTerminalGroups();
+      const reading = useMonitorCommand(module, groups.activeConnection?.connectionId, groups.activeConnection?.status === 'connected');
+      return { ...groups, reading };
+    }, { wrapper: TerminalGroupProvider });
+    const owner = { id: 'saved-dup-owner', originalConnectionId: 'saved', name: 'Host', protocol: 'SSH', connectionStatus: 'pending' as const, reconnectCount: 0 };
+    const editor = createEditorTab({ connectionId: owner.id, savedConnectionId: 'saved', name: owner.name, protocol: 'SSH', status }, '/tmp/config.json', 'config.json');
+    const groupId = result.current.state.activeGroupId;
+    act(() => {
+      result.current.dispatch({ type: 'ADD_TAB', groupId, tab: owner });
+      result.current.dispatch({ type: 'ADD_TAB', groupId, tab: { ...owner, id: 'saved-dup-other', connectionStatus: 'connected' } });
+      result.current.dispatch({ type: 'SPLIT_GROUP', groupId, direction: 'right' });
+      result.current.dispatch({ type: 'OPEN_EDITOR_TAB', tab: editor });
+    });
+    expect(result.current.state.tabToGroupMap[editor.id]).not.toBe(result.current.state.tabToGroupMap[owner.id]);
+    expect(result.current.activeConnection).toMatchObject({ connectionId: owner.id, savedConnectionId: 'saved', status: 'pending' });
+    await tick(20000);
+    expect(calls()).toHaveLength(0);
+    act(() => { result.current.dispatch({ type: 'UPDATE_TAB_STATUS', tabId: owner.id, status: 'connected' }); });
+    await tick();
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0][1].connectionId).toBe(owner.id);
+    expect(result.current.activeTab?.connectionStatus).toBe(status);
+    expect(result.current.reading.data).toEqual({ kind: 'numbers', values: [42] });
+    act(() => { result.current.dispatch({ type: 'UPDATE_TAB_STATUS', tabId: owner.id, status: 'disconnected' }); });
+    await tick(20000);
+    expect(calls()).toHaveLength(1);
+    act(() => { result.current.dispatch({ type: 'UPDATE_TAB_STATUS', tabId: owner.id, status: 'connected' }); });
+    await tick();
+    expect(calls()).toHaveLength(2);
+    act(() => { result.current.dispatch({ type: 'REMOVE_TAB', groupId: result.current.state.tabToGroupMap[owner.id], tabId: owner.id }); });
+    await tick(20000);
+    expect(result.current.activeConnection?.status).toBe('disconnected');
+    expect(calls()).toHaveLength(2);
   });
 });
