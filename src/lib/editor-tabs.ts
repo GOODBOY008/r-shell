@@ -2,6 +2,7 @@ import type { TerminalTab } from './terminal-group-types';
 
 export interface EditorConnection {
   connectionId: string;
+  savedConnectionId?: string;
   name: string;
   host?: string;
   username?: string;
@@ -18,6 +19,7 @@ export function createEditorTab(connection: EditorConnection, filePath: string, 
     host: connection.host,
     username: connection.username,
     editorConnectionId: connection.connectionId,
+    originalConnectionId: connection.savedConnectionId,
     editorConnectionName: connection.name,
     editorFilePath: filePath,
     connectionStatus: connection.status,

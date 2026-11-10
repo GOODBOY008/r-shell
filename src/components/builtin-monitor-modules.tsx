@@ -1,0 +1,1494 @@
+import React, { useState, useEffect, useRef, useReducer } from 'react';
+import { useTranslation, Trans } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
+import { withRetry, CancelledError } from '@/lib/async-retry';
+import { resolveActiveInterface } from '@/lib/network-interface';
+import { Terminal, HardDrive, ArrowDownUp, Gauge, X, ArrowDown, Cpu } from 'lucide-react';
+import { Card, CardContent } from './ui/card';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
+import { Progress } from './ui/progress';
+import { Badge } from './ui/badge';
+import type { BuiltinMonitorId } from '@/lib/monitor-config';
+import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { Button } from './ui/button';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from './ui/alert-dialog';
+import { notify } from '@/lib/notifications';
+
+import { SystemOverview } from './system-overview';
+import { createOverviewState, overviewReducer, OVERVIEW_POLL_MS, type SystemStatsResponse } from '@/lib/system-overview';
+
+interface BuiltinMonitorProps {
+  connectionId?: string;
+  active: boolean;
+  enabled: Record<BuiltinMonitorId, boolean>;
+  children: (modules: Record<BuiltinMonitorId, React.ReactNode>) => React.ReactNode;
+}
+
+interface Process {
+  pid: number;
+  user: string;
+  cpu: number;
+  mem: number;
+  command: string;
+}
+
+interface DiskUsage {
+  path: string;
+  filesystem: string;
+  total: string;
+  used: string;
+  available: string;
+  usage: number;
+}
+
+interface LatencyData {
+  time: string;
+  latency: number;
+  timestamp: number;
+}
+
+interface NetworkUsage {
+  upload: number;
+  download: number;
+  uploadFormatted: string;
+  downloadFormatted: string;
+}
+
+interface NetworkHistoryData {
+  time: string;
+  download: number;
+  upload: number;
+  timestamp: number;
+}
+
+interface InterfaceBandwidth {
+  interface: string;
+  rx_bytes_per_sec: number;
+  tx_bytes_per_sec: number;
+}
+
+// GPU Types
+type GpuVendor = 'nvidia' | 'amd' | 'unknown';
+
+interface GpuInfo {
+  index: number;
+  name: string;
+  vendor: GpuVendor;
+  driver_version?: string;
+  cuda_version?: string;
+}
+
+interface GpuStats {
+  index: number;
+  name: string;
+  vendor: GpuVendor;
+  utilization: number;
+  memory_used: number;      // MiB
+  memory_total: number;     // MiB
+  memory_percent: number;
+  temperature?: number;     // Celsius
+  power_draw?: number;      // Watts
+  power_limit?: number;     // Watts
+  fan_speed?: number;       // %
+  encoder_util?: number;    // %
+  decoder_util?: number;    // %
+}
+
+interface GpuDetectionResult {
+  available: boolean;
+  vendor: GpuVendor;
+  gpus: GpuInfo[];
+  detection_method: string;
+}
+
+interface GpuHistoryData {
+  time: string;
+  utilization: number;
+  memory: number;
+  temperature?: number;
+  timestamp: number;
+}
+
+// GPU color thresholds
+const getGpuTempColor = (temp: number): string => {
+  if (temp >= 85) return 'text-red-500';
+  if (temp >= 75) return 'text-orange-500';
+  if (temp >= 60) return 'text-yellow-500';
+  return 'text-[var(--success)]';
+};
+
+const _getGpuTempProgressColor = (temp: number): string => {
+  if (temp >= 85) return '[&>div]:bg-red-500';
+  if (temp >= 75) return '[&>div]:bg-orange-500';
+  if (temp >= 60) return '[&>div]:bg-yellow-500';
+  return '[&>div]:bg-primary';
+};
+
+// Global utility functions for percentage color coding
+const getUsageColor = (usage: number): string => {
+  if (usage >= 90) return 'text-red-500';
+  if (usage >= 75) return 'text-orange-500';
+  if (usage >= 50) return 'text-yellow-500';
+  return 'text-[var(--success)]';
+};
+
+const getProgressColor = (usage: number): string => {
+  if (usage >= 90) return '[&>div]:bg-red-500';
+  if (usage >= 75) return '[&>div]:bg-orange-500';
+  if (usage >= 50) return '[&>div]:bg-yellow-500';
+  return '[&>div]:bg-primary';
+};
+
+export function BuiltinMonitorModules({ connectionId, active, enabled, children }: BuiltinMonitorProps) {
+  const overviewActive = active && enabled.overview;
+  const processesActive = active && enabled.processes;
+  const disksActive = active && enabled.disks;
+  const gpuActive = active && enabled.gpu;
+  const networkActive = active && enabled.network;
+  const latencyActive = active && enabled.latency;
+  const { t } = useTranslation();
+  const [overview, dispatchOverview] = useReducer(overviewReducer, connectionId, createOverviewState);
+  // Do not paint the previous host's reading while the new effect is starting.
+  const visibleOverview = overview.connectionId === connectionId ? overview : createOverviewState(connectionId);
+  const [processes, setProcesses] = useState<Process[]>([]);
+  const [processToKill, setProcessToKill] = useState<Process | null>(null);
+  const [processSortBy, setProcessSortBy] = useState<'cpu' | 'mem'>('cpu');
+  const [disks, setDisks] = useState<DiskUsage[]>([]);
+
+  // GPU State
+  const [gpuDetection, setGpuDetection] = useState<GpuDetectionResult | null>(null);
+  const [gpuStats, setGpuStats] = useState<GpuStats[]>([]);
+  const [selectedGpuIndex, setSelectedGpuIndex] = useState<number | 'all'>('all');
+  const [gpuHistory, setGpuHistory] = useState<Map<number, GpuHistoryData[]>>(new Map());
+  const [gpuDetectionDone, setGpuDetectionDone] = useState<boolean>(false);
+
+  // GPU colors for multi-GPU chart
+  const GPU_COLORS = ['#8b5cf6', '#06b6d4', '#f97316', '#22c55e', '#ec4899', '#eab308'];
+
+  // Stats have their own polling lifecycle: sorting processes must not add
+  // samples or restart this connection's history. A slow probe never overlaps.
+  useEffect(() => {
+    dispatchOverview({ type: 'reset', connectionId });
+    if (!connectionId || !overviewActive) return;
+
+    let cancelled = false;
+    let inFlight = false;
+    const fetchSystemStats = async () => {
+      // requestIdleCallback may run after this effect has been cleaned up.
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        const response = await invoke<SystemStatsResponse>('get_system_stats', { connectionId });
+        if (!cancelled) {
+          dispatchOverview({ type: 'success', connectionId, response, timestamp: Date.now() });
+        }
+      } catch (error) {
+        if (!cancelled) dispatchOverview({ type: 'failure', connectionId });
+        throw error;
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void withRetry(fetchSystemStats, () => cancelled, { maxRetries: 2 })
+      .catch(error => { if (!(error instanceof CancelledError)) console.error('Stats initial fetch failed:', error); });
+    const interval = setInterval(() => {
+      const poll = () => { void fetchSystemStats().catch(() => {}); };
+      if ('requestIdleCallback' in window) requestIdleCallback(poll);
+      else poll();
+    }, OVERVIEW_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [connectionId, overviewActive]);
+
+  // Fetch processes with the same cancellation and retry contract.
+  const fetchProcesses = async (isCancelled: () => boolean = () => false): Promise<void> => {
+    if (!connectionId || isCancelled()) return;
+
+    const result = await invoke<{
+      success: boolean;
+      processes?: Array<{
+        pid: string;
+        user: string;
+        cpu: string;
+        mem: string;
+        command: string;
+      }>;
+      error?: string;
+    }>('get_processes', { connectionId, sortBy: processSortBy });
+
+    if (isCancelled()) return;
+
+    if (result.success && result.processes) {
+      setProcesses(
+        result.processes.map(p => ({
+          pid: parseInt(p.pid),
+          user: p.user,
+          cpu: parseFloat(p.cpu),
+          mem: parseFloat(p.mem),
+          command: p.command,
+        }))
+      );
+    }
+  };
+
+  // Kill a process
+  const handleKillProcess = async (process: Process) => {
+    if (!connectionId) return;
+
+    try {
+      const result = await invoke<{
+        success: boolean;
+        output?: string;
+        error?: string
+      }>('kill_process', {
+        connectionId,
+        pid: process.pid.toString(),
+        signal: '15' // SIGTERM
+      });
+
+      if (result.success) {
+        notify.success(t('systemMonitor.processTerminated', { pid: process.pid }));
+        // Fire-and-forget refresh — failure here is non-critical
+        void fetchProcesses().catch(e => console.error('Failed to refresh processes:', e));
+      } else {
+        notify.error(t('systemMonitor.failedToKillProcessWithError', { error: result.error || t('systemMonitor.unknownError') }));
+      }
+    } catch (error) {
+      console.error('Failed to kill process:', error);
+      notify.error(t('systemMonitor.failedToKillProcess', { error: String(error) }));
+    }
+
+    setProcessToKill(null);
+  };
+
+  // Processes refresh independently every 10 s and when their sort changes.
+  useEffect(() => {
+    if (!connectionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setProcesses([]);
+      return;
+    }
+    if (!processesActive) return;
+    let cancelled = false;
+    void withRetry(() => fetchProcesses(() => cancelled), () => cancelled, { maxRetries: 2 })
+      .catch(err => { if (!(err instanceof CancelledError)) console.error('Processes initial fetch failed:', err); });
+    const interval = setInterval(() => {
+      const poll = () => { if (!cancelled) void fetchProcesses(() => cancelled).catch(() => {}); };
+      if ('requestIdleCallback' in window) requestIdleCallback(poll);
+      else poll();
+    }, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- the inline fetch uses the connection and sort captured by this effect
+  }, [connectionId, processSortBy, processesActive]);
+
+  // Fetch disk usage data.
+  // Same isCancelled / throw-on-error contract as fetchSystemStats.
+  // Disk usage refreshes every 60 s so the initial retry is especially
+  // important: without it the panel stays empty for a full minute on failure.
+  const fetchDiskUsage = async (isCancelled: () => boolean = () => false): Promise<void> => {
+    if (isCancelled()) return;
+    if (!connectionId) { setDisks([]); return; }
+
+    const result = await invoke<{
+      success: boolean;
+      disks: Array<{
+        filesystem: string;
+        path: string;
+        total: string;
+        used: string;
+        available: string;
+        usage: number;
+      }>;
+      error?: string;
+    }>('get_disk_usage', { connectionId });
+
+    if (isCancelled()) return;
+
+    if (result.success) {
+      setDisks(result.disks);
+    } else {
+      throw new Error(result.error ?? 'Disk usage fetch returned failure');
+    }
+  };
+
+  // Disk usage polling — 60 s interval; initial call uses retry (high impact
+  // if missed: user waits a full minute for first data).
+  useEffect(() => {
+    if (!connectionId) return;
+    if (!disksActive) return;
+
+    let cancelled = false;
+
+    void withRetry(() => fetchDiskUsage(() => cancelled), () => cancelled, {
+      maxRetries: 3,
+      onRetry: (n, err) => console.warn(`Disk usage retry ${n}:`, err),
+    }).catch(err => { if (!(err instanceof CancelledError)) console.error('Disk usage failed after all retries:', err); });
+
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => { void fetchDiskUsage(() => cancelled).catch(() => {}); });
+      } else {
+        void fetchDiskUsage(() => cancelled).catch(() => {});
+      }
+    }, 60000);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchDiskUsage is a stable inline fn; adding it causes infinite re-renders
+  }, [connectionId, disksActive]);
+
+  // GPU Stats fetching.
+  // Same isCancelled / throw-on-error contract as fetchSystemStats.
+  const fetchGpuStats = async (isCancelled: () => boolean = () => false): Promise<void> => {
+    if (!connectionId || !gpuDetection?.available || isCancelled()) return;
+
+    const result = await invoke<{
+      success: boolean;
+      gpus: GpuStats[];
+      error?: string;
+    }>('get_gpu_stats', { connectionId });
+
+    if (isCancelled()) return;
+
+    if (result.success && result.gpus.length > 0) {
+      setGpuStats(result.gpus);
+
+      const now = new Date();
+      const timeStr = now.toLocaleTimeString().slice(0, 8);
+
+      setGpuHistory(prev => {
+        const newHistory = new Map(prev);
+        result.gpus.forEach(gpu => {
+          const history = newHistory.get(gpu.index) || [];
+          const newPoint: GpuHistoryData = {
+            time: timeStr,
+            utilization: gpu.utilization,
+            memory: gpu.memory_percent,
+            temperature: gpu.temperature,
+            timestamp: now.getTime(),
+          };
+          newHistory.set(gpu.index, [...history, newPoint].slice(-60));
+        });
+        return newHistory;
+      });
+    }
+  };
+
+  // GPU detection effect — one-shot per connection, gated on gpuDetection state.
+  // Uses withRetry from @/lib/async-retry for exponential backoff (1 s → 2 s → 4 s)
+  // and CancelledError for clean stale-result suppression on connection switch.
+  useEffect(() => {
+    if (!connectionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGpuDetection(null);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGpuStats([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGpuHistory(new Map());
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setGpuDetectionDone(false);
+      return;
+    }
+
+    // Hidden panel: defer the probe. Re-runs when the tab becomes visible.
+    if (!gpuActive) return;
+
+    let cancelled = false;
+    setGpuDetectionDone(false);
+    setGpuDetection(null);
+
+    void withRetry(
+      () => invoke<GpuDetectionResult>('detect_gpu', { connectionId }),
+      () => cancelled,
+      {
+        maxRetries: 3,
+        onRetry: (n, err) => console.warn(`GPU detection retry ${n}:`, err),
+      },
+    ).then(result => {
+      setGpuDetection(result);
+      setGpuDetectionDone(true);
+      if (result.available && result.gpus.length > 0) {
+        setSelectedGpuIndex(result.gpus.length > 1 ? 'all' : result.gpus[0].index);
+      }
+    }).catch(err => {
+      if (err instanceof CancelledError) return; // connection switched — discard
+      console.error('GPU detection failed after all retries:', err);
+      setGpuDetection({ available: false, vendor: 'unknown', gpus: [], detection_method: 'none' });
+      setGpuDetectionDone(true);
+    });
+
+    return () => { cancelled = true; };
+  }, [connectionId, gpuActive]);
+
+  // GPU stats polling - only if GPU detected
+  useEffect(() => {
+    if (!connectionId || !gpuDetection?.available) return;
+    if (!gpuActive) return;
+
+    let cancelled = false;
+
+    // Initial fetch (GPU stats are not critical on first call — 5 s interval self-heals)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchGpuStats(() => cancelled).catch(err => console.error('GPU stats fetch failed:', err));
+
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => { void fetchGpuStats(() => cancelled).catch(() => {}); });
+      } else {
+        void fetchGpuStats(() => cancelled).catch(() => {});
+      }
+    }, 5000);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- fetchGpuStats is a stable inline fn; adding it causes infinite re-renders
+  }, [connectionId, gpuDetection?.available, gpuActive]);
+
+  const [latencyData, setLatencyData] = useState<LatencyData[]>([]);
+  const [networkUsage, setNetworkUsage] = useState<NetworkUsage>({
+    upload: 0,
+    download: 0,
+    uploadFormatted: '0 KB/s',
+    downloadFormatted: '0 KB/s'
+  });
+  const [networkHistory, setNetworkHistory] = useState<NetworkHistoryData[]>([]);
+  const [networkInterfaces, setNetworkInterfaces] = useState<string[]>([]);
+  const [selectedInterface, setSelectedInterface] = useState<string>('all');
+  // null = auto-select the busiest interface; a string = the user chose it and
+  // auto-selection must stop overriding their choice (including 'all').
+  const [userPickedInterface, setUserPickedInterface] = useState<string | null>(null);
+  // Mirrors the interface the history buffer was filled with. A ref rather than
+  // state so the polling effect can compare without subscribing to it —
+  // depending on that state would make the effect re-trigger itself.
+  const lastActiveInterface = useRef<string | null>(null);
+  // What auto-selection last chose. Held across idle polls so the selection —
+  // and with it the chart history — does not flap between the busiest NIC and
+  // the aggregate on a host that is quiet most of the time.
+  const previousAutoInterface = useRef<string | null>(null);
+  const [_interfaceBandwidthMap, setInterfaceBandwidthMap] = useState<Map<string, InterfaceBandwidth>>(new Map());
+
+  // Network usage monitoring - fetch real bandwidth data
+  // OPTIMIZED: Use longer interval and request idle callback
+  useEffect(() => {
+    if (!connectionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setNetworkHistory([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setNetworkInterfaces([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSelectedInterface('all');
+      setUserPickedInterface(null);
+      lastActiveInterface.current = null;
+      previousAutoInterface.current = null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setInterfaceBandwidthMap(new Map());
+      return;
+    }
+    // Hidden panel: keep the last reading, stop sampling. The bandwidth probe
+    // costs a remote `sleep 1`, so this is the most expensive thing the panel
+    // does while nobody is looking at it.
+    if (!networkActive) return;
+
+    let cancelled = false;
+
+    // fetchBandwidth throws on invoke failure so withRetry can retry it.
+    // The isCancelled guard prevents stale state updates after connection switch.
+    const fetchBandwidth = async (isCancelled: () => boolean = () => false) => {
+      if (isCancelled()) return;
+      const result = await invoke<{
+          success: boolean;
+          bandwidth: Array<{
+            interface: string;
+            rx_bytes_per_sec: number;
+            tx_bytes_per_sec: number;
+          }>;
+          error?: string;
+        }>('get_network_bandwidth', { connectionId });
+
+      if (isCancelled()) return;
+
+      if (result.success && result.bandwidth.length > 0) {
+          // Update interface list and bandwidth map
+          const interfaceNames = result.bandwidth.map(iface => iface.interface);
+          setNetworkInterfaces(prevInterfaces => {
+            // Only update if interfaces changed
+            if (JSON.stringify(prevInterfaces) !== JSON.stringify(interfaceNames)) {
+              return interfaceNames;
+            }
+            return prevInterfaces;
+          });
+
+          // Store bandwidth data per interface
+          const newBandwidthMap = new Map<string, InterfaceBandwidth>();
+          result.bandwidth.forEach(iface => {
+            newBandwidthMap.set(iface.interface, iface);
+          });
+          setInterfaceBandwidthMap(newBandwidthMap);
+
+          // Resolve which interface to display. A user pick wins while it is
+          // still present; if that interface disappears (dongle unplugged, VPN
+          // torn down) fall back to auto rather than reporting a dead 0 KB/s.
+          const activeInterface = resolveActiveInterface(
+            userPickedInterface,
+            previousAutoInterface.current,
+            interfaceNames,
+            result.bandwidth,
+          );
+          previousAutoInterface.current = activeInterface;
+          // Sync the dropdown to whatever we resolved. React bails out when
+          // the value is unchanged, so this does not re-render every poll —
+          // and not reading `selectedInterface` here is what keeps this effect
+          // from re-triggering itself when auto-selection changes the pick.
+          setSelectedInterface(activeInterface);
+
+          // The chart is labelled with the selected interface, so an
+          // auto-switch has to drop the previous interface's history — the
+          // same thing the dropdown handler does.
+          if (lastActiveInterface.current !== activeInterface) {
+            if (lastActiveInterface.current !== null) {
+              setNetworkHistory([]);
+            }
+            lastActiveInterface.current = activeInterface;
+          }
+
+          // Calculate bandwidth based on selected interface
+          let totalDownload = 0;
+          let totalUpload = 0;
+
+          if (activeInterface === 'all') {
+            // Sum all interfaces for total bandwidth
+            result.bandwidth.forEach(iface => {
+              totalDownload += iface.rx_bytes_per_sec;
+              totalUpload += iface.tx_bytes_per_sec;
+            });
+          } else {
+            // Use only selected interface
+            const selectedData = result.bandwidth.find(iface => iface.interface === activeInterface);
+            if (selectedData) {
+              totalDownload = selectedData.rx_bytes_per_sec;
+              totalUpload = selectedData.tx_bytes_per_sec;
+            }
+          }
+
+          // Convert bytes/sec to KB/s
+          const downloadKBps = totalDownload / 1024;
+          const uploadKBps = totalUpload / 1024;
+
+          const formatSpeed = (kbps: number): string => {
+            if (kbps >= 1024) {
+              return `${(kbps / 1024).toFixed(1)} MB/s`;
+            }
+            return `${kbps.toFixed(0)} KB/s`;
+          };
+
+          setNetworkUsage({
+            upload: uploadKBps,
+            download: downloadKBps,
+            uploadFormatted: formatSpeed(uploadKBps),
+            downloadFormatted: formatSpeed(downloadKBps)
+          });
+
+          // Update history
+          const now = new Date();
+          const newHistoryPoint: NetworkHistoryData = {
+            time: now.toLocaleTimeString().slice(0, 8),
+            download: Math.round(downloadKBps),
+            upload: Math.round(uploadKBps),
+            timestamp: now.getTime()
+          };
+
+          setNetworkHistory(prev => {
+            const updated = [...prev, newHistoryPoint];
+            // Keep only last 300 data points (5 minutes of data)
+            return updated.slice(-60);
+          });
+        }
+    };
+
+    // Initial fetch with retry
+    void withRetry(() => fetchBandwidth(() => cancelled), () => cancelled, { maxRetries: 2 })
+      .catch(err => { if (!(err instanceof CancelledError)) console.error('Network bandwidth initial fetch failed:', err); });
+
+    // OPTIMIZED: Increased from 2s to 5s, use idle callback
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => { void fetchBandwidth(() => cancelled).catch(() => {}); });
+      } else {
+        void fetchBandwidth(() => cancelled).catch(() => {});
+      }
+    }, 5000);
+
+    return () => { cancelled = true; clearInterval(interval); };
+    // `selectedInterface` is deliberately absent: it is the *derived* display
+    // value, and writing it from inside this effect would re-trigger the
+    // effect — a host whose busiest NIC alternates would never reach the 5s
+    // interval and would instead issue back-to-back remote samples (each one
+    // costs a 1s sleep on the host). `userPickedInterface` changes only on an
+    // explicit dropdown choice, so depending on it still refetches at once.
+    // `active` gates the whole effect: a hidden panel keeps its last reading
+    // and stops sampling (the probe costs a remote `sleep 1`).
+  }, [connectionId, userPickedInterface, networkActive]);
+
+  // Network latency monitoring - fetch real ping data
+  // OPTIMIZED: Longer interval, use idle callback
+  useEffect(() => {
+    if (!connectionId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLatencyData([]);
+      return;
+    }
+    if (!latencyActive) return;
+
+    let cancelled = false;
+
+    // fetchLatency throws on invoke failure; isCancelled guards stale setState.
+    const fetchLatency = async (isCancelled: () => boolean = () => false) => {
+      if (isCancelled()) return;
+      const result = await invoke<{
+        success: boolean;
+        latency_ms?: number;
+        error?: string;
+      }>('get_network_latency', {
+        connectionId,
+        target: '8.8.8.8', // Ping Google DNS
+      });
+
+      if (isCancelled()) return;
+
+      if (result.success && result.latency_ms !== undefined) {
+        const now = new Date();
+        const newDataPoint: LatencyData = {
+          time: now.toLocaleTimeString().slice(0, 8),
+          latency: Math.round(result.latency_ms * 10) / 10,
+          timestamp: now.getTime(),
+        };
+        setLatencyData(prev => [...prev, newDataPoint].slice(-60));
+      }
+    };
+
+    // Initial fetch with retry
+    void withRetry(() => fetchLatency(() => cancelled), () => cancelled, { maxRetries: 2 })
+      .catch(err => { if (!(err instanceof CancelledError)) console.error('Latency initial fetch failed:', err); });
+
+    // OPTIMIZED: Increased from 3s to 10s, use idle callback
+    const interval = setInterval(() => {
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => { void fetchLatency(() => cancelled).catch(() => {}); });
+      } else {
+        void fetchLatency(() => cancelled).catch(() => {});
+      }
+    }, 10000);
+
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [connectionId, latencyActive]);
+
+
+
+  return (
+    <>
+      {children({
+        overview: <SystemOverview key={connectionId} state={visibleOverview} />,
+        gpu: <>
+        {/* GPU Monitor */}
+        {gpuDetectionDone && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-1.5">
+              <div className="flex items-center gap-1.5">
+                <Cpu className="w-3 h-3 shrink-0" />
+                <h3 className="text-xs font-semibold truncate">{t('systemMonitor.gpuMonitor')}</h3>
+              </div>
+              {gpuDetection?.available && gpuDetection.gpus.length > 1 && (
+                <Select
+                  value={selectedGpuIndex.toString()}
+                  onValueChange={(value) => setSelectedGpuIndex(value === 'all' ? 'all' : parseInt(value))}
+                >
+                  <SelectTrigger className="h-6 w-auto min-w-[56px] max-w-[100px] text-[11px] px-1 py-0 gap-0.5">
+                    <SelectValue placeholder={t('systemMonitor.selectGpu')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all" className="text-[11px] h-6">
+                      {t('systemMonitor.allGpus')}
+                    </SelectItem>
+                    {gpuDetection.gpus.map(gpu => (
+                      <SelectItem key={gpu.index} value={gpu.index.toString()} className="text-[11px] h-6">
+                        GPU {gpu.index}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            <Card className="rounded-lg shadow-none">
+              <CardContent className="p-3 last:pb-3">
+                {!gpuDetection?.available ? (
+                  <div className="text-[11px] text-muted-foreground space-y-1">
+                    <p>{t('systemMonitor.noGpuDetected')}</p>
+                    <p className="text-[11px]">{t('systemMonitor.supportedGpus')}</p>
+                  </div>
+                ) : selectedGpuIndex === 'all' ? (
+                  /* "All" GPU View - Compact Summary Cards */
+                  <div className="space-y-2">
+                    {gpuStats.map((gpu, idx) => {
+                      const _gpuInfo = gpuDetection.gpus.find(g => g.index === gpu.index);
+                      return (
+                        <div key={gpu.index} className="border border-border rounded p-1.5 space-y-1">
+                          {/* GPU Name Row */}
+                          <div className="flex items-center gap-1.5">
+                            <div
+                              className="w-2 h-2 rounded-full shrink-0"
+                              style={{ backgroundColor: GPU_COLORS[idx % GPU_COLORS.length] }}
+                            />
+                            <span className="text-[11px] font-medium truncate">
+                              GPU {gpu.index}: {gpu.name}
+                            </span>
+                          </div>
+
+                          {/* Utilization & VRAM Row */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div className="space-y-0.5">
+                              <div className="flex justify-between text-[11px]">
+                                <span className="text-muted-foreground">{t('systemMonitor.gpuLabel')}</span>
+                                <span className={`font-semibold ${getUsageColor(gpu.utilization ?? 0)}`}>
+                                  {(gpu.utilization ?? 0).toFixed(0)}%
+                                </span>
+                              </div>
+                              <Progress value={gpu.utilization ?? 0} className={`h-1 ${getProgressColor(gpu.utilization ?? 0)}`} />
+                            </div>
+                            <div className="space-y-0.5">
+                              <div className="flex justify-between text-[11px]">
+                                <span className="text-muted-foreground">{t('systemMonitor.vram')}</span>
+                                <span className={`font-semibold ${getUsageColor(gpu.memory_percent ?? 0)}`}>
+                                  {(gpu.memory_percent ?? 0).toFixed(0)}%
+                                </span>
+                              </div>
+                              <Progress value={gpu.memory_percent ?? 0} className={`h-1 ${getProgressColor(gpu.memory_percent ?? 0)}`} />
+                              <div className="text-[11px] text-muted-foreground text-right">
+                                {(gpu.memory_used ?? 0).toLocaleString()} MiB / {(gpu.memory_total ?? 0).toLocaleString()} MiB
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Stats Row */}
+                          <div className="flex gap-2 text-[11px] text-muted-foreground">
+                            {gpu.temperature != null && (
+                              <span className={getGpuTempColor(gpu.temperature)}>
+                                {gpu.temperature.toFixed(0)}°C
+                              </span>
+                            )}
+                            {gpu.power_draw != null && (
+                              <span>
+                                {gpu.power_draw.toFixed(0)}W
+                                {gpu.power_limit != null && `/${gpu.power_limit.toFixed(0)}W`}
+                              </span>
+                            )}
+                            {gpu.fan_speed != null && (
+                              <span>Fan {gpu.fan_speed.toFixed(0)}%</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Combined Usage History Chart for All GPUs */}
+                    {gpuStats.length > 0 && gpuHistory.size > 0 && (
+                      <div>
+                        <div className="text-[11px] text-muted-foreground mb-1">{t('systemMonitor.combinedUsageHistory')}</div>
+                        <div className="h-24 text-foreground">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart margin={{ top: 5, right: 2, left: 0, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                              <XAxis
+                                dataKey="time"
+                                type="category"
+                                allowDuplicatedCategory={false}
+                                tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                                stroke="var(--muted-foreground)"
+                                strokeWidth={0.5}
+                                height={20}
+                                interval="preserveStartEnd"
+                                minTickGap={30}
+                              />
+                              <YAxis
+                                tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                                stroke="var(--muted-foreground)"
+                                strokeWidth={0.5}
+                                domain={[0, 100]}
+                                ticks={[0, 50, 100]}
+                                width={25}
+                              />
+                              <Tooltip
+                                contentStyle={{
+                                  backgroundColor: 'var(--popover)',
+                                  color: 'var(--popover-foreground)',
+                                  border: '1px solid var(--border)',
+                                  borderRadius: '6px',
+                                  fontSize: '11px'
+                                }}
+                                formatter={(value: any, name: any) => [`${Number(value).toFixed(1)}%`, name === 'utilization' ? t('systemMonitor.gpuLabel') : name]}
+                              />
+                              {gpuStats.map((gpu, idx) => {
+                                const history = gpuHistory.get(gpu.index) || [];
+                                return (
+                                  <Line
+                                    key={gpu.index}
+                                    data={history}
+                                    dataKey="utilization"
+                                    name={`GPU ${gpu.index}`}
+                                    type="monotone"
+                                    stroke={GPU_COLORS[idx % GPU_COLORS.length]}
+                                    strokeWidth={2}
+                                    dot={false}
+                                    isAnimationActive={false}
+                                  />
+                                );
+                              })}
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                        <div className="flex gap-3 justify-center mt-1 flex-wrap">
+                          {gpuStats.map((gpu, idx) => (
+                            <div key={gpu.index} className="flex items-center gap-1">
+                              <div
+                                className="w-2 h-2 rounded-full"
+                                style={{ backgroundColor: GPU_COLORS[idx % GPU_COLORS.length] }}
+                              />
+                              <span className="text-[11px] text-muted-foreground">{t('systemMonitor.gpuIndex', { index: gpu.index })}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Single GPU Detailed View */
+                  <div className="space-y-2">
+                    {/* GPU Info Header */}
+                    {(() => {
+                      const currentGpu = gpuStats.find(g => g.index === selectedGpuIndex) || gpuStats[0];
+                      const gpuInfo = gpuDetection.gpus.find(g => g.index === selectedGpuIndex) || gpuDetection.gpus[0];
+
+                      if (!currentGpu) {
+                        return <div className="text-[11px] text-muted-foreground">{t('systemMonitor.loadingGpuStats')}</div>;
+                      }
+
+                      return (
+                        <>
+                          {/* GPU Name & Badges */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[11px] font-medium truncate" title={currentGpu.name}>
+                              {currentGpu.name}
+                            </span>
+                            <Badge variant="outline" className="text-[11px] px-1 py-0 h-4">
+                              {currentGpu.vendor === 'nvidia' ? 'NVIDIA' : currentGpu.vendor === 'amd' ? 'AMD' : 'Unknown'}
+                            </Badge>
+                            {gpuInfo?.driver_version && (
+                              <Badge variant="secondary" className="text-[11px] px-1 py-0 h-4">
+                                {gpuInfo.driver_version}
+                              </Badge>
+                            )}
+                            {gpuInfo?.cuda_version && (
+                              <Badge variant="secondary" className="text-[11px] px-1 py-0 h-4">
+                                CUDA {gpuInfo.cuda_version}
+                              </Badge>
+                            )}
+                          </div>
+
+                          {/* GPU Utilization */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center gap-1">
+                              <span className="text-xs font-medium">{t('systemMonitor.gpuUtilization')}</span>
+                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.utilization ?? 0)}`}>
+                                {(currentGpu.utilization ?? 0).toFixed(1)}%
+                              </span>
+                            </div>
+                            <Progress value={currentGpu.utilization ?? 0} className={`h-1.5 ${getProgressColor(currentGpu.utilization ?? 0)}`} />
+                          </div>
+
+                          {/* VRAM */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center gap-1">
+                              <span className="text-xs font-medium">{t('systemMonitor.vram')}</span>
+                              <span className={`text-xs font-semibold ${getUsageColor(currentGpu.memory_percent ?? 0)}`}>
+                                {(currentGpu.memory_percent ?? 0).toFixed(1)}%
+                              </span>
+                            </div>
+                            <Progress value={currentGpu.memory_percent ?? 0} className={`h-1.5 ${getProgressColor(currentGpu.memory_percent ?? 0)}`} />
+                            <div className="text-[11px] text-muted-foreground text-right leading-tight">
+                              {currentGpu.memory_used ?? 0} MiB / {currentGpu.memory_total ?? 0} MiB
+                            </div>
+                          </div>
+
+                          {/* Temperature, Power, Fan, Encoder, Decoder in single row */}
+                          <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px]">
+                            {currentGpu.temperature != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.temp')}</span>
+                                <span className={`font-semibold ${getGpuTempColor(currentGpu.temperature)}`}>
+                                  {currentGpu.temperature.toFixed(0)}°C
+                                </span>
+                              </div>
+                            )}
+                            {currentGpu.power_draw != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.power')}</span>
+                                <span className="font-semibold">
+                                  {currentGpu.power_draw.toFixed(0)}W
+                                  {currentGpu.power_limit != null && (
+                                    <span className="text-muted-foreground font-normal">/{currentGpu.power_limit.toFixed(0)}W</span>
+                                  )}
+                                </span>
+                              </div>
+                            )}
+                            {currentGpu.fan_speed != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.fan')}</span>
+                                <span className="font-semibold">{currentGpu.fan_speed.toFixed(0)}%</span>
+                              </div>
+                            )}
+                            {currentGpu.encoder_util != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.encoder')}</span>
+                                <span className={`font-semibold ${getUsageColor(currentGpu.encoder_util)}`}>
+                                  {currentGpu.encoder_util.toFixed(0)}%
+                                </span>
+                              </div>
+                            )}
+                            {currentGpu.decoder_util != null && (
+                              <div className="flex items-baseline gap-1">
+                                <span className="text-muted-foreground">{t('systemMonitor.decoder')}</span>
+                                <span className={`font-semibold ${getUsageColor(currentGpu.decoder_util)}`}>
+                                  {currentGpu.decoder_util.toFixed(0)}%
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* GPU Usage History Chart */}
+                          {gpuHistory.get(currentGpu.index)?.length ? (
+                            <div>
+                              <div className="text-[11px] text-muted-foreground mb-1">{t('systemMonitor.usageHistory')}</div>
+                              <div className="h-20 text-foreground">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <AreaChart
+                                    data={gpuHistory.get(currentGpu.index) || []}
+                                    margin={{ top: 5, right: 2, left: 0, bottom: 0 }}
+                                  >
+                                    <defs>
+                                      <linearGradient id="gpuUtilGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="#8b5cf6" stopOpacity={0.3} />
+                                        <stop offset="100%" stopColor="#8b5cf6" stopOpacity={0.05} />
+                                      </linearGradient>
+                                      <linearGradient id="gpuMemGradient" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.3} />
+                                        <stop offset="100%" stopColor="#06b6d4" stopOpacity={0.05} />
+                                      </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                                    <XAxis
+                                      dataKey="time"
+                                      tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                                      stroke="var(--muted-foreground)"
+                                      strokeWidth={0.5}
+                                      height={20}
+                                      interval="preserveStartEnd"
+                                      minTickGap={30}
+                                    />
+                                    <YAxis
+                                      tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                                      stroke="var(--muted-foreground)"
+                                      strokeWidth={0.5}
+                                      domain={[0, 100]}
+                                      ticks={[0, 50, 100]}
+                                      width={25}
+                                    />
+                                    <Tooltip
+                                      contentStyle={{
+                                        backgroundColor: 'var(--popover)',
+                                        color: 'var(--popover-foreground)',
+                                        border: '1px solid var(--border)',
+                                        borderRadius: '6px',
+                                        fontSize: '11px'
+                                      }}
+                                      formatter={(value: any, name: any) => [
+                                        `${Number(value).toFixed(1)}%`,
+                                        name === 'utilization' ? t('systemMonitor.gpuLabel') : t('systemMonitor.vram')
+                                      ]}
+                                    />
+                                    <Area
+                                      type="monotone"
+                                      dataKey="utilization"
+                                      stroke="#8b5cf6"
+                                      strokeWidth={2}
+                                      fill="url(#gpuUtilGradient)"
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                    <Area
+                                      type="monotone"
+                                      dataKey="memory"
+                                      stroke="#06b6d4"
+                                      strokeWidth={2}
+                                      fill="url(#gpuMemGradient)"
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                  </AreaChart>
+                                </ResponsiveContainer>
+                              </div>
+                              <div className="flex gap-3 justify-center mt-1">
+                                <div className="flex items-center gap-1">
+                                  <div className="w-2 h-2 rounded-full bg-[#8b5cf6]" />
+                              <span className="text-[11px] text-muted-foreground">{t('systemMonitor.gpuLabel')}</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <div className="w-2 h-2 rounded-full bg-[#06b6d4]" />
+                              <span className="text-[11px] text-muted-foreground">{t('systemMonitor.vram')}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {/* Temperature History Chart */}
+                          {gpuHistory.get(currentGpu.index)?.some(h => h.temperature !== undefined) && (
+                            <div>
+                              <div className="text-[11px] text-muted-foreground mb-1">{t('systemMonitor.temperatureHistory')}</div>
+                              <div className="h-16 text-foreground">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <LineChart
+                                    data={gpuHistory.get(currentGpu.index) || []}
+                                    margin={{ top: 5, right: 2, left: 0, bottom: 0 }}
+                                  >
+                                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                                    <XAxis
+                                      dataKey="time"
+                                      tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                                      stroke="var(--muted-foreground)"
+                                      strokeWidth={0.5}
+                                      height={20}
+                                      interval="preserveStartEnd"
+                                      minTickGap={30}
+                                    />
+                                    <YAxis
+                                      tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                                      stroke="var(--muted-foreground)"
+                                      strokeWidth={0.5}
+                                      domain={[30, 100]}
+                                      ticks={[40, 60, 80]}
+                                      width={25}
+                                    />
+                                    <Tooltip
+                                      contentStyle={{
+                                        backgroundColor: 'var(--popover)',
+                                        color: 'var(--popover-foreground)',
+                                        border: '1px solid var(--border)',
+                                        borderRadius: '6px',
+                                        fontSize: '11px'
+                                      }}
+                                      formatter={(value: any) => [`${Number(value).toFixed(0)}°C`, t('systemMonitor.temp')]}
+                                    />
+                                    <Line
+                                      type="monotone"
+                                      dataKey="temperature"
+                                      stroke="#f97316"
+                                      strokeWidth={2}
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+
+        </>,
+        processes: <>
+        {/* Running Processes */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5">
+            <Terminal className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-semibold truncate">{t('systemMonitor.runningProcesses')}</h3>
+          </div>
+          <Card className="overflow-hidden rounded-lg shadow-none">
+            <CardContent className="p-0 last:pb-0">
+              <div className="max-h-40 overflow-auto">
+                <table className="w-full caption-bottom text-sm">
+                  <thead className="[&_tr]:border-b [&_tr]:border-border">
+                    <tr className="border-b border-border transition-colors">
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px]">{t('systemMonitor.pid')}</th>
+                      <th
+                        className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] cursor-pointer hover:bg-muted/50 select-none"
+                        aria-sort={processSortBy === 'cpu' ? 'descending' : 'none'}
+                      >
+                        <button type="button" className="flex h-7 w-full items-center gap-0.5 rounded-sm" onClick={() => setProcessSortBy('cpu')}>
+                          {t('systemMonitor.cpu')}
+                          {processSortBy === 'cpu' && <ArrowDown className="w-2.5 h-2.5" />}
+                        </button>
+                      </th>
+                      <th
+                        className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] cursor-pointer hover:bg-muted/50 select-none"
+                        aria-sort={processSortBy === 'mem' ? 'descending' : 'none'}
+                      >
+                        <button type="button" className="flex h-7 w-full items-center gap-0.5 rounded-sm" onClick={() => setProcessSortBy('mem')}>
+                          {t('systemMonitor.mem')}
+                          {processSortBy === 'mem' && <ArrowDown className="w-2.5 h-2.5" />}
+                        </button>
+                      </th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px]">{t('systemMonitor.command')}</th>
+                      <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium whitespace-nowrap text-[11px] w-8"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="[&_tr:last-child]:border-0">
+                    {processes.slice(0, 8).map((process) => (
+                      <tr key={process.pid} className="hover:bg-muted/50 border-b border-border transition-colors">
+                        <td className="p-1 align-middle whitespace-nowrap text-[11px]">{process.pid}</td>
+                        <td className={`p-1 align-middle whitespace-nowrap text-[11px] font-semibold ${getUsageColor(process.cpu)}`}>
+                          {process.cpu.toFixed(0)}%
+                        </td>
+                        <td className={`p-1 align-middle whitespace-nowrap text-[11px] font-semibold ${getUsageColor(process.mem)}`}>
+                          {process.mem.toFixed(0)}%
+                        </td>
+                        <td className="p-1 align-middle whitespace-nowrap text-[11px] font-mono truncate max-w-0" title={process.command}>
+                          {process.command}
+                        </td>
+                        <td className="p-1 align-middle whitespace-nowrap text-xs">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6"
+                            onClick={() => setProcessToKill(process)}
+                            title={t('systemMonitor.killProcess')}
+                          >
+                            <X className="h-3 w-3" />
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+
+        </>,
+        disks: <>
+        {/* Disk Usage */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5">
+            <HardDrive className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-semibold truncate">{t('systemMonitor.diskUsage')}</h3>
+          </div>
+          <Card className="overflow-hidden rounded-lg shadow-none">
+            <CardContent className="p-0 last:pb-0">
+              {disks.length === 0 ? (
+                <div className="p-2 text-[11px] text-muted-foreground">
+                  {t('systemMonitor.noDiskInfo')}
+                </div>
+              ) : (
+                <div className="max-h-40 overflow-auto">
+                  <table className="w-full caption-bottom text-sm">
+                    <thead className="[&_tr]:border-b [&_tr]:border-border">
+                      <tr className="border-b border-border transition-colors">
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-left align-middle font-medium text-[11px]">{t('systemMonitor.path')}</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.size')}</th>
+                        <th className="sticky top-0 z-10 bg-background text-foreground h-7 px-1 text-right align-middle font-medium text-[11px]">{t('systemMonitor.usage')}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="[&_tr:last-child]:border-0">
+                      {disks.map((disk, index) => (
+                        <tr key={index} className="hover:bg-muted/50 border-b border-border transition-colors">
+                          <td className="p-1 align-middle font-medium text-[11px] truncate max-w-0" title={`${disk.path} (${disk.filesystem})`}>
+                            {disk.path}
+                          </td>
+                          <td className="p-1 align-middle text-right font-mono text-[11px] whitespace-nowrap">{disk.total}</td>
+                          <td className="p-1 align-middle text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <span className={`font-mono text-[11px] font-semibold ${getUsageColor(disk.usage)}`}>
+                                {disk.usage}%
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+
+        </>,
+        network: <>
+        {/* Network Usage */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <ArrowDownUp className="w-3 h-3 shrink-0" />
+              <h3 className="text-xs font-semibold truncate">{t('systemMonitor.networkUsage')}</h3>
+            </div>
+            {networkInterfaces.length > 0 && (
+              <Select value={selectedInterface} onValueChange={(value) => {
+                setSelectedInterface(value);
+                // Pin the choice so auto-selection stops overriding it, and
+                // refetch immediately instead of waiting for the next poll.
+                setUserPickedInterface(value);
+                // Clear history when switching interfaces
+                setNetworkHistory([]);
+              }}>
+                <SelectTrigger className="h-6 w-auto min-w-[56px] max-w-[112px] text-[11px] px-1 py-0 gap-0.5">
+                  <SelectValue placeholder={t('systemMonitor.selectInterface')} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all" className="text-[11px] h-6">
+                    {t('systemMonitor.allInterfaces')}
+                  </SelectItem>
+                  {networkInterfaces.map(iface => (
+                    <SelectItem key={iface} value={iface} className="text-[11px] h-6">
+                      {iface}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
+          <Card className="rounded-lg shadow-none">
+            <CardContent className="p-3 space-y-3 last:pb-3">
+              {/* Current Speeds */}
+              <div className="grid grid-cols-2 gap-1.5">
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[var(--chart-1)] shrink-0" />
+                    <div className="text-[11px] text-muted-foreground">{t('systemMonitor.down')}</div>
+                  </div>
+                  <div className="font-medium text-[11px] truncate" title={networkUsage.downloadFormatted}>
+                    {networkUsage.downloadFormatted}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1">
+                    <div className="w-1.5 h-1.5 rounded-full bg-[var(--chart-2)] shrink-0" />
+                    <div className="text-[11px] text-muted-foreground">{t('systemMonitor.up')}</div>
+                  </div>
+                  <div className="font-medium text-[11px] truncate" title={networkUsage.uploadFormatted}>
+                    {networkUsage.uploadFormatted}
+                  </div>
+                </div>
+              </div>
+
+              {/* Usage History Chart */}
+              <div>
+                <div className="text-[11px] text-muted-foreground mb-1">{t('systemMonitor.history')}</div>
+                <div className="h-24 text-foreground">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart
+                      data={networkHistory.map(item => ({
+                        ...item,
+                        uploadPositive: item.upload,
+                        downloadNegative: -item.download
+                      }))}
+                      margin={{ top: 5, right: 2, left: 0, bottom: 0 }}
+                    >
+                      <defs>
+                        <linearGradient id="uploadGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="var(--chart-2)" stopOpacity={0.3} />
+                          <stop offset="100%" stopColor="var(--chart-2)" stopOpacity={0.05} />
+                        </linearGradient>
+                        <linearGradient id="downloadGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.05} />
+                          <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0.3} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                      <XAxis
+                        dataKey="time"
+                        axisLine={true}
+                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                        stroke="var(--muted-foreground)"
+                        tickLine={false}
+                        height={20}
+                        interval="preserveStartEnd"
+                        minTickGap={50}
+                      />
+                      <YAxis
+                        tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                        stroke="var(--muted-foreground)"
+                        domain={[-1500, 1500]}
+                        ticks={[-1228.8, -614.4, 0, 614.4, 1228.8]}
+                        tickFormatter={(value) => {
+                          const absValue = Math.abs(value);
+                          if (absValue === 0) return '0';
+                          if (absValue >= 1024) {
+                            return `${(absValue / 1024).toFixed(1)} MB/s`;
+                          }
+                          return `${absValue.toFixed(0)} KB/s`;
+                        }}
+                        width={64}
+                        tickLine={false}
+                      />
+                      <ReferenceLine y={0} stroke="var(--muted-foreground)" strokeWidth={1.5} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: 'var(--popover)',
+                          color: 'var(--popover-foreground)',
+                          border: '1px solid var(--border)',
+                          borderRadius: '6px',
+                          fontSize: '11px'
+                        }}
+                        formatter={(value: any, name: any) => {
+                          const kbps = Math.abs(Number(value));
+                          const formatted = kbps >= 1024 ? `${(kbps / 1024).toFixed(1)} MB/s` : `${kbps.toFixed(0)} KB/s`;
+                          return [formatted, name === 'uploadPositive' ? t('systemMonitor.upload') : t('systemMonitor.download')];
+                        }}
+                        labelFormatter={(label: any) => `${label}`}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="uploadPositive"
+                        stroke="var(--chart-2)"
+                        strokeWidth={2}
+                        fill="url(#uploadGradient)"
+                        dot={false}
+                        activeDot={{ r: 3, fill: 'var(--chart-2)', stroke: 'var(--chart-2)' }}
+                        isAnimationActive={false}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="downloadNegative"
+                        stroke="var(--chart-1)"
+                        strokeWidth={2}
+                        fill="url(#downloadGradient)"
+                        dot={false}
+                        activeDot={{ r: 3, fill: 'var(--chart-1)', stroke: 'var(--chart-1)' }}
+                        isAnimationActive={false}
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+
+        </>,
+        latency: <>
+        {/* Network Latency */}
+        <div className="space-y-1">
+          <div className="flex items-center gap-1.5">
+            <Gauge className="w-3 h-3 shrink-0" />
+            <h3 className="text-xs font-semibold truncate">{t('systemMonitor.networkLatency')}</h3>
+          </div>
+          <Card className="rounded-lg shadow-none">
+            <CardContent className="p-3 last:pb-3">
+              <div className="h-24 text-foreground">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={latencyData} margin={{ top: 5, right: 2, left: -10, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-border" opacity={0.2} />
+                    <defs>
+                      <linearGradient id="latencyGradient" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="var(--chart-1)" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis
+                      dataKey="time"
+                      tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                      stroke="var(--muted-foreground)"
+                      strokeWidth={0.5}
+                      height={20}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
+                      stroke="var(--muted-foreground)"
+                      strokeWidth={0.5}
+                      width={48}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: 'var(--popover)',
+                        color: 'var(--popover-foreground)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '6px',
+                        fontSize: '12px'
+                      }}
+                      formatter={(value: any) => [`${value}ms`, t('systemMonitor.latency')]}
+                      labelFormatter={(label: any) => `${t('systemMonitor.time')}: ${label}`}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="latency"
+                      stroke="var(--chart-1)"
+                      strokeWidth={3}
+                      fill="url(#latencyGradient)"
+                      dot={false}
+                      activeDot={{
+                        r: 5,
+                        fill: 'var(--chart-1)',
+                        stroke: 'var(--card)',
+                        strokeWidth: 2
+                      }}
+                      isAnimationActive={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        </>,
+      })}
+      {/* Kill Process Confirmation Dialog */}
+      <AlertDialog open={!!processToKill} onOpenChange={(open) => !open && setProcessToKill(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('systemMonitor.terminateProcessTitle')}</AlertDialogTitle>
+            <AlertDialogDescription>
+              <Trans i18nKey="systemMonitor.terminateProcessDesc" values={{ pid: processToKill?.pid }} components={{ strong: <strong /> }} />
+              <br />
+              <span className="text-xs font-mono mt-2 block">
+                {processToKill?.command}
+              </span>
+              <br />
+              {t('systemMonitor.terminateProcessDetail')}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => processToKill && handleKillProcess(processToKill)}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {t('systemMonitor.terminate')}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}

@@ -20,10 +20,11 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { TerminalGroupState, TerminalTab } from '../lib/terminal-group-types';
 import App from '../App';
 import type { ConnectionConfig } from '../components/connection-dialog';
+import { createEditorTab } from '../lib/editor-tabs';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared mocks
@@ -154,15 +155,19 @@ vi.mock('@/components/connection-dialog', async () => {
   return {
     ConnectionDialog: (props: {
       onConnect?: (config: ConnectionConfig) => void;
+      onSave?: (config: ConnectionConfig) => void;
     }) =>
       ReactModule.createElement(
-        'button',
-        {
+        ReactModule.Fragment,
+        null,
+        ReactModule.createElement('button', {
           'data-testid': 'trigger-onconnect',
-          onClick: () =>
-            props.onConnect?.(mockDialogConfig),
-        },
-        'trigger',
+          onClick: () => props.onConnect?.(mockDialogConfig),
+        }, 'connect'),
+        ReactModule.createElement('button', {
+          'data-testid': 'trigger-onsave',
+          onClick: () => props.onSave?.(mockDialogConfig),
+        }, 'save'),
       ),
   };
 });
@@ -212,7 +217,8 @@ vi.mock('@/components/file-browser-view', async () => {
 });
 vi.mock('@/components/file-editor-view', async () => {
   const ReactModule = await import('react');
-  return { FileEditorView: () => ReactModule.createElement('div') };
+  return { FileEditorView: ({ filePath, fileName }: { filePath: string; fileName: string }) =>
+    ReactModule.createElement('div', { 'data-testid': `editor-${filePath}` }, fileName) };
 });
 
 // jsdom lacks ResizeObserver; Radix popups require it.
@@ -319,6 +325,78 @@ describe('App connection dialog and reconnect', () => {
       expect(lastState.groups['group-1'].tabs.find(tab => tab.id === 'cancelled-rdp')?.connectionStatus).toBe('disconnected');
     });
     expect(lifecycle.toast.error).not.toHaveBeenCalled();
+  });
+
+  it.each(['Test Server', 'Renamed Server'])('preserves editor filenames when saving connection settings as %s', async (name) => {
+    const primary = mockState.groups['group-1'].tabs[0];
+    const duplicate: TerminalTab = { ...primary, id: 'conn-1-dup-1', originalConnectionId: 'conn-1' };
+    const connection = {
+      connectionId: duplicate.id, savedConnectionId: 'conn-1', name: primary.name,
+      protocol: 'SSH', status: 'disconnected' as const,
+    };
+    const editors = [
+      createEditorTab(connection, '/etc/settings.json', 'settings.json'),
+      createEditorTab(connection, '/tmp/preview.png', 'preview.png'),
+    ];
+    const tabs = [primary, duplicate, ...editors];
+    mockState.groups['group-1'].tabs = tabs;
+    mockState.groups['group-1'].activeTabId = editors[1].id;
+    mockState.tabToGroupMap = Object.fromEntries(tabs.map(tab => [tab.id, 'group-1']));
+    mockDialogConfig = { ...mockDialogConfig, name };
+    lifecycle.invoke.mockResolvedValue({});
+
+    render(<App />);
+    const stateBeforeSave = lifecycle.stateHistory[lifecycle.stateHistory.length - 1];
+    await act(async () => { fireEvent.click(screen.getByTestId('trigger-onsave')); });
+
+    await vi.waitFor(() => {
+      // Await the save callback even when the connection name is unchanged.
+      const savedState = lifecycle.stateHistory[lifecycle.stateHistory.length - 1];
+      expect(savedState).not.toBe(stateBeforeSave);
+      const savedTabs = savedState.groups['group-1'].tabs;
+      expect(savedTabs.slice(0, 2).map(tab => tab.name)).toEqual([name, name]);
+      expect(savedTabs.slice(2).map(tab => ({ name: tab.name, savedId: tab.originalConnectionId }))).toEqual([
+        { name: 'settings.json', savedId: 'conn-1' },
+        { name: 'preview.png', savedId: 'conn-1' },
+      ]);
+      expect(screen.getByTestId('editor-/tmp/preview.png').textContent).toBe('preview.png');
+    });
+  });
+
+  it.each([false, true])('quick-connect opens a terminal beside an orphaned editor (prompt for credentials: %s)', async (promptForCredentials) => {
+    const editor = createEditorTab({
+      connectionId: 'conn-1-dup-1', savedConnectionId: 'conn-1', name: 'Test Server',
+      protocol: 'SSH', status: 'disconnected',
+    }, '/etc/settings.json', 'settings.json');
+    mockState.groups['group-1'].tabs = [editor];
+    mockState.groups['group-1'].activeTabId = editor.id;
+    mockState.tabToGroupMap = { [editor.id]: 'group-1' };
+    if (promptForCredentials) {
+      const connections = JSON.parse(localStorage.getItem('r-shell-connections')!);
+      // An absent password must show the settings dialog; an empty string is valid.
+      delete connections[0].password;
+      localStorage.setItem('r-shell-connections', JSON.stringify(connections));
+    }
+    lifecycle.invoke.mockImplementation(async command => command === 'ssh_connect' ? { success: true } : {});
+    render(<App />);
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('rshell-quick-connect', { detail: { connectionId: 'conn-1' } }));
+    });
+    if (promptForCredentials) {
+      expect(lifecycle.invoke.mock.calls.filter(([cmd]) => cmd === 'ssh_connect')).toHaveLength(0);
+      await act(async () => { fireEvent.click(screen.getByTestId('trigger-onsave')); });
+    }
+    await vi.waitFor(() => {
+      const group = lifecycle.stateHistory[lifecycle.stateHistory.length - 1].groups['group-1'];
+      expect(group.tabs).toHaveLength(2);
+      expect(group.tabs.find(tab => tab.id === editor.id)).toEqual(editor);
+      expect(group.tabs.find(tab => tab.id === group.activeTabId)).toMatchObject({
+        name: 'Test Server', protocol: 'SSH', connectionStatus: 'connecting',
+      });
+      expect(group.activeTabId).not.toBe(editor.id);
+    });
+    expect(lifecycle.toast.info).not.toHaveBeenCalled();
+    expect(lifecycle.invoke.mock.calls.filter(([cmd]) => cmd === 'ssh_connect')).toHaveLength(1);
   });
 
   it.each(['retina', '2560x1440'])('keeps an unsaved %s RDP mode through the real tab reducer and portal', async (rdpResolution) => {

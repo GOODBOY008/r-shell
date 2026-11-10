@@ -593,6 +593,39 @@ pub async fn ssh_execute_command(
     }
 }
 
+#[tauri::command]
+pub async fn run_monitor_command(
+    connection_id: String,
+    run_id: String,
+    command: String,
+    timeout_ms: u64,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<crate::ssh::monitor::MonitorResult, String> {
+    if command.trim().is_empty()
+        || command.len() > 64 * 1024
+        || run_id.is_empty()
+        || run_id.len() > 128
+        || !(1000..=60000).contains(&timeout_ms)
+    {
+        return Err("Invalid monitor command parameters".into());
+    }
+    let (client, job) = state.start_monitor_job(&connection_id, &run_id).await?;
+    Ok(crate::ssh::monitor::execute(client, job, &command, timeout_ms).await)
+}
+
+#[tauri::command]
+pub async fn cancel_monitor_command(
+    connection_id: String,
+    run_id: String,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<(), String> {
+    if run_id.is_empty() || run_id.len() > 128 {
+        return Err("Invalid monitor run id".into());
+    }
+    state.monitor_jobs.cancel(&connection_id, &run_id);
+    Ok(())
+}
+
 // Helper function to transform interactive commands to batch mode
 fn transform_interactive_command(command: &str) -> String {
     let cmd = command.trim();

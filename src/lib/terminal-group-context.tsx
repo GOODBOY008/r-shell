@@ -14,6 +14,7 @@ interface TerminalGroupContextType {
   /** 当前活动连接信息（驱动面板联动） */
   activeConnection: {
     connectionId: string;
+    savedConnectionId?: string;
     name: string;
     protocol: string;
     host?: string;
@@ -99,14 +100,20 @@ export function TerminalGroupProvider({ children }: { children: React.ReactNode 
   const contextValue = useMemo(() => {
     const activeGroup = state.groups[state.activeGroupId] ?? null;
     const activeTab = activeGroup?.tabs.find((t) => t.id === activeGroup.activeTabId) ?? null;
+    // An editor's creation-time status can outlive reconnects or the owning tab.
+    const editorOwnerId = activeTab?.tabType === 'editor' ? activeTab.editorConnectionId : undefined;
+    const editorOwner = editorOwnerId
+      ? state.groups[state.tabToGroupMap[editorOwnerId]]?.tabs.find(tab => tab.id === editorOwnerId)
+      : undefined;
     const activeConnection = activeTab
       ? {
           connectionId: activeTab.editorConnectionId ?? activeTab.id,
+          savedConnectionId: activeTab.originalConnectionId ?? activeTab.editorConnectionId ?? activeTab.id,
           name: activeTab.editorConnectionName ?? activeTab.name,
           protocol: activeTab.protocol ?? '',
           host: activeTab.host,
           username: activeTab.username,
-          status: activeTab.connectionStatus,
+          status: activeTab.tabType === 'editor' ? editorOwner?.connectionStatus ?? 'disconnected' : activeTab.connectionStatus,
         }
       : null;
 

@@ -147,6 +147,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const effectiveConnectionIdRef = useRef<string | undefined>(undefined);
   // Monotonic counter: each loadFiles call stamps its own gen; stale responses are discarded.
   const loadGenRef = useRef(0);
+  useEffect(() => () => {
+    // Discard late loads as well as overlay timers already scheduled before unmount.
+    loadGenRef.current += 1;
+    if (loadingTimerRef.current !== null) clearTimeout(loadingTimerRef.current);
+    loadingTimerRef.current = null;
+  }, []);
   // Tracks the connectionId for which files were last successfully loaded.
   const lastLoadedConnectionIdRef = useRef<string | null>(null);
   // Tracks the previous connectionId so the main load effect can skip

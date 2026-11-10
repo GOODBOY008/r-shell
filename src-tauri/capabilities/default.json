@@ -86,6 +86,8 @@
     "allow-preview-ssh-config-import",
     "allow-ssh-disconnect",
     "allow-ssh-execute-command",
+    "allow-run-monitor-command",
+    "allow-cancel-monitor-command",
     "allow-ssh-tab-complete",
     "allow-start-socks-proxy",
     "allow-stat-local-path",

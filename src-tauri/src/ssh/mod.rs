@@ -1,4 +1,5 @@
 pub mod auto_auth;
+pub(crate) mod monitor;
 #[cfg(all(test, unix))]
 mod bitwarden_e2e;
 pub(crate) mod passphrase_store;

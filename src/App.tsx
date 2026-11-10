@@ -1,5 +1,6 @@
 import { buildDesktopConnectRequest, desktopConnect, DesktopConnectCancelledError } from '@/lib/desktop-connect';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import type { PanelImperativeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
 import { folderPathFromArg } from './lib/connection-folder';
@@ -143,6 +144,7 @@ function AppContent() {
   // the first layout, and cap them so small windows still have a main area.
   const leftSidebarMinSize = Math.min(35, 220 / Math.max(windowWidth - 12, 1) * 100);
   const rightSidebarMinSize = Math.min(35, 260 / Math.max(windowWidth - 12, 1) * 100);
+  const rightSidebarRef = useRef<PanelImperativeHandle | null>(null);
   const [selectedConnection, setSelectedConnection] = useState<ConnectionNode | null>(null);
 
   // Terminal group state from context
@@ -1606,7 +1608,7 @@ function AppContent() {
         dispatch({
           type: 'OPEN_EDITOR_TAB', groupId, activate: false,
           tab: createEditorTab({
-            connectionId: owner.id, name: owner.name, host: owner.host,
+            connectionId: owner.id, savedConnectionId: owner.originalConnectionId ?? owner.id, name: owner.name, host: owner.host,
             username: owner.username, status: 'disconnected',
           }, entry.filePath, entry.fileName),
         });
@@ -1850,10 +1852,10 @@ function AppContent() {
       }
     }
 
-    // Update any open tab name for this connection
+    // Editor tabs share the saved connection identity, but their names are filenames.
     for (const group of Object.values(state.groups)) {
       for (const tab of group.tabs) {
-        if (tab.id === config.id || tab.originalConnectionId === config.id) {
+        if (tab.tabType !== 'editor' && (tab.id === config.id || tab.originalConnectionId === config.id)) {
           dispatch({ type: 'UPDATE_TAB_NAME', tabId: tab.id, name: config.name });
         }
       }
@@ -1871,8 +1873,9 @@ function AppContent() {
       // exact tab that opened the dialog: a primary tab has no
       // originalConnectionId, and several duplicates would be ambiguous.
       const pendingTab =
-        (targetTabId ? allTabs.find(tab => tab.id === targetTabId) : undefined) ??
+        (targetTabId ? allTabs.find(tab => tab.tabType !== 'editor' && tab.id === targetTabId) : undefined) ??
         allTabs.find(tab =>
+          tab.tabType !== 'editor' &&
           tab.originalConnectionId === config.id &&
           (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
         );
@@ -2021,7 +2024,8 @@ function AppContent() {
   // handshake — so without the guard two clicks race into two backend
   // connects for one id and two tabs sharing it.
   const runQuickConnect = useCallback(async (connectionId: string) => {
-    const existingTab = allTabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
+    const existingTab = allTabs.find(tab => tab.tabType !== 'editor' &&
+      (tab.id === connectionId || tab.originalConnectionId === connectionId));
     if (existingTab) {
       handleTabSelect(existingTab.id);
       notify.info(t('app.alreadyConnected'), {
@@ -2310,10 +2314,11 @@ function AppContent() {
               {/* Right Sidebar - Monitor/Logs using activeConnection from context */}
               <ResizablePanel
                 id="right-sidebar"
+                panelRef={rightSidebarRef}
                 order={3}
                 defaultSize={Math.max(layout.rightSidebarSize, rightSidebarMinSize)}
                 minSize={rightSidebarMinSize}
-                maxSize={35}
+                maxSize={70}
               >
                 <Tabs value={rightSidebar.active} onValueChange={rightSidebar.select} className="h-full min-w-0 flex flex-col bg-sidebar">
                   <TabsList className="flex w-auto shrink-0 justify-start overflow-x-auto mx-2 mt-2">
@@ -2329,8 +2334,16 @@ function AppContent() {
                         {activeConnection && rightSidebar.mounted.has('monitor') ? (
                           <ErrorBoundary label={t('app.systemMonitor')}>
                             <SystemMonitor
+                              savedConnectionId={activeConnection.savedConnectionId && ConnectionStorageManager.getConnection(activeConnection.savedConnectionId) ? activeConnection.savedConnectionId : undefined}
+                              protocol={activeConnection.protocol}
+                              connectionStatus={activeConnection.status}
                               connectionId={activeConnection.connectionId}
                               active={rightSidebar.active === 'monitor'}
+                              onColumnsChange={columns => {
+                                const panel = rightSidebarRef.current;
+                                const width = columns * 260 + (columns - 1) * 16 + 8;
+                                if (columns > 1 && panel && panel.getSize().inPixels < width) panel.resize(`${width}px`);
+                              }}
                             />
                           </ErrorBoundary>
                         ) : null}
