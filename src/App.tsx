@@ -1873,8 +1873,9 @@ function AppContent() {
       // exact tab that opened the dialog: a primary tab has no
       // originalConnectionId, and several duplicates would be ambiguous.
       const pendingTab =
-        (targetTabId ? allTabs.find(tab => tab.id === targetTabId) : undefined) ??
+        (targetTabId ? allTabs.find(tab => tab.tabType !== 'editor' && tab.id === targetTabId) : undefined) ??
         allTabs.find(tab =>
+          tab.tabType !== 'editor' &&
           tab.originalConnectionId === config.id &&
           (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
         );
@@ -2023,7 +2024,8 @@ function AppContent() {
   // handshake — so without the guard two clicks race into two backend
   // connects for one id and two tabs sharing it.
   const runQuickConnect = useCallback(async (connectionId: string) => {
-    const existingTab = allTabs.find(tab => tab.id === connectionId || tab.originalConnectionId === connectionId);
+    const existingTab = allTabs.find(tab => tab.tabType !== 'editor' &&
+      (tab.id === connectionId || tab.originalConnectionId === connectionId));
     if (existingTab) {
       handleTabSelect(existingTab.id);
       notify.info(t('app.alreadyConnected'), {

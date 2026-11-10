@@ -157,6 +157,24 @@ describe('monitor layout and editor', () => {
     view.rerender(<SystemMonitor connectionId="session" protocol="SFTP" />);
     await act(async () => {}); expect(mocks.invoke).not.toHaveBeenCalled();
   });
+
+  it('keeps the trial preview through reconnect and runs the edited command only on another click', async () => {
+    const initial = { ...newCommandMonitor(), name: 'Metric', command: 'printf 42' };
+    const props = { initial, connectionId: 'session', scopeLabel: 'Default', onSave: vi.fn(), onClose: vi.fn() };
+    const view = render(<MonitorEditDialog {...props} active />);
+    fireEvent.click(screen.getByRole('button', { name: 'Test command' }));
+    await screen.findAllByText('42', { selector: 'pre' });
+    fireEvent.change(screen.getByLabelText('Remote command'), { target: { value: 'printf 7' } });
+    view.rerender(<MonitorEditDialog {...props} active={false} />);
+    view.rerender(<MonitorEditDialog {...props} active />);
+    await act(async () => {});
+    expect(mocks.invoke.mock.calls.filter(([name]) => name === 'run_monitor_command')).toHaveLength(1);
+    expect((screen.getByRole('button', { name: 'Test command' }) as HTMLButtonElement).disabled).toBe(false);
+    mocks.invoke.mockResolvedValue({ stdout: '7', stderr: '', exitCode: 0, durationMs: 1, status: 'success', error: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Test command' }));
+    await waitFor(() => expect(mocks.invoke.mock.calls.filter(([name]) => name === 'run_monitor_command')).toHaveLength(2));
+    expect(mocks.invoke.mock.calls[1][1].command).toBe('printf 7');
+  });
   it('carries the original saved connection into an editor tab', () => {
     expect(createEditorTab({ connectionId: 'saved-dup-123', savedConnectionId: 'saved', name: 'Host', status: 'connected' }, '/tmp/a', 'a'))
       .toMatchObject({ editorConnectionId: 'saved-dup-123', originalConnectionId: 'saved' });

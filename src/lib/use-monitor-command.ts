@@ -23,9 +23,13 @@ export function useMonitorCommand(module: CommandMonitor, connectionId: string |
   const identity = `${connectionId ?? ''}:${module.id}:${fingerprint}:${trial}`;
   const [reading, setReading] = useState<Reading>({ identity, samples: [], running: false });
   const inFlight = useRef<Promise<void> | null>(null);
+  const lastTrial = useRef<string | undefined>(undefined);
   const gap = useRef(false);
   useEffect(() => {
     if (!connectionId || !active) return;
+    // A reconnect is not a new trial request, even if the previous attempt was cancelled.
+    if (once && lastTrial.current === trial) return;
+    if (once) lastTrial.current = trial;
     let disposed = false;
     let runId: string | undefined;
     const poll = () => {
@@ -79,8 +83,11 @@ export function useMonitorCommand(module: CommandMonitor, connectionId: string |
       disposed = true;
       gap.current = true;
       clearInterval(timer);
-      if (runId) cancelMonitorRun(connectionId, runId);
+      if (runId) {
+        cancelMonitorRun(connectionId, runId);
+        if (once) setReading(previous => previous.identity === identity ? { ...previous, running: false } : previous);
+      }
     };
-  }, [identity, connectionId, active, spec, once]);
+  }, [identity, connectionId, active, spec, once, trial]);
   return reading.identity === identity ? { ...reading, running: active && reading.running } : { identity, samples: [], running: false } as Reading;
 }

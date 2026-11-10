@@ -54,4 +54,45 @@ describe('custom monitor lifecycle', () => {
     expect(result.current.samples[1].breakBefore).toBe(true);
     expect(result.current.error).toBeUndefined();
   });
+
+  it.each(['success', 'timeout'] as const)('does not replay a %s trial on resume or config changes', async status => {
+    mocks.invoke.mockResolvedValue({ ...response(), status });
+    const { rerender } = renderHook(({ active, command, trial }) => useMonitorCommand({ ...module, command }, 'session', active, true, trial), {
+      initialProps: { active: true, command: 'printf 42', trial: 'first' },
+    });
+    await tick();
+    rerender({ active: false, command: 'printf 42', trial: 'first' });
+    rerender({ active: true, command: 'printf 42', trial: 'first' });
+    await tick(30000);
+    expect(calls()).toHaveLength(1);
+    rerender({ active: true, command: 'printf 7', trial: 'first' });
+    await tick();
+    expect(calls()).toHaveLength(1);
+    rerender({ active: true, command: 'printf 7', trial: 'second' });
+    await tick();
+    expect(calls()).toHaveLength(2);
+    expect(calls()[1][1].command).toBe('printf 7');
+  });
+
+  it('cancels an interrupted trial without replaying it or leaving it running after reconnect', async () => {
+    let finish!: (result: MonitorCommandResult) => void;
+    mocks.invoke.mockImplementation(name => name === 'run_monitor_command' ? new Promise(resolve => { finish = resolve; }) : Promise.resolve());
+    const { rerender, result } = renderHook(({ active, trial }) => useMonitorCommand(module, 'session', active, true, trial), {
+      initialProps: { active: true, trial: 'first' },
+    });
+    expect(result.current.running).toBe(true);
+    rerender({ active: false, trial: 'first' });
+    expect(mocks.invoke).toHaveBeenCalledWith('cancel_monitor_command', expect.objectContaining({ runId: calls()[0][1].runId }));
+    rerender({ active: true, trial: 'first' });
+    expect(result.current.running).toBe(false);
+    await act(async () => finish(response('999')));
+    await tick();
+    expect(calls()).toHaveLength(1);
+    expect(result.current.data).toBeUndefined();
+    mocks.invoke.mockResolvedValue(response('7'));
+    rerender({ active: true, trial: 'second' });
+    await tick();
+    expect(calls()).toHaveLength(2);
+    expect(result.current.data).toEqual({ kind: 'numbers', values: [7] });
+  });
 });

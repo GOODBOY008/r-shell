@@ -363,6 +363,42 @@ describe('App connection dialog and reconnect', () => {
     });
   });
 
+  it.each([false, true])('quick-connect opens a terminal beside an orphaned editor (prompt for credentials: %s)', async (promptForCredentials) => {
+    const editor = createEditorTab({
+      connectionId: 'conn-1-dup-1', savedConnectionId: 'conn-1', name: 'Test Server',
+      protocol: 'SSH', status: 'disconnected',
+    }, '/etc/settings.json', 'settings.json');
+    mockState.groups['group-1'].tabs = [editor];
+    mockState.groups['group-1'].activeTabId = editor.id;
+    mockState.tabToGroupMap = { [editor.id]: 'group-1' };
+    if (promptForCredentials) {
+      const connections = JSON.parse(localStorage.getItem('r-shell-connections')!);
+      // An absent password must show the settings dialog; an empty string is valid.
+      delete connections[0].password;
+      localStorage.setItem('r-shell-connections', JSON.stringify(connections));
+    }
+    lifecycle.invoke.mockImplementation(async command => command === 'ssh_connect' ? { success: true } : {});
+    render(<App />);
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent('rshell-quick-connect', { detail: { connectionId: 'conn-1' } }));
+    });
+    if (promptForCredentials) {
+      expect(lifecycle.invoke.mock.calls.filter(([cmd]) => cmd === 'ssh_connect')).toHaveLength(0);
+      await act(async () => { fireEvent.click(screen.getByTestId('trigger-onsave')); });
+    }
+    await vi.waitFor(() => {
+      const group = lifecycle.stateHistory[lifecycle.stateHistory.length - 1].groups['group-1'];
+      expect(group.tabs).toHaveLength(2);
+      expect(group.tabs.find(tab => tab.id === editor.id)).toEqual(editor);
+      expect(group.tabs.find(tab => tab.id === group.activeTabId)).toMatchObject({
+        name: 'Test Server', protocol: 'SSH', connectionStatus: 'connecting',
+      });
+      expect(group.activeTabId).not.toBe(editor.id);
+    });
+    expect(lifecycle.toast.info).not.toHaveBeenCalled();
+    expect(lifecycle.invoke.mock.calls.filter(([cmd]) => cmd === 'ssh_connect')).toHaveLength(1);
+  });
+
   it.each(['retina', '2560x1440'])('keeps an unsaved %s RDP mode through the real tab reducer and portal', async (rdpResolution) => {
     mockState.groups['group-1'].tabs = [];
     mockState.groups['group-1'].activeTabId = null;
