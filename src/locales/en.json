@@ -1467,7 +1467,18 @@
       "chartLabel": "CPU and memory usage history",
       "collecting": "Collecting samples…",
       "fiveMinutesAgo": "5m ago",
-      "now": "Now"
+      "now": "Now",
+      "cpuOverall": "Overall",
+      "cpuSummary_one": "Overall · {{formattedCount}} logical CPU",
+      "cpuSummary_other": "Overall · {{formattedCount}} logical CPUs",
+      "perCpuUsage": "Per-CPU usage",
+      "busiestCpus": "Busiest CPUs",
+      "showAllCpus": "Show all {{formattedCount}}",
+      "showFewerCpus": "Show fewer",
+      "cpuIndex": "CPU {{index}}",
+      "logicalCpuLabel": "Logical CPU {{index}}: {{value}}",
+      "cpuHelp": "Overall usage is averaged across logical CPUs, including hardware threads. Each bar shows one logical CPU: height indicates usage; amber means at least 75%, red at least 90%. Hover or focus a bar for its number and exact usage. Striped bars are unavailable.",
+      "perCpuUnavailable": "Per-CPU usage unavailable on this host"
     }
   },
   "logMonitor": {

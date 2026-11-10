@@ -1,4 +1,5 @@
 use crate::connection_manager::ConnectionManager;
+use crate::cpu_stats::{parse_cpu_stats, CpuCoreUsage};
 use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
 use crate::os_keypath::resolve_private_key_path;
@@ -254,6 +255,8 @@ pub struct DiskStats {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SystemStats {
     pub cpu_percent: f64,
+    pub cpu_logical_count: Option<usize>,
+    pub cpu_cores: Vec<CpuCoreUsage>,
     pub memory: MemoryStats,
     pub swap: MemoryStats,
     pub disk: DiskStats,
@@ -671,14 +674,16 @@ pub async fn get_system_stats(
     // Detect OS for distro-aware commands
     let os_info = get_os_info(&connection_id, &client, state.inner()).await;
 
-    // CPU usage (percentage)
+    // Aggregate and logical-CPU usage share the same sampling window/request.
     let cpu_cmd = os_info.cpu_cmd();
-    let cpu_percent = client
+    let cpu_output = client
         .execute_command(cpu_cmd)
         .await
-        .ok()
-        .and_then(|s| s.trim().parse::<f64>().ok())
-        .unwrap_or(0.0);
+        .map_err(|error| format!("Failed to sample CPU usage: {error}"))?;
+    let cpu = parse_cpu_stats(&cpu_output);
+    let cpu_percent = cpu
+        .percent
+        .ok_or_else(|| "CPU usage unavailable".to_string())?;
 
     // Memory stats (in MB)
     let mem_cmd = os_info.memory_cmd();
@@ -735,6 +740,8 @@ pub async fn get_system_stats(
 
     Ok(SystemStats {
         cpu_percent,
+        cpu_logical_count: cpu.logical_count,
+        cpu_cores: cpu.cores,
         memory,
         swap,
         disk,

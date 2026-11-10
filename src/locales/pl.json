@@ -1517,7 +1517,20 @@
       "chartLabel": "Historia użycia CPU i pamięci",
       "collecting": "Zbieranie próbek…",
       "fiveMinutesAgo": "5 min temu",
-      "now": "Teraz"
+      "now": "Teraz",
+      "cpuOverall": "Łącznie",
+      "cpuSummary_one": "Łącznie · {{formattedCount}} procesor logiczny",
+      "cpuSummary_few": "Łącznie · {{formattedCount}} procesory logiczne",
+      "cpuSummary_many": "Łącznie · {{formattedCount}} procesorów logicznych",
+      "cpuSummary_other": "Łącznie · {{formattedCount}} procesora logicznego",
+      "perCpuUsage": "Użycie poszczególnych CPU",
+      "busiestCpus": "Najbardziej obciążone CPU",
+      "showAllCpus": "Pokaż wszystkie: {{formattedCount}}",
+      "showFewerCpus": "Pokaż mniej",
+      "cpuIndex": "CPU {{index}}",
+      "logicalCpuLabel": "Procesor logiczny {{index}}: {{value}}",
+      "cpuHelp": "Łączne użycie jest średnią dla procesorów logicznych, w tym wątków sprzętowych. Każdy słupek oznacza jeden procesor logiczny: wysokość wskazuje użycie; pomarańczowy oznacza co najmniej 75%, czerwony co najmniej 90%. Najedź na słupek lub ustaw na nim fokus, aby zobaczyć numer i dokładne użycie. Paski oznaczają niedostępne dane.",
+      "perCpuUnavailable": "Użycie poszczególnych CPU jest niedostępne na tym hoście"
     }
   },
   "logMonitor": {
