@@ -528,6 +528,8 @@ pub fn run() {
             commands::has_detached_session,
             commands::close_detached_session,
             commands::ssh_execute_command,
+            commands::run_monitor_command,
+            commands::cancel_monitor_command,
             commands::ssh_tab_complete,
             commands::get_system_stats,
             commands::list_files,

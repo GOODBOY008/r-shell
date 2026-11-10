@@ -158,6 +158,7 @@ pub struct SessionHealth {
 }
 
 pub struct ConnectionManager {
+    pub(crate) monitor_jobs: Arc<crate::ssh::monitor::MonitorJobs>,
     connections: Arc<RwLock<HashMap<String, Arc<RwLock<SshClient>>>>>,
     pty_sessions: Arc<RwLock<HashMap<String, Arc<PtySession>>>>,
     /// PTY sessions kept alive in the background after being detached.
@@ -198,6 +199,7 @@ pub struct ConnectionManager {
 impl ConnectionManager {
     pub fn new() -> Self {
         Self {
+            monitor_jobs: Arc::new(crate::ssh::monitor::MonitorJobs::default()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             pty_sessions: Arc::new(RwLock::new(HashMap::new())),
             detached_sessions: Arc::new(RwLock::new(HashMap::new())),
@@ -308,6 +310,21 @@ impl ConnectionManager {
         connections.get(connection_id).cloned()
     }
 
+    pub(crate) async fn start_monitor_job(
+        &self,
+        connection_id: &str,
+        run_id: &str,
+    ) -> Result<(Arc<RwLock<SshClient>>, crate::ssh::monitor::MonitorJob), String> {
+        // Registration and removal share the map lock: close cannot miss a new job.
+        let connections = self.connections.read().await;
+        let client = connections
+            .get(connection_id)
+            .cloned()
+            .ok_or("Connection not found")?;
+        let job = self.monitor_jobs.begin(connection_id, run_id)?;
+        Ok((client, job))
+    }
+
     pub async fn close_connection(&self, connection_id: &str) -> Result<()> {
         self.cancel_pending_connection(connection_id).await;
         // Transfers on this connection must stop first: an engine parked on a
@@ -316,6 +333,7 @@ impl ConnectionManager {
         self.cancel_all_connection_transfers(connection_id).await;
 
         let mut connections = self.connections.write().await;
+        self.monitor_jobs.cancel_connection(connection_id);
         if let Some(client) = connections.remove(connection_id) {
             let mut client = client.write().await;
             client.disconnect().await?;
@@ -552,6 +570,7 @@ impl ConnectionManager {
             if !is_same {
                 return;
             }
+            self.monitor_jobs.cancel_connection(connection_id);
             connections.remove(connection_id);
         }
         tracing::info!("Evicted dead SSH session for {}", connection_id);
@@ -2010,12 +2029,15 @@ mod tests {
         }
 
         // Evicting via the stale Arc must leave the newer connection alive.
+        let (_, monitor_job) = mgr.start_monitor_job("conn-1", "monitor-1").await.unwrap();
         mgr.evict_dead_connection("conn-1", &stale_client).await;
         assert!(mgr.get_connection("conn-1").await.is_some());
+        assert!(!monitor_job.cancel.is_cancelled());
 
         // Evicting with the matching Arc removes it.
         mgr.evict_dead_connection("conn-1", &live_client).await;
         assert!(mgr.get_connection("conn-1").await.is_none());
+        assert!(monitor_job.cancel.is_cancelled());
     }
 
     // ===== Transfer job registry =====

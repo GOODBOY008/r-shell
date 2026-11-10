@@ -14,6 +14,7 @@ interface TerminalGroupContextType {
   /** 当前活动连接信息（驱动面板联动） */
   activeConnection: {
     connectionId: string;
+    savedConnectionId?: string;
     name: string;
     protocol: string;
     host?: string;
@@ -102,6 +103,7 @@ export function TerminalGroupProvider({ children }: { children: React.ReactNode 
     const activeConnection = activeTab
       ? {
           connectionId: activeTab.editorConnectionId ?? activeTab.id,
+          savedConnectionId: activeTab.originalConnectionId ?? activeTab.editorConnectionId ?? activeTab.id,
           name: activeTab.editorConnectionName ?? activeTab.name,
           protocol: activeTab.protocol ?? '',
           host: activeTab.host,
