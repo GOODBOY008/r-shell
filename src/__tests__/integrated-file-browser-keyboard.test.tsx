@@ -90,7 +90,21 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe('IntegratedFileBrowser loading cleanup', () => {
+  it.each([false, true])('leaves no overlay timer after unmount (load completed: %s)', async completed => {
+    vi.useFakeTimers();
+    let finish!: (entries: unknown[]) => void;
+    mocks.invoke.mockImplementation(command => command === 'list_files' ? new Promise(resolve => { finish = resolve; }) : Promise.resolve([]));
+    const view = render(<IntegratedFileBrowser connectionId={`cleanup-${completed}`} isConnected onClose={vi.fn()} />);
+    if (completed) await act(async () => { finish([]); });
+    view.unmount();
+    if (!completed) await act(async () => { finish([]); });
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('IntegratedFileBrowser keyboard shortcuts', () => {
