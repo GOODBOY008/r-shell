@@ -1331,6 +1331,18 @@ impl SshClient {
         }
     }
 
+    /// Release the closing logical owner's dispatcher even when another owner
+    /// retains this transport. Exclusive client access also orders this cleanup
+    /// after any in-progress PTY/X11 registration.
+    pub(crate) async fn close_x11_forwarding(&mut self, connection_id: &str) {
+        self.x11_registry.senders.write().await.remove(connection_id);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn x11_registry_for_test(&self) -> Arc<crate::x11::X11DispatcherRegistry> {
+        self.x11_registry.clone()
+    }
+
     pub async fn disconnect(&mut self) -> Result<()> {
         // Discard session-scoped unlock replies even if disconnecting fails.
         self.config.take();

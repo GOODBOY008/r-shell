@@ -113,6 +113,16 @@ async fn docker_dashboard_reuses_transport_without_sharing_owner_lifecycle() {
         .await
         .unwrap();
     let terminal_cancel = manager.get_pty_cancel_token("terminal").await.unwrap();
+    // Exercise dispatcher ownership without requiring a local X server.
+    let registry = original.read().await.x11_registry.clone();
+    let (x11_tx, mut x11_rx) = mpsc::unbounded_channel();
+    registry.senders.write().await.insert(
+        "terminal".into(),
+        crate::x11::X11DispatcherEntry {
+            tx: x11_tx,
+            token: crate::x11::next_dispatcher_token(),
+        },
+    );
     let peer = original
         .read()
         .await
@@ -141,6 +151,10 @@ async fn docker_dashboard_reuses_transport_without_sharing_owner_lifecycle() {
         );
         manager.close_connection(&id).await.unwrap();
         assert!(!terminal_cancel.is_cancelled());
+        assert!(
+            !x11_rx.is_closed(),
+            "closing a dashboard must preserve terminal forwarding"
+        );
         assert!(original
             .read()
             .await
@@ -162,6 +176,10 @@ async fn docker_dashboard_reuses_transport_without_sharing_owner_lifecycle() {
     ));
     manager.close_connection("terminal").await.unwrap();
     assert!(terminal_cancel.is_cancelled());
+    assert!(tokio::time::timeout(Duration::from_secs(1), x11_rx.recv())
+        .await
+        .unwrap()
+        .is_none());
     let result = running.await.unwrap();
     assert_eq!(result.status, monitor::MonitorStatus::Success);
     assert_eq!(result.stdout, "survived");

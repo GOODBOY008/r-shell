@@ -387,11 +387,12 @@ impl ConnectionManager {
         let mut connections = self.connections.write().await;
         self.monitor_jobs.cancel_connection(connection_id);
         if let Some(client) = connections.remove(connection_id) {
-            if !connections
+            let last_owner = !connections
                 .values()
-                .any(|other| Arc::ptr_eq(other, &client))
-            {
-                let mut client = client.write().await;
+                .any(|other| Arc::ptr_eq(other, &client));
+            let mut client = client.write().await;
+            client.close_x11_forwarding(connection_id).await;
+            if last_owner {
                 client.disconnect().await?;
             }
         }
@@ -2182,6 +2183,53 @@ mod tests {
         mgr.close_connection("terminal").await.unwrap();
         assert!(terminal_job.cancel.is_cancelled());
         assert!(transfer.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn closing_shared_terminal_releases_only_its_x11_dispatcher() {
+        let mgr = ConnectionManager::new();
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        let registry = client.read().await.x11_registry_for_test();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let (other_tx, other_rx) = tokio::sync::mpsc::unbounded_channel();
+        registry.senders.write().await.insert(
+            "terminal".into(),
+            crate::x11::X11DispatcherEntry {
+                tx,
+                token: crate::x11::next_dispatcher_token(),
+            },
+        );
+        registry.senders.write().await.insert(
+            "other".into(),
+            crate::x11::X11DispatcherEntry {
+                tx: other_tx,
+                token: crate::x11::next_dispatcher_token(),
+            },
+        );
+        {
+            let mut connections = mgr.connections.write().await;
+            for id in ["terminal", "dashboard", "other"] {
+                connections.insert(id.into(), client.clone());
+            }
+        }
+        mgr.close_connection("terminal").await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            !other_rx.is_closed(),
+            "another owner's dispatcher must remain registered"
+        );
+        assert!(Arc::ptr_eq(
+            &client,
+            &mgr.get_connection("dashboard").await.unwrap()
+        ));
+        mgr.close_connection("terminal").await.unwrap();
+        mgr.close_connection("dashboard").await.unwrap();
+        assert!(!other_rx.is_closed());
+        mgr.close_connection("other").await.unwrap();
+        assert!(other_rx.is_closed());
     }
 
     #[tokio::test]
