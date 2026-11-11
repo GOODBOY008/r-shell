@@ -38,14 +38,28 @@ describe('dashboard resource budgets', () => {
     expect(peak).toBe(8); expect(hostPeak).toBe(1); expect(loginPeak).toBe(4);
     expect(results).toHaveBeenCalledTimes(12); expect(seen.size).toBe(84);
   });
-  it('waits a full refresh interval after a slow command completes', async () => {
+  it('skips missed ticks after a slow command without overlapping or catching up', async () => {
     const profiles = hosts(1); const board = boardFor(profiles);
     let complete!: (value: MonitorCommandResult) => void;
     vi.mocked(deps.execute).mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
-    runtime.configure([board], profiles, [board.id], [board.id]); await tick(20_000);
+    runtime.configure([board], profiles, [board.id], [board.id]); await tick(22_000);
     expect(deps.execute).toHaveBeenCalledTimes(1);
-    complete(output()); await tick(4500); expect(deps.execute).toHaveBeenCalledTimes(1);
+    complete(output()); await tick(2500); expect(deps.execute).toHaveBeenCalledTimes(1);
     await tick(750); expect(deps.execute).toHaveBeenCalledTimes(2);
+  });
+  it('keeps five-second start-to-start sampling across visibility changes without reconnecting', async () => {
+    const profiles = hosts(1); const board = boardFor(profiles);
+    const starts: number[] = [];
+    vi.mocked(deps.execute).mockImplementation(async () => { starts.push(Date.now()); await delay(1000); return output(); });
+    runtime.configure([board], profiles, [board.id], [board.id]); await tick(12_000);
+    runtime.configure([board], profiles, [board.id], []); await tick(21_000);
+    runtime.configure([board], profiles, [board.id], [board.id]); await tick(8000);
+    expect(starts).toHaveLength(9);
+    expect(starts.slice(1).map((at, i) => at - starts[i])).toEqual(Array(8).fill(5000));
+    expect(deps.connect).toHaveBeenCalledTimes(1);
+    expect(deps.disconnect).not.toHaveBeenCalled();
+    const samples = runtime.widgetReading(board.id, board.widgets[0].id, profiles[0].id)!.samples;
+    expect(samples.slice(1).every(sample => !sample.breakBefore)).toBe(true);
   });
   it('backs off failed commands, preserves the last value and allows explicit retry', async () => {
     const profiles = hosts(1); const board = boardFor(profiles);
@@ -109,6 +123,17 @@ describe('dashboard resource budgets', () => {
     updates.mockClear(); unrelated.mockClear(); status.mockClear();
     await tick(5000); expect(updates.mock.calls.length).toBeLessThanOrEqual(2); expect(updates).toHaveBeenCalled();
     expect(unrelated).not.toHaveBeenCalled(); expect(status).not.toHaveBeenCalled();
+  });
+  it('advances a paused visible chart even when another board keeps publishing samples', async () => {
+    const profiles = hosts(1); const chart = boardFor(profiles); const active = boardFor(profiles);
+    runtime.configure([chart, active], profiles, [chart.id, active.id], [chart.id, active.id]); await tick(1000);
+    runtime.configure([{ ...chart, paused: true }, active], profiles, [chart.id, active.id], [chart.id]); await tick(1000);
+    const updates = vi.fn(); runtime.subscribeBoard(chart.id, updates);
+    const start = runtime.getTime();
+    await tick(120_000);
+    expect(updates.mock.calls.length).toBeGreaterThanOrEqual(23);
+    expect(runtime.getTime() - start).toBeGreaterThanOrEqual(115_000);
+    expect(runtime.widgetReading(chart.id, chart.widgets[0].id, profiles[0].id)?.samples).toHaveLength(1);
   });
   it('has no recurring wakeups for closed or static-only boards', async () => {
     const board = { ...newDashboard('Notes'), widgets: [{ ...newDashboardNote(), name: 'Note', content: 'Static' }] };

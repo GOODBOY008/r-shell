@@ -72,10 +72,10 @@ describe('dashboard collection ownership', () => {
     expect(deps.connect).not.toHaveBeenCalled();
     runtime.configure([board], profiles, [board.id], [board.id]); await tick();
     runtime.configure([board], profiles, [board.id], []); await tick(10_000);
-    expect(deps.execute).toHaveBeenCalledTimes(2);
+    expect(deps.execute).toHaveBeenCalledTimes(4);
     expect(runtime.collectionState(board.id)).toBe('background');
     await tick(20_000);
-    expect(deps.execute).toHaveBeenCalledTimes(4);
+    expect(deps.execute).toHaveBeenCalledTimes(8);
   });
   it('keeps samples and command count when cards move, resize, rename, change precision or columns', async () => {
     const board = fixture(); runtime.configure([board], profiles, [board.id], [board.id]); await tick();

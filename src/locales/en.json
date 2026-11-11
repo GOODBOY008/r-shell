@@ -2146,7 +2146,7 @@
       "waiting": "Starts when opened",
       "closed": "Closed",
       "static": "Static content",
-      "background": "Background · ≥30s"
+      "background": "Background"
     },
     "connectionStates": {
       "idle": "Waiting to connect",
@@ -2180,7 +2180,7 @@
     "connectionsSelected_other": "{{count}} selected",
     "addOptions": "More ways to add cards",
     "layoutHelp": "Drag the handle to move a card, or drag its lower-right corner to resize. Cards snap into available space. Changes save automatically; Esc cancels a gesture.",
-    "refreshEvery": "Wait {{seconds}}s between runs",
+    "refreshEvery": "Every {{seconds}}s",
     "failed": "Collection failed",
     "noMetrics": "Select at least one metric to display.",
     "templates": {
@@ -2191,7 +2191,7 @@
       "commands": "View commands",
       "savePaused": "Save paused; review before collecting",
       "pausedHelp": "Commands stay idle until you resume the dashboard.",
-      "startHelp": "Collection starts after saving. Read-only probes use 10–60 second intervals; background dashboards refresh at most every 30 seconds.",
+      "startHelp": "Collection starts after saving. Read-only probes default to 10-second intervals, including in the background.",
       "create": "Create dashboard",
       "createStart": "Create and start",
       "addCards": "Add to dashboard",
@@ -2282,6 +2282,6 @@
       "backToContent": "Back to content"
     },
     "previewEvicted": "Raw output was released to save memory. Run a trial to preview it again; the last displayed values are kept.",
-    "collectionPolicy": "The interval starts after a command finishes. Background dashboards wait at least 30s; failures back off up to 60s or your longer interval."
+    "collectionPolicy": "Foreground and background use the configured interval. Slow commands never overlap or catch up missed runs. Failures back off up to 60s or your longer interval."
   }
 }

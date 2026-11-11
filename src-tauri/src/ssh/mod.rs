@@ -143,6 +143,27 @@ pub struct SshConfig {
     pub x11: Option<crate::x11::X11Config>,
 }
 
+impl SshConfig {
+    /// Compare the complete route, credentials and transport settings. Only the
+    /// UI attempt nonce is irrelevant to an already authenticated transport.
+    /// Keep this value transient: it contains credentials and must not be logged.
+    pub(crate) fn reuse_key(&self) -> Result<serde_json::Value> {
+        fn clear_attempt(auth: &mut AuthMethod) {
+            if let AuthMethod::AutoKey { options } = auth {
+                options.attempt_id.clear();
+            }
+        }
+        let mut config = self.clone();
+        clear_attempt(&mut config.auth_method);
+        let mut hop = config.tunnel.as_mut();
+        while let Some(tunnel) = hop {
+            clear_attempt(&mut tunnel.auth_method);
+            hop = tunnel.via.as_deref_mut();
+        }
+        Ok(serde_json::to_value(config)?)
+    }
+}
+
 fn default_connect_timeout() -> u64 {
     3
 }
@@ -1344,6 +1365,16 @@ impl SshClient {
         self.session.is_some()
     }
 
+    pub(crate) fn can_reuse(&self, key: &serde_json::Value) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|session| !session.is_closed())
+            && self
+                .config
+                .as_ref()
+                .is_some_and(|config| config.reuse_key().is_ok_and(|existing| existing == *key))
+    }
+
     /// Create a persistent PTY shell session (like ttyd)
     /// This enables interactive commands like vim, less, more, top, etc.
     pub async fn create_pty_session(
@@ -1904,6 +1935,9 @@ impl SshClient {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod reuse_tests;
 
 #[cfg(test)]
 mod host_key_tests {

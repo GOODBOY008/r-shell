@@ -8,7 +8,7 @@ import type { ConnectionData } from '../connection-storage';
 const control = process.env.RSHELL_DASHBOARD_SSH_CONTROL;
 const port = process.env.RSHELL_DASHBOARD_SSH_PORT ?? '22';
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
-it.skipIf(!control)('limits real SSH probes to one channel and slows background collection', async () => {
+it.skipIf(!control)('limits real SSH probes to one channel while retaining the configured background cadence', async () => {
   const args = ['-S', control!, '-p', port, '-o', 'BatchMode=yes', 'testuser@127.0.0.1'];
   const ssh = (command: string) => new Promise<string>((resolve, reject) => execFile('ssh', [...args, command], { timeout: 10_000 }, (error, stdout) => error ? reject(error) : resolve(stdout)));
   await ssh('rm -rf /tmp/rshell-perf-active /tmp/rshell-perf-peaks; mkdir /tmp/rshell-perf-active');
@@ -36,9 +36,9 @@ it.skipIf(!control)('limits real SSH probes to one channel and slows background 
     const trial: string[] = [];
     await runtime.trial(sources[0], [connection.id], new AbortController().signal, (_id, result) => { expect(result.status).toBe('success'); trial.push(result.stdout); });
     expect(trial).toHaveLength(1); expect(commands).toBe(7);
-    await wait(5500); expect(commands).toBe(7); expect(runtime.collectionState(board.id)).toBe('background');
+    await wait(5500); expect(commands).toBeGreaterThanOrEqual(13); expect(runtime.collectionState(board.id)).toBe('background');
     runtime.configure([board], [connection], [board.id], [board.id]);
-    await until(() => commands > 7);
+    await until(() => children.size === 0);
     runtime.configure([board], [connection], [], []); await wait(500);
     const peaks = (await ssh('cat /tmp/rshell-perf-peaks')).trim().split(/\s+/).map(Number);
     expect(Math.max(...peaks)).toBe(1);

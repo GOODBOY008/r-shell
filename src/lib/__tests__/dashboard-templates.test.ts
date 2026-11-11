@@ -4,11 +4,11 @@ import { validDashboard } from '../dashboard-config';
 import i18n from '../i18n';
 
 describe('dashboard starter templates', () => {
-  it('samples expensive or slowly changing probes less often', () => {
+  it('preserves the default sampling frequency for every starter probe', () => {
     const linux = dashboardFromTemplate(DASHBOARD_TEMPLATES[0], 'Linux', ['one'], false, i18n.t);
     const docker = dashboardFromTemplate(DASHBOARD_TEMPLATES[1], 'Docker', ['one'], false, i18n.t);
-    expect(linux.sources.map(source => source.intervalSeconds)).toEqual([10, 60, 60]);
-    expect(docker.sources.map(source => source.intervalSeconds)).toEqual([15, 30, 30]);
+    expect(linux.sources.map(source => source.intervalSeconds)).toEqual([10, 10, 10]);
+    expect(docker.sources.map(source => source.intervalSeconds)).toEqual([10, 10, 10]);
   });
   it.each(DASHBOARD_TEMPLATES)('creates an independent valid $id dashboard with shared source references', template => {
     const before = JSON.stringify(template);

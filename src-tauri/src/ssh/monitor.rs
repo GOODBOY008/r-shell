@@ -31,6 +31,16 @@ impl Drop for MonitorJob {
     }
 }
 impl MonitorJobs {
+    /// Aliases share channel admission while cancellation remains owner-scoped.
+    pub fn share_connection(&self, alias: &str, existing: &str) {
+        let mut state = self.0.lock().unwrap();
+        let limit = state
+            .limits
+            .entry(existing.to_owned())
+            .or_insert_with(|| Arc::new(Semaphore::new(2)))
+            .clone();
+        state.limits.insert(alias.to_owned(), limit);
+    }
     pub fn begin(self: &Arc<Self>, connection: &str, run: &str) -> Result<MonitorJob, String> {
         let mut state = self.0.lock().unwrap();
         state
@@ -231,6 +241,28 @@ mod tests {
         )
         .await;
         assert_eq!(result.status, MonitorStatus::Cancelled);
+    }
+    #[tokio::test]
+    async fn reused_transports_share_limits_but_not_cancellation() {
+        let jobs = Arc::new(MonitorJobs::default());
+        jobs.share_connection("dashboard", "terminal");
+        let first = jobs.begin("terminal", "1").unwrap();
+        let second = jobs.begin("dashboard", "2").unwrap();
+        let third = jobs.begin("dashboard", "3").unwrap();
+        let one = first.limit.acquire().await.unwrap();
+        let _two = second.limit.acquire().await.unwrap();
+        assert!(third.limit.try_acquire().is_err());
+        jobs.cancel_connection("terminal");
+        assert!(first.cancel.is_cancelled());
+        assert!(!second.cancel.is_cancelled());
+        drop(one);
+        let _three = third.limit.try_acquire().unwrap();
+        jobs.share_connection("trial", "dashboard");
+        let trial = jobs.begin("trial", "4").unwrap();
+        assert!(trial.limit.try_acquire().is_err());
+        jobs.cancel_connection("dashboard");
+        jobs.cancel_connection("trial");
+        assert!(jobs.0.lock().unwrap().limits.is_empty());
     }
     #[tokio::test]
     async fn monitor_cancel_before_registration_never_executes() {

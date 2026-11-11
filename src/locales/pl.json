@@ -2200,7 +2200,7 @@
       "waiting": "Uruchomi się po otwarciu",
       "closed": "Zamknięty",
       "static": "Treść statyczna",
-      "background": "W tle · co najmniej 30 s"
+      "background": "W tle"
     },
     "connectionStates": {
       "idle": "Oczekiwanie na połączenie",
@@ -2252,7 +2252,7 @@
     "connectionsSelected_other": "Wybrano {{count}}",
     "addOptions": "Więcej sposobów dodawania kart",
     "layoutHelp": "Przeciągnij uchwyt, aby przenieść kartę, lub jej prawy dolny róg, aby zmienić rozmiar. Karty wypełniają wolne miejsca. Zmiany zapisują się automatycznie; Esc anuluje przeciąganie.",
-    "refreshEvery": "Odstęp między próbami: {{seconds}} s",
+    "refreshEvery": "Co {{seconds}} s",
     "failed": "Błąd zbierania danych",
     "noMetrics": "Wybierz co najmniej jedną metrykę.",
     "templates": {
@@ -2263,7 +2263,7 @@
       "commands": "Pokaż polecenia",
       "savePaused": "Zapisz jako wstrzymany; sprawdź przed uruchomieniem",
       "pausedHelp": "Polecenia zostaną uruchomione dopiero po wznowieniu pulpitu.",
-      "startHelp": "Zbieranie rozpoczyna się po zapisaniu. Polecenia tylko do odczytu mają interwały 10–60 s; w tle interwał wynosi co najmniej 30 s.",
+      "startHelp": "Zbieranie rozpoczyna się po zapisaniu. Polecenia tylko do odczytu domyślnie odświeżają dane co 10 s, także w tle.",
       "create": "Utwórz pulpit",
       "createStart": "Utwórz i uruchom",
       "addCards": "Dodaj do pulpitu",
@@ -2354,6 +2354,6 @@
       "backToContent": "Wróć do treści"
     },
     "previewEvicted": "Surowy wynik zwolniono, aby oszczędzić pamięć. Uruchom próbę, by zobaczyć podgląd ponownie. Ostatnie wyświetlane wartości są zachowane.",
-    "collectionPolicy": "Interwał jest liczony od zakończenia polecenia. W tle wynosi co najmniej 30 s; błędy wydłużają go do 60 s lub do ustawionej dłuższej wartości."
+    "collectionPolicy": "Na pierwszym planie i w tle obowiązuje ustawiony interwał. Wolne polecenia nie nakładają się i nie nadrabiają pominiętych uruchomień. Błędy wydłużają ponowienia do 60 s lub ustawionego dłuższego interwału."
   }
 }

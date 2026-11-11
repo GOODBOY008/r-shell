@@ -93,6 +93,8 @@ export interface SshConnectRequestSource extends SshExtendedOptions, ProxyConnec
 
 export interface SshConnectRequest extends SshIdentityRequest, ProxyConnectFields {
   connection_id: string;
+  /** Lease a matching authenticated SSH transport for dashboard channels. */
+  reuse_existing?: boolean;
   host: string;
   port: number;
   username: string;

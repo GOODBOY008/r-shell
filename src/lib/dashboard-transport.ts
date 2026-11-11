@@ -24,6 +24,7 @@ export const dashboardTransport: DashboardRuntimeDependencies = {
       if (controller.signal.aborted) return { success: false, needsInput: true, error: i18n.t('connectionDialog.toast.connectionCancelled') };
       if (!connectionHasCredentials(connection)) return { success: false, needsInput: true, error: i18n.t('dashboard.credentialsRequired') };
       const request = buildSshConnectRequest(runtimeId, connection);
+      request.reuse_existing = true;
       const connecting = sshConnect(request, { interactive });
       // Manual host-key/key-unlock decisions follow the existing untimed UI;
       // the backend still bounds network operations, and closing cancels them.

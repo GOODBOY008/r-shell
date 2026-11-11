@@ -218,7 +218,27 @@ impl ConnectionManager {
     }
 
     pub async fn create_connection(&self, connection_id: String, config: SshConfig) -> Result<()> {
-        let mut client = SshClient::new();
+        self.create_ssh_connection(connection_id, config, false)
+            .await
+    }
+
+    /// Dashboard aliases own their jobs independently, but can lease an existing
+    /// authenticated transport instead of paying for another TCP/SSH handshake.
+    pub async fn create_reusable_connection(
+        &self,
+        connection_id: String,
+        config: SshConfig,
+    ) -> Result<()> {
+        self.create_ssh_connection(connection_id, config, true)
+            .await
+    }
+
+    async fn create_ssh_connection(
+        &self,
+        connection_id: String,
+        config: SshConfig,
+        reuse: bool,
+    ) -> Result<()> {
         // Two concurrent connects for one id race at the insert below: the
         // second silently replaces the first client, tearing down the live
         // PTY riding on it. No legitimate flow starts two connects for the
@@ -238,11 +258,43 @@ impl ConnectionManager {
             &connection_id,
             &cancel_token,
             async {
+                if reuse {
+                    let key = config.reuse_key()?;
+                    let connections = self.connections.write().await;
+                    anyhow::ensure!(
+                        !connections.contains_key(&connection_id),
+                        "Connection ID is already in use"
+                    );
+                    let mut shared = None;
+                    for (id, candidate) in connections.iter() {
+                        // Never hold the registry behind a busy client writer.
+                        if candidate
+                            .try_read()
+                            .is_ok_and(|client| client.can_reuse(&key))
+                        {
+                            shared = Some((id.clone(), candidate.clone()));
+                            break;
+                        }
+                    }
+                    if let Some((owner, shared)) = shared {
+                        // Hold the map guard until publication so closing the
+                        // original owner cannot disconnect our new lease.
+                        return Ok((shared, connections, Some(owner)));
+                    }
+                }
+                let mut client = SshClient::new();
                 client.connect(&config).await?;
-                Ok((client, self.connections.write().await))
+                Ok((
+                    Arc::new(RwLock::new(client)),
+                    self.connections.write().await,
+                    None,
+                ))
             },
-            |(client, mut connections)| {
-                connections.insert(connection_id.clone(), Arc::new(RwLock::new(client)));
+            |(client, mut connections, owner)| {
+                if let Some(owner) = owner {
+                    self.monitor_jobs.share_connection(&connection_id, &owner);
+                }
+                connections.insert(connection_id.clone(), client);
             },
         )
         .await
@@ -335,9 +387,16 @@ impl ConnectionManager {
         let mut connections = self.connections.write().await;
         self.monitor_jobs.cancel_connection(connection_id);
         if let Some(client) = connections.remove(connection_id) {
-            let mut client = client.write().await;
-            client.disconnect().await?;
+            if !connections
+                .values()
+                .any(|other| Arc::ptr_eq(other, &client))
+            {
+                let mut client = client.write().await;
+                client.disconnect().await?;
+            }
         }
+        // A shared transport stays alive; close only this owner's PTY channel.
+        self.close_pty_connection(connection_id, None).await?;
         // If a detached session exists for this connection, cancel it so the
         // SSH channel and PTY are torn down (no reader is streaming it).
         {
@@ -2100,6 +2159,29 @@ mod tests {
             token.is_cancelled(),
             "close_connection must cancel the connection's transfers"
         );
+    }
+
+    #[tokio::test]
+    async fn closing_a_shared_alias_cancels_only_its_own_work() {
+        let mgr = ConnectionManager::new();
+        let client = Arc::new(RwLock::new(SshClient::new()));
+        {
+            let mut connections = mgr.connections.write().await;
+            connections.insert("terminal".into(), client.clone());
+            connections.insert("dashboard".into(), client.clone());
+        }
+        let (_, terminal_job) = mgr.start_monitor_job("terminal", "sample").await.unwrap();
+        let (_, dashboard_job) = mgr.start_monitor_job("dashboard", "sample").await.unwrap();
+        let transfer = mgr.register_transfer("terminal", "transfer").await;
+        mgr.close_connection("dashboard").await.unwrap();
+        assert!(dashboard_job.cancel.is_cancelled());
+        assert!(!terminal_job.cancel.is_cancelled());
+        assert!(!transfer.is_cancelled());
+        assert!(Arc::ptr_eq(&client, &mgr.get_connection("terminal").await.unwrap()));
+        assert!(mgr.get_connection("dashboard").await.is_none());
+        mgr.close_connection("terminal").await.unwrap();
+        assert!(terminal_job.cancel.is_cancelled());
+        assert!(transfer.is_cancelled());
     }
 
     #[tokio::test]

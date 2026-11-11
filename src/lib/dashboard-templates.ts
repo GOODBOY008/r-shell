@@ -22,8 +22,8 @@ END {
   if (total <= 0 || !found) exit 1
   printf "{\\"load1\\":%.2f,\\"load5\\":%.2f,\\"load15\\":%.2f,\\"memoryUsedPercent\\":%.2f}\\n", one, five, fifteen, (total-available)*100/total
 }' /proc/loadavg /proc/meminfo` },
-      { key: 'disks', command: 'LC_ALL=C df -hP', intervalSeconds: 60 },
-      { key: 'host', command: 'hostname && uname -sr && uptime', intervalSeconds: 60 },
+      { key: 'disks', command: 'LC_ALL=C df -hP' },
+      { key: 'host', command: 'hostname && uname -sr && uptime' },
     ],
     cards: [
       { key: 'memory', source: 'resources', display: 'number', paths: ['memoryUsedPercent'], unit: '%', decimals: 1 },
@@ -35,9 +35,9 @@ END {
   {
     id: 'docker',
     sources: [
-      { key: 'engine', command: `docker info --format '{"running":{{.ContainersRunning}},"stopped":{{.ContainersStopped}},"images":{{.Images}}}'`, timeoutSeconds: 15, intervalSeconds: 15 },
-      { key: 'containers', command: "docker ps -a --format '{{json .}}'", timeoutSeconds: 15, intervalSeconds: 30 },
-      { key: 'usage', command: "docker stats --no-stream --format '{{json .}}'", timeoutSeconds: 15, intervalSeconds: 30 },
+      { key: 'engine', command: `docker info --format '{"running":{{.ContainersRunning}},"stopped":{{.ContainersStopped}},"images":{{.Images}}}'`, timeoutSeconds: 15 },
+      { key: 'containers', command: "docker ps -a --format '{{json .}}'", timeoutSeconds: 15 },
+      { key: 'usage', command: "docker stats --no-stream --format '{{json .}}'", timeoutSeconds: 15 },
     ],
     cards: [
       { key: 'running', source: 'engine', display: 'number', paths: ['running'], decimals: 0 },

@@ -52,7 +52,6 @@ interface Job {
   runtimeId?: string;
   disposed: boolean;
   failures: number;
-  completedAt?: number;
   controller?: AbortController;
 }
 const rawKey = (boardId: string, sourceId: string, connectionId: string) => JSON.stringify([boardId, sourceId, connectionId]);
@@ -65,7 +64,6 @@ const failureResult = (error?: unknown, status: MonitorCommandResult['status'] =
 });
 
 export const DASHBOARD_RAW_CACHE_BYTES = 8 * 1024 * 1024;
-const BACKGROUND_INTERVAL_MS = 30_000;
 const brief = (value: string) => value.length > 4096 ? value.slice(0, 4096) + '…' : value;
 const summary = (result: MonitorCommandResult): MonitorCommandResult => ({ ...result, stdout: '', stderr: brief(result.stderr), error: result.error ? brief(result.error) : result.error });
 
@@ -101,6 +99,7 @@ export class DashboardRuntime {
   private live = false;
   private clock = 0;
   private lastSamplePrune = 0;
+  private lastChartRefresh = 0;
   private now: () => number;
 
   constructor(private deps: DashboardRuntimeDependencies) { this.now = deps.now ?? Date.now; }
@@ -148,7 +147,7 @@ export class DashboardRuntime {
     if (period) this.timer = setInterval(() => this.pump(), period);
   }
   private delay(job: Job) {
-    const interval = Math.max(job.source.intervalSeconds * 1000, this.visible.has(job.boardId) ? 0 : BACKGROUND_INTERVAL_MS);
+    const interval = job.source.intervalSeconds * 1000;
     return Math.max(interval, Math.min(60_000, interval * 2 ** Math.min(job.failures, 6)));
   }
   private setRaw(key: string, value: DashboardSourceReading) {
@@ -246,7 +245,6 @@ export class DashboardRuntime {
         this.jobs.set(key, { key, boardId: board.id, source, connectionId, session, nextAt: 0, disposed: false, failures: 0 });
       } else {
         const job = this.jobs.get(key)!; job.source = source;
-        if (job.completedAt !== undefined && !job.runId) job.nextAt = job.completedAt + this.delay(job);
       }
     }
     for (const session of retained) this.release(session, 'reconcile');
@@ -280,7 +278,7 @@ export class DashboardRuntime {
     const session = this.sessions.get(connectionId);
     if (!session || session.retired || session.pending) return;
     if (session.status === 'connected') {
-      for (const job of this.jobs.values()) if (job.connectionId === connectionId) { job.nextAt = 0; job.failures = 0; job.completedAt = undefined; }
+      for (const job of this.jobs.values()) if (job.connectionId === connectionId) { job.nextAt = 0; job.failures = 0; }
       this.pump();
     } else { session.retryAt = 0; void this.connect(session, true); }
   }
@@ -349,7 +347,10 @@ export class DashboardRuntime {
       }
       this.refreshTimer();
     }
-    if (this.now() - this.clock >= 5000) for (const board of this.visibleCharts()) this.emit(board.id);
+    if (this.now() - this.lastChartRefresh >= 5000) {
+      this.lastChartRefresh = this.now();
+      for (const board of this.visibleCharts()) this.emit(board.id);
+    }
     for (const session of this.sessions.values()) if (!session.retired && session.refs.size && !session.pending
       && (session.status === 'idle' || (session.status === 'retrying' && session.retryAt <= this.now()))) void this.connect(session);
     for (const job of [...this.jobs.values()].sort((a, b) => a.nextAt - b.nextAt)) if (!job.disposed && job.session?.status === 'connected'
@@ -364,13 +365,21 @@ export class DashboardRuntime {
     this.setRaw(job.key, { ...this.raw.get(job.key), running: true }); this.emit(job.boardId);
     const promise = (async () => {
       let result: MonitorCommandResult;
-      try { result = await this.commands.run(job.connectionId, () => this.deps.execute(runtimeId, runId, job.source), job.controller!.signal); }
+      let startedAt = this.now();
+      try { result = await this.commands.run(job.connectionId, () => {
+        startedAt = this.now();
+        return this.deps.execute(runtimeId, runId, job.source);
+      }, job.controller!.signal); }
       catch (error) { result = failureResult(error); }
       if (job.disposed || session.retired || session.runtimeId !== runtimeId) return;
       const previous = this.raw.get(job.key);
-      job.completedAt = this.now();
+      const completedAt = this.now();
       job.failures = result.status === 'success' || result.status === 'cancelled' ? 0 : job.failures + 1;
-      job.nextAt = job.completedAt + this.delay(job);
+      const interval = job.source.intervalSeconds * 1000;
+      // Visibility only controls rendering. Preserve the configured sampling
+      // cadence, skipping missed ticks after an overrun instead of catching up.
+      job.nextAt = job.failures ? completedAt + this.delay(job)
+        : startedAt + (Math.floor((completedAt - startedAt) / interval) + 1) * interval;
       this.setRaw(job.key, { ...previous, result: summary(result), running: false,
         ...(result.status === 'success' ? { success: result, updatedAt: this.now() } : {}) });
       const board = this.boards.get(job.boardId);
