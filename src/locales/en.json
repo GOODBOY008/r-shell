@@ -2144,7 +2144,8 @@
       "running": "Collecting",
       "paused": "Paused",
       "waiting": "Starts when opened",
-      "closed": "Closed"
+      "closed": "Closed",
+      "static": "Static content"
     },
     "connectionStates": {
       "idle": "Waiting to connect",
@@ -2257,6 +2258,27 @@
       "wide": "Wide layout",
       "medium": "Medium layout",
       "narrow": "Narrow layout"
+    },
+    "notes": {
+      "commandCard": "Command card",
+      "add": "Text / Markdown card",
+      "edit": "Edit text / Markdown card",
+      "format": "Format",
+      "text": "Plain text",
+      "markdown": "Markdown",
+      "content": "Content",
+      "help": "Add instructions, links or notes. No connection or command is needed; content stays available while collection is paused.",
+      "placeholder": "Write notes or paste Markdown…",
+      "preview": "Preview",
+      "previewEmpty": "Your content will appear here as you type.",
+      "insertExample": "Insert example",
+      "size": "{{size}} / {{limit}} KiB",
+      "tooLong": "Content must be no larger than 64 KiB.",
+      "required": "Enter a title and some content.",
+      "linkError": "Could not open this link.",
+      "example": "## Operations notes\n\n- [ ] Check container health\n- [ ] Review errors before restarting\n\n| Signal | Action |\n| --- | --- |\n| High CPU | Inspect the busiest container |\n\n```sh\ndocker ps\n```\n\n[Docker documentation](https://docs.docker.com/)",
+      "footnotes": "Notes",
+      "backToContent": "Back to content"
     }
   }
 }

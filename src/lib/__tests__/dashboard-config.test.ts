@@ -1,14 +1,32 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { copyDashboard, DASHBOARD_STORAGE_KEY, deleteDashboard, loadDashboardStore, moveDashboardWidget, newDashboard, newDashboardSource, newDashboardWidget, saveDashboard, validDashboardSource, validDashboardWidget } from '../dashboard-config';
+import { copyDashboard, isCommandWidget, newDashboardNote, DASHBOARD_STORAGE_KEY, deleteDashboard, loadDashboardStore, moveDashboardWidget, newDashboard, newDashboardSource, newDashboardWidget, saveDashboard, validDashboardSource, validDashboardWidget } from '../dashboard-config';
 
 beforeEach(() => localStorage.clear());
 describe('dashboard configuration', () => {
+  it.each([1, 2])('reads version %s and saves standalone notes without inventing sources', version => {
+    const board = newDashboard('Notes');
+    const raw = JSON.stringify({ version, dashboards: [board] });
+    localStorage.setItem(DASHBOARD_STORAGE_KEY, raw);
+    expect(loadDashboardStore().version).toBe(3);
+    expect(localStorage.getItem(DASHBOARD_STORAGE_KEY)).toBe(raw);
+    const note = { ...newDashboardNote(), name: 'Runbook', content: '# Hello\n\nKeep  spaces', layouts: { wide: { x: 0, y: 0, w: 12, h: 6 } } };
+    const next = { ...board, widgets: [note] };
+    saveDashboard(next); expect(loadDashboardStore().dashboards[0]).toEqual(next);
+    const copy = copyDashboard(next, 'Copy');
+    expect(copy.sources).toEqual([]); expect(copy.widgets[0]).toMatchObject({ kind: 'note', content: note.content, layouts: note.layouts });
+    expect(copy.widgets[0].id).not.toBe(note.id); expect(copy.widgets[0]).not.toHaveProperty('sourceId');
+  });
+  it('rejects malformed, blank, oversized or source-bound static notes', () => {
+    const note = { ...newDashboardNote(), name: 'Note', content: 'Text' };
+    expect(validDashboardWidget(note)).toBe(true);
+    for (const patch of [{ content: '  \n ' }, { content: 1 }, { content: '界'.repeat(22_000) }, { format: 'html' }, { kind: 'future' }, { sourceId: 'source' }]) expect(validDashboardWidget({ ...note, ...patch })).toBe(false);
+  });
   it('reads version 1 without rewriting it, then preserves geometry through save, reload and copy', () => {
     const source = { ...newDashboardSource(), name: 'Source', command: 'printf 0', connectionIds: ['saved'] };
     const board = { ...newDashboard('Legacy'), sources: [source], widgets: [{ ...newDashboardWidget(source.id), name: 'Count' }] };
     const raw = JSON.stringify({ version: 1, dashboards: [board] });
     localStorage.setItem(DASHBOARD_STORAGE_KEY, raw);
-    expect(loadDashboardStore().version).toBe(2); expect(localStorage.getItem(DASHBOARD_STORAGE_KEY)).toBe(raw);
+    expect(loadDashboardStore().version).toBe(3); expect(localStorage.getItem(DASHBOARD_STORAGE_KEY)).toBe(raw);
     const upgraded = { ...board, widgets: board.widgets.map(widget => ({ ...widget, layouts: { wide: { x: 6, y: 9, w: 6, h: 12 } } })) };
     saveDashboard(upgraded);
     expect(loadDashboardStore().dashboards[0]).toEqual(upgraded);
@@ -39,7 +57,8 @@ describe('dashboard configuration', () => {
     const copy = copyDashboard(board, 'Copy');
     expect(copy.id).not.toBe(board.id); expect(copy.sources[0].id).not.toBe(source.id);
     expect(new Set(copy.widgets.map(widget => widget.sourceId))).toEqual(new Set([copy.sources[0].id]));
-    copy.widgets[0].fields[0].label = 'Changed'; expect(board.widgets[0].fields[0].label).toBe('');
+    const copied = copy.widgets[0]; if (!isCommandWidget(copied)) throw new Error('Expected command');
+    copied.fields[0].label = 'Changed'; expect(board.widgets[0].fields[0].label).toBe('');
     expect(moveDashboardWidget(board, second.id, 0).widgets.map(widget => widget.id)).toEqual([second.id, first.id]);
   });
   it.each(['{', '{"version":99,"dashboards":[]}', '{"version":1,"dashboards":[{}]}'])('preserves unreadable configuration: %s', raw => {

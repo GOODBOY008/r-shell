@@ -4,7 +4,7 @@ import { DashboardEditor } from '../components/dashboard-editor';
 import { DashboardValue } from '../components/dashboard-value';
 import { DashboardView } from '../components/dashboard-view';
 import { DashboardCreateDialog } from '../components/dashboard-create-dialog';
-import { newDashboard, newDashboardSource, newDashboardWidget } from '../lib/dashboard-config';
+import { newDashboard, newDashboardNote, newDashboardSource, newDashboardWidget } from '../lib/dashboard-config';
 import { DashboardRuntime } from '../lib/dashboard-runtime';
 import { useDashboards } from '../lib/use-dashboards';
 import type { ConnectionData } from '../lib/connection-storage';
@@ -168,6 +168,34 @@ describe('multi-connection display', () => {
 });
 
 describe('dashboard layout editing', () => {
+  it('creates a standalone note from the add menu without SSH profiles or sources', () => {
+    const board = { ...newDashboard('Offline'), id: 'board' };
+    context.boards = [board]; context.connections = [];
+    const view = render(<DashboardView dashboardId="board" />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Text / Markdown card' })[0]);
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).queryByLabelText(i18n.t('monitor.command'))).toBeNull();
+    fireEvent.change(within(dialog).getByLabelText(i18n.t('monitor.name')), { target: { value: 'Operations' } });
+    fireEvent.change(within(dialog).getByLabelText('Content'), { target: { value: '## Offline guide' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    const saved = vi.mocked(context.saveBoard).mock.calls.at(-1)![0];
+    expect(saved.sources).toEqual([]); expect(saved.widgets[0]).toMatchObject({ kind: 'note', content: '## Offline guide' });
+    context.boards = [saved]; context.runtime.configure([saved], [], ['board'], ['board']); view.rerender(<DashboardView dashboardId="board" />);
+    expect(screen.getByRole('heading', { name: 'Offline guide' })).toBeTruthy(); expect(screen.getByText('Static content')).toBeTruthy();
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it('copies and resizes a static card using the shared layout controls', () => {
+    const note = { ...newDashboardNote(), name: 'Guide', content: 'Local notes' };
+    context.boards = [{ ...newDashboard('Notes'), id: 'board', widgets: [note] }];
+    render(<DashboardView dashboardId="board" />);
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('dashboard.copyCard') }));
+    const copy = vi.mocked(context.saveBoard).mock.calls.at(-1)![0].widgets[1];
+    expect(copy).toMatchObject({ kind: 'note', content: note.content }); expect(copy.id).not.toBe(note.id); expect(copy).not.toHaveProperty('sourceId');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit layout' }));
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Resize card' }), { key: 'ArrowDown' });
+    const resized = vi.mocked(context.saveBoard).mock.calls.at(-1)![0].widgets[0];
+    expect(Object.values(resized.layouts!)[0].h).toBe(9); expect(execute).not.toHaveBeenCalled();
+  });
   it('exposes resize handles only in edit mode and supports keyboard resize and undo', () => {
     const view = render(<DashboardView dashboardId="board" />);
     expect(screen.queryByRole('button', { name: 'Resize card' })).toBeNull();

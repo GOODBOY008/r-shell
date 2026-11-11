@@ -1,3 +1,4 @@
+import { isCommandWidget } from '../dashboard-config';
 import { execFileSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { createInstance } from 'i18next';
@@ -12,7 +13,7 @@ describe.skipIf(!container)('real dashboard template commands', () => {
     await i18n.init({ lng: 'en', resources: { en: { translation: {} } } });
     const board = dashboardFromTemplate(template, 'Live', ['fixture'], false, i18n.t);
     const output = new Map(board.sources.map(source => [source.id, execFileSync('docker', ['exec', '--user', 'testuser', container!, 'sh', '-c', source.command], { encoding: 'utf8', timeout: 20_000, maxBuffer: 256 * 1024 })]));
-    for (const widget of board.widgets) {
+    for (const widget of board.widgets.filter(isCommandWidget)) {
       const data = parseMonitorOutput(widget, output.get(widget.sourceId)!);
       if (data.kind === 'numbers') expect(data.values.every(Number.isFinite)).toBe(true);
       if (data.kind === 'text') expect(data.text.trim().length).toBeGreaterThan(0);

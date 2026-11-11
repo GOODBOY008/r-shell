@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ArrowRight, Play, Square } from 'lucide-react';
-import { newDashboardSource, newDashboardWidget, validDashboardSource, validDashboardWidget, type CommandDataSource, type Dashboard, type DashboardWidget } from '@/lib/dashboard-config';
+import { newDashboardSource, newDashboardWidget, validDashboardSource, validDashboardWidget, type CommandDataSource, type Dashboard, type DashboardCommandWidget } from '@/lib/dashboard-config';
 import { useDashboards } from '@/lib/use-dashboards';
 import { parseMonitorOutput, suggestMonitorFields, type MonitorData } from '@/lib/monitor-data';
 import type { MonitorCommandResult } from '@/lib/use-monitor-command';
@@ -16,7 +16,7 @@ import { dashboardConnectionLabel } from '@/lib/dashboard-labels';
 import { DashboardConnectionPicker } from './dashboard-connection-picker';
 
 export function DashboardEditor({ board, initialWidget, initialSource, onSave, onClose }: {
-  board: Dashboard; initialWidget?: DashboardWidget; initialSource?: CommandDataSource;
+  board: Dashboard; initialWidget?: DashboardCommandWidget; initialSource?: CommandDataSource;
   onSave: (board: Dashboard) => void; onClose: () => void;
 }) {
   const { t } = useTranslation();

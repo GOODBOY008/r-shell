@@ -2198,7 +2198,8 @@
       "running": "Zbiera dane",
       "paused": "Wstrzymano",
       "waiting": "Uruchomi się po otwarciu",
-      "closed": "Zamknięty"
+      "closed": "Zamknięty",
+      "static": "Treść statyczna"
     },
     "connectionStates": {
       "idle": "Oczekiwanie na połączenie",
@@ -2329,6 +2330,27 @@
       "wide": "Szeroki układ",
       "medium": "Średni układ",
       "narrow": "Wąski układ"
+    },
+    "notes": {
+      "commandCard": "Karta polecenia",
+      "add": "Karta tekstowa / Markdown",
+      "edit": "Edytuj kartę tekstową / Markdown",
+      "format": "Format",
+      "text": "Zwykły tekst",
+      "markdown": "Markdown",
+      "content": "Treść",
+      "help": "Dodaj instrukcje, linki lub notatki. Połączenie ani polecenie nie są potrzebne; treść pozostaje dostępna podczas wstrzymania zbierania danych.",
+      "placeholder": "Wpisz notatkę lub wklej Markdown…",
+      "preview": "Podgląd",
+      "previewEmpty": "Podgląd treści pojawi się tutaj podczas pisania.",
+      "insertExample": "Wstaw przykład",
+      "size": "{{size}} / {{limit}} KiB",
+      "tooLong": "Treść nie może przekraczać 64 KiB.",
+      "required": "Wpisz tytuł i treść.",
+      "linkError": "Nie udało się otworzyć tego linku.",
+      "example": "## Notatki operacyjne\n\n- [ ] Sprawdź stan kontenerów\n- [ ] Przejrzyj błędy przed restartem\n\n| Sygnał | Działanie |\n| --- | --- |\n| Wysokie użycie CPU | Sprawdź najbardziej obciążony kontener |\n\n```sh\ndocker ps\n```\n\n[Dokumentacja Dockera](https://docs.docker.com/)",
+      "footnotes": "Przypisy",
+      "backToContent": "Wróć do treści"
     }
   }
 }

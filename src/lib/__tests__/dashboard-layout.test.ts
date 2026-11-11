@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import { collides, type Layout } from 'react-grid-layout/core';
-import { newDashboard, newDashboardWidget, type Dashboard, type DashboardWidget } from '../dashboard-config';
+import { newDashboard, newDashboardWidget, type Dashboard, type DashboardCommandWidget } from '../dashboard-config';
 import { adjustDashboardCard, dashboardLayout, dashboardLayoutSnapshot, resetDashboardLayout, restoreDashboardLayout, saveDashboardLayout } from '../dashboard-layout';
 
-function boardFor(displays: DashboardWidget['display'][]): Dashboard {
+function boardFor(displays: DashboardCommandWidget['display'][]): Dashboard {
   return { ...newDashboard('Layout'), widgets: displays.map((display, index) => ({ ...newDashboardWidget('source'), id: String(index), name: String(index), display })) };
 }
 function expectPacked(layout: Layout, cols: number) {
@@ -79,7 +79,7 @@ describe('dashboard geometry', () => {
     expect(restored.columns).toBe(board.columns);
   });
   it('keeps generated and adjusted layouts collision-free across display types and breakpoints', () => {
-    fc.assert(fc.property(fc.array(fc.constantFrom<DashboardWidget['display']>('number', 'chart', 'table', 'text'), { minLength: 1, maxLength: 20 }), fc.integer({ min: -12, max: 12 }), fc.integer({ min: -12, max: 12 }), (displays, dx, dy) => {
+    fc.assert(fc.property(fc.array(fc.constantFrom<DashboardCommandWidget['display']>('number', 'chart', 'table', 'text'), { minLength: 1, maxLength: 20 }), fc.integer({ min: -12, max: 12 }), fc.integer({ min: -12, max: 12 }), (displays, dx, dy) => {
       const board = boardFor(displays);
       for (const [breakpoint, cols] of [['wide', 12], ['medium', 8], ['narrow', 4]] as const) {
         const moved = adjustDashboardCard(board, breakpoint, '0', 'move', dx, dy);

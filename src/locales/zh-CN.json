@@ -2138,7 +2138,8 @@
       "running": "采集中",
       "paused": "已暂停",
       "waiting": "打开查看后启动",
-      "closed": "未打开"
+      "closed": "未打开",
+      "static": "静态内容"
     },
     "connectionStates": {
       "idle": "等待连接",
@@ -2244,6 +2245,27 @@
       "wide": "宽屏布局",
       "medium": "中等宽度布局",
       "narrow": "窄屏布局"
+    },
+    "notes": {
+      "commandCard": "命令卡片",
+      "add": "文本 / Markdown 卡片",
+      "edit": "编辑文本 / Markdown 卡片",
+      "format": "格式",
+      "text": "纯文本",
+      "markdown": "Markdown",
+      "content": "内容",
+      "help": "添加操作说明、链接或备注，无需连接或命令，暂停采集时内容仍可查看。",
+      "placeholder": "输入备注或粘贴 Markdown…",
+      "preview": "预览",
+      "previewEmpty": "输入内容后将在这里实时预览。",
+      "insertExample": "插入示例",
+      "size": "{{size}} / {{limit}} KiB",
+      "tooLong": "内容不能超过 64 KiB。",
+      "required": "请输入标题和内容。",
+      "linkError": "无法打开此链接。",
+      "example": "## 运维说明\n\n- [ ] 检查容器健康状态\n- [ ] 重启前查看错误日志\n\n| 指标 | 处理方式 |\n| --- | --- |\n| CPU 使用率高 | 检查占用最高的容器 |\n\n```sh\ndocker ps\n```\n\n[Docker 文档](https://docs.docker.com/)",
+      "footnotes": "脚注",
+      "backToContent": "返回正文"
     }
   }
 }

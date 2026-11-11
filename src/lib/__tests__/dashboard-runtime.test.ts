@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { DashboardRuntime, type DashboardRuntimeDependencies } from '../dashboard-runtime';
-import { copyDashboard, newDashboard, newDashboardSource, newDashboardWidget } from '../dashboard-config';
+import { copyDashboard, newDashboard, newDashboardNote, newDashboardSource, newDashboardWidget } from '../dashboard-config';
 import type { ConnectionData } from '../connection-storage';
 import type { MonitorCommandResult } from '../use-monitor-command';
 
@@ -30,6 +30,27 @@ beforeEach(() => {
 afterEach(() => { runtime.stop(); vi.useRealTimers(); });
 
 describe('dashboard collection ownership', () => {
+  it('shows static content without opening a connection, including while paused or edited', async () => {
+    const note = { ...newDashboardNote(), name: 'Notes', content: '# Offline' };
+    const board = { ...newDashboard('Notes'), widgets: [note] };
+    runtime.configure([board], [], [board.id], [board.id]); await tick(20_000);
+    expect(runtime.collectionState(board.id)).toBe('static'); expect(runtime.isRunning(board.id)).toBe(false);
+    runtime.configure([{ ...board, paused: true, widgets: [{ ...note, format: 'text' as const, content: 'Edited' }] }], [], [board.id], [board.id]); await tick(20_000);
+    expect(runtime.collectionState(board.id)).toBe('static');
+    expect(deps.connect).not.toHaveBeenCalled(); expect(deps.execute).not.toHaveBeenCalled();
+    expect(runtime.widgetReading(board.id, note.id, 'one')).toBeUndefined();
+  });
+  it('preserves live readings when notes are edited and stops sources when only notes remain visible', async () => {
+    const board = fixture(); const note = { ...newDashboardNote(), name: 'Guide', content: 'First' };
+    const mixed = { ...board, widgets: [...board.widgets, note] };
+    runtime.configure([mixed], profiles, [board.id], [board.id]); await tick();
+    const samples = runtime.widgetReading(board.id, 'chart', 'one')?.samples;
+    runtime.configure([{ ...mixed, widgets: [...board.widgets, { ...note, content: 'Changed' }] }], profiles, [board.id], [board.id]); await tick();
+    expect(runtime.widgetReading(board.id, 'chart', 'one')?.samples).toEqual(samples); expect(deps.execute).toHaveBeenCalledTimes(2);
+    runtime.configure([{ ...mixed, widgets: [...board.widgets.map(widget => ({ ...widget, enabled: false })), note] }], profiles, [board.id], [board.id]); await tick(20_000);
+    expect(deps.execute).toHaveBeenCalledTimes(2); expect(deps.disconnect).toHaveBeenCalledTimes(2);
+    expect(runtime.collectionState(board.id)).toBe('static');
+  });
   it('reports an empty or fully hidden board as idle without opening SSH sessions', async () => {
     const empty = newDashboard('Empty');
     runtime.configure([empty], profiles, [empty.id], [empty.id]); await tick();

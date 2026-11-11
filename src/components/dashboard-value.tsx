@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { AlertTriangle, ArrowLeft, ArrowRight, CircleCheck, Pause, Pencil, RefreshCw } from 'lucide-react';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import type { ConnectionData } from '@/lib/connection-storage';
-import { DASHBOARD_EDIT_CONNECTION_EVENT, type CommandDataSource, type Dashboard, type DashboardWidget } from '@/lib/dashboard-config';
+import { DASHBOARD_EDIT_CONNECTION_EVENT, type CommandDataSource, type Dashboard, type DashboardCommandWidget } from '@/lib/dashboard-config';
 import type { DashboardRuntime, DashboardWidgetReading } from '@/lib/dashboard-runtime';
 import { monitorChartData } from '@/lib/monitor-data';
 import { dashboardConnectionLabel } from '@/lib/dashboard-labels';
@@ -31,7 +31,7 @@ export function DashboardConnectionStatus({ id, runtime, paused, reading, compac
 }
 
 export function DashboardValue({ board, widget, source, runtime, connections, visible = true, fill = false }: {
-  board: Dashboard; widget: DashboardWidget; source: CommandDataSource; runtime: DashboardRuntime; connections: ConnectionData[]; visible?: boolean; fill?: boolean;
+  board: Dashboard; widget: DashboardCommandWidget; source: CommandDataSource; runtime: DashboardRuntime; connections: ConnectionData[]; visible?: boolean; fill?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const [filter, setFilter] = useState('all');

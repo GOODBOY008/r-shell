@@ -9,13 +9,25 @@ export interface CommandDataSource {
   intervalSeconds: number;
   timeoutSeconds: number;
 }
-export interface DashboardWidget extends MonitorDisplayConfig {
+interface DashboardCard {
   id: string;
   name: string;
-  sourceId: string;
   enabled: boolean;
   layouts?: Partial<Record<DashboardBreakpoint, DashboardCardLayout>>;
 }
+export interface DashboardCommandWidget extends DashboardCard, MonitorDisplayConfig {
+  kind?: 'command';
+  sourceId: string;
+}
+export interface DashboardNoteWidget extends DashboardCard {
+  kind: 'note';
+  format: 'text' | 'markdown';
+  content: string;
+  sourceId?: never;
+}
+export type DashboardWidget = DashboardCommandWidget | DashboardNoteWidget;
+export const DASHBOARD_NOTE_LIMIT = 64 * 1024;
+export const isCommandWidget = (widget: DashboardWidget): widget is DashboardCommandWidget => widget.kind !== 'note';
 export type DashboardBreakpoint = 'wide' | 'medium' | 'narrow';
 export interface DashboardCardLayout { x: number; y: number; w: number; h: number }
 export const DASHBOARD_GRID_COLUMNS: Record<DashboardBreakpoint, number> = { wide: 12, medium: 8, narrow: 4 };
@@ -27,7 +39,7 @@ export interface Dashboard {
   sources: CommandDataSource[];
   widgets: DashboardWidget[];
 }
-export interface DashboardStore { version: 2; dashboards: Dashboard[] }
+export interface DashboardStore { version: 3; dashboards: Dashboard[] }
 export const DASHBOARD_STORAGE_KEY = 'r-shell-dashboards';
 export const DASHBOARD_CHANGED_EVENT = 'rshell-dashboards-changed';
 export const DASHBOARD_EDIT_CONNECTION_EVENT = 'rshell-dashboard-edit-connection';
@@ -40,9 +52,12 @@ export function newDashboard(name: string): Dashboard {
 export function newDashboardSource(): CommandDataSource {
   return { id: crypto.randomUUID(), name: '', connectionIds: [], command: '', intervalSeconds: 10, timeoutSeconds: 10 };
 }
-export function newDashboardWidget(sourceId = ''): DashboardWidget {
+export function newDashboardWidget(sourceId = ''): DashboardCommandWidget {
   const { display, fields, arrayPath, unit, decimals } = newCommandMonitor();
   return { id: crypto.randomUUID(), sourceId, name: '', enabled: true, display, fields, arrayPath, unit, decimals };
+}
+export function newDashboardNote(): DashboardNoteWidget {
+  return { id: crypto.randomUUID(), kind: 'note', name: '', enabled: true, format: 'markdown', content: '' };
 }
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const name = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
@@ -62,9 +77,12 @@ export function validDashboardSource(value: unknown): value is CommandDataSource
     && value.connectionIds.every(name) && new Set(value.connectionIds).size === value.connectionIds.length;
 }
 export function validDashboardWidget(value: unknown): value is DashboardWidget {
-  if (!record(value) || !name(value.id) || !name(value.name) || !name(value.sourceId)
-    || typeof value.enabled !== 'boolean' || !validMonitorDisplay(value)
+  if (!record(value) || !name(value.id) || !name(value.name)
+    || typeof value.enabled !== 'boolean'
     || (value.layouts !== undefined && !validCardLayouts(value.layouts))) return false;
+  if (value.kind === 'note') return ['text', 'markdown'].includes(value.format as string) && name(value.content)
+    && new TextEncoder().encode(value.content).length <= DASHBOARD_NOTE_LIMIT && value.sourceId === undefined;
+  if ((value.kind !== undefined && value.kind !== 'command') || !name(value.sourceId) || !validMonitorDisplay(value)) return false;
   const paths = value.display === 'text' ? [] : [
     ...(value.display === 'table' && value.tableFormat !== 'jsonl' ? [value.arrayPath] : []),
     ...value.fields.slice(0, value.display === 'number' ? 1 : undefined).map(field => field.path),
@@ -81,17 +99,17 @@ export function validDashboard(value: unknown): value is Dashboard {
     || !Array.isArray(value.widgets) || !value.widgets.every(validDashboardWidget)) return false;
   const sources = value.sources;
   return uniqueIds(sources) && uniqueIds(value.widgets)
-    && value.widgets.every(widget => sources.some(source => source.id === widget.sourceId));
+    && value.widgets.every(widget => !isCommandWidget(widget) || sources.some(source => source.id === widget.sourceId));
 }
 export function loadDashboardStore(): DashboardStore {
   const raw = localStorage.getItem(DASHBOARD_STORAGE_KEY);
-  if (!raw) return { version: 2, dashboards: [] };
+  if (!raw) return { version: 3, dashboards: [] };
   const data: unknown = JSON.parse(raw);
   // Do not silently replace damaged or newer configuration on the next edit.
-  if (!record(data) || ![1, 2].includes(data.version as number) || !Array.isArray(data.dashboards)
+  if (!record(data) || ![1, 2, 3].includes(data.version as number) || !Array.isArray(data.dashboards)
     || !data.dashboards.every(validDashboard) || !uniqueIds(data.dashboards)) throw new Error('Invalid dashboard store');
-  // Version 1 cards have no geometry. Derive it without writing until the user saves.
-  return { version: 2, dashboards: data.dashboards };
+  // Older cards have no kind (v1 also has no geometry). Upgrade only on save.
+  return { version: 3, dashboards: data.dashboards };
 }
 export function saveDashboard(dashboard: Dashboard): void {
   if (!validDashboard(dashboard)) throw new Error('Invalid dashboard');
@@ -113,7 +131,9 @@ export function copyDashboard(board: Dashboard, copyName: string): Dashboard {
   copy.name = copyName;
   const sourceIds = new Map(copy.sources.map(source => [source.id, crypto.randomUUID()]));
   copy.sources = copy.sources.map(source => ({ ...source, id: sourceIds.get(source.id)! }));
-  copy.widgets = copy.widgets.map(widget => ({ ...widget, id: crypto.randomUUID(), sourceId: sourceIds.get(widget.sourceId)! }));
+  copy.widgets = copy.widgets.map(widget => isCommandWidget(widget)
+    ? { ...widget, id: crypto.randomUUID(), sourceId: sourceIds.get(widget.sourceId)! }
+    : { ...widget, id: crypto.randomUUID() });
   return copy;
 }
 export function moveDashboardWidget(board: Dashboard, id: string, target: number): Dashboard {

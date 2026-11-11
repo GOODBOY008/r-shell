@@ -1,5 +1,5 @@
 import type { ConnectionData } from './connection-storage';
-import type { CommandDataSource, Dashboard, DashboardWidget } from './dashboard-config';
+import { isCommandWidget, type CommandDataSource, type Dashboard, type DashboardWidget } from './dashboard-config';
 import { appendMonitorSample, parseMonitorOutput, type MonitorData, type MonitorSample } from './monitor-data';
 import type { MonitorCommandResult } from './use-monitor-command';
 
@@ -52,7 +52,7 @@ interface Job {
 }
 const rawKey = (boardId: string, sourceId: string, connectionId: string) => JSON.stringify([boardId, sourceId, connectionId]);
 const widgetKey = (boardId: string, widgetId: string, connectionId: string) => JSON.stringify([boardId, widgetId, connectionId]);
-const projection = (widget: DashboardWidget) => JSON.stringify([widget.sourceId, widget.display, widget.fields.map(field => field.path), widget.arrayPath, widget.tableFormat]);
+const projection = (widget: DashboardWidget) => isCommandWidget(widget) ? JSON.stringify([widget.sourceId, widget.display, widget.fields.map(field => field.path), widget.arrayPath, widget.tableFormat]) : 'note';
 const sourceSchedule = (source: CommandDataSource) => JSON.stringify([source.command, source.intervalSeconds, source.timeoutSeconds]);
 const endpoint = (connection?: ConnectionData) => JSON.stringify([connection?.host, connection?.port, connection?.username]);
 const failureResult = (error?: unknown, status: MonitorCommandResult['status'] = 'transport_error'): MonitorCommandResult => ({
@@ -168,9 +168,11 @@ export class DashboardRuntime {
   isOpen(id: string) { return this.open.has(id); }
   isRunning(id: string) {
     const board = this.boards.get(id);
-    return this.open.has(id) && this.started.has(id) && board?.paused === false && board.widgets.some(widget => widget.enabled);
+    return this.open.has(id) && this.started.has(id) && board?.paused === false && board.widgets.some(widget => isCommandWidget(widget) && widget.enabled);
   }
-  collectionState(id: string): 'closed' | 'paused' | 'waiting' | 'idle' | 'running' {
+  collectionState(id: string): 'closed' | 'paused' | 'waiting' | 'idle' | 'running' | 'static' {
+    const enabled = this.boards.get(id)?.widgets.filter(widget => widget.enabled) ?? [];
+    if (this.open.has(id) && enabled.length && enabled.every(widget => !isCommandWidget(widget))) return 'static';
     if (this.boards.get(id)?.paused) return 'paused';
     if (!this.open.has(id)) return 'closed';
     if (!this.started.has(id)) return 'waiting';
@@ -313,7 +315,7 @@ export class DashboardRuntime {
   private project(board: Dashboard, source: CommandDataSource, connectionId: string) {
     const raw = this.raw.get(rawKey(board.id, source.id, connectionId));
     if (!raw) return;
-    for (const widget of board.widgets.filter(item => item.sourceId === source.id && item.enabled)) {
+    for (const widget of board.widgets.filter(isCommandWidget).filter(item => item.sourceId === source.id && item.enabled)) {
       const key = widgetKey(board.id, widget.id, connectionId);
       const previous = this.readings.get(key);
       const error = raw.result?.status !== 'success' ? raw.result?.status : undefined;

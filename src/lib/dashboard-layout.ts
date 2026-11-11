@@ -1,12 +1,12 @@
 import { collides, moveElement, verticalCompactor, type Layout, type LayoutItem } from 'react-grid-layout/core';
-import { DASHBOARD_GRID_COLUMNS, type Dashboard, type DashboardBreakpoint, type DashboardCardLayout, type DashboardWidget } from './dashboard-config';
+import { DASHBOARD_GRID_COLUMNS, isCommandWidget, type Dashboard, type DashboardBreakpoint, type DashboardCardLayout, type DashboardWidget } from './dashboard-config';
 import type { MonitorColumns } from './monitor-config';
 import type { KeyboardEvent } from 'react';
 
 export const DASHBOARD_ROW_HEIGHT = 24;
 export const DASHBOARD_GRID_GAP = 16;
-const heights = { number: 7, chart: 11, table: 12, text: 9 };
-const minimumHeights = { number: 5, chart: 8, table: 7, text: 6 };
+const heights = { number: 7, chart: 11, table: 12, text: 9, note: 8 };
+const minimumHeights = { number: 5, chart: 8, table: 7, text: 6, note: 4 };
 const breakpoints: DashboardBreakpoint[] = ['wide', 'medium', 'narrow'];
 const geometry = ({ x, y, w, h }: LayoutItem): DashboardCardLayout => ({ x, y, w, h });
 
@@ -24,8 +24,9 @@ export function dashboardBreakpoint(width: number): DashboardBreakpoint {
 
 function itemFor(widget: DashboardWidget, rect: DashboardCardLayout, cols: number): LayoutItem {
   const w = Math.max(4, Math.min(cols, Math.round(rect.w)));
+  const minH = minimumHeights[isCommandWidget(widget) ? widget.display : 'note'];
   return { i: widget.id, x: Math.max(0, Math.min(cols - w, Math.round(rect.x))), y: Math.max(0, Math.min(10_000, Math.round(rect.y))),
-    w, h: Math.max(minimumHeights[widget.display], Math.min(32, Math.round(rect.h))), minW: 4, maxW: cols, minH: minimumHeights[widget.display], maxH: 32 };
+    w, h: Math.max(minH, Math.min(32, Math.round(rect.h))), minW: 4, maxW: cols, minH, maxH: 32 };
 }
 
 // Fill the earliest available rectangle, including holes below shorter cards.
@@ -52,7 +53,7 @@ export function dashboardLayout(board: Dashboard, breakpoint: DashboardBreakpoin
       const ratio = cols / DASHBOARD_GRID_COLUMNS[from];
       placed.push(itemFor(widget, { ...saved, x: saved.x * ratio, w: saved.w * ratio }, cols));
     } else {
-      pending.push(itemFor(widget, { x: 0, y: 0, w: cols / Math.min(board.columns, cols / 4), h: heights[widget.display] }, cols));
+      pending.push(itemFor(widget, { x: 0, y: 0, w: cols / Math.min(board.columns, cols / 4), h: heights[isCommandWidget(widget) ? widget.display : 'note'] }, cols));
     }
   }
   // Preserve visual reading order when several columns collapse onto the same x.

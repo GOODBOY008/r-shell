@@ -1,0 +1,25 @@
+.dashboard-note { overflow-wrap: anywhere; }
+.dashboard-note > :first-child { margin-top: 0; }
+.dashboard-note > :last-child { margin-bottom: 0; }
+.dashboard-note :is(h1, h2, h3, h4, h5, h6) { margin: 1.25em 0 0.5em; font-weight: 600; line-height: 1.3; }
+.dashboard-note h1 { font-size: 1.5em; }
+.dashboard-note h2 { font-size: 1.25em; }
+.dashboard-note h3 { font-size: 1.1em; }
+.dashboard-note :is(p, ul, ol, blockquote, pre, table) { margin: 0.75em 0; }
+.dashboard-note :is(ul, ol) { padding-left: 1.5em; }
+.dashboard-note ul { list-style: disc; }
+.dashboard-note ol { list-style: decimal; }
+.dashboard-note li + li { margin-top: 0.25em; }
+.dashboard-note .contains-task-list { list-style: none; padding-left: 0.25em; }
+.dashboard-note input[type=checkbox] { margin-right: 0.5em; accent-color: var(--primary); }
+.dashboard-note a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; }
+.dashboard-note a:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 2px; }
+.dashboard-note blockquote { border-left: 3px solid var(--border); padding-left: 1em; color: var(--muted-foreground); }
+.dashboard-note code { font-family: var(--font-mono); font-size: 0.9em; border-radius: 4px; padding: 0.1em 0.3em; background: var(--muted); }
+.dashboard-note pre { overflow: auto; border-radius: 6px; padding: 0.75em; background: var(--muted); }
+.dashboard-note pre code { background: transparent; padding: 0; }
+.dashboard-note table { width: 100%; border-collapse: collapse; }
+.dashboard-note :is(th, td) { border: 1px solid var(--border); padding: 0.4em 0.65em; }
+.dashboard-note th { background: var(--muted); font-weight: 600; }
+.dashboard-note hr { border-color: var(--border); margin: 1em 0; }
+.dashboard-note img { max-width: 100%; height: auto; border-radius: 6px; }
