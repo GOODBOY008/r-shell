@@ -3,6 +3,27 @@ import { copyDashboard, DASHBOARD_STORAGE_KEY, deleteDashboard, loadDashboardSto
 
 beforeEach(() => localStorage.clear());
 describe('dashboard configuration', () => {
+  it('reads version 1 without rewriting it, then preserves geometry through save, reload and copy', () => {
+    const source = { ...newDashboardSource(), name: 'Source', command: 'printf 0', connectionIds: ['saved'] };
+    const board = { ...newDashboard('Legacy'), sources: [source], widgets: [{ ...newDashboardWidget(source.id), name: 'Count' }] };
+    const raw = JSON.stringify({ version: 1, dashboards: [board] });
+    localStorage.setItem(DASHBOARD_STORAGE_KEY, raw);
+    expect(loadDashboardStore().version).toBe(2); expect(localStorage.getItem(DASHBOARD_STORAGE_KEY)).toBe(raw);
+    const upgraded = { ...board, widgets: board.widgets.map(widget => ({ ...widget, layouts: { wide: { x: 6, y: 9, w: 6, h: 12 } } })) };
+    saveDashboard(upgraded);
+    expect(loadDashboardStore().dashboards[0]).toEqual(upgraded);
+    const copy = copyDashboard(upgraded, 'Copied');
+    expect(copy.widgets[0].layouts).toEqual(upgraded.widgets[0].layouts);
+    copy.widgets[0].layouts!.wide!.w = 4;
+    expect(upgraded.widgets[0].layouts.wide.w).toBe(6);
+  });
+  it('rejects invalid geometry instead of overwriting damaged configuration', () => {
+    const widget = { ...newDashboardWidget('source'), name: 'Card' };
+    for (const rect of [{ x: -1, y: 0, w: 6, h: 8 }, { x: 8, y: 0, w: 6, h: 8 }, { x: 0, y: 0, w: 2, h: 8 }, { x: 0, y: Infinity, w: 6, h: 8 }, { x: 0, y: 0, w: 6, h: 99 }]) {
+      expect(validDashboardWidget({ ...widget, layouts: { wide: rect } })).toBe(false);
+    }
+    expect(validDashboardWidget({ ...widget, layouts: { future: { x: 0, y: 0, w: 6, h: 8 } } })).toBe(false);
+  });
   it('starts empty and saves a source and its first card together', () => {
     expect(loadDashboardStore().dashboards).toEqual([]);
     const board = newDashboard('Fleet'); const source = { ...newDashboardSource(), name: 'Snapshot', connectionIds: ['saved'], command: 'printf 0' };

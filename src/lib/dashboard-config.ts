@@ -14,7 +14,11 @@ export interface DashboardWidget extends MonitorDisplayConfig {
   name: string;
   sourceId: string;
   enabled: boolean;
+  layouts?: Partial<Record<DashboardBreakpoint, DashboardCardLayout>>;
 }
+export type DashboardBreakpoint = 'wide' | 'medium' | 'narrow';
+export interface DashboardCardLayout { x: number; y: number; w: number; h: number }
+export const DASHBOARD_GRID_COLUMNS: Record<DashboardBreakpoint, number> = { wide: 12, medium: 8, narrow: 4 };
 export interface Dashboard {
   id: string;
   name: string;
@@ -23,7 +27,7 @@ export interface Dashboard {
   sources: CommandDataSource[];
   widgets: DashboardWidget[];
 }
-export interface DashboardStore { version: 1; dashboards: Dashboard[] }
+export interface DashboardStore { version: 2; dashboards: Dashboard[] }
 export const DASHBOARD_STORAGE_KEY = 'r-shell-dashboards';
 export const DASHBOARD_CHANGED_EVENT = 'rshell-dashboards-changed';
 export const DASHBOARD_EDIT_CONNECTION_EVENT = 'rshell-dashboard-edit-connection';
@@ -43,6 +47,13 @@ export function newDashboardWidget(sourceId = ''): DashboardWidget {
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const name = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
 const integer = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+function validCardLayouts(value: unknown): boolean {
+  return record(value) && Object.entries(value).every(([breakpoint, layout]) => {
+    const cols = DASHBOARD_GRID_COLUMNS[breakpoint as DashboardBreakpoint];
+    return !!cols && record(layout) && integer(layout.w, 4, cols) && integer(layout.x, 0, cols - (layout.w as number))
+      && integer(layout.y, 0, 10_000) && integer(layout.h, 4, 32);
+  });
+}
 export function validDashboardSource(value: unknown): value is CommandDataSource {
   return record(value) && name(value.id) && name(value.name) && name(value.command)
     && new TextEncoder().encode(value.command).length <= 64 * 1024
@@ -52,7 +63,8 @@ export function validDashboardSource(value: unknown): value is CommandDataSource
 }
 export function validDashboardWidget(value: unknown): value is DashboardWidget {
   if (!record(value) || !name(value.id) || !name(value.name) || !name(value.sourceId)
-    || typeof value.enabled !== 'boolean' || !validMonitorDisplay(value)) return false;
+    || typeof value.enabled !== 'boolean' || !validMonitorDisplay(value)
+    || (value.layouts !== undefined && !validCardLayouts(value.layouts))) return false;
   const paths = value.display === 'text' ? [] : [
     ...(value.display === 'table' && value.tableFormat !== 'jsonl' ? [value.arrayPath] : []),
     ...value.fields.slice(0, value.display === 'number' ? 1 : undefined).map(field => field.path),
@@ -73,12 +85,13 @@ export function validDashboard(value: unknown): value is Dashboard {
 }
 export function loadDashboardStore(): DashboardStore {
   const raw = localStorage.getItem(DASHBOARD_STORAGE_KEY);
-  if (!raw) return { version: 1, dashboards: [] };
+  if (!raw) return { version: 2, dashboards: [] };
   const data: unknown = JSON.parse(raw);
   // Do not silently replace damaged or newer configuration on the next edit.
-  if (!record(data) || data.version !== 1 || !Array.isArray(data.dashboards)
+  if (!record(data) || ![1, 2].includes(data.version as number) || !Array.isArray(data.dashboards)
     || !data.dashboards.every(validDashboard) || !uniqueIds(data.dashboards)) throw new Error('Invalid dashboard store');
-  return { version: 1, dashboards: data.dashboards };
+  // Version 1 cards have no geometry. Derive it without writing until the user saves.
+  return { version: 2, dashboards: data.dashboards };
 }
 export function saveDashboard(dashboard: Dashboard): void {
   if (!validDashboard(dashboard)) throw new Error('Invalid dashboard');

@@ -53,10 +53,10 @@ describe('dashboard collection ownership', () => {
     runtime.configure([board], profiles, [board.id], []); await tick(10_000);
     expect(deps.execute).toHaveBeenCalledTimes(4);
   });
-  it('keeps samples and command count when cards move, rename, change precision or columns', async () => {
+  it('keeps samples and command count when cards move, resize, rename, change precision or columns', async () => {
     const board = fixture(); runtime.configure([board], profiles, [board.id], [board.id]); await tick();
     const before = runtime.widgetReading(board.id, 'chart', 'one')?.samples;
-    runtime.configure([{ ...board, columns: 3, widgets: [...board.widgets].reverse().map(widget => ({ ...widget, name: 'Renamed', decimals: 4 })) }], profiles, [board.id], [board.id]);
+    runtime.configure([{ ...board, columns: 3, widgets: [...board.widgets].reverse().map(widget => ({ ...widget, name: 'Renamed', decimals: 4, layouts: { wide: { x: 0, y: 5, w: 12, h: 16 }, narrow: { x: 0, y: 0, w: 4, h: 10 } } })) }], profiles, [board.id], [board.id]);
     await tick(); expect(deps.execute).toHaveBeenCalledTimes(2);
     expect(runtime.widgetReading(board.id, 'chart', 'one')?.samples).toEqual(before);
   });

@@ -2249,7 +2249,7 @@
     "connectionsSelected_many": "Wybrano {{count}}",
     "connectionsSelected_other": "Wybrano {{count}}",
     "addOptions": "Więcej sposobów dodawania kart",
-    "layoutHelp": "Przeciągnij karty, aby zmienić kolejność. Zmiany zapisują się automatycznie.",
+    "layoutHelp": "Przeciągnij uchwyt, aby przenieść kartę, lub jej prawy dolny róg, aby zmienić rozmiar. Karty wypełniają wolne miejsca. Zmiany zapisują się automatycznie; Esc anuluje przeciąganie.",
     "refreshEvery": "Co {{seconds}} sekund",
     "failed": "Błąd zbierania danych",
     "noMetrics": "Wybierz co najmniej jedną metrykę.",
@@ -2317,6 +2317,18 @@
         "MemUsage": "Pamięć / limit",
         "NetIO": "Sieciowe I/O"
       }
+    },
+    "layoutPreset": "Rozmieść karty",
+    "resetLayout": "Resetuj rozmiary i pozycje",
+    "undoLayout": "Cofnij układ",
+    "resizeCard": "Zmień rozmiar karty",
+    "resizeHelp": "Przeciągnij lub użyj strzałek, aby zmienić szerokość i wysokość.",
+    "moveHelp": "Przeciągnij lub użyj strzałek. Sąsiednie karty przesuną się.",
+    "hiddenCards": "Ukryte karty — wybierz kartę, aby ją wyświetlić",
+    "layoutViews": {
+      "wide": "Szeroki układ",
+      "medium": "Średni układ",
+      "narrow": "Wąski układ"
     }
   }
 }

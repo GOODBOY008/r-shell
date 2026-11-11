@@ -2164,7 +2164,7 @@
     "addConnection": "添加 SSH 连接",
     "connectionsSelected_other": "已选 {{count}} 个",
     "addOptions": "更多添加方式",
-    "layoutHelp": "拖动卡片调整顺序，修改会自动保存。",
+    "layoutHelp": "拖动把手移动卡片，拖动右下角调整宽高。卡片会吸附并填补空位，调整后自动保存；Esc 取消当前拖动。",
     "refreshEvery": "每 {{seconds}} 秒刷新",
     "failed": "采集失败",
     "noMetrics": "请至少选择一个要显示的指标。",
@@ -2232,6 +2232,18 @@
         "MemUsage": "内存 / 上限",
         "NetIO": "网络 I/O"
       }
+    },
+    "layoutPreset": "排列卡片",
+    "resetLayout": "重置大小和位置",
+    "undoLayout": "撤销布局",
+    "resizeCard": "调整卡片大小",
+    "resizeHelp": "拖动调整大小，也可用方向键调整宽度和高度。",
+    "moveHelp": "拖动或按方向键移动，其他卡片会自动避让。",
+    "hiddenCards": "已隐藏的卡片，点击可恢复显示",
+    "layoutViews": {
+      "wide": "宽屏布局",
+      "medium": "中等宽度布局",
+      "narrow": "窄屏布局"
     }
   }
 }

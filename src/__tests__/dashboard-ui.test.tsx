@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DashboardEditor } from '../components/dashboard-editor';
 import { DashboardValue } from '../components/dashboard-value';
@@ -164,5 +164,39 @@ describe('multi-connection display', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Filter displayed connections' }), { target: { value: 'two' } });
     expect(screen.getByText('2 retained rows')).toBeTruthy(); expect(screen.getByText('1 / 1')).toBeTruthy();
     expect(screen.queryByText('A-0')).toBeNull();
+  });
+});
+
+describe('dashboard layout editing', () => {
+  it('exposes resize handles only in edit mode and supports keyboard resize and undo', () => {
+    const view = render(<DashboardView dashboardId="board" />);
+    expect(screen.queryByRole('button', { name: 'Resize card' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit layout' }));
+    const region = screen.getByRole('region', { name: 'Count' });
+    fireEvent.keyDown(within(region).getByRole('button', { name: 'Resize card' }), { key: 'ArrowDown' });
+    const saved = vi.mocked(context.saveBoard).mock.calls[0][0];
+    expect(Object.values(saved.widgets[0].layouts!)[0].h).toBe(8);
+    expect(saved.widgets.map(widget => widget.id)).toEqual(['card', 'second']);
+    expect(saved.sources).toEqual(context.boards[0].sources); expect(execute).not.toHaveBeenCalled();
+    context.boards = [saved]; view.rerender(<DashboardView dashboardId="board" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo layout' }));
+    expect(vi.mocked(context.saveBoard).mock.calls.at(-1)![0].widgets.every(widget => !widget.layouts)).toBe(true);
+  });
+  it('reports save failures without replacing the persisted layout', () => {
+    context.saveBoard = vi.fn(() => { throw new Error('quota'); });
+    render(<DashboardView dashboardId="board" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit layout' }));
+    fireEvent.keyDown(screen.getAllByRole('button', { name: 'Resize card' })[0], { key: 'ArrowDown' });
+    expect(screen.getByRole('alert').textContent).toBe(i18n.t('dashboard.saveError'));
+    expect(context.boards[0].widgets.every(widget => !widget.layouts)).toBe(true);
+  });
+  it('keeps hidden cards out of the grid and offers a restore action', () => {
+    const board = fixture(); board.widgets[0].enabled = false; context.boards = [board];
+    render(<DashboardView dashboardId="board" />);
+    expect(screen.queryByRole('region', { name: 'Count' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit layout' }));
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('dashboard.showCard', { name: 'Count' }) }));
+    expect(vi.mocked(context.saveBoard).mock.calls.at(-1)![0].widgets[0].enabled).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

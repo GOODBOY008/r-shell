@@ -2177,7 +2177,7 @@
     "connectionsSelected_one": "{{count}} selected",
     "connectionsSelected_other": "{{count}} selected",
     "addOptions": "More ways to add cards",
-    "layoutHelp": "Drag cards to reorder. Changes are saved automatically.",
+    "layoutHelp": "Drag the handle to move a card, or drag its lower-right corner to resize. Cards snap into available space. Changes save automatically; Esc cancels a gesture.",
     "refreshEvery": "Every {{seconds}} seconds",
     "failed": "Collection failed",
     "noMetrics": "Select at least one metric to display.",
@@ -2245,6 +2245,18 @@
         "MemUsage": "Memory / limit",
         "NetIO": "Network I/O"
       }
+    },
+    "layoutPreset": "Arrange cards",
+    "resetLayout": "Reset sizes and positions",
+    "undoLayout": "Undo layout",
+    "resizeCard": "Resize card",
+    "resizeHelp": "Drag to resize, or use arrow keys to change width and height.",
+    "moveHelp": "Drag to move, or use arrow keys. Nearby cards move aside.",
+    "hiddenCards": "Hidden cards — select one to show it again",
+    "layoutViews": {
+      "wide": "Wide layout",
+      "medium": "Medium layout",
+      "narrow": "Narrow layout"
     }
   }
 }
