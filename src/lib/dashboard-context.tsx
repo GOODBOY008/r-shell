@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTerminalGroups } from './terminal-group-context';
 import { isTerminalTabVisible } from './terminal-group-reducer';
 import { ConnectionStorageManager } from './connection-storage';
@@ -13,6 +13,14 @@ function readBoards() {
 }
 export function DashboardProvider({ children }: { children: React.ReactNode }) {
   const { state, dispatch } = useTerminalGroups();
+  const stateRef = useRef(state);
+  useEffect(() => { stateRef.current = state; }, [state]);
+  const [foreground, setForeground] = useState(() => !document.hidden);
+  useEffect(() => {
+    const changed = () => setForeground(!document.hidden);
+    document.addEventListener('visibilitychange', changed);
+    return () => document.removeEventListener('visibilitychange', changed);
+  }, []);
   const [stored, setStored] = useState(readBoards);
   const [connections, setConnections] = useState(() => ConnectionStorageManager.getConnections());
   const [runtime] = useState(() => new DashboardRuntime(dashboardTransport));
@@ -32,17 +40,22 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener('storage', storage);
     };
   }, []);
+  // Terminal output/layout changes must not reconcile every dashboard source.
+  const workspace = JSON.stringify(Object.values(state.groups).flatMap(group => group.tabs)
+    .filter(tab => tab.tabType === 'dashboard' && tab.dashboardId)
+    .map(tab => ({ id: tab.id, dashboardId: tab.dashboardId!, name: tab.name, groupId: state.tabToGroupMap[tab.id], visible: isTerminalTabVisible(state, tab.id) })));
   useEffect(() => {
-    const tabs = Object.values(state.groups).flatMap(group => group.tabs).filter(tab => tab.tabType === 'dashboard' && tab.dashboardId);
-    runtime.configure(stored.boards, connections, tabs.map(tab => tab.dashboardId!), tabs.filter(tab => isTerminalTabVisible(state, tab.id)).map(tab => tab.dashboardId!));
+    const tabs = JSON.parse(workspace) as Array<{ id: string; dashboardId: string; name: string; groupId: string; visible: boolean }>;
+    runtime.configure(stored.boards, connections, tabs.map(tab => tab.dashboardId), foreground ? tabs.filter(tab => tab.visible).map(tab => tab.dashboardId) : []);
     // Rename/delete the workspace reference together with its saved dashboard.
     if (!stored.storageError) for (const tab of tabs) {
       const board = stored.boards.find(item => item.id === tab.dashboardId);
-      if (!board) dispatch({ type: 'REMOVE_TAB', groupId: state.tabToGroupMap[tab.id], tabId: tab.id });
+      if (!board) dispatch({ type: 'REMOVE_TAB', groupId: tab.groupId, tabId: tab.id });
       else if (board.name !== tab.name) dispatch({ type: 'UPDATE_TAB_NAME', tabId: tab.id, name: board.name });
     }
-  }, [stored, connections, runtime, state, dispatch]);
+  }, [stored, connections, runtime, workspace, foreground, dispatch]);
   const openBoard = useCallback((board: Dashboard) => {
+    const state = stateRef.current;
     const id = dashboardTabId(board.id);
     const groupId = state.tabToGroupMap[id];
     if (groupId) {
@@ -51,7 +64,7 @@ export function DashboardProvider({ children }: { children: React.ReactNode }) {
     } else dispatch({ type: 'ADD_TAB', groupId: state.activeGroupId, tab: {
       id, name: board.name, dashboardId: board.id, tabType: 'dashboard', connectionStatus: 'disconnected', reconnectCount: 0,
     } });
-  }, [state, dispatch]);
-  const value = useMemo(() => ({ ...stored, connections, runtime, openBoard, saveBoard: saveDashboard }), [stored, connections, runtime, openBoard]);
+  }, [dispatch]);
+  const value = useMemo(() => ({ ...stored, connections, runtime, foreground, openBoard, saveBoard: saveDashboard }), [stored, connections, runtime, foreground, openBoard]);
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;
 }

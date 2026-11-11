@@ -72,6 +72,9 @@ describe('dashboard collection ownership', () => {
     expect(deps.connect).not.toHaveBeenCalled();
     runtime.configure([board], profiles, [board.id], [board.id]); await tick();
     runtime.configure([board], profiles, [board.id], []); await tick(10_000);
+    expect(deps.execute).toHaveBeenCalledTimes(2);
+    expect(runtime.collectionState(board.id)).toBe('background');
+    await tick(20_000);
     expect(deps.execute).toHaveBeenCalledTimes(4);
   });
   it('keeps samples and command count when cards move, resize, rename, change precision or columns', async () => {
@@ -132,7 +135,7 @@ describe('dashboard collection ownership', () => {
     deps.execute.mockResolvedValue({ ...result(), status: 'timeout' }); await tick(10_000);
     expect(runtime.widgetReading(board.id, 'chart', 'one')?.error).toBe('timeout');
     expect(runtime.widgetReading(board.id, 'chart', 'one')?.data).toEqual({ kind: 'numbers', values: [0] });
-    deps.execute.mockResolvedValue(result('{"cpu":"invalid"}')); await tick(10_000);
+    deps.execute.mockResolvedValue(result('{"cpu":"invalid"}')); await tick(20_000);
     expect(runtime.widgetReading(board.id, 'chart', 'one')?.error).toMatchObject({ code: 'invalidNumber' });
     deps.execute.mockResolvedValue(result('{"cpu":-1.2}')); await tick(10_000);
     expect(runtime.widgetReading(board.id, 'chart', 'one')?.error).toBeUndefined();
@@ -148,8 +151,9 @@ describe('dashboard collection ownership', () => {
     runtime.configure([board], profiles.map(profile => ({ ...profile, name: 'Renamed' })), [board.id], [board.id]);
     expect(deps.connect).toHaveBeenCalledTimes(1);
     runtime.configure([board], profiles.map(profile => ({ ...profile, host: 'replacement' })), [board.id], [board.id]); await tick();
-    const nextId = deps.connect.mock.calls[1][1]; expect(nextId).not.toBe(firstId);
+    expect(deps.connect).toHaveBeenCalledTimes(1);
     pending.resolve({ success: true }); await tick();
+    const nextId = deps.connect.mock.calls[1][1]; expect(nextId).not.toBe(firstId);
     expect(deps.disconnect).toHaveBeenCalledWith(firstId);
     expect(deps.disconnect).not.toHaveBeenCalledWith(nextId);
     expect(runtime.connectionState('one').status).toBe('connected');
@@ -183,6 +187,7 @@ describe('dashboard collection ownership', () => {
     const pending = deferred<{ success: boolean }>(); deps.connect.mockImplementationOnce(() => pending.promise);
     const abort = new AbortController(); const onResult = vi.fn();
     const trial = runtime.trial(board.sources[0], ['one'], abort.signal, onResult);
+    await tick();
     abort.abort(); pending.resolve({ success: true }); await trial; await tick(20_000);
     expect(deps.cancelConnect).toHaveBeenCalled(); expect(deps.execute).not.toHaveBeenCalled(); expect(onResult).not.toHaveBeenCalled();
     await runtime.trial(board.sources[0], ['one'], new AbortController().signal, onResult); await tick(20_000);

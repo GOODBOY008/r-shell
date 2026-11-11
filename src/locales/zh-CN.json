@@ -2139,7 +2139,8 @@
       "paused": "已暂停",
       "waiting": "打开查看后启动",
       "closed": "未打开",
-      "static": "静态内容"
+      "static": "静态内容",
+      "background": "后台采集 · 至少 30 秒"
     },
     "connectionStates": {
       "idle": "等待连接",
@@ -2166,7 +2167,7 @@
     "connectionsSelected_other": "已选 {{count}} 个",
     "addOptions": "更多添加方式",
     "layoutHelp": "拖动把手移动卡片，拖动右下角调整宽高。卡片会吸附并填补空位，调整后自动保存；Esc 取消当前拖动。",
-    "refreshEvery": "每 {{seconds}} 秒刷新",
+    "refreshEvery": "采集间隔 {{seconds}} 秒",
     "failed": "采集失败",
     "noMetrics": "请至少选择一个要显示的指标。",
     "templates": {
@@ -2177,7 +2178,7 @@
       "commands": "查看采集命令",
       "savePaused": "保存为暂停，检查后再采集",
       "pausedHelp": "点击看板的「继续」后才会执行命令。",
-      "startHelp": "保存后开始采集。所有命令均为只读，默认每 10 秒刷新。",
+      "startHelp": "保存后开始采集。只读采集项使用 10–60 秒周期，后台看板刷新间隔至少为 30 秒。",
       "create": "创建看板",
       "createStart": "创建并开始采集",
       "addCards": "添加到看板",
@@ -2266,6 +2267,8 @@
       "example": "## 运维说明\n\n- [ ] 检查容器健康状态\n- [ ] 重启前查看错误日志\n\n| 指标 | 处理方式 |\n| --- | --- |\n| CPU 使用率高 | 检查占用最高的容器 |\n\n```sh\ndocker ps\n```\n\n[Docker 文档](https://docs.docker.com/)",
       "footnotes": "脚注",
       "backToContent": "返回正文"
-    }
+    },
+    "previewEvicted": "原始输出已释放以节省内存。试运行可重新预览，卡片保留最后成功的数据。",
+    "collectionPolicy": "每次命令结束后再等待此间隔。后台至少等待 30 秒；失败时逐步延长至 60 秒，原间隔更长时保持原值。"
   }
 }

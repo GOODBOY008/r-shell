@@ -157,13 +157,18 @@ describe('multi-connection display', () => {
     context.runtime.stop(); context.runtime = runtime;
     const next = { ...board, sources: [source], widgets: [widget] };
     runtime.start(); runtime.configure([next], profiles, [next.id], [next.id]); await vi.advanceTimersByTimeAsync(250);
-    render(<DashboardValue board={next} widget={widget} source={source} runtime={runtime} connections={profiles} />);
+    const view = render(<DashboardValue board={next} widget={widget} source={source} runtime={runtime} connections={profiles} />);
     expect(screen.getByText('202 retained rows')).toBeTruthy(); expect(screen.getByText('1 / 5')).toBeTruthy();
     for (let index = 0; index < 4; index++) fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
     expect(screen.getByText('B-0')).toBeTruthy(); expect(screen.getByText('B-1')).toBeTruthy();
     fireEvent.change(screen.getByRole('combobox', { name: 'Filter displayed connections' }), { target: { value: 'two' } });
     expect(screen.getByText('2 retained rows')).toBeTruthy(); expect(screen.getByText('1 / 1')).toBeTruthy();
     expect(screen.queryByText('A-0')).toBeNull();
+    view.rerender(<DashboardValue board={next} widget={widget} source={source} runtime={runtime} connections={profiles} visible={false} />);
+    expect(screen.queryByRole('table')).toBeNull();
+    view.rerender(<DashboardValue board={next} widget={widget} source={source} runtime={runtime} connections={profiles} />);
+    expect((screen.getByRole('combobox', { name: 'Filter displayed connections' }) as HTMLSelectElement).value).toBe('two');
+    expect(screen.getByText('B-0')).toBeTruthy();
   });
 });
 

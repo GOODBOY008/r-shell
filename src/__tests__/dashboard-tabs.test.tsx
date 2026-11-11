@@ -6,12 +6,35 @@ import { TerminalGroupProvider, useTerminalGroups } from '../lib/terminal-group-
 import { dashboardTabId, newDashboard, saveDashboard } from '../lib/dashboard-config';
 import { createDefaultState, deserialize, loadState, saveState, serialize } from '../lib/terminal-group-serializer';
 import { isSshTerminalTab } from '../lib/session-health';
+import { DashboardRuntime } from '../lib/dashboard-runtime';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => undefined) }));
 beforeEach(() => localStorage.clear());
-afterEach(() => { cleanup(); localStorage.clear(); });
+afterEach(() => { cleanup(); localStorage.clear(); vi.restoreAllMocks(); });
 const wrapper = ({ children }: { children: React.ReactNode }) => <TerminalGroupProvider><DashboardProvider>{children}</DashboardProvider></TerminalGroupProvider>;
 describe('dashboard workspace tabs', () => {
+  it('does not reconcile or rebroadcast dashboards when an unrelated terminal is renamed', () => {
+    const configure = vi.spyOn(DashboardRuntime.prototype, 'configure');
+    const board = newDashboard('Fleet'); saveDashboard(board);
+    const { result } = renderHook(() => ({ ...useTerminalGroups(), dashboard: useDashboards() }), { wrapper });
+    act(() => result.current.dashboard.openBoard(board));
+    act(() => result.current.dispatch({ type: 'ADD_TAB', groupId: result.current.state.activeGroupId, tab: { id: 'other', name: 'Terminal', connectionStatus: 'disconnected', reconnectCount: 0 } }));
+    configure.mockClear(); const context = result.current.dashboard;
+    act(() => result.current.dispatch({ type: 'UPDATE_TAB_NAME', tabId: 'other', name: 'Renamed terminal' }));
+    expect(configure).not.toHaveBeenCalled(); expect(result.current.dashboard).toBe(context);
+  });
+  it('removes foreground demand when the webview becomes hidden and restores it on return', () => {
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(false);
+    const configure = vi.spyOn(DashboardRuntime.prototype, 'configure');
+    const board = newDashboard('Fleet'); saveDashboard(board);
+    const { result } = renderHook(() => useDashboards(), { wrapper });
+    act(() => result.current.openBoard(board));
+    expect(configure.mock.calls.at(-1)?.[3]).toEqual([board.id]);
+    hidden.mockReturnValue(true); act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(configure.mock.calls.at(-1)?.[3]).toEqual([]); expect(result.current.foreground).toBe(false);
+    hidden.mockReturnValue(false); act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(configure.mock.calls.at(-1)?.[3]).toEqual([board.id]);
+  });
   it('deduplicates open requests, tracks renames, and never becomes an active terminal connection', () => {
     const board = newDashboard('Fleet'); saveDashboard(board);
     const { result } = renderHook(() => ({ ...useTerminalGroups(), dashboard: useDashboards() }), { wrapper });
