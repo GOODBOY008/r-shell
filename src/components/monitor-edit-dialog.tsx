@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, ArrowUp, ArrowDown, X, Play, Square } from 'lucide-react';
-import { type CommandMonitor, type MonitorDisplay, type MonitorTableFormat, validCommandMonitor } from '@/lib/monitor-config';
+import { Play, Square } from 'lucide-react';
+import { type CommandMonitor, validCommandMonitor } from '@/lib/monitor-config';
 import { MonitorParseError, monitorPath, parseMonitorOutput, suggestMonitorFields, type MonitorData } from '@/lib/monitor-data';
 import { useMonitorCommand } from '@/lib/use-monitor-command';
 import { Button } from './ui/button';
@@ -10,6 +10,7 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from './ui/dialog';
 import { MonitorError, MonitorValue } from './monitor-value';
+import { MonitorDisplayFields } from './monitor-display-fields';
 
 export function MonitorEditDialog({ initial, connectionId, active, scopeLabel, onSave, onClose }: {
   initial: CommandMonitor; connectionId?: string; active: boolean; scopeLabel: string;
@@ -37,11 +38,6 @@ export function MonitorEditDialog({ initial, connectionId, active, scopeLabel, o
     } return true; } catch { return false; }
   };
   const field = (key: keyof CommandMonitor, label: string, element: React.ReactNode) => <div className="space-y-1.5"><Label htmlFor={`${prefix}-${key}`}>{label}</Label>{element}</div>;
-  const reorderField = (index: number, delta: number) => {
-    const fields = [...draft.fields];
-    fields.splice(index + delta, 0, fields.splice(index, 1)[0]);
-    update({ fields });
-  };
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
     <DialogContent className="!inset-0 !m-auto !translate-x-0 !translate-y-0 !h-[85vh] max-h-[calc(100vh-2rem)] sm:max-w-2xl flex flex-col min-h-0">
       <DialogHeader><DialogTitle>{t('monitor.editModule')}</DialogTitle><DialogDescription>{scopeLabel}</DialogDescription></DialogHeader>
@@ -54,34 +50,7 @@ export function MonitorEditDialog({ initial, connectionId, active, scopeLabel, o
             {field('intervalSeconds', t('monitor.interval'), <Input id={`${prefix}-intervalSeconds`} type="number" min={5} max={86400} step={1} value={draft.intervalSeconds} onChange={event => update({ intervalSeconds: Number(event.target.value) })} required />)}
             {field('timeoutSeconds', t('monitor.timeout'), <Input id={`${prefix}-timeoutSeconds`} type="number" min={1} max={60} step={1} value={draft.timeoutSeconds} onChange={event => update({ timeoutSeconds: Number(event.target.value) })} required />)}
           </div>
-          {field('display', t('monitor.display'), <select id={`${prefix}-display`} className="h-9 rounded-md border border-input bg-background px-3 text-sm w-full" value={draft.display} onChange={event => update({ display: event.target.value as MonitorDisplay })}>
-            {(['text', 'number', 'chart', 'table'] as const).map(display => <option key={display} value={display}>{t(`monitor.displays.${display}`)}</option>)}
-          </select>)}
-          {draft.display !== 'text' && <>
-            {draft.display === 'table' && <>
-              {field('tableFormat', t('monitor.tableFormat'), <select id={`${prefix}-tableFormat`} className="h-9 rounded-md border border-input bg-background px-3 text-sm w-full" value={draft.tableFormat ?? 'json'} onChange={event => update({ tableFormat: event.target.value as MonitorTableFormat })}>
-                <option value="json">{t('monitor.jsonArray')}</option><option value="jsonl">{t('monitor.jsonLines')}</option>
-              </select>)}
-              <p className="text-xs text-muted-foreground">{t('monitor.tableFormatHelp')}</p>
-              {draft.tableFormat !== 'jsonl' && field('arrayPath', t('monitor.arrayPath'), <Input id={`${prefix}-arrayPath`} value={draft.arrayPath} placeholder={t('monitor.rootPath')} onChange={event => update({ arrayPath: event.target.value })} />)}
-            </>}
-            <div className="space-y-2"><Label>{t('monitor.fields')}</Label><p className="text-xs text-muted-foreground">{t('monitor.fieldHelp')}</p>
-              {(draft.display === 'number' ? draft.fields.slice(0, 1) : draft.fields).map((item, index) => <div key={index} className="flex gap-1 items-center flex-wrap">
-                <Input className="flex-1 min-w-28" aria-label={t('monitor.fieldPath', { index: index + 1 })} placeholder={t('monitor.rootPath')} value={item.path} onChange={event => update({ fields: draft.fields.map((value, i) => i === index ? { ...value, path: event.target.value } : value) })} />
-                <Input className="flex-1 min-w-28" aria-label={t('monitor.fieldLabel', { index: index + 1 })} placeholder={t('monitor.label')} value={item.label} onChange={event => update({ fields: draft.fields.map((value, i) => i === index ? { ...value, label: event.target.value } : value) })} />
-                {draft.display !== 'number' && <>
-                  <Button type="button" variant="ghost" size="icon" aria-label={t('monitor.moveUp')} disabled={!index} onClick={() => reorderField(index, -1)}><ArrowUp className="size-3" /></Button>
-                  <Button type="button" variant="ghost" size="icon" aria-label={t('monitor.moveDown')} disabled={index === draft.fields.length - 1} onClick={() => reorderField(index, 1)}><ArrowDown className="size-3" /></Button>
-                  <Button type="button" variant="ghost" size="icon" aria-label={t('monitor.removeField')} disabled={draft.fields.length === 1} onClick={() => update({ fields: draft.fields.filter((_, i) => i !== index) })}><X className="size-3" /></Button>
-                </>}
-              </div>)}
-              {draft.display !== 'number' && <Button type="button" variant="outline" size="sm" disabled={draft.fields.length >= 20} onClick={() => update({ fields: [...draft.fields, { path: '', label: '' }] })}><Plus className="size-3" />{t('monitor.addField')}</Button>}
-            </div>
-            {(draft.display === 'number' || draft.display === 'chart') && <div className="grid grid-cols-2 gap-3">
-              {field('unit', t('monitor.unit'), <Input id={`${prefix}-unit`} value={draft.unit} onChange={event => update({ unit: event.target.value })} />)}
-              {field('decimals', t('monitor.decimals'), <Input id={`${prefix}-decimals`} type="number" min={0} max={10} step={1} value={draft.decimals} onChange={event => update({ decimals: Number(event.target.value) })} required />)}
-            </div>}
-          </>}
+          <MonitorDisplayFields value={draft} onChange={update} />
           <div className="border rounded-md p-3 space-y-3">
             <div className="flex items-center gap-2"><Button type="button" variant="outline" size="sm" disabled={!connectionId || !active || !draft.command.trim() || draft.timeoutSeconds < 1 || draft.timeoutSeconds > 60 || reading.running} onClick={() => { setTrial({ module: { ...draft, display: 'text' }, nonce: crypto.randomUUID() }); setTrialActive(true); }}><Play className="size-3" />{t('monitor.tryRun')}</Button>
               {reading.running && <Button type="button" variant="ghost" size="sm" onClick={() => setTrialActive(false)}><Square className="size-3" />{t('common.cancel')}</Button>}

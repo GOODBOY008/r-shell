@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useRef } from 'react';
 import { ArrowLeft, ArrowRight } from 'lucide-react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
-import type { CommandMonitor } from '@/lib/monitor-config';
+import type { MonitorDisplayConfig } from '@/lib/monitor-config';
 import { MonitorParseError, monitorChartData, type MonitorData, type MonitorSample } from '@/lib/monitor-data';
 import type { MonitorCommandResult } from '@/lib/use-monitor-command';
 import { Button } from './ui/button';
@@ -20,7 +20,7 @@ export function MonitorError({ error, result }: { error: unknown; result?: Monit
   return <div role="status" className="text-xs text-destructive break-words"><p>{message}</p>
     {(result?.error || result?.stderr) && <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{result.error || result.stderr}</pre>}</div>;
 }
-export function MonitorValue({ module, data, samples = [] }: { module: CommandMonitor; data?: MonitorData; samples?: MonitorSample[] }) {
+export function MonitorValue({ module, data, samples = [] }: { module: MonitorDisplayConfig & { name: string }; data?: MonitorData; samples?: MonitorSample[] }) {
   const { t, i18n } = useTranslation();
   // Preview drafts can be temporarily invalid; keep form validation separate from rendering.
   const decimals = Number.isFinite(module.decimals) ? Math.max(0, Math.min(10, Math.trunc(module.decimals))) : 0;
@@ -43,7 +43,7 @@ export function MonitorValue({ module, data, samples = [] }: { module: CommandMo
   </div>;
 }
 
-function MonitorTable({ module, data }: { module: CommandMonitor; data: Extract<MonitorData, { kind: 'table' }> }) {
+function MonitorTable({ module, data }: { module: MonitorDisplayConfig & { name: string }; data: Extract<MonitorData, { kind: 'table' }> }) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
   const scroll = (direction: number) => {

@@ -2,7 +2,7 @@ import type { TerminalGroupState, GridNode } from './terminal-group-types';
 import { resetUnreadOutput } from './terminal-group-reducer';
 
 export const STORAGE_KEY = 'r-shell-terminal-groups';
-export const STATE_VERSION = 1;
+export const STATE_VERSION = 2;
 
 const LEGACY_ACTIVE_CONNECTIONS_KEY = 'r-shell-active-connections';
 
@@ -32,7 +32,7 @@ export function deserialize(json: string): TerminalGroupState | null {
   try {
     const parsed: unknown = JSON.parse(json);
     if (!isSerializedState(parsed)) return null;
-    if (parsed.version !== STATE_VERSION) return null;
+    if (parsed.version !== STATE_VERSION && parsed.version !== 1) return null;
     if (!isValidState(parsed.data)) return null;
     return dedupeDuplicateTabs(resetUnreadOutput(parsed.data));
   } catch {
@@ -57,6 +57,7 @@ function dedupeDuplicateTabs(state: TerminalGroupState): TerminalGroupState {
   const groups = Object.fromEntries(
     Object.entries(state.groups).map(([id, group]) => {
       const tabs = group.tabs.filter(tab => {
+        if (tab.tabType === 'dashboard' && (typeof tab.dashboardId !== 'string' || !tab.dashboardId || tab.id !== `dashboard:${tab.dashboardId}`)) return false;
         if (seen.has(tab.id)) return false;
         seen.add(tab.id);
         return true;

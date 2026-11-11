@@ -328,6 +328,7 @@ function stripUnencryptedSecrets(connection: ConnectionData): ConnectionData {
  */
 function persistConnections(connections: ConnectionData[]): void {
   writeStoredArray(CONNECTIONS_STORAGE_KEY, connections.map(stripUnencryptedSecrets));
+  window.dispatchEvent(new Event('rshell-connections-changed'));
 }
 
 export class ConnectionStorageManager {

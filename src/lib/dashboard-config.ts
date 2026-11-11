@@ -1,0 +1,145 @@
+import { newCommandMonitor, validMonitorDisplay, type MonitorColumns, type MonitorDisplayConfig } from './monitor-config';
+import { monitorPath, MonitorParseError } from './monitor-data';
+
+export interface CommandDataSource {
+  id: string;
+  name: string;
+  connectionIds: string[];
+  command: string;
+  intervalSeconds: number;
+  timeoutSeconds: number;
+}
+interface DashboardCard {
+  id: string;
+  name: string;
+  enabled: boolean;
+  layouts?: Partial<Record<DashboardBreakpoint, DashboardCardLayout>>;
+}
+export interface DashboardCommandWidget extends DashboardCard, MonitorDisplayConfig {
+  kind?: 'command';
+  sourceId: string;
+}
+export interface DashboardNoteWidget extends DashboardCard {
+  kind: 'note';
+  format: 'text' | 'markdown';
+  content: string;
+  sourceId?: never;
+}
+export type DashboardWidget = DashboardCommandWidget | DashboardNoteWidget;
+export const DASHBOARD_NOTE_LIMIT = 64 * 1024;
+export const isCommandWidget = (widget: DashboardWidget): widget is DashboardCommandWidget => widget.kind !== 'note';
+export type DashboardBreakpoint = 'wide' | 'medium' | 'narrow';
+export interface DashboardCardLayout { x: number; y: number; w: number; h: number }
+export const DASHBOARD_GRID_COLUMNS: Record<DashboardBreakpoint, number> = { wide: 12, medium: 8, narrow: 4 };
+export interface Dashboard {
+  id: string;
+  name: string;
+  columns: MonitorColumns;
+  paused: boolean;
+  sources: CommandDataSource[];
+  widgets: DashboardWidget[];
+}
+export interface DashboardStore { version: 3; dashboards: Dashboard[] }
+export const DASHBOARD_STORAGE_KEY = 'r-shell-dashboards';
+export const DASHBOARD_CHANGED_EVENT = 'rshell-dashboards-changed';
+export const DASHBOARD_EDIT_CONNECTION_EVENT = 'rshell-dashboard-edit-connection';
+export const DASHBOARD_NEW_CONNECTION_EVENT = 'rshell-dashboard-new-connection';
+export const dashboardTabId = (id: string) => `dashboard:${id}`;
+
+export function newDashboard(name: string): Dashboard {
+  return { id: crypto.randomUUID(), name, columns: 2, paused: false, sources: [], widgets: [] };
+}
+export function newDashboardSource(): CommandDataSource {
+  return { id: crypto.randomUUID(), name: '', connectionIds: [], command: '', intervalSeconds: 10, timeoutSeconds: 10 };
+}
+export function newDashboardWidget(sourceId = ''): DashboardCommandWidget {
+  const { display, fields, arrayPath, unit, decimals } = newCommandMonitor();
+  return { id: crypto.randomUUID(), sourceId, name: '', enabled: true, display, fields, arrayPath, unit, decimals };
+}
+export function newDashboardNote(): DashboardNoteWidget {
+  return { id: crypto.randomUUID(), kind: 'note', name: '', enabled: true, format: 'markdown', content: '' };
+}
+const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const name = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
+const integer = (value: unknown, min: number, max: number) => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+function validCardLayouts(value: unknown): boolean {
+  return record(value) && Object.entries(value).every(([breakpoint, layout]) => {
+    const cols = DASHBOARD_GRID_COLUMNS[breakpoint as DashboardBreakpoint];
+    return !!cols && record(layout) && integer(layout.w, 4, cols) && integer(layout.x, 0, cols - (layout.w as number))
+      && integer(layout.y, 0, 10_000) && integer(layout.h, 4, 32);
+  });
+}
+export function validDashboardSource(value: unknown): value is CommandDataSource {
+  return record(value) && name(value.id) && name(value.name) && name(value.command)
+    && new TextEncoder().encode(value.command).length <= 64 * 1024
+    && integer(value.intervalSeconds, 5, 86400) && integer(value.timeoutSeconds, 1, 60)
+    && Array.isArray(value.connectionIds) && value.connectionIds.length > 0
+    && value.connectionIds.every(name) && new Set(value.connectionIds).size === value.connectionIds.length;
+}
+export function validDashboardWidget(value: unknown): value is DashboardWidget {
+  if (!record(value) || !name(value.id) || !name(value.name)
+    || typeof value.enabled !== 'boolean'
+    || (value.layouts !== undefined && !validCardLayouts(value.layouts))) return false;
+  if (value.kind === 'note') return ['text', 'markdown'].includes(value.format as string) && name(value.content)
+    && new TextEncoder().encode(value.content).length <= DASHBOARD_NOTE_LIMIT && value.sourceId === undefined;
+  if ((value.kind !== undefined && value.kind !== 'command') || !name(value.sourceId) || !validMonitorDisplay(value)) return false;
+  const paths = value.display === 'text' ? [] : [
+    ...(value.display === 'table' && value.tableFormat !== 'jsonl' ? [value.arrayPath] : []),
+    ...value.fields.slice(0, value.display === 'number' ? 1 : undefined).map(field => field.path),
+  ];
+  return paths.every(path => {
+    try { monitorPath({}, path); return true; }
+    catch (error) { return !(error instanceof MonitorParseError && error.code === 'invalidPath'); }
+  });
+}
+function uniqueIds(items: { id: string }[]) { return new Set(items.map(item => item.id)).size === items.length; }
+export function validDashboard(value: unknown): value is Dashboard {
+  if (!record(value) || !name(value.id) || !name(value.name) || ![1, 2, 3].includes(value.columns as number)
+    || typeof value.paused !== 'boolean' || !Array.isArray(value.sources) || !value.sources.every(validDashboardSource)
+    || !Array.isArray(value.widgets) || !value.widgets.every(validDashboardWidget)) return false;
+  const sources = value.sources;
+  return uniqueIds(sources) && uniqueIds(value.widgets)
+    && value.widgets.every(widget => !isCommandWidget(widget) || sources.some(source => source.id === widget.sourceId));
+}
+export function loadDashboardStore(): DashboardStore {
+  const raw = localStorage.getItem(DASHBOARD_STORAGE_KEY);
+  if (!raw) return { version: 3, dashboards: [] };
+  const data: unknown = JSON.parse(raw);
+  // Do not silently replace damaged or newer configuration on the next edit.
+  if (!record(data) || ![1, 2, 3].includes(data.version as number) || !Array.isArray(data.dashboards)
+    || !data.dashboards.every(validDashboard) || !uniqueIds(data.dashboards)) throw new Error('Invalid dashboard store');
+  // Older cards have no kind (v1 also has no geometry). Upgrade only on save.
+  return { version: 3, dashboards: data.dashboards };
+}
+export function saveDashboard(dashboard: Dashboard): void {
+  if (!validDashboard(dashboard)) throw new Error('Invalid dashboard');
+  const store = loadDashboardStore();
+  const index = store.dashboards.findIndex(item => item.id === dashboard.id);
+  if (index < 0) store.dashboards.push(dashboard);
+  else store.dashboards[index] = dashboard;
+  localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(store));
+  window.dispatchEvent(new Event(DASHBOARD_CHANGED_EVENT));
+}
+export function deleteDashboard(id: string): void {
+  const store = loadDashboardStore();
+  localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify({ ...store, dashboards: store.dashboards.filter(board => board.id !== id) }));
+  window.dispatchEvent(new Event(DASHBOARD_CHANGED_EVENT));
+}
+export function copyDashboard(board: Dashboard, copyName: string): Dashboard {
+  const copy = structuredClone(board);
+  copy.id = crypto.randomUUID();
+  copy.name = copyName;
+  const sourceIds = new Map(copy.sources.map(source => [source.id, crypto.randomUUID()]));
+  copy.sources = copy.sources.map(source => ({ ...source, id: sourceIds.get(source.id)! }));
+  copy.widgets = copy.widgets.map(widget => isCommandWidget(widget)
+    ? { ...widget, id: crypto.randomUUID(), sourceId: sourceIds.get(widget.sourceId)! }
+    : { ...widget, id: crypto.randomUUID() });
+  return copy;
+}
+export function moveDashboardWidget(board: Dashboard, id: string, target: number): Dashboard {
+  const index = board.widgets.findIndex(widget => widget.id === id);
+  if (index < 0 || target < 0 || target >= board.widgets.length || index === target) return board;
+  const widgets = [...board.widgets];
+  widgets.splice(target, 0, widgets.splice(index, 1)[0]);
+  return { ...board, widgets };
+}

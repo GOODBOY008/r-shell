@@ -1,0 +1,30 @@
+.dashboard-grid .react-grid-item.react-grid-placeholder {
+  background: var(--primary);
+  border: 2px dashed var(--primary);
+  border-radius: 0.75rem;
+  opacity: 0.16;
+}
+.dashboard-grid .react-grid-item > .react-resizable-handle {
+  width: 24px;
+  height: 24px;
+  z-index: 5;
+  touch-action: none;
+}
+.dashboard-grid-editing .react-grid-item > .react-resizable-handle { opacity: 1; }
+.dashboard-grid .react-grid-item > .react-resizable-handle::after {
+  width: 8px;
+  height: 8px;
+  right: 6px;
+  bottom: 6px;
+  border-color: var(--primary);
+}
+.dashboard-grid .react-resizable-handle:focus-visible {
+  border-radius: 0.25rem;
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.dashboard-grid-interacting { user-select: none; }
+.dashboard-grid .react-draggable-dragging { box-shadow: 0 12px 32px #0003; }
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-grid .react-grid-layout, .dashboard-grid .react-grid-item { transition: none; }
+}
