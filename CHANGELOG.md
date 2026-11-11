@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-11-11
+
+### 🔖 R-Shell 3.2.0 — Multi-Host Dashboards
+
+Build dashboards that collect metrics from multiple saved SSH connections. Combine templates for Linux hosts, Docker, storage, processes, networking, systemd, and NVIDIA GPUs, then arrange live metrics alongside text and Markdown in resizable cards. Dashboards reuse compatible SSH connections and limit retained output to reduce memory usage.
+
+### New Features 🎉
+
+- feat(dashboard): expand templates and compose mixed-host boards by @GOODBOY008 in #309
+- feat(dashboard): add multi-host dashboards with templates and resizable layouts by @GOODBOY008 in #307
+- feat(monitor): add customizable dashboards and multicolumn layouts by @GOODBOY008 in #306
+- feat(monitor): visualize logical CPU usage with compact bars by @GOODBOY008 in #304
+
+### Bug Fixes 🐛
+
+- fix(connections): distinguish desktop and file transfer icons by @GOODBOY008 in #305
+- fix(settings): restore defaults and display saved font families by @GOODBOY008 in #303
+
+### Performance Improvements 🚀
+
+- perf(dashboard): reuse SSH transports and reduce memory overhead by @GOODBOY008 in #308
+
+### Other Changes
+
+- chore(deps-dev): bump jsdom from 30.1.3 to 31.0.0 by @dependabot[bot] in #301
+- chore(deps): bump the npm-minor-patch group across 1 directory with 10 updates by @dependabot[bot] in #300
+- chore(deps): bump the cargo-minor-patch group across 1 directory with 3 updates by @dependabot[bot] in #299
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) and [@dependabot[bot]](https://github.com/apps/dependabot) for contributing to this release! 🙏
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.1.4...v3.2.0
+
 ## [3.1.4] - 2026-11-09
 
 ### 🔖 R-Shell 3.1.4 — System Overview & Workspace Polish
