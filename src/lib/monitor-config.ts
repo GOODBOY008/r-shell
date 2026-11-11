@@ -60,10 +60,14 @@ function parseConfig(value: unknown): MonitorConfig | null {
   for (const module of defaultMonitorConfig().modules) if (module.kind === 'builtin' && !builtins.has(module.builtin)) modules.push(module);
   return { columns: value.columns === 2 || value.columns === 3 ? value.columns : 1, modules };
 }
-export function loadMonitorStore(): MonitorStore {
+export function readMonitorStoreSnapshot(): string | null {
+  try { return localStorage.getItem(MONITOR_STORAGE_KEY); }
+  catch { return null; }
+}
+
+export function loadMonitorStore(raw = readMonitorStoreSnapshot()): MonitorStore {
   const fallback: MonitorStore = { version: 1, global: defaultMonitorConfig(), overrides: {} };
   try {
-    const raw = localStorage.getItem(MONITOR_STORAGE_KEY);
     if (!raw) return fallback;
     const data: unknown = JSON.parse(raw);
     if (!record(data) || data.version !== 1) return fallback;

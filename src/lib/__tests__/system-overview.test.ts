@@ -44,6 +44,15 @@ describe('overview measurements', () => {
     expect(reading.disk).toEqual({ total: '500G', used: '226G', percent: 45.2 });
   });
 
+  it('preserves load averages in 1, 5, and 15 minute order, including zero', () => {
+    for (const load_average of ['0.00 3.25 120.50', '0.00, 3.25, 120.50']) {
+      expect(normalizeOverviewReading({ load_average }).loadAverage).toEqual([0, 3.25, 120.5]);
+    }
+    for (const load_average of [null, '', '1.00 2.00', '1.00 2.00 NaN', '1.00 2.00 -3.00']) {
+      expect(normalizeOverviewReading({ load_average }).loadAverage).toBeNull();
+    }
+  });
+
   it('keeps logical CPU IDs and zero usage while rejecting invalid readings', () => {
     const reading = normalizeOverviewReading({ cpu_logical_count: 0, cpu_cores: [
       { id: 10, percent: 105 }, { id: 2, percent: 0 }, { id: 7, percent: null },

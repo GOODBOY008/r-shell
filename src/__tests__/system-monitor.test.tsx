@@ -2,6 +2,7 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SystemMonitor } from '../components/system-monitor';
+import { defaultMonitorConfig, MONITOR_STORAGE_KEY, newCommandMonitor, saveMonitorConfig } from '../lib/monitor-config';
 import { pickDefaultNetworkInterface, resolveActiveInterface } from '../lib/network-interface';
 
 const mocks = vi.hoisted(() => ({
@@ -23,15 +24,12 @@ vi.mock('sonner', () => ({
 // Recharts needs a sized layout; stub every export SystemMonitor imports.
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  AreaChart: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   LineChart: ({ children, data, 'aria-label': label }: { children: React.ReactNode; data: unknown; 'aria-label'?: string }) => <div aria-label={label} data-history={JSON.stringify(data)}>{children}</div>,
-  Area: () => null,
   Line: () => null,
   XAxis: () => null,
   YAxis: () => null,
   CartesianGrid: () => null,
   Tooltip: () => null,
-  DefaultTooltipContent: () => null,
   ReferenceLine: () => null,
 }));
 
@@ -83,6 +81,16 @@ describe('SystemMonitor overview', () => {
     expect(screen.getByRole('meter', { name: 'Memory' }).getAttribute('aria-valuenow')).toBe('0');
   });
 
+  it('shows the load average for each time window when the first sample arrives', async () => {
+    setupInvoke({ load_average: '0.00 1.23 4.56' });
+    render(<SystemMonitor connectionId="conn-1" />);
+    const load = within(screen.getByRole('group', { name: 'Load average' }));
+    expect(load.getAllByText('—')).toHaveLength(3);
+    await load.findByText('4.56');
+    expect(load.getAllByRole('term').map(item => item.textContent)).toEqual(['1 min', '5 min', '15 min']);
+    expect(load.getAllByRole('definition').map(item => item.textContent)).toEqual(['0.00', '1.23', '4.56']);
+  });
+
   it('shows the overall average and individual logical CPUs separately', async () => {
     setupInvoke({ cpu_percent: 50, cpu_logical_count: 2, cpu_cores: [{ id: 0, percent: 100 }, { id: 1, percent: 0 }] });
     render(<SystemMonitor connectionId="conn-1" />);
@@ -90,6 +98,20 @@ describe('SystemMonitor overview', () => {
     expect(screen.getByRole('meter', { name: 'CPU' }).getAttribute('aria-valuenow')).toBe('50');
     expect(screen.getByRole('meter', { name: 'Logical CPU 0: 100%' }).getAttribute('aria-valuenow')).toBe('100');
     expect(screen.getByRole('meter', { name: 'Logical CPU 1: 0%' }).getAttribute('aria-valuenow')).toBe('0');
+  });
+
+  it('labels hybrid logical CPUs by type even when an efficiency CPU is busier', async () => {
+    setupInvoke({ cpu_logical_count: 3, cpu_cores: [
+      { id: 0, percent: 100, kind: 'efficiency' },
+      { id: 3, percent: 0, kind: 'performance' },
+      { id: 8, percent: 12, kind: 'performance' },
+    ] });
+    render(<SystemMonitor connectionId="hybrid-linux" />);
+    const topology = await screen.findByRole('list', { name: 'Logical CPUs by core type' });
+    expect(within(topology).getByText('Performance core · 2 threads')).toBeTruthy();
+    expect(within(topology).getByText('Efficiency core · 1 thread')).toBeTruthy();
+    expect(screen.getByRole('meter', { name: 'Logical CPU 0 (Efficiency core): 100%' })).toBeTruthy();
+    expect(screen.getByRole('meter', { name: 'Logical CPU 3 (Performance core): 0%' })).toBeTruthy();
   });
 
   it('surfaces busy high-numbered CPUs and lets users expand and collapse all readings', async () => {
@@ -108,9 +130,14 @@ describe('SystemMonitor overview', () => {
   });
 
   it('shows unavailable per-CPU usage without copying the average to every CPU', async () => {
-    setupInvoke({ cpu_percent: 25, cpu_logical_count: 16 });
+    setupInvoke({ cpu_percent: 25, cpu_logical_count: 18, cpu_core_groups: [
+      { kind: 'super', logical_count: 6 }, { kind: 'performance', logical_count: 12 },
+    ] });
     render(<SystemMonitor connectionId="conn-1" />);
-    expect(await screen.findByText('Overall · 16 logical CPUs')).toBeTruthy();
+    expect(await screen.findByText('Overall · 18 logical CPUs')).toBeTruthy();
+    expect(screen.getByText('Super core · 6 threads')).toBeTruthy();
+    expect(screen.getByText('Performance core · 12 threads')).toBeTruthy();
+    expect(screen.queryByText(/Efficiency core/)).toBeNull();
     expect(screen.getByText('Per-CPU usage unavailable on this host')).toBeTruthy();
     expect(screen.queryByRole('meter', { name: /Logical CPU/ })).toBeNull();
   });
@@ -125,8 +152,8 @@ describe('SystemMonitor overview', () => {
   it('shows unavailable capacity instead of reporting a healthy zero', async () => {
     setupInvoke({ memory: { total: 0, used: 0 }, swap: { total: 0, used: 0 } });
     render(<SystemMonitor connectionId="conn-1" />);
-    expect(await screen.findByText('Unavailable')).toBeTruthy();
     const overview = screen.getByRole('region', { name: 'System Overview' });
+    expect(await within(overview).findByText('Unavailable')).toBeTruthy();
     expect(within(overview).queryByRole('meter', { name: 'Memory' })).toBeNull();
     expect(within(overview).queryByText('Swap')).toBeNull();
     expect(overview.textContent).not.toContain('NaN');
@@ -162,6 +189,44 @@ describe('SystemMonitor overview', () => {
       expect(content.className).toContain('last:pb-');
     });
   });
+});
+
+it('keeps chart cards visible while sampling and draws a first reading, including real zeroes', async () => {
+  const config = defaultMonitorConfig();
+  config.modules.push({ ...newCommandMonitor(), name: 'Queue', command: 'printf 0', display: 'chart' });
+  saveMonitorConfig(config);
+  setupInvoke({}, [{ interface: 'eth0', rx_bytes_per_sec: 0, tx_bytes_per_sec: 0 }]);
+  const defaults = mocks.invoke.getMockImplementation()!;
+  mocks.invoke.mockImplementation(async (command, args) => {
+    switch (command) {
+      case 'detect_gpu': return { available: true, gpus: [{ index: 0, name: 'GPU', vendor: 'nvidia' }] };
+      case 'get_gpu_stats': return { success: true, gpus: [{ index: 0, name: 'GPU', vendor: 'nvidia', utilization: 0, memory_percent: 0 }] };
+      case 'get_network_latency': return { success: true, latency_ms: 0 };
+      case 'run_monitor_command': return { status: 'success', stdout: '0' };
+      default: return defaults(command, args);
+    }
+  });
+  const { unmount } = render(<SystemMonitor connectionId="host" />);
+  try {
+    expect(screen.getByRole('heading', { name: 'GPU Monitor' })).toBeTruthy();
+    expect(screen.getAllByText('Collecting samples…')).toHaveLength(5);
+    expect(screen.queryByText('0 KB/s')).toBeNull();
+    for (const [name, values] of [
+      ['CPU and memory usage history', { cpu: 0.2 }],
+      ['GPU Monitor history', { 'utilization:0': 0, 'memory:0': 0 }],
+      ['Network Usage history', { download: 0, upload: 0 }],
+      ['Network Latency history', { latency: 0 }],
+      ['Queue history', { v0: 0 }],
+    ] as const) {
+      const chart = await screen.findByLabelText(name);
+      const samples = JSON.parse(chart.getAttribute('data-history') || '[]');
+      expect(samples).toHaveLength(1);
+      expect(samples[0]).toMatchObject(values);
+    }
+  } finally {
+    unmount();
+    localStorage.removeItem(MONITOR_STORAGE_KEY);
+  }
 });
 
 // Regression for #188: the Network Usage card auto-selected its interface by
@@ -333,20 +398,14 @@ describe('SystemMonitor network usage', () => {
   });
 });
 
-/**
- * Regression for #189: the sidebar keeps every visited panel mounted so its
- * state survives a tab switch, which means a hidden panel would otherwise keep
- * polling. SystemMonitor is the most expensive of them — six SSH round trips
- * per tick, one of which is a remote `sleep 1` for the bandwidth probe.
- */
-describe('SystemMonitor hidden panel', () => {
+describe('SystemMonitor sampling controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   afterEach(cleanup);
 
-  it('issues no commands at all while its tab is hidden', async () => {
+  it('issues no commands while sampling is disabled', async () => {
     setupInvoke();
     render(<SystemMonitor connectionId="conn-1" active={false} />);
 
@@ -355,7 +414,7 @@ describe('SystemMonitor hidden panel', () => {
     expect(mocks.invoke).not.toHaveBeenCalled();
   });
 
-  it('probes once the tab is visible', async () => {
+  it('probes once sampling is enabled', async () => {
     setupInvoke();
     const { rerender } = render(<SystemMonitor connectionId="conn-1" active={false} />);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -373,7 +432,7 @@ describe('SystemMonitor hidden panel', () => {
   // The intervals are 5 s / 10 s / 60 s, so a plain `setTimeout(50)` window can
   // never observe a tick — this test has to advance the clock or it passes
   // whether or not the guards exist.
-  it('stops polling when hidden and keeps the last reading on screen', async () => {
+  it('keeps the last reading on screen and stops polling after disconnect', async () => {
     vi.useFakeTimers();
     try {
       setupInvoke();
@@ -383,15 +442,15 @@ describe('SystemMonitor hidden panel', () => {
       expect(mocks.invoke).toHaveBeenCalledWith('get_system_stats', { connectionId: 'conn-1' });
       expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
 
-      rerender(<SystemMonitor connectionId="conn-1" active={false} />);
-      const callsAtSwitch = mocks.invoke.mock.calls.length;
+      rerender(<SystemMonitor connectionId="conn-1" connectionStatus="disconnected" />);
+      const callsAtDisconnect = mocks.invoke.mock.calls.length;
 
       // Well past the 5 s stats/process/GPU interval and the 10 s latency one.
       await act(() => vi.advanceTimersByTimeAsync(30_000));
 
       // The reading stays put rather than blanking out, and nothing is fetched.
       expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
-      expect(mocks.invoke.mock.calls.length).toBe(callsAtSwitch);
+      expect(mocks.invoke.mock.calls.length).toBe(callsAtDisconnect);
     } finally {
       vi.useRealTimers();
     }
@@ -415,7 +474,7 @@ describe('SystemMonitor overview lifecycle', () => {
   const statsCalls = () => mocks.invoke.mock.calls.filter(([command]) => command === 'get_system_stats');
   const chart = () => JSON.parse(screen.getByLabelText('CPU and memory usage history').getAttribute('data-history') || '[]');
 
-  it('samples at five seconds, retains history while hidden, and breaks after a pause', async () => {
+  it('samples at five seconds, retains history during a pause, and marks the gap', async () => {
     const { rerender } = render(<SystemMonitor connectionId="conn-1" />);
     await tick();
     expect(statsCalls()).toHaveLength(1);
@@ -473,10 +532,10 @@ describe('SystemMonitor overview lifecycle', () => {
     await act(async () => { resolveOld(makeStats({ cpu_percent: 99, cpu_cores: [{ id: 99, percent: 100 }] })); });
     expect(screen.getByRole('meter', { name: 'CPU' }).getAttribute('aria-valuenow')).toBe('0.2');
     expect(screen.queryByRole('meter', { name: /Logical CPU 99/ })).toBeNull();
-    expect(screen.queryByLabelText('CPU and memory usage history')).toBeNull();
+    expect(chart()).toHaveLength(1);
   });
 
-  it('clears loaded history on a different connection, including a hidden switch', async () => {
+  it('clears loaded history on a different connection even when sampling is paused', async () => {
     const { rerender } = render(<SystemMonitor connectionId="conn-1" />);
     await tick();
     await tick(5000);
@@ -488,7 +547,7 @@ describe('SystemMonitor overview lifecycle', () => {
     rerender(<SystemMonitor connectionId="conn-2" />);
     await tick();
     expect(screen.getByText('6.4 GiB / 11.7 GiB')).toBeTruthy();
-    expect(screen.queryByLabelText('CPU and memory usage history')).toBeNull();
+    expect(chart()).toHaveLength(1);
   });
 
   it('does not overlap slow probes or request extra samples when sorting processes', async () => {
@@ -505,7 +564,7 @@ describe('SystemMonitor overview lifecycle', () => {
     expect(statsCalls()).toHaveLength(1);
   });
 
-  it('does not issue a deferred idle probe after hiding or unmounting', async () => {
+  it('does not issue a deferred idle probe after pausing or unmounting', async () => {
     const idleCallbacks: IdleRequestCallback[] = [];
     vi.stubGlobal('requestIdleCallback', (callback: IdleRequestCallback) => { idleCallbacks.push(callback); return idleCallbacks.length; });
     try {
