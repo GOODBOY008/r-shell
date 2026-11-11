@@ -2258,7 +2258,7 @@
     "templates": {
       "browse": "Przeglądaj szablony",
       "addTitle": "Dodaj z szablonu",
-      "intro": "Zacznij od gotowego pulpitu lub utwórz własny.",
+      "intro": "Wybierz gotowy pulpit lub połącz szablony dla różnych hostów i obciążeń.",
       "choose": "Wybierz punkt wyjścia",
       "commands": "Pokaż polecenia",
       "savePaused": "Zapisz jako wstrzymany; sprawdź przed uruchomieniem",
@@ -2267,7 +2267,7 @@
       "create": "Utwórz pulpit",
       "createStart": "Utwórz i uruchom",
       "addCards": "Dodaj do pulpitu",
-      "emptyHelp": "Zacznij od szablonu Linux lub Docker. Wybierz połączenia SSH — polecenia i karty są gotowe.",
+      "emptyHelp": "Zacznij od szablonu hostów, kontenerów, usług lub GPU. Połącz metryki i notatki, a następnie wybierz połączenia SSH dla każdej grupy.",
       "linux": {
         "name": "Hosty Linux",
         "short": "Pamięć, obciążenie i dyski",
@@ -2291,7 +2291,20 @@
         "host": "Informacje o hoście",
         "engine": "Silnik Docker",
         "containers": "Lista kontenerów",
-        "usage": "Zasoby kontenerów"
+        "usage": "Zasoby kontenerów",
+        "rootCapacity": "Pojemność głównego systemu plików",
+        "rootInodes": "I-węzły głównego systemu plików",
+        "processSummary": "Stany procesów",
+        "topCpu": "Procesy według CPU",
+        "topMemory": "Procesy według pamięci",
+        "networkTotals": "Liczniki interfejsów",
+        "interfaces": "Statystyki interfejsów",
+        "sockets": "Podsumowanie gniazd",
+        "serviceSummary": "Stany załadowanych usług",
+        "failedServices": "Nieudane jednostki usług",
+        "serviceList": "Załadowane usługi",
+        "gpuMemory": "Migawka pamięci GPU",
+        "gpuStatus": "Stan urządzeń NVIDIA"
       },
       "cards": {
         "memory": "Użycie pamięci",
@@ -2301,7 +2314,29 @@
         "running": "Uruchomione kontenery",
         "containerTrend": "Trend kontenerów",
         "containers": "Lista kontenerów",
-        "usage": "Zasoby kontenerów"
+        "usage": "Zasoby kontenerów",
+        "rootUsed": "Zajęte miejsce w /",
+        "rootAvailable": "Dostępne miejsce w /",
+        "rootTrend": "Trend pojemności /",
+        "inodes": "Użyte i-węzły w /",
+        "processCount": "Liczba procesów",
+        "processTrend": "Trend procesów gotowych / zombie",
+        "received": "Odebrano łącznie",
+        "transmitted": "Wysłano łącznie",
+        "networkDrops": "Odrzucone pakiety łącznie",
+        "activeServices": "Aktywne usługi",
+        "failedServiceCount": "Nieudane usługi",
+        "serviceTrend": "Trend stanów usług",
+        "gpuCount": "Liczba GPU",
+        "gpuMemory": "Użycie pamięci GPU",
+        "gpuTrend": "Trend pamięci GPU",
+        "topCpu": "Procesy według CPU",
+        "topMemory": "Procesy według pamięci",
+        "interfaces": "Statystyki interfejsów",
+        "sockets": "Podsumowanie gniazd",
+        "failedServices": "Nieudane jednostki usług",
+        "serviceList": "Załadowane usługi",
+        "gpuStatus": "Stan urządzeń NVIDIA"
       },
       "fields": {
         "memoryUsedPercent": "Użycie pamięci",
@@ -2317,8 +2352,97 @@
         "Status": "Status",
         "CPUPerc": "CPU %",
         "MemUsage": "Pamięć / limit",
-        "NetIO": "Sieciowe I/O"
-      }
+        "NetIO": "Sieciowe I/O",
+        "rootUsedPercent": "Zajęte miejsce w /",
+        "rootUsedGiB": "Użyte",
+        "rootAvailableGiB": "Dostępne",
+        "inodeUsedPercent": "Użyte i-węzły w /",
+        "processCount": "Liczba procesów",
+        "runnable": "Gotowe do pracy",
+        "zombies": "Zombie",
+        "rxMiB": "Odebrane",
+        "txMiB": "Wysłane",
+        "rxDrops": "Odrzucone przy odbiorze",
+        "txDrops": "Odrzucone przy wysyłaniu",
+        "activeServices": "Aktywne usługi",
+        "failedServices": "Nieudane usługi",
+        "gpuCount": "Liczba GPU",
+        "gpuMemoryUsedMiB": "Użyta pamięć",
+        "gpuMemoryTotalMiB": "Całkowita pamięć",
+        "gpuMemoryPercent": "Użycie pamięci GPU"
+      },
+      "search": "Szukaj szablonów",
+      "filterCategory": "Kategoria szablonu",
+      "noResults": "Brak pasujących szablonów. Twój wybór został zachowany.",
+      "combine": "Połącz szablony",
+      "combineHelp": "Wybierz kilka szablonów do jednego pulpitu. Każda grupa może używać innych połączeń SSH.",
+      "composedName": "Połączony pulpit",
+      "selectionSummary": "Karty: {{cards}} · Źródła: {{sources}} · Hosty: {{hosts}}",
+      "connectionsFor": "Połączenia SSH: {{name}}",
+      "copyConnections": "Użyj połączeń z grupy {{name}}",
+      "requireConnections": "Wybierz co najmniej jedno połączenie SSH dla każdej grupy zbierania danych.",
+      "notesPreview": "Edytowalne notatki; nie wymagają połączeń ani poleceń.",
+      "categories": {
+        "all": "Wszystkie kategorie",
+        "system": "System",
+        "workloads": "Obciążenia",
+        "operations": "Operacje",
+        "mixed": "Mieszane",
+        "custom": "Własne"
+      },
+      "storage": {
+        "name": "Pamięć masowa",
+        "short": "Miejsce i i-węzły",
+        "description": "Monitoruj pojemność głównego systemu plików, wolne miejsce, i-węzły i punkty montowania.",
+        "requirements": "Wymaga Linux, GNU df i awk. Metryki głównego systemu dotyczą /; brak obsługi statystyk i-węzłów jest zgłaszany jako błąd."
+      },
+      "processes": {
+        "name": "Procesy",
+        "short": "Liczba procesów i zasoby",
+        "description": "Śledź procesy gotowe do pracy i zombie oraz listy według użycia CPU i pamięci.",
+        "requirements": "Wymaga Linux, ps z procps, awk i head. ps pokazuje średnie użycie CPU w czasie życia procesu, a nie chwilowy pomiar."
+      },
+      "network": {
+        "name": "Liczniki sieciowe",
+        "short": "Interfejsy i gniazda",
+        "description": "Sprawdzaj skumulowany ruch odebrany i wysłany, odrzucone pakiety oraz podsumowanie gniazd.",
+        "requirements": "Wymaga Linux /proc/net/dev, /proc/net/sockstat, awk i cat. Sumy nie obejmują pętli zwrotnej, ale obejmują interfejsy wirtualne. Są to liczniki skumulowane, nie przepustowość."
+      },
+      "services": {
+        "name": "Usługi systemd",
+        "short": "Aktywne i uszkodzone usługi",
+        "description": "Śledź stany załadowanych usług i sprawdzaj nieudane jednostki bez zmiany ich działania.",
+        "requirements": "Wymaga działającego systemd, dostępu do systemctl i awk. Liczniki obejmują załadowane jednostki usług, nie wszystkie zainstalowane pliki jednostek."
+      },
+      "gpu": {
+        "name": "NVIDIA GPU",
+        "short": "Pamięć GPU i stan urządzeń",
+        "description": "Śledź liczbę GPU, łączne użycie pamięci i podsumowanie urządzeń oraz procesów NVIDIA.",
+        "requirements": "Wymaga hosta Linux ze sterownikami NVIDIA, nvidia-smi i awk. Nieobsługiwane wartości pamięci (N/A) są zgłaszane jako błędy zamiast zera."
+      },
+      "runbook": {
+        "name": "Notatki operacyjne",
+        "short": "Markdown i zwykły tekst",
+        "description": "Umieść edytowalną listę przekazania i informacje o środowisku obok metryk. Nie wymaga połączeń SSH."
+      },
+      "mixed": {
+        "name": "Operacje mieszane",
+        "short": "Linux + Docker + notatki",
+        "description": "Połącz metryki Linux, stan Dockera i notatki. Przypisz każdej grupie zbierania danych jej własne hosty SSH."
+      },
+      "notes": {
+        "handover": {
+          "name": "Lista przekazania",
+          "content": "## Przekazanie\n\n- [ ] Sprawdź pojemność hostów i ostatnie trendy\n- [ ] Przejrzyj nieudane usługi lub kontenery\n- [ ] Zapisz ostatnie zmiany i dalsze zadania\n\n### Kontakty i materiały\n\nDodaj właściciela, odnośniki do incydentów i kroki przywracania."
+        },
+        "context": {
+          "name": "Informacje o środowisku",
+          "content": "Środowisko: …\nUsługa: …\nWłaściciel: …\nOkno zmian: …"
+        }
+      },
+      "sharedHelp": "Identyczne polecenia i zestawy połączeń współdzielą źródło. Powtarzające się karty z nakładających się szablonów są dodawane raz.",
+      "showLibrary": "Wybierz szablony",
+      "hideLibrary": "Zwiń listę szablonów"
     },
     "layoutPreset": "Rozmieść karty",
     "resetLayout": "Resetuj rozmiary i pozycje",

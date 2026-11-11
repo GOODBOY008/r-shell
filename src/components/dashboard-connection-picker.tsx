@@ -6,8 +6,8 @@ import { dashboardConnectionLabel } from '@/lib/dashboard-labels';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 
-export function DashboardConnectionPicker({ connections, selected, onChange, onAddConnection }: {
-  connections: ConnectionData[]; selected: string[]; onChange: (ids: string[]) => void; onAddConnection?: () => void;
+export function DashboardConnectionPicker({ connections, selected, onChange, onAddConnection, label }: {
+  connections: ConnectionData[]; selected: string[]; onChange: (ids: string[]) => void; onAddConnection?: () => void; label?: string;
 }) {
   const { t } = useTranslation();
   const id = useId();
@@ -16,7 +16,7 @@ export function DashboardConnectionPicker({ connections, selected, onChange, onA
   const filtered = ssh.filter(connection => `${connection.name} ${connection.username} ${connection.host}`.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()));
   const missing = selected.filter(value => !ssh.some(connection => connection.id === value));
   return <fieldset className="min-w-0 space-y-2">
-    <legend className="text-sm font-medium mb-2">{t('dashboard.selectConnections')}</legend>
+    <legend className="text-sm font-medium mb-2">{label ?? t('dashboard.selectConnections')}</legend>
     {ssh.length > 0 ? <div className="rounded-lg border overflow-hidden">
       <div className="relative border-b"><Search className="absolute left-3 top-2.5 size-3.5 text-muted-foreground" /><Input id={id} aria-label={t('dashboard.connectionSearch')} placeholder={t('dashboard.connectionSearch')} className="h-9 pl-9 border-0 rounded-none shadow-none" value={search} onChange={event => setSearch(event.target.value)} /></div>
       <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-muted/30 text-xs"><span className="text-muted-foreground">{t('dashboard.connectionsSelected', { count: selected.length - missing.length })}</span><Button type="button" size="sm" variant="ghost" className="h-6 px-1 text-xs" onClick={() => onChange([...new Set([...selected, ...filtered.map(connection => connection.id)])])} disabled={!filtered.length}>{t('dashboard.selectResults')}</Button></div>
