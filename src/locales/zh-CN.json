@@ -1857,6 +1857,7 @@
       "identityFiles": "身份文件",
       "identityAgent": "SSH Agent",
       "identitiesOnly": "仅使用已配置的身份",
+      "requireKnownHostKey": "要求匹配已保存的主机密钥",
       "connectTimeout": "连接超时（秒）",
       "compression": "压缩",
       "keepAlive": "保活",

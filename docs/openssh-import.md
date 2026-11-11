@@ -49,6 +49,7 @@ merged into it.
 | `IdentityFile` | Paths accumulate in declaration order. An explicit list replaces automatic default-key discovery. `none` contributes no file and suppresses default-key discovery when used alone. |
 | `IdentityAgent` | Uses the default Unix socket or Windows OpenSSH named pipe when unset. Explicit sockets, environment selectors, and `none` are supported. |
 | `IdentitiesOnly` | Restricts agent offers to configured/default identities. The agent may still sign for a configured public identity. |
+| `StrictHostKeyChecking yes` | Each target or jump host with this setting requires a matching key in the user's `~/.ssh/known_hosts`. Entries marked `@revoked` for that endpoint are rejected. Connections cannot add or replace the key. Other explicit values remain unsupported. |
 | `ProxyJump` | Supports aliases, explicit users and ports, SSH URIs with percent-encoded usernames, bracketed IPv6, comma-separated chains, and a first hop's own route. Every hop resolves its own user and identity settings. |
 | Connection options | Maps `ConnectTimeout`, `Compression`, `ServerAliveInterval`, and `ServerAliveCountMax`. An omitted timeout uses the application setting. |
 
@@ -64,8 +65,8 @@ determined. Effective `ProxyCommand`, custom host-key verification, unsupported
 authentication providers, and other connection semantics that cannot be
 preserved block affected hosts. Commands, agent forwarding, port forwarding,
 connection multiplexing, and other ignored options produce notices and prevent
-automatic selection. Host keys use R-Shell's existing verification setting and
-shared OpenSSH `known_hosts` file.
+automatic selection. Endpoints without an explicit host-key requirement follow
+the application setting and use the shared OpenSSH `known_hosts` file.
 
 Preview is bounded to 4 MiB of distinct configuration files, 16 nested files,
 4,096 explicit aliases, and eight jump hosts. Included syntax trees are shared;

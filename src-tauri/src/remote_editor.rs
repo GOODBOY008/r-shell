@@ -139,6 +139,7 @@ mod tests {
                     },
                     tunnel: None,
                     host_key_policy: HostKeyPolicy::Off,
+                    require_known_host_key: false,
                     connect_timeout: 10,
                 },
             )

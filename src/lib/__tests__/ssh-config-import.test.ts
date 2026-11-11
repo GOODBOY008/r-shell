@@ -163,8 +163,11 @@ describe('OpenSSH import merge', () => {
   });
   it('persists once and retains all import options through editing and SSH/SFTP request building', () => {
     ConnectionStorageManager.getFolders();
+    const incoming = entry();
+    incoming.config.requireKnownHostKey = true;
+    incoming.config.jumpHosts[0].requireKnownHostKey = true;
     ConnectionStorageManager.importSshConfig(
-      preview(entry()),
+      preview(incoming),
       [{ alias: 'prod' }],
       'All Connections'
     );
@@ -179,9 +182,14 @@ describe('OpenSSH import merge', () => {
         identity_files: ['/keys/app'],
         identity_agent: 'none',
         identities_only: true,
+        require_known_host_key: true,
         connect_timeout: 35,
-        jump_hosts: entry().config.jumpHosts,
+        jump_hosts: incoming.config.jumpHosts,
       });
     }
+    expect(saved.sshConfigSource?.snapshot).toMatchObject({
+      requireKnownHostKey: true,
+      jumpHosts: [{ requireKnownHostKey: true }],
+    });
   });
 });

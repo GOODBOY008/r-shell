@@ -300,6 +300,7 @@ mod tests {
             proxy: None,
             // An ephemeral local fixture must not write the user's known_hosts.
             host_key_policy: HostKeyPolicy::Off,
+            require_known_host_key: false,
             connect_timeout: 5,
             tunnel: None,
             x11: None,

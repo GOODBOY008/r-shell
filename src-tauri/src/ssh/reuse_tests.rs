@@ -15,6 +15,7 @@ fn config() -> SshConfig {
         proxy: None,
         tunnel: None,
         host_key_policy: HostKeyPolicy::Off,
+        require_known_host_key: false,
         connect_timeout: 5,
         x11: None,
     }
@@ -40,6 +41,7 @@ fn reuse_requires_matching_route_credentials_and_transport_options() {
         ("keepalive_interval", serde_json::json!(60)),
         ("keepalive_max", serde_json::json!(3)),
         ("connect_timeout", serde_json::json!(10)),
+        ("require_known_host_key", serde_json::json!(true)),
     ] {
         let mut changed = serde_json::to_value(&original).unwrap();
         changed[field] = value;

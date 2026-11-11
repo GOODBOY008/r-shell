@@ -360,6 +360,9 @@ export function SshConfigImportDialog({
                                 {t('openSsh.fields.identitiesOnly')}:{' '}
                                 {String(endpoint.identitiesOnly ?? false)}
                               </p>
+                              {endpoint.requireKnownHostKey && (
+                                <p>{t('openSsh.fields.requireKnownHostKey')}</p>
+                              )}
                             </div>
                           ))}
                         </div>

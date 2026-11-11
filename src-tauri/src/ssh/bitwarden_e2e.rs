@@ -11,12 +11,14 @@ fn sftp_config(config: &SshConfig) -> SftpConfig {
         auth_method: config.auth_method.clone(),
         tunnel: config.tunnel.clone(),
         options: Some(JumpConnectionOptions {
+            require_known_host_key: false,
             connect_timeout: Some(config.connect_timeout),
             compression: config.compression,
             keepalive_interval: config.keepalive_interval,
             keepalive_max: config.keepalive_max,
         }),
         host_key_policy: config.host_key_policy.clone(),
+        require_known_host_key: config.require_known_host_key,
         connect_timeout: config.connect_timeout,
     }
 }
@@ -56,6 +58,7 @@ async fn bitwarden_desktop_live_agent() {
         tunnel: None,
         proxy: None,
         host_key_policy: HostKeyPolicy::Off,
+        require_known_host_key: false,
         connect_timeout: 10,
         x11: None,
     };

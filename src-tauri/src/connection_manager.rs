@@ -2514,6 +2514,7 @@ mod tests {
                 connect_timeout: 10,
                 proxy: None,
                 host_key_policy: crate::ssh::HostKeyPolicy::default(),
+                require_known_host_key: false,
                 tunnel: None,
                 x11: None,
             })
