@@ -2173,7 +2173,7 @@
     "templates": {
       "browse": "浏览模板",
       "addTitle": "从模板添加",
-      "intro": "选择开箱即用的看板，也可以从空白开始。",
+      "intro": "选择开箱即用的看板，也可组合模板覆盖不同主机和工作负载。",
       "choose": "选择起点",
       "commands": "查看采集命令",
       "savePaused": "保存为暂停，检查后再采集",
@@ -2182,7 +2182,7 @@
       "create": "创建看板",
       "createStart": "创建并开始采集",
       "addCards": "添加到看板",
-      "emptyHelp": "从 Linux 或 Docker 模板快速开始。选择 SSH 连接，即可使用预置命令和卡片。",
+      "emptyHelp": "从主机、容器、服务或 GPU 模板开始。组合指标和说明卡片，再为每组选择 SSH 连接。",
       "linux": {
         "name": "Linux 主机",
         "short": "内存、负载与磁盘",
@@ -2206,7 +2206,20 @@
         "host": "主机信息",
         "engine": "Docker 引擎",
         "containers": "容器清单",
-        "usage": "容器资源"
+        "usage": "容器资源",
+        "rootCapacity": "根文件系统容量",
+        "rootInodes": "根文件系统 inode",
+        "processSummary": "进程状态",
+        "topCpu": "CPU 进程排行",
+        "topMemory": "内存进程排行",
+        "networkTotals": "接口累计计数",
+        "interfaces": "各接口统计",
+        "sockets": "套接字摘要",
+        "serviceSummary": "已加载服务状态",
+        "failedServices": "失败服务单元",
+        "serviceList": "已加载服务清单",
+        "gpuMemory": "GPU 显存快照",
+        "gpuStatus": "NVIDIA 设备状态"
       },
       "cards": {
         "memory": "内存使用率",
@@ -2216,7 +2229,29 @@
         "running": "运行容器",
         "containerTrend": "容器趋势",
         "containers": "容器清单",
-        "usage": "容器资源"
+        "usage": "容器资源",
+        "rootUsed": "根目录空间使用率",
+        "rootAvailable": "根目录可用空间",
+        "rootTrend": "根目录容量趋势",
+        "inodes": "根目录 inode 使用率",
+        "processCount": "进程总数",
+        "processTrend": "运行队列 / 僵尸进程趋势",
+        "received": "累计接收量",
+        "transmitted": "累计发送量",
+        "networkDrops": "累计丢包趋势",
+        "activeServices": "活动服务数",
+        "failedServiceCount": "失败服务数",
+        "serviceTrend": "服务状态趋势",
+        "gpuCount": "GPU 数量",
+        "gpuMemory": "显存使用率",
+        "gpuTrend": "显存趋势",
+        "topCpu": "CPU 进程排行",
+        "topMemory": "内存进程排行",
+        "interfaces": "各接口统计",
+        "sockets": "套接字摘要",
+        "failedServices": "失败服务单元",
+        "serviceList": "已加载服务清单",
+        "gpuStatus": "NVIDIA 设备状态"
       },
       "fields": {
         "memoryUsedPercent": "内存使用率",
@@ -2232,8 +2267,97 @@
         "Status": "运行状态",
         "CPUPerc": "CPU %",
         "MemUsage": "内存 / 上限",
-        "NetIO": "网络 I/O"
-      }
+        "NetIO": "网络 I/O",
+        "rootUsedPercent": "根目录空间使用率",
+        "rootUsedGiB": "已使用",
+        "rootAvailableGiB": "可用",
+        "inodeUsedPercent": "根目录 inode 使用率",
+        "processCount": "进程总数",
+        "runnable": "可运行",
+        "zombies": "僵尸进程",
+        "rxMiB": "接收",
+        "txMiB": "发送",
+        "rxDrops": "接收丢包",
+        "txDrops": "发送丢包",
+        "activeServices": "活动服务数",
+        "failedServices": "失败服务数",
+        "gpuCount": "GPU 数量",
+        "gpuMemoryUsedMiB": "已用显存",
+        "gpuMemoryTotalMiB": "总显存",
+        "gpuMemoryPercent": "显存使用率"
+      },
+      "search": "搜索模板",
+      "filterCategory": "模板分类",
+      "noResults": "没有匹配的模板，已选内容仍然保留。",
+      "combine": "组合多个模板",
+      "combineHelp": "选择多个模板创建一张看板，每组可使用不同的 SSH 连接。",
+      "composedName": "组合看板",
+      "selectionSummary": "卡片 {{cards}} · 采集项 {{sources}} · 主机 {{hosts}}",
+      "connectionsFor": "{{name}}的 SSH 连接",
+      "copyConnections": "使用{{name}}的连接",
+      "requireConnections": "请为每个采集分组至少选择一个 SSH 连接。",
+      "notesPreview": "可编辑的说明卡片，无需连接或执行命令。",
+      "categories": {
+        "all": "全部分类",
+        "system": "主机系统",
+        "workloads": "工作负载",
+        "operations": "运维",
+        "mixed": "混合场景",
+        "custom": "自定义"
+      },
+      "storage": {
+        "name": "存储容量",
+        "short": "根目录空间与 inode",
+        "description": "查看根文件系统容量、可用空间、inode 使用率和挂载文件系统。",
+        "requirements": "需要 Linux、GNU df 和 awk。根目录指标针对 /，不支持 inode 统计时显示错误。"
+      },
+      "processes": {
+        "name": "进程诊断",
+        "short": "进程数量与资源排行",
+        "description": "查看运行队列与僵尸进程趋势，以及按 CPU 和内存使用率排序的进程。",
+        "requirements": "需要 Linux procps 的 ps、awk 和 head。ps 的 CPU 使用率是进程存活期间的平均值，并非瞬时采样。"
+      },
+      "network": {
+        "name": "网络计数",
+        "short": "接口累计量与套接字",
+        "description": "查看累计接收和发送量、丢包计数及套接字摘要。",
+        "requirements": "需要 Linux /proc/net/dev、/proc/net/sockstat、awk 和 cat。合计排除回环接口但包含虚拟接口；展示累计计数，并非实时吞吐率。"
+      },
+      "services": {
+        "name": "systemd 服务",
+        "short": "活动服务与失败单元",
+        "description": "跟踪已加载的服务状态，查看失败单元，不修改服务。",
+        "requirements": "需要正在运行的 systemd、systemctl 访问权限和 awk。计数范围为已加载的服务单元，不是所有已安装的单元文件。"
+      },
+      "gpu": {
+        "name": "NVIDIA GPU",
+        "short": "显存与设备状态",
+        "description": "查看 GPU 数量、合计显存使用和 NVIDIA 设备及进程摘要。",
+        "requirements": "需要安装 NVIDIA 驱动的 Linux 主机、nvidia-smi 和 awk。不支持的显存值（N/A）显示错误，不转换为零。"
+      },
+      "runbook": {
+        "name": "运维说明",
+        "short": "Markdown 与纯文本",
+        "description": "把可编辑的交接清单和环境说明放在指标旁边，无需 SSH 连接也能使用。"
+      },
+      "mixed": {
+        "name": "混合运维",
+        "short": "Linux + Docker + 说明",
+        "description": "组合 Linux 指标、Docker 状态和交接说明，为不同采集分组分别指定 SSH 主机。"
+      },
+      "notes": {
+        "handover": {
+          "name": "交接清单",
+          "content": "## 交接检查\n\n- [ ] 检查主机容量和近期趋势\n- [ ] 查看失败服务或容器\n- [ ] 记录近期变更与待办事项\n\n### 联系人与参考资料\n\n在此补充负责人、事件链接和恢复步骤。"
+        },
+        "context": {
+          "name": "环境说明",
+          "content": "环境：…\n服务：…\n负责人：…\n变更窗口：…"
+        }
+      },
+      "sharedHelp": "相同命令和连接集合共用采集项；重叠模板中的重复卡片只添加一次。",
+      "showLibrary": "选择模板",
+      "hideLibrary": "收起模板列表"
     },
     "layoutPreset": "排列卡片",
     "resetLayout": "重置大小和位置",

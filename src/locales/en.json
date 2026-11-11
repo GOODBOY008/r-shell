@@ -2186,7 +2186,7 @@
     "templates": {
       "browse": "Browse templates",
       "addTitle": "Add from template",
-      "intro": "Start with a ready-to-use dashboard, or build your own.",
+      "intro": "Choose a ready-to-use dashboard, or combine templates for different hosts and workloads.",
       "choose": "Choose a starting point",
       "commands": "View commands",
       "savePaused": "Save paused; review before collecting",
@@ -2195,7 +2195,7 @@
       "create": "Create dashboard",
       "createStart": "Create and start",
       "addCards": "Add to dashboard",
-      "emptyHelp": "Start with Linux or Docker metrics in a few clicks. Choose your SSH connections; commands and cards are ready to use.",
+      "emptyHelp": "Start with a template for hosts, containers, services or GPUs. Combine metrics and notes, then choose the SSH connections for each group.",
       "linux": {
         "name": "Linux hosts",
         "short": "Memory, load and disks",
@@ -2219,7 +2219,20 @@
         "host": "Host information",
         "engine": "Docker engine",
         "containers": "Container inventory",
-        "usage": "Container resources"
+        "usage": "Container resources",
+        "rootCapacity": "Root filesystem capacity",
+        "rootInodes": "Root inode usage",
+        "processSummary": "Process states",
+        "topCpu": "Processes by CPU",
+        "topMemory": "Processes by memory",
+        "networkTotals": "Interface counters",
+        "interfaces": "Per-interface statistics",
+        "sockets": "Socket summary",
+        "serviceSummary": "Loaded service states",
+        "failedServices": "Failed service units",
+        "serviceList": "Loaded services",
+        "gpuMemory": "GPU memory snapshot",
+        "gpuStatus": "NVIDIA device status"
       },
       "cards": {
         "memory": "Memory used",
@@ -2229,7 +2242,29 @@
         "running": "Running containers",
         "containerTrend": "Container trend",
         "containers": "Container inventory",
-        "usage": "Container resources"
+        "usage": "Container resources",
+        "rootUsed": "Root space used",
+        "rootAvailable": "Root space available",
+        "rootTrend": "Root capacity trend",
+        "inodes": "Root inodes used",
+        "processCount": "Process count",
+        "processTrend": "Runnable / zombie trend",
+        "received": "Received · cumulative",
+        "transmitted": "Transmitted · cumulative",
+        "networkDrops": "Dropped packets · cumulative",
+        "activeServices": "Active services",
+        "failedServiceCount": "Failed services",
+        "serviceTrend": "Service state trend",
+        "gpuCount": "GPU count",
+        "gpuMemory": "GPU memory used",
+        "gpuTrend": "GPU memory trend",
+        "topCpu": "Processes by CPU",
+        "topMemory": "Processes by memory",
+        "interfaces": "Per-interface statistics",
+        "sockets": "Socket summary",
+        "failedServices": "Failed service units",
+        "serviceList": "Loaded services",
+        "gpuStatus": "NVIDIA device status"
       },
       "fields": {
         "memoryUsedPercent": "Memory used",
@@ -2245,8 +2280,97 @@
         "Status": "Status",
         "CPUPerc": "CPU %",
         "MemUsage": "Memory / limit",
-        "NetIO": "Network I/O"
-      }
+        "NetIO": "Network I/O",
+        "rootUsedPercent": "Root space used",
+        "rootUsedGiB": "Used",
+        "rootAvailableGiB": "Available",
+        "inodeUsedPercent": "Root inodes used",
+        "processCount": "Process count",
+        "runnable": "Runnable",
+        "zombies": "Zombie",
+        "rxMiB": "Received",
+        "txMiB": "Transmitted",
+        "rxDrops": "Receive drops",
+        "txDrops": "Transmit drops",
+        "activeServices": "Active services",
+        "failedServices": "Failed services",
+        "gpuCount": "GPU count",
+        "gpuMemoryUsedMiB": "Used memory",
+        "gpuMemoryTotalMiB": "Total memory",
+        "gpuMemoryPercent": "GPU memory used"
+      },
+      "search": "Search templates",
+      "filterCategory": "Template category",
+      "noResults": "No matching templates. Your selection is kept.",
+      "combine": "Combine templates",
+      "combineHelp": "Select several templates to create one dashboard. Each group can use different SSH connections.",
+      "composedName": "Combined dashboard",
+      "selectionSummary": "Cards: {{cards}} · Sources: {{sources}} · Hosts: {{hosts}}",
+      "connectionsFor": "SSH connections for {{name}}",
+      "copyConnections": "Use connections from {{name}}",
+      "requireConnections": "Choose at least one SSH connection for each collection group.",
+      "notesPreview": "Editable notes; no connection or command needed.",
+      "categories": {
+        "all": "All categories",
+        "system": "System",
+        "workloads": "Workloads",
+        "operations": "Operations",
+        "mixed": "Mixed",
+        "custom": "Custom"
+      },
+      "storage": {
+        "name": "Storage capacity",
+        "short": "Root filesystem and inodes",
+        "description": "Track root filesystem capacity, available space, inode use and mounted filesystems.",
+        "requirements": "Requires Linux, GNU df and awk. Root metrics describe /; unsupported inode statistics are reported as an error."
+      },
+      "processes": {
+        "name": "Processes",
+        "short": "Counts and busy processes",
+        "description": "Track runnable and zombie processes, with lists ranked by CPU and memory use.",
+        "requirements": "Requires Linux procps ps, awk and head. ps reports CPU use averaged over each process lifetime, not an instantaneous CPU sample."
+      },
+      "network": {
+        "name": "Network counters",
+        "short": "Interface totals and sockets",
+        "description": "Inspect cumulative receive/transmit counters, dropped packets and socket summaries.",
+        "requirements": "Requires Linux /proc/net/dev, /proc/net/sockstat, awk and cat. Totals exclude loopback but include virtual interfaces; they are cumulative counters, not throughput."
+      },
+      "services": {
+        "name": "systemd services",
+        "short": "Active and failed services",
+        "description": "Follow loaded service states and inspect failed units without changing services.",
+        "requirements": "Requires a running systemd manager, systemctl access and awk. Counts cover loaded service units, not all installed unit files."
+      },
+      "gpu": {
+        "name": "NVIDIA GPU",
+        "short": "GPU memory and device status",
+        "description": "Track GPU count, combined framebuffer memory and the NVIDIA device/process summary.",
+        "requirements": "Requires a Linux host with NVIDIA drivers, nvidia-smi and awk. Unsupported memory values (N/A) are reported as errors instead of zero."
+      },
+      "runbook": {
+        "name": "Operations notes",
+        "short": "Markdown and plain text",
+        "description": "Keep an editable handover checklist and environment details beside your metrics. Works without SSH connections."
+      },
+      "mixed": {
+        "name": "Mixed operations",
+        "short": "Linux + Docker + notes",
+        "description": "A combined dashboard with Linux metrics, Docker status and handover notes. Assign each collection group to its own SSH hosts."
+      },
+      "notes": {
+        "handover": {
+          "name": "Handover checklist",
+          "content": "## Handover\n\n- [ ] Check host capacity and recent trends\n- [ ] Review failed services or containers\n- [ ] Record recent changes and follow-up work\n\n### Contacts and references\n\nAdd the owner, incident links and recovery steps here."
+        },
+        "context": {
+          "name": "Environment details",
+          "content": "Environment: …\nService: …\nOwner: …\nChange window: …"
+        }
+      },
+      "sharedHelp": "Matching commands and connection sets share a source. Repeated cards from overlapping templates appear once.",
+      "showLibrary": "Choose templates",
+      "hideLibrary": "Collapse template list"
     },
     "layoutPreset": "Arrange cards",
     "resetLayout": "Reset sizes and positions",

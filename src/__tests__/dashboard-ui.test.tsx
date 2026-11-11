@@ -87,6 +87,50 @@ describe('template onboarding', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(close).toHaveBeenCalled(); expect(context.saveBoard).not.toHaveBeenCalled(); expect(execute).not.toHaveBeenCalled();
   });
+  it('requires each mixed group to be bound and saves different hosts with static notes', () => {
+    render(<DashboardCreateDialog onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Mixed operations/ }));
+    const linux = screen.getByRole('group', { name: 'SSH connections for Linux hosts' });
+    const docker = screen.getByRole('group', { name: 'SSH connections for Docker fleet' });
+    fireEvent.click(within(linux).getByRole('checkbox', { name: /one/ }));
+    expect((screen.getByRole('button', { name: 'Create and start' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(docker).getByRole('checkbox', { name: /two/ }));
+    expect(execute).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    const saved = vi.mocked(context.saveBoard).mock.calls[0][0];
+    expect(saved.sources.slice(0, 3).every(source => source.connectionIds.join() === 'one')).toBe(true);
+    expect(saved.sources.slice(3).every(source => source.connectionIds.join() === 'two')).toBe(true);
+    expect(saved.widgets.filter(widget => widget.kind === 'note')).toHaveLength(2);
+    expect(saved.widgets).toHaveLength(10);
+  });
+  it('combines templates, copies explicit bindings and retains the selection when search has no matches', () => {
+    render(<DashboardCreateDialog onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Dashboard name'), { target: { value: 'Production overview' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Combine templates' }));
+    fireEvent.click(screen.getByRole('button', { name: /Storage capacity/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'SSH connections for Linux hosts' })).getByRole('checkbox', { name: /one/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use connections from Linux hosts' }));
+    fireEvent.click(screen.getByRole('button', { name: /Operations notes/ }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search templates' }), { target: { value: 'not-a-template' } });
+    expect(screen.getByText('No matching templates. Your selection is kept.')).toBeTruthy();
+    expect(execute).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create and start' }));
+    const saved = vi.mocked(context.saveBoard).mock.calls[0][0];
+    expect(saved.name).toBe('Production overview'); expect(saved.sources).toHaveLength(5);
+    expect(saved.sources.filter(source => source.command === 'LC_ALL=C df -hP')).toHaveLength(1);
+    expect(saved.widgets).toHaveLength(10);
+  });
+  it('creates a standalone notes dashboard without SSH and filters the library by category', () => {
+    context.connections = [];
+    render(<DashboardCreateDialog onClose={() => {}} />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Template category' }), { target: { value: 'operations' } });
+    expect(screen.queryByRole('button', { name: /Docker fleet/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Operations notes/ }));
+    expect(screen.queryByRole('button', { name: 'Add SSH connection' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Create dashboard' }));
+    const saved = vi.mocked(context.saveBoard).mock.calls[0][0];
+    expect(saved.sources).toEqual([]); expect(saved.widgets).toHaveLength(2); expect(execute).not.toHaveBeenCalled();
+  });
 });
 
 describe('dashboard creation and shared editing', () => {
