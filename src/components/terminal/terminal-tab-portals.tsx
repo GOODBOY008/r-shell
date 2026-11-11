@@ -24,6 +24,7 @@ import { DesktopViewer } from '../desktop-viewer';
 import { FileEditorView } from '../file-editor-view';
 import { createEditorTab } from '../../lib/editor-tabs';
 import { useEditorTabs } from '../../lib/editor-tabs-context';
+import { DashboardView } from '../dashboard-view';
 
 interface TerminalTabPortalContextValue {
   getPortalNode: (tabId: string) => HTMLDivElement;
@@ -154,7 +155,9 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
 
   let content: React.ReactNode;
 
-  if (tab.tabType === 'desktop') {
+  if (tab.tabType === 'dashboard') {
+    content = <DashboardView dashboardId={tab.dashboardId ?? ''} visible={isVisible} />;
+  } else if (tab.tabType === 'desktop') {
     content = (
       <DesktopViewer
         connectionId={tab.id}

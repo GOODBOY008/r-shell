@@ -1,4 +1,4 @@
-import type { CommandMonitor, MonitorField } from './monitor-config';
+import type { MonitorDisplayConfig, MonitorField } from './monitor-config';
 
 export type MonitorErrorCode = 'invalidJson' | 'invalidJsonLine' | 'invalidPath' | 'missingField' | 'invalidNumber' | 'invalidTable';
 export class MonitorParseError extends Error {
@@ -29,7 +29,7 @@ function parseNumericSource(stdout: string): unknown {
   const raw = stdout.trim();
   return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw) ? Number(raw) : parseJson(raw);
 }
-function tableRows(module: CommandMonitor, stdout: string): Record<string, unknown>[] {
+function tableRows(module: MonitorDisplayConfig, stdout: string): Record<string, unknown>[] {
   let rows: unknown;
   if (module.tableFormat === 'jsonl') {
     rows = stdout.split(/\r?\n/).flatMap((line, index) => {
@@ -41,7 +41,7 @@ function tableRows(module: CommandMonitor, stdout: string): Record<string, unkno
   if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw new MonitorParseError('invalidTable');
   return rows as Record<string, unknown>[];
 }
-export function parseMonitorOutput(module: CommandMonitor, stdout: string): MonitorData {
+export function parseMonitorOutput(module: MonitorDisplayConfig, stdout: string): MonitorData {
   if (module.display === 'text') return { kind: 'text', text: stdout };
   if (module.display === 'table') {
     const rows = tableRows(module, stdout);
@@ -55,7 +55,7 @@ export function parseMonitorOutput(module: CommandMonitor, stdout: string): Moni
   return { kind: 'numbers', values: fields.map(field => numeric(monitorPath(data, field.path), field.path)) };
 }
 /** Suggest mappings from a completed trial; this never runs a command or changes the form itself. */
-export function suggestMonitorFields(module: CommandMonitor, stdout: string): MonitorField[] {
+export function suggestMonitorFields(module: MonitorDisplayConfig, stdout: string): MonitorField[] {
   const value: unknown = module.display === 'table' ? tableRows(module, stdout)[0] : parseNumericSource(stdout);
   const fields: MonitorField[] = [];
   const visit = (item: unknown, path: string, depth: number) => {

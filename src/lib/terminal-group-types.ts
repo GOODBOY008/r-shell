@@ -11,7 +11,9 @@ export interface TerminalTab {
   id: string;
   name: string;
   /** Tab type: 'terminal' for SSH PTY, 'file-browser' for SFTP/FTP, 'desktop' for RDP/VNC, 'editor' for remote file editing */
-  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor';
+  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor' | 'dashboard';
+  /** Saved dashboard identity; dashboard tabs do not own terminal sessions. */
+  dashboardId?: string;
   protocol?: string;
   /** Display mode used by this desktop session, including unsaved connections. */
   rdpResolution?: string;

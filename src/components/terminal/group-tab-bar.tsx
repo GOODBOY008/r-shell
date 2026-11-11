@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useLayoutEffect, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode, MonitorOff } from 'lucide-react';
+import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode, MonitorOff, LayoutDashboard } from 'lucide-react';
 import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
 import { getTabDisplayName } from '../../lib/terminal-group-utils';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
@@ -19,6 +19,7 @@ import {
 } from '../ui/context-menu';
 import { formatKeyboardShortcut, terminalShortcutBinding } from '@/lib/keyboard-shortcuts';
 import { useShortcutBindings } from '@/lib/shortcut-registry';
+import { DashboardTabStatus } from '../dashboard-tab-status';
 import { announce } from '@/lib/live-announcer';
 
 // ── Module-level drag state (shared across all GroupTabBar instances) ──
@@ -438,7 +439,9 @@ export function GroupTabBar({
                       aria-pressed={tab.id === activeTabId}
                       title={tab.tabType === 'editor' ? `${tab.host ?? ''} · ${tab.editorFilePath ?? tab.name}` : getTabDisplayName(tab, tabs)}
                     >
-                      {tab.tabType === 'file-browser' ? (
+                      {tab.tabType === 'dashboard' ? (
+                        <LayoutDashboard className="h-3.5 w-3.5 shrink-0 text-primary" />
+                      ) : tab.tabType === 'file-browser' ? (
                         <FolderSync className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
                       ) : tab.tabType === 'desktop' ? (
                         <Monitor className="h-3.5 w-3.5 shrink-0 text-blue-500" />
@@ -447,7 +450,7 @@ export function GroupTabBar({
                       ) : (
                         <Terminal className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       )}
-                      {tab.tabType !== 'editor' && <span
+                      {tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && <span
                         data-connection-status={tab.connectionStatus}
                         className={`w-2 h-2 rounded-full shrink-0 ${
                           tab.connectionStatus === 'connected'
@@ -459,6 +462,7 @@ export function GroupTabBar({
                                 : 'bg-[var(--status-disconnected)]'
                         }`}
                       />}
+                      {tab.tabType === 'dashboard' && tab.dashboardId && <DashboardTabStatus id={tab.dashboardId} />}
                       <span className="text-xs font-medium truncate">{getTabDisplayName(tab, tabs)}</span>
                       {editorTabs?.dirtyTabIds.has(tab.id) && (
                         <span
@@ -500,7 +504,7 @@ export function GroupTabBar({
                 </ContextMenuTrigger>
                 <ContextMenuContent>
                   {/* Reconnect when disconnected */}
-                  {onReconnect && tab.tabType !== 'editor' && (
+                  {onReconnect && tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && (
                     <>
                       <ContextMenuItem onClick={() => onReconnect(tab.id)}>
                         <RefreshCw className="mr-2 h-4 w-4" />
@@ -510,7 +514,7 @@ export function GroupTabBar({
                     </>
                   )}
                   {/* Duplicate */}
-                  {onDuplicateTab && tab.tabType !== 'editor' && (
+                  {onDuplicateTab && tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && (
                     <>
                       <ContextMenuItem onClick={() => onDuplicateTab(tab.id)}>
                         <Copy className="mr-2 h-4 w-4" />
@@ -521,7 +525,7 @@ export function GroupTabBar({
                     </>
                   )}
                   {/* Detach into background (SSH terminal tabs only) */}
-                  {onDetachTab && tab.tabType !== 'file-browser' && tab.tabType !== 'desktop' && tab.tabType !== 'editor' && (
+                  {onDetachTab && tab.tabType !== 'file-browser' && tab.tabType !== 'desktop' && tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && (
                     <>
                       <ContextMenuItem onClick={() => onDetachTab(tab.id)}>
                         <MonitorOff className="mr-2 h-4 w-4" />

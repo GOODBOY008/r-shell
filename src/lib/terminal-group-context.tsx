@@ -56,7 +56,7 @@ function initializeState(): TerminalGroupState {
       ...group,
       tabs: group.tabs.map((tab) => ({
         ...tab,
-        connectionStatus: 'pending' as const,
+        connectionStatus: tab.tabType === 'dashboard' ? 'disconnected' as const : 'pending' as const,
       })),
     };
     for (const tab of group.tabs) {
@@ -105,7 +105,7 @@ export function TerminalGroupProvider({ children }: { children: React.ReactNode 
     const editorOwner = editorOwnerId
       ? state.groups[state.tabToGroupMap[editorOwnerId]]?.tabs.find(tab => tab.id === editorOwnerId)
       : undefined;
-    const activeConnection = activeTab
+    const activeConnection = activeTab && activeTab.tabType !== 'dashboard'
       ? {
           connectionId: activeTab.editorConnectionId ?? activeTab.id,
           savedConnectionId: activeTab.originalConnectionId ?? activeTab.editorConnectionId ?? activeTab.id,

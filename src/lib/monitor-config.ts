@@ -6,10 +6,12 @@ export type MonitorColumns = 1 | 2 | 3;
 export interface MonitorField { path: string; label: string }
 interface ModuleBase { id: string; enabled: boolean }
 export interface BuiltinMonitor extends ModuleBase { kind: 'builtin'; builtin: BuiltinMonitorId }
-export interface CommandMonitor extends ModuleBase {
-  kind: 'command'; name: string; command: string; intervalSeconds: number; timeoutSeconds: number;
+export interface MonitorDisplayConfig {
   display: MonitorDisplay; fields: MonitorField[]; arrayPath: string; unit: string; decimals: number;
   tableFormat?: MonitorTableFormat;
+}
+export interface CommandMonitor extends ModuleBase, MonitorDisplayConfig {
+  kind: 'command'; name: string; command: string; intervalSeconds: number; timeoutSeconds: number;
 }
 export type MonitorModule = BuiltinMonitor | CommandMonitor;
 export interface MonitorConfig { columns: MonitorColumns; modules: MonitorModule[] }
@@ -30,8 +32,10 @@ export function validCommandMonitor(value: unknown): value is CommandMonitor {
   if (!record(value)) return false;
   return value.kind === 'command' && typeof value.id === 'string' && !!value.id && typeof value.enabled === 'boolean'
     && typeof value.name === 'string' && !!value.name.trim() && typeof value.command === 'string' && !!value.command.trim()
-    && integer(value.intervalSeconds, 5, 86400) && integer(value.timeoutSeconds, 1, 60) && integer(value.decimals, 0, 10)
-    && ['text', 'number', 'chart', 'table'].includes(value.display as string)
+    && integer(value.intervalSeconds, 5, 86400) && integer(value.timeoutSeconds, 1, 60) && validMonitorDisplay(value);
+}
+export function validMonitorDisplay(value: unknown): value is MonitorDisplayConfig {
+  return record(value) && integer(value.decimals, 0, 10) && ['text', 'number', 'chart', 'table'].includes(value.display as string)
     && (value.tableFormat === undefined || value.tableFormat === 'json' || value.tableFormat === 'jsonl')
     && typeof value.arrayPath === 'string' && typeof value.unit === 'string'
     && Array.isArray(value.fields) && value.fields.length > 0 && value.fields.length <= 20

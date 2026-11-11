@@ -10,6 +10,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
+import { DashboardSidebar } from './components/dashboard-sidebar';
+import { DashboardProvider } from './lib/dashboard-context';
+import { DASHBOARD_EDIT_CONNECTION_EVENT } from './lib/dashboard-config';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
 import { PortForwardingPanel } from './components/port-forwarding-panel';
@@ -134,6 +137,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 function AppContent() {
   const { t } = useTranslation();
   const appearance = useAppearanceSettings();
+  const [leftSidebarTab, setLeftSidebarTab] = useState('connections');
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   useEffect(() => {
     const updateWidth = () => setWindowWidth(window.innerWidth);
@@ -344,6 +348,7 @@ function AppContent() {
   // Without the cancel the attempt lingers until its own timeout (30 s
   // against a down host) and can settle after the tab is gone.
   const cancelPendingTerminalConnect = useCallback((tab: TerminalTab) => {
+    if (tab.tabType === 'dashboard') return;
     cancelSshConnect(tab.id);
     if (
       (tab.connectionStatus === 'pending' || tab.connectionStatus === 'connecting') &&
@@ -363,6 +368,7 @@ function AppContent() {
   // its own session, so disconnecting here never takes down another tab's
   // connection.
   const disconnectTabBackend = useCallback((tab: TerminalTab, remainingTabs: TerminalTab[], released: Set<string>) => {
+    if (tab.tabType === 'dashboard') return;
     if (tab.tabType === 'desktop') {
       // Desktop sessions are established by desktop_connect and live in their
       // own backend map, not with the PTY/SSH connections.
@@ -508,14 +514,14 @@ function AppContent() {
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
     // Editor tabs are transient — exclude them from persistence
-    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor');
+    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor' && tab.tabType !== 'dashboard');
     if (persistableTabs.length > 0) {
       const activeConnections = persistableTabs.map((tab, index) => ({
         tabId: tab.id,
         connectionId: tab.id,
         order: index,
         originalConnectionId: tab.originalConnectionId,
-        tabType: tab.tabType,
+        tabType: tab.tabType as Exclude<TerminalTab['tabType'], 'dashboard'>,
         protocol: tab.protocol,
       }));
       ActiveConnectionsManager.saveActiveConnections(activeConnections);
@@ -787,7 +793,7 @@ function AppContent() {
       const lazy = new Set<string>();
       for (const activeConn of [...activeConnections].sort((a, b) => a.order - b.order)) {
         const tab = tabsById.get(activeConn.connectionId);
-        if (!tab) {
+        if (!tab || tab.tabType === 'dashboard') {
           console.warn(`[Restore] No restored tab for ${activeConn.connectionId}; skipping`);
           continue;
         }
@@ -1097,7 +1103,7 @@ function AppContent() {
 
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
-    if (!tabToDuplicate || tabToDuplicate.tabType === 'editor') return;
+    if (!tabToDuplicate || tabToDuplicate.tabType === 'editor' || tabToDuplicate.tabType === 'dashboard') return;
 
     const originalConnectionId = tabToDuplicate.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
@@ -1220,7 +1226,7 @@ function AppContent() {
 
   const runReconnect = useCallback(async (tabId: string, automatic = false) => {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
-    if (!tabToReconnect) {
+    if (!tabToReconnect || tabToReconnect.tabType === 'dashboard') {
       clearReconnectRetry(tabId);
       return;
     }
@@ -1760,7 +1766,7 @@ function AppContent() {
       newSession: () => handleNewTab(),
       openSettings: handleOpenSettings,
       duplicateSession: () => { if (activeTab) void handleDuplicateTab(activeTab.id); },
-      reconnect: () => { if (activeTab && activeTab.tabType !== 'editor') void handleReconnect(activeTab.id); },
+      reconnect: () => { if (activeTab && activeTab.tabType !== 'editor' && activeTab.tabType !== 'dashboard') void handleReconnect(activeTab.id); },
     }, shortcutBindings),
   ]);
 
@@ -1828,6 +1834,15 @@ function AppContent() {
     }
   }, [t]);
 
+  useEffect(() => {
+    const editConnection = (event: Event) => {
+      const id: unknown = (event as CustomEvent).detail;
+      if (typeof id === 'string') handleEditConnection({ id, name: '', type: 'connection' });
+    };
+    window.addEventListener(DASHBOARD_EDIT_CONNECTION_EVENT, editConnection);
+    return () => window.removeEventListener(DASHBOARD_EDIT_CONNECTION_EVENT, editConnection);
+  }, [handleEditConnection]);
+
   const handleSaveConnection = useCallback(async (config: ConnectionConfig) => {
     if (!config.id) return;
 
@@ -1855,7 +1870,7 @@ function AppContent() {
     // Editor tabs share the saved connection identity, but their names are filenames.
     for (const group of Object.values(state.groups)) {
       for (const tab of group.tabs) {
-        if (tab.tabType !== 'editor' && (tab.id === config.id || tab.originalConnectionId === config.id)) {
+        if (tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && (tab.id === config.id || tab.originalConnectionId === config.id)) {
           dispatch({ type: 'UPDATE_TAB_NAME', tabId: tab.id, name: config.name });
         }
       }
@@ -1873,9 +1888,9 @@ function AppContent() {
       // exact tab that opened the dialog: a primary tab has no
       // originalConnectionId, and several duplicates would be ambiguous.
       const pendingTab =
-        (targetTabId ? allTabs.find(tab => tab.tabType !== 'editor' && tab.id === targetTabId) : undefined) ??
+        (targetTabId ? allTabs.find(tab => tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && tab.id === targetTabId) : undefined) ??
         allTabs.find(tab =>
-          tab.tabType !== 'editor' &&
+          tab.tabType !== 'editor' && tab.tabType !== 'dashboard' &&
           tab.originalConnectionId === config.id &&
           (tab.connectionStatus === 'disconnected' || tab.connectionStatus === 'pending')
         );
@@ -2024,7 +2039,7 @@ function AppContent() {
   // handshake — so without the guard two clicks race into two backend
   // connects for one id and two tabs sharing it.
   const runQuickConnect = useCallback(async (connectionId: string) => {
-    const existingTab = allTabs.find(tab => tab.tabType !== 'editor' &&
+    const existingTab = allTabs.find(tab => tab.tabType !== 'editor' && tab.tabType !== 'dashboard' &&
       (tab.id === connectionId || tab.originalConnectionId === connectionId));
     if (existingTab) {
       handleTabSelect(existingTab.id);
@@ -2141,7 +2156,7 @@ function AppContent() {
   // Desktop tabs (RDP/VNC) also don't need right sidebar or bottom panel
   const isDesktopTab = activeTab?.tabType === 'desktop';
   // Keep the file list available while editing so users can open the next file.
-  const hideExtraPanels = isFileBrowserTab || isDesktopTab
+  const hideExtraPanels = isFileBrowserTab || isDesktopTab || activeTab?.tabType === 'dashboard'
     || activeConnection?.protocol === 'SFTP' || activeConnection?.protocol === 'FTP';
 
   return (
@@ -2219,6 +2234,12 @@ function AppContent() {
                 minSize={leftSidebarMinSize}
                 maxSize={35}
               >
+                <Tabs value={leftSidebarTab} onValueChange={setLeftSidebarTab} className="h-full min-h-0 flex flex-col bg-sidebar">
+                  <TabsList className="mx-2 mt-2 grid grid-cols-2 shrink-0">
+                    <TabsTrigger value="connections">{t('dashboard.connections')}</TabsTrigger>
+                    <TabsTrigger value="dashboards">{t('dashboard.title')}</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="connections" forceMount className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden">
                 <ConnectionManager
                   onConnectionSelect={handleConnectionSelect}
                   onConnectionConnect={handleConnectionConnect}
@@ -2233,6 +2254,9 @@ function AppContent() {
                   onReattachSession={handleReattachSession}
                   onCloseDetachedSession={handleCloseDetachedSession}
                 />
+                  </TabsContent>
+                  <TabsContent value="dashboards" forceMount className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden"><DashboardSidebar /></TabsContent>
+                </Tabs>
               </ResizablePanel>
 
               <ResizableHandle />
@@ -2480,9 +2504,11 @@ export default function App() {
     <ErrorBoundary label="R-Shell">
       <LayoutProvider>
         <TerminalGroupProvider>
-          <EditorTabsProvider>
-            <AppContent />
-          </EditorTabsProvider>
+          <DashboardProvider>
+            <EditorTabsProvider>
+              <AppContent />
+            </EditorTabsProvider>
+          </DashboardProvider>
         </TerminalGroupProvider>
       </LayoutProvider>
     </ErrorBoundary>

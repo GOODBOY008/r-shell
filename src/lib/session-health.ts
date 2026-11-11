@@ -29,7 +29,7 @@ export interface SessionHealth {
 /** Minimal tab shape needed for health checks. */
 export interface HealthCheckedTab {
   id: string;
-  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor';
+  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor' | 'dashboard';
   protocol?: string;
   connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'pending';
 }
