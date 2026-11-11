@@ -22,7 +22,7 @@ afterEach(() => vi.useRealTimers());
 describe('dashboard SSH transport', () => {
   it('decrypts a private copy and uses a runtime identity with noninteractive automatic auth', async () => {
     await dashboardTransport.connect(profile, 'runtime', false);
-    expect(sshConnect).toHaveBeenCalledWith(expect.objectContaining({ connection_id: 'runtime', password: 'opened' }), { interactive: false });
+    expect(sshConnect).toHaveBeenCalledWith(expect.objectContaining({ connection_id: 'runtime', password: 'opened', reuse_existing: true }), { interactive: false });
     expect(profile.password).toBe('v1:sealed:secret');
   });
   it('does not start SSH when cancelled while decrypting credentials', async () => {

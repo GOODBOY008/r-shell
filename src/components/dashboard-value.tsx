@@ -37,6 +37,8 @@ export function DashboardValue({ board, widget, source, runtime, connections, vi
   const [filter, setFilter] = useState('all');
   const [page, setPage] = useState(0);
   const [hiddenFields, setHiddenFields] = useState<Set<string>>(new Set());
+  // Keep filter/page state, but release heavy table/chart DOM and derived arrays in hidden tabs.
+  if (!visible) return null;
   const label = (id: string) => dashboardConnectionLabel(id, connections);
   const effectiveFilter = source.connectionIds.includes(filter) ? filter : 'all';
   const selected = effectiveFilter === 'all' ? source.connectionIds : [effectiveFilter];
@@ -56,22 +58,31 @@ export function DashboardValue({ board, widget, source, runtime, connections, vi
     {selected.map(id => <div key={id} className="min-w-0 p-3 rounded-lg bg-muted/30"><p className="text-xs font-medium truncate mb-3" title={label(id)}>{label(id)}</p><div className={`mb-3 tabular-nums ${reading(id)?.error ? 'opacity-60' : ''}`}><MonitorValue module={widget} data={reading(id)?.data} /></div>{status(id, true)}</div>)}
   </div></div>;
   if (widget.display === 'table') {
-    const rows = selected.flatMap(id => {
+    const tables = selected.map(id => {
       const data = reading(id)?.data;
-      return data?.kind === 'table' ? data.rows.map((cells, index) => ({ id, cells, index })) : [];
+      return { id, rows: data?.kind === 'table' ? data.rows : [] };
     });
-    const pages = Math.max(1, Math.ceil(rows.length / 50));
+    const totalRows = tables.reduce((total, table) => total + table.rows.length, 0);
+    const pages = Math.max(1, Math.ceil(totalRows / 50));
     const currentPage = Math.min(page, pages - 1);
+    let offset = 0;
+    const rows: Array<{ id: string; cells: string[]; index: number }> = [];
+    for (const table of tables) {
+      const start = Math.max(0, currentPage * 50 - offset);
+      const end = Math.max(0, (currentPage + 1) * 50 - offset);
+      offset += table.rows.length;
+      for (let index = start; index < Math.min(end, table.rows.length); index++) rows.push({ id: table.id, cells: table.rows[index], index });
+    }
     return <div className={containerClass}>{selector}
       <div className={`${fill ? 'flex-1 min-h-24' : 'max-h-80'} overflow-auto rounded-md border`} tabIndex={0} role="region" aria-label={widget.name}><table className="w-full min-w-max text-xs text-left"><thead><tr>
         <th className="sticky top-0 left-0 z-20 bg-card p-2 border-b">{t('dashboard.connection')}</th>
         {widget.fields.map((field, index) => <th key={index} className="sticky top-0 z-10 bg-card p-2 border-b font-medium">{field.label || field.path || t('monitor.value')}</th>)}
-      </tr></thead><tbody>{rows.slice(currentPage * 50, (currentPage + 1) * 50).map(row => <tr key={`${row.id}:${row.index}`}>
+      </tr></thead><tbody>{rows.map(row => <tr key={`${row.id}:${row.index}`}>
         <td className="sticky left-0 bg-card z-10 p-2 border-b"><span className={`block max-w-44 truncate ${reading(row.id)?.error ? 'text-amber-600' : ''}`} title={label(row.id)}>{!!reading(row.id)?.error && <AlertTriangle className="inline size-3 mr-1" />}{label(row.id)}</span></td>
         {row.cells.map((cell, index) => <td key={index} className="p-2 border-b"><span className="block max-w-64 truncate" title={cell}>{cell}</span></td>)}
       </tr>)}</tbody></table></div>
       {!rows.length && <p className="text-xs text-muted-foreground">{t(selected.some(id => reading(id)?.data?.kind === 'table') ? 'monitor.emptyTable' : 'monitor.noData')}</p>}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground shrink-0"><span>{t('dashboard.rows', { count: rows.length })}</span><div className="flex items-center gap-2"><Button variant="outline" size="icon" className="size-7" disabled={!currentPage} aria-label={t('dashboard.previousPage')} onClick={() => setPage(currentPage - 1)}><ArrowLeft className="size-3" /></Button><span>{t('dashboard.page', { page: currentPage + 1, pages })}</span><Button variant="outline" size="icon" className="size-7" disabled={currentPage + 1 >= pages} aria-label={t('dashboard.nextPage')} onClick={() => setPage(currentPage + 1)}><ArrowRight className="size-3" /></Button></div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground shrink-0"><span>{t('dashboard.rows', { count: totalRows })}</span><div className="flex items-center gap-2"><Button variant="outline" size="icon" className="size-7" disabled={!currentPage} aria-label={t('dashboard.previousPage')} onClick={() => setPage(currentPage - 1)}><ArrowLeft className="size-3" /></Button><span>{t('dashboard.page', { page: currentPage + 1, pages })}</span><Button variant="outline" size="icon" className="size-7" disabled={currentPage + 1 >= pages} aria-label={t('dashboard.nextPage')} onClick={() => setPage(currentPage + 1)}><ArrowRight className="size-3" /></Button></div></div>
       {selected.map(id => {
         const data = reading(id)?.data;
         return data?.kind === 'table' && data.total > 200 ? <p key={id} className="text-xs text-amber-600 dark:text-amber-400">{label(id)} · {t('monitor.tableLimit', { total: data.total })}</p> : null;
@@ -83,10 +94,11 @@ export function DashboardValue({ board, widget, source, runtime, connections, vi
   const colors = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-4)', 'var(--chart-5)'];
   const fields = widget.fields.map((field, index) => ({ ...field, index })).filter(field => !hiddenFields.has(field.path));
   const now = runtime.getTime();
+  const points = new Map(selected.map(id => [id, monitorChartData((reading(id)?.samples ?? []).filter(sample => now - sample.timestamp <= 300_000))]));
   const series = selected.flatMap(id => fields.map(field => ({
     id: `${id}:${field.index}`, label: `${label(id)} · ${field.label || field.path || t('monitor.value')}`,
     field, color: colors[(source.connectionIds.indexOf(id) * widget.fields.length + field.index) % colors.length],
-    data: monitorChartData((reading(id)?.samples ?? []).filter(sample => now - sample.timestamp <= 300_000)),
+    data: points.get(id)!,
   })));
   const precision = Number.isFinite(widget.decimals) ? Math.max(0, Math.min(10, Math.trunc(widget.decimals))) : 0;
   return <div className={containerClass}><div className="flex justify-between gap-2 flex-wrap shrink-0">{selector}<details className="text-xs"><summary className="cursor-pointer text-muted-foreground py-2">{t('dashboard.metrics')}</summary><div className="flex gap-3 flex-wrap py-2">{widget.fields.map((field, index) => <label key={index} className="flex items-center gap-1"><input type="checkbox" checked={!hiddenFields.has(field.path)} onChange={() => setHiddenFields(previous => { const next = new Set(previous); if (next.has(field.path)) next.delete(field.path); else next.add(field.path); return next; })} />{field.label || field.path || t('monitor.value')}</label>)}</div></details></div>

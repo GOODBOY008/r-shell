@@ -1,6 +1,7 @@
 import type { ConnectionData } from './connection-storage';
 import { isCommandWidget, type CommandDataSource, type Dashboard, type DashboardWidget } from './dashboard-config';
-import { appendMonitorSample, parseMonitorOutput, type MonitorData, type MonitorSample } from './monitor-data';
+import { appendMonitorSample, createMonitorOutputParser, type MonitorData, type MonitorSample } from './monitor-data';
+import { DashboardWorkQueue } from './dashboard-work-queue';
 import type { MonitorCommandResult } from './use-monitor-command';
 
 export type DashboardConnectionStatus = 'idle' | 'connecting' | 'connected' | 'retrying' | 'needsAuth' | 'missing';
@@ -38,6 +39,7 @@ interface Session extends DashboardConnectionState {
   pending?: Promise<void>;
   retryAt: number;
   failures: number;
+  controller: AbortController;
 }
 interface Job {
   key: string;
@@ -49,6 +51,8 @@ interface Job {
   runId?: string;
   runtimeId?: string;
   disposed: boolean;
+  failures: number;
+  controller?: AbortController;
 }
 const rawKey = (boardId: string, sourceId: string, connectionId: string) => JSON.stringify([boardId, sourceId, connectionId]);
 const widgetKey = (boardId: string, widgetId: string, connectionId: string) => JSON.stringify([boardId, widgetId, connectionId]);
@@ -59,39 +63,120 @@ const failureResult = (error?: unknown, status: MonitorCommandResult['status'] =
   stdout: '', stderr: '', exitCode: null, durationMs: 0, status, error: error instanceof Error ? error.message : typeof error === 'string' ? error : null,
 });
 
-/** Owns collection independently of React views. The backend enforces the two-channel limit,
- * including queue time in each command's timeout; trials use that same session and queue. */
+export const DASHBOARD_RAW_CACHE_BYTES = 8 * 1024 * 1024;
+const brief = (value: string) => value.length > 4096 ? value.slice(0, 4096) + '…' : value;
+const summary = (result: MonitorCommandResult): MonitorCommandResult => ({ ...result, stdout: '', stderr: brief(result.stderr), error: result.error ? brief(result.error) : result.error });
+
+/** Bounds work before IPC: one command per host and eight across dashboards/trials.
+ * The backend retains its independent two-channel limit and execution timeout. */
 export class DashboardRuntime {
   private boards = new Map<string, Dashboard>();
   private connections = new Map<string, ConnectionData>();
   private open = new Set<string>();
   private started = new Set<string>();
+  private visible = new Set<string>();
   private sessions = new Map<string, Session>();
   private jobs = new Map<string, Job>();
   private inFlight = new Map<string, Promise<void>>();
   private raw = new Map<string, DashboardSourceReading>();
   private readings = new Map<string, DashboardWidgetReading>();
   private listeners = new Set<() => void>();
+  private boardListeners = new Map<string, Set<() => void>>();
+  private boardRevisions = new Map<string, number>();
+  private statusListeners = new Set<() => void>();
+  private statusRevision = 0;
+  private statusSignature = '';
+  private dirty = new Set<string>();
+  private notification?: ReturnType<typeof setTimeout>;
+  private commands = new DashboardWorkQueue(8, 1);
+  private logins = new DashboardWorkQueue(4, 1);
+  private rawWeights = new Map<string, number>();
+  private rawBytes = 0;
   private trials = new Set<AbortController>();
   private timer?: ReturnType<typeof setInterval>;
   private revision = 0;
+  private timerPeriod = 0;
   private live = false;
   private clock = 0;
+  private lastSamplePrune = 0;
+  private lastChartRefresh = 0;
   private now: () => number;
 
   constructor(private deps: DashboardRuntimeDependencies) { this.now = deps.now ?? Date.now; }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.revision;
   getTime = () => this.clock;
-  private emit() { this.clock = this.now(); this.revision++; this.listeners.forEach(listener => listener()); }
-  start() { this.live = true; this.timer ??= setInterval(() => this.pump(), 250); this.pump(); }
+  subscribeBoard = (id: string, listener: () => void) => {
+    const listeners = this.boardListeners.get(id) ?? new Set<() => void>();
+    listeners.add(listener); this.boardListeners.set(id, listeners);
+    return () => { listeners.delete(listener); if (!listeners.size) this.boardListeners.delete(id); };
+  };
+  subscribeStatus = (listener: () => void) => { this.statusListeners.add(listener); return () => { this.statusListeners.delete(listener); }; };
+  getBoardSnapshot = (id: string) => this.boardRevisions.get(id) ?? 0;
+  getStatusSnapshot = () => this.statusRevision;
+  getCacheUsage = () => ({ rawOutputBytes: this.rawBytes, sources: this.raw.size, widgets: this.readings.size });
+  private emit(id?: string) {
+    if (!this.live) return;
+    for (const boardId of id ? [id] : this.boards.keys()) this.dirty.add(boardId);
+    this.notification ??= setTimeout(() => this.flush(), 50);
+  }
+  private flush() {
+    clearTimeout(this.notification); this.notification = undefined;
+    this.clock = this.now(); this.revision++;
+    const changed = [...this.dirty]; this.dirty.clear();
+    for (const id of changed) this.boardRevisions.set(id, (this.boardRevisions.get(id) ?? 0) + 1);
+    const signature = JSON.stringify([...this.boards.keys()].map(id => [id, this.collectionState(id)]));
+    if (signature !== this.statusSignature) {
+      this.statusSignature = signature; this.statusRevision++; this.statusListeners.forEach(listener => listener());
+    }
+    for (const id of changed) this.boardListeners.get(id)?.forEach(listener => listener());
+    this.listeners.forEach(listener => listener());
+  }
+  private emitConnection(id: string) {
+    for (const board of this.boards.values()) if (board.sources.some(source => source.connectionIds.includes(id))) this.emit(board.id);
+  }
+  private visibleCharts() {
+    return [...this.boards.values()].filter(board => this.visible.has(board.id) && this.open.has(board.id)
+      && board.widgets.some(widget => isCommandWidget(widget) && widget.enabled && widget.display === 'chart'));
+  }
+  private refreshTimer() {
+    const history = [...this.readings.values()].some(reading => reading.samples.length > 0);
+    const period = !this.live ? 0 : this.jobs.size ? 250 : this.visibleCharts().length || history ? 5000 : 0;
+    if (period === this.timerPeriod) return;
+    clearInterval(this.timer); this.timer = undefined; this.timerPeriod = period;
+    if (period) this.timer = setInterval(() => this.pump(), period);
+  }
+  private delay(job: Job) {
+    const interval = job.source.intervalSeconds * 1000;
+    return Math.max(interval, Math.min(60_000, interval * 2 ** Math.min(job.failures, 6)));
+  }
+  private setRaw(key: string, value: DashboardSourceReading) {
+    this.raw.set(key, value);
+    this.rawBytes -= this.rawWeights.get(key) ?? 0; this.rawWeights.delete(key);
+    if (value.success) {
+      const bytes = (value.success.stdout.length + value.success.stderr.length) * 2;
+      this.rawWeights.set(key, bytes); this.rawBytes += bytes;
+    }
+    while (this.rawBytes > DASHBOARD_RAW_CACHE_BYTES) {
+      const oldest = this.rawWeights.keys().next().value!;
+      this.rawBytes -= this.rawWeights.get(oldest)!; this.rawWeights.delete(oldest);
+      const entry = this.raw.get(oldest);
+      if (entry) this.raw.set(oldest, { ...entry, success: undefined });
+    }
+  }
+  private deleteRaw(key: string) {
+    this.rawBytes -= this.rawWeights.get(key) ?? 0; this.rawWeights.delete(key); this.raw.delete(key);
+  }
+  start() { this.live = true; this.emit(); this.refreshTimer(); this.pump(); }
   stop() {
     this.live = false;
-    clearInterval(this.timer); this.timer = undefined;
+    clearInterval(this.timer); this.timer = undefined; this.timerPeriod = 0;
     for (const trial of this.trials) trial.abort();
     for (const job of this.jobs.values()) this.removeJob(job);
     for (const session of this.sessions.values()) this.retire(session);
     this.sessions.clear();
+    this.raw.clear(); this.rawWeights.clear(); this.rawBytes = 0; this.readings.clear();
+    this.flush();
   }
 
   configure(boards: Dashboard[], connections: ConnectionData[], openIds: string[], visibleIds: string[]) {
@@ -110,7 +195,7 @@ export class DashboardRuntime {
         for (const connectionId of source.connectionIds) {
           if ((old && old.command !== source.command)
             || (this.connections.has(connectionId) && endpoint(this.connections.get(connectionId)) !== endpoint(nextConnections.get(connectionId)))) {
-            this.raw.delete(rawKey(board.id, source.id, connectionId));
+            this.deleteRaw(rawKey(board.id, source.id, connectionId));
             for (const widget of board.widgets.filter(item => item.sourceId === source.id)) this.readings.delete(widgetKey(board.id, widget.id, connectionId));
           }
         }
@@ -130,6 +215,7 @@ export class DashboardRuntime {
     this.boards = nextBoards;
     this.connections = nextConnections;
     this.open = nextOpen;
+    this.visible = new Set(visibleIds.filter(id => this.open.has(id)));
     for (const id of visibleIds) if (this.open.has(id)) this.started.add(id);
     for (const [id, session] of this.sessions) {
       const connection = this.connections.get(id);
@@ -156,27 +242,29 @@ export class DashboardRuntime {
     for (const [key, { board, source, connectionId }] of desired) {
       if (!this.jobs.has(key)) {
         const session = this.acquire(connectionId, key);
-        this.jobs.set(key, { key, boardId: board.id, source, connectionId, session, nextAt: 0, disposed: false });
-      } else this.jobs.get(key)!.source = source;
+        this.jobs.set(key, { key, boardId: board.id, source, connectionId, session, nextAt: 0, disposed: false, failures: 0 });
+      } else {
+        const job = this.jobs.get(key)!; job.source = source;
+      }
     }
     for (const session of retained) this.release(session, 'reconcile');
     // New/edited cards can preview the latest successful output without a new command.
     for (const board of boards) for (const source of board.sources) for (const connectionId of source.connectionIds) this.project(board, source, connectionId);
     this.prune();
-    this.emit(); this.pump();
+    this.emit(); this.refreshTimer(); this.pump();
   }
   isOpen(id: string) { return this.open.has(id); }
   isRunning(id: string) {
     const board = this.boards.get(id);
     return this.open.has(id) && this.started.has(id) && board?.paused === false && board.widgets.some(widget => isCommandWidget(widget) && widget.enabled);
   }
-  collectionState(id: string): 'closed' | 'paused' | 'waiting' | 'idle' | 'running' | 'static' {
+  collectionState(id: string): 'closed' | 'paused' | 'waiting' | 'idle' | 'running' | 'static' | 'background' {
     const enabled = this.boards.get(id)?.widgets.filter(widget => widget.enabled) ?? [];
     if (this.open.has(id) && enabled.length && enabled.every(widget => !isCommandWidget(widget))) return 'static';
     if (this.boards.get(id)?.paused) return 'paused';
     if (!this.open.has(id)) return 'closed';
     if (!this.started.has(id)) return 'waiting';
-    return this.isRunning(id) ? 'running' : 'idle';
+    return this.isRunning(id) ? this.visible.has(id) ? 'running' : 'background' : 'idle';
   }
   hasStarted(id: string) { return this.started.has(id); }
   connectionState(id: string): DashboardConnectionState {
@@ -190,7 +278,7 @@ export class DashboardRuntime {
     const session = this.sessions.get(connectionId);
     if (!session || session.retired || session.pending) return;
     if (session.status === 'connected') {
-      for (const job of this.jobs.values()) if (job.connectionId === connectionId) job.nextAt = 0;
+      for (const job of this.jobs.values()) if (job.connectionId === connectionId) { job.nextAt = 0; job.failures = 0; }
       this.pump();
     } else { session.retryAt = 0; void this.connect(session, true); }
   }
@@ -201,7 +289,7 @@ export class DashboardRuntime {
     let session = this.sessions.get(id);
     if (!session) {
       session = { savedId: id, runtimeId: '', fingerprint: this.deps.fingerprint(connection), connection,
-        refs: new Set(), status: 'idle', retired: false, retryAt: 0, failures: 0 };
+        refs: new Set(), status: 'idle', retired: false, retryAt: 0, failures: 0, controller: new AbortController() };
       this.sessions.set(id, session);
     }
     session.refs.add(owner);
@@ -217,7 +305,7 @@ export class DashboardRuntime {
   }
   private retire(session: Session) {
     if (session.retired) return;
-    session.retired = true;
+    session.retired = true; session.controller.abort();
     if (!session.runtimeId) return;
     this.deps.cancelConnect(session.runtimeId);
     void this.deps.disconnect(session.runtimeId).catch(() => {});
@@ -225,72 +313,92 @@ export class DashboardRuntime {
   private connect(session: Session, interactive = false): Promise<void> {
     if (session.pending) return session.pending;
     if (session.retired || !session.refs.size) return Promise.resolve();
-    const runtimeId = `dashboard-${crypto.randomUUID()}`;
-    session.runtimeId = runtimeId;
-    session.status = 'connecting'; session.error = undefined; this.emit();
-    const pending = (async () => {
-      try {
-        const result = await this.deps.connect(session.connection, runtimeId, interactive);
-        if (session.retired || session.runtimeId !== runtimeId) {
-          if (result.success) await this.deps.disconnect(runtimeId).catch(() => {});
-          return;
-        }
-        if (result.success) { session.status = 'connected'; session.failures = 0; }
-        else {
-          session.status = result.needsInput ? 'needsAuth' : 'retrying';
-          session.error = result.error;
-          session.retryAt = this.now() + [10_000, 20_000, 40_000, 60_000][Math.min(session.failures++, 3)];
-        }
-      } catch (error) {
-        if (!session.retired) {
-          session.status = 'retrying'; session.error = String(error);
-          session.retryAt = this.now() + [10_000, 20_000, 40_000, 60_000][Math.min(session.failures++, 3)];
-        }
-      } finally { session.pending = undefined; this.emit(); }
-    })();
+    const pending = this.logins.run(session.savedId, async () => {
+      if (session.retired) return;
+      const runtimeId = `dashboard-${crypto.randomUUID()}`;
+      session.runtimeId = runtimeId;
+      session.status = 'connecting'; session.error = undefined; this.emitConnection(session.savedId);
+      const result = await this.deps.connect(session.connection, runtimeId, interactive);
+      if (session.retired || session.runtimeId !== runtimeId) {
+        if (result.success) await this.deps.disconnect(runtimeId).catch(() => {});
+        return;
+      }
+      if (result.success) { session.status = 'connected'; session.failures = 0; }
+      else {
+        session.status = result.needsInput ? 'needsAuth' : 'retrying'; session.error = result.error;
+        session.retryAt = this.now() + [10_000, 20_000, 40_000, 60_000][Math.min(session.failures++, 3)];
+      }
+    }, session.controller.signal).catch((error: unknown) => {
+      if (!session.retired) {
+        session.status = 'retrying'; session.error = String(error);
+        session.retryAt = this.now() + [10_000, 20_000, 40_000, 60_000][Math.min(session.failures++, 3)];
+      }
+    }).finally(() => { session.pending = undefined; this.emitConnection(session.savedId); this.pump(); });
     session.pending = pending;
     return pending;
   }
   private pump() {
     if (!this.live) return;
-    if (this.open.size && this.now() - this.clock >= 5000) this.emit();
+    if (this.now() - this.lastSamplePrune >= 5000) {
+      this.lastSamplePrune = this.now();
+      for (const [key, reading] of this.readings) if (reading.samples[0]?.timestamp < this.now() - 300_000) {
+        this.readings.set(key, { ...reading, samples: reading.samples.filter(sample => sample.timestamp >= this.now() - 300_000) });
+        this.emit((JSON.parse(key) as string[])[0]);
+      }
+      this.refreshTimer();
+    }
+    if (this.now() - this.lastChartRefresh >= 5000) {
+      this.lastChartRefresh = this.now();
+      for (const board of this.visibleCharts()) this.emit(board.id);
+    }
     for (const session of this.sessions.values()) if (!session.retired && session.refs.size && !session.pending
       && (session.status === 'idle' || (session.status === 'retrying' && session.retryAt <= this.now()))) void this.connect(session);
-    for (const job of this.jobs.values()) if (!job.disposed && job.session?.status === 'connected'
-      && !job.session.retired && !this.inFlight.has(job.key) && job.nextAt <= this.now()) this.run(job);
+    for (const job of [...this.jobs.values()].sort((a, b) => a.nextAt - b.nextAt)) if (!job.disposed && job.session?.status === 'connected'
+      && !job.session.retired && !this.inFlight.has(job.key) && job.nextAt <= this.now() && this.commands.hasCapacity(job.connectionId)) this.run(job);
   }
   private run(job: Job) {
     const session = job.session!;
     const runtimeId = session.runtimeId;
     const runId = crypto.randomUUID();
     job.runId = runId; job.runtimeId = runtimeId;
-    job.nextAt = this.now() + job.source.intervalSeconds * 1000;
-    this.raw.set(job.key, { ...this.raw.get(job.key), running: true }); this.emit();
+    job.nextAt = Infinity; job.controller = new AbortController();
+    this.setRaw(job.key, { ...this.raw.get(job.key), running: true }); this.emit(job.boardId);
     const promise = (async () => {
       let result: MonitorCommandResult;
-      try { result = await this.deps.execute(runtimeId, runId, job.source); }
+      let startedAt = this.now();
+      try { result = await this.commands.run(job.connectionId, () => {
+        startedAt = this.now();
+        return this.deps.execute(runtimeId, runId, job.source);
+      }, job.controller!.signal); }
       catch (error) { result = failureResult(error); }
       if (job.disposed || session.retired || session.runtimeId !== runtimeId) return;
       const previous = this.raw.get(job.key);
-      this.raw.set(job.key, { ...previous, result, running: false,
+      const completedAt = this.now();
+      job.failures = result.status === 'success' || result.status === 'cancelled' ? 0 : job.failures + 1;
+      const interval = job.source.intervalSeconds * 1000;
+      // Visibility only controls rendering. Preserve the configured sampling
+      // cadence, skipping missed ticks after an overrun instead of catching up.
+      job.nextAt = job.failures ? completedAt + this.delay(job)
+        : startedAt + (Math.floor((completedAt - startedAt) / interval) + 1) * interval;
+      this.setRaw(job.key, { ...previous, result: summary(result), running: false,
         ...(result.status === 'success' ? { success: result, updatedAt: this.now() } : {}) });
       const board = this.boards.get(job.boardId);
       if (board) this.project(board, job.source, job.connectionId);
       if (result.status === 'transport_error') {
-        session.status = 'retrying'; session.error = result.error ?? undefined;
+        session.status = 'retrying'; session.error = result.error ?? undefined; this.emitConnection(session.savedId);
         session.retryAt = this.now() + [10_000, 20_000, 40_000, 60_000][Math.min(session.failures++, 3)];
         // Retire the physical attempt without dropping references to this saved connection.
         for (const other of this.jobs.values()) if (other.session === session && other.runId && other.runtimeId === runtimeId) {
           this.deps.cancel(runtimeId, other.runId);
           const raw = this.raw.get(other.key);
-          this.raw.set(other.key, { ...raw, result, running: false });
+          this.setRaw(other.key, { ...raw, result: summary(result), running: false });
           const owner = this.boards.get(other.boardId);
           if (owner) this.project(owner, other.source, other.connectionId);
         }
         session.runtimeId = '';
         void this.deps.disconnect(runtimeId).catch(() => {});
       }
-      this.emit();
+      this.emit(job.boardId);
     })().finally(() => {
       if (this.inFlight.get(job.key) === promise) this.inFlight.delete(job.key);
       job.runId = undefined; job.runtimeId = undefined;
@@ -299,11 +407,11 @@ export class DashboardRuntime {
     this.inFlight.set(job.key, promise);
   }
   private removeJob(job: Job) {
-    job.disposed = true;
+    job.disposed = true; job.controller?.abort();
     if (job.runId && job.runtimeId) this.deps.cancel(job.runtimeId, job.runId);
     this.jobs.delete(job.key);
     const raw = this.raw.get(job.key);
-    if (raw) this.raw.set(job.key, { ...raw, running: false });
+    if (raw) this.setRaw(job.key, { ...raw, running: false });
     const board = this.boards.get(job.boardId);
     if (board) for (const widget of board.widgets.filter(item => item.sourceId === job.source.id)) {
       const key = widgetKey(board.id, widget.id, job.connectionId);
@@ -315,14 +423,23 @@ export class DashboardRuntime {
   private project(board: Dashboard, source: CommandDataSource, connectionId: string) {
     const raw = this.raw.get(rawKey(board.id, source.id, connectionId));
     if (!raw) return;
+    const parse = raw.success ? createMonitorOutputParser(raw.success.stdout) : undefined;
+    const projections = new Map<string, { data?: MonitorData; error?: Error }>();
     for (const widget of board.widgets.filter(isCommandWidget).filter(item => item.sourceId === source.id && item.enabled)) {
       const key = widgetKey(board.id, widget.id, connectionId);
       const previous = this.readings.get(key);
       const error = raw.result?.status !== 'success' ? raw.result?.status : undefined;
-      let next: DashboardWidgetReading = { samples: [], gap: false, ...previous, result: raw.result, error };
+      let next: DashboardWidgetReading = { samples: [], gap: false, ...previous, result: raw.result, error: error ?? (raw.success ? undefined : previous?.error) };
       if (raw.success && (!previous || previous.updatedAt !== raw.updatedAt)) {
         try {
-          const data = parseMonitorOutput(widget, raw.success.stdout);
+          const spec = projection(widget);
+          let parsed = projections.get(spec);
+          if (!parsed) {
+            try { parsed = { data: parse!(widget) }; } catch (error) { parsed = { error: error instanceof Error ? error : new Error(String(error)) }; }
+            projections.set(spec, parsed);
+          }
+          if (parsed.error) throw parsed.error;
+          const data = parsed.data!;
           next = { ...next, data, updatedAt: raw.updatedAt, samples: widget.display === 'chart' && data.kind === 'numbers'
             ? appendMonitorSample(next.samples, data.values, raw.updatedAt!, source.intervalSeconds * 1000, next.gap) : [], gap: false };
         } catch (parseError) { next.error = parseError; next.gap = true; }
@@ -337,12 +454,13 @@ export class DashboardRuntime {
     for (const key of this.readings.keys()) { const parts = JSON.parse(key) as string[]; if (parts[0] === boardId && parts[1] === id) this.readings.delete(key); }
   }
   private clearBoard(id: string) {
-    for (const map of [this.raw, this.readings]) for (const key of map.keys()) if ((JSON.parse(key) as string[])[0] === id) map.delete(key);
+    for (const key of this.raw.keys()) if ((JSON.parse(key) as string[])[0] === id) this.deleteRaw(key);
+    for (const key of this.readings.keys()) if ((JSON.parse(key) as string[])[0] === id) this.readings.delete(key);
   }
   private prune() {
     for (const key of this.raw.keys()) {
       const [boardId, sourceId, connectionId] = JSON.parse(key) as string[];
-      if (!this.open.has(boardId) || !this.boards.get(boardId)?.sources.some(source => source.id === sourceId && source.connectionIds.includes(connectionId))) this.raw.delete(key);
+      if (!this.open.has(boardId) || !this.boards.get(boardId)?.sources.some(source => source.id === sourceId && source.connectionIds.includes(connectionId))) this.deleteRaw(key);
     }
     for (const key of this.readings.keys()) {
       const [boardId, id, connectionId] = JSON.parse(key) as string[];
@@ -362,7 +480,7 @@ export class DashboardRuntime {
     if (signal.aborted) controller.abort();
     this.trials.add(controller);
     try {
-      await Promise.all(connectionIds.map(async connectionId => {
+      await Promise.all(connectionIds.map(connectionId => this.commands.run(connectionId, async () => {
         const owner = `trial-${crypto.randomUUID()}`;
         const session = this.acquire(connectionId, owner);
         if (!session) { if (!controller.signal.aborted) onResult(connectionId, failureResult()); return; }
@@ -382,8 +500,8 @@ export class DashboardRuntime {
           const result = await this.deps.execute(runtimeId, runId, source);
           if (!controller.signal.aborted && !session.retired && session.runtimeId === runtimeId) onResult(connectionId, result);
         } catch (error) { if (!controller.signal.aborted) onResult(connectionId, failureResult(error)); }
-        finally { controller.signal.removeEventListener('abort', cancel); this.release(session, owner); this.emit(); }
-      }));
+        finally { controller.signal.removeEventListener('abort', cancel); this.release(session, owner); this.emitConnection(connectionId); }
+      }, controller.signal).catch((error: unknown) => { if (!controller.signal.aborted) onResult(connectionId, failureResult(error)); })));
     } finally { signal.removeEventListener('abort', abort); this.trials.delete(controller); }
   }
 }

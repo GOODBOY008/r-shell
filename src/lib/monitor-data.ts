@@ -25,11 +25,11 @@ function numeric(value: unknown, path: string): number {
 function parseJson(raw: string): unknown {
   try { return JSON.parse(raw) as unknown; } catch { throw new MonitorParseError('invalidJson'); }
 }
-function parseNumericSource(stdout: string): unknown {
+function parseNumericSource(stdout: string, readJson = parseJson): unknown {
   const raw = stdout.trim();
-  return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw) ? Number(raw) : parseJson(raw);
+  return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(raw) ? Number(raw) : readJson(raw);
 }
-function tableRows(module: MonitorDisplayConfig, stdout: string): Record<string, unknown>[] {
+function tableRows(module: MonitorDisplayConfig, stdout: string, readJson = parseJson): Record<string, unknown>[] {
   let rows: unknown;
   if (module.tableFormat === 'jsonl') {
     rows = stdout.split(/\r?\n/).flatMap((line, index) => {
@@ -37,22 +37,39 @@ function tableRows(module: MonitorDisplayConfig, stdout: string): Record<string,
       try { return [JSON.parse(line) as unknown]; }
       catch { throw new MonitorParseError('invalidJsonLine', String(index + 1)); }
     });
-  } else rows = monitorPath(parseJson(stdout.trim()), module.arrayPath);
+  } else rows = monitorPath(readJson(stdout.trim()), module.arrayPath);
   if (!Array.isArray(rows) || rows.some(row => !row || typeof row !== 'object' || Array.isArray(row))) throw new MonitorParseError('invalidTable');
   return rows as Record<string, unknown>[];
 }
 export function parseMonitorOutput(module: MonitorDisplayConfig, stdout: string): MonitorData {
-  if (module.display === 'text') return { kind: 'text', text: stdout };
-  if (module.display === 'table') {
-    const rows = tableRows(module, stdout);
-    return { kind: 'table', total: rows.length, rows: rows.slice(0, 200).map(row => module.fields.map(field => {
-      const cell = monitorPath(row, field.path);
-      return cell === null ? '' : typeof cell === 'string' ? cell : JSON.stringify(cell) ?? '';
-    })) };
-  }
-  const data = parseNumericSource(stdout);
-  const fields = module.display === 'number' ? module.fields.slice(0, 1) : module.fields;
-  return { kind: 'numbers', values: fields.map(field => numeric(monitorPath(data, field.path), field.path)) };
+  return createMonitorOutputParser(stdout)(module);
+}
+/** Shared only while projecting one sample. Decoded JSON is never retained in the runtime cache. */
+export function createMonitorOutputParser(stdout: string): (module: MonitorDisplayConfig) => MonitorData {
+  let decoded: { value?: unknown; error?: Error } | undefined;
+  const readJson = (raw: string): unknown => {
+    if (!decoded) {
+      try { decoded = { value: parseJson(raw) }; } catch (error) { decoded = { error: error instanceof Error ? error : new Error(String(error)) }; }
+    }
+    if (decoded.error) throw decoded.error;
+    return decoded.value;
+  };
+  const tables = new Map<string, Record<string, unknown>[]>();
+  return module => {
+    if (module.display === 'text') return { kind: 'text', text: stdout };
+    if (module.display === 'table') {
+      const key = module.tableFormat === 'jsonl' ? 'jsonl' : `json:${module.arrayPath}`;
+      let rows = tables.get(key);
+      if (!rows) { rows = tableRows(module, stdout, readJson); tables.set(key, rows); }
+      return { kind: 'table', total: rows.length, rows: rows.slice(0, 200).map(row => module.fields.map(field => {
+        const cell = monitorPath(row, field.path);
+        return cell === null ? '' : typeof cell === 'string' ? cell : JSON.stringify(cell) ?? '';
+      })) };
+    }
+    const data = parseNumericSource(stdout, readJson);
+    const fields = module.display === 'number' ? module.fields.slice(0, 1) : module.fields;
+    return { kind: 'numbers', values: fields.map(field => numeric(monitorPath(data, field.path), field.path)) };
+  };
 }
 /** Suggest mappings from a completed trial; this never runs a command or changes the form itself. */
 export function suggestMonitorFields(module: MonitorDisplayConfig, stdout: string): MonitorField[] {

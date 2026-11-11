@@ -5,7 +5,7 @@ import type english from '../locales/en.json';
 
 export type DashboardTemplateId = 'linux' | 'docker' | 'blank';
 type TemplateLabels = (typeof english)['dashboard']['templates'];
-interface TemplateSource { key: keyof TemplateLabels['sources']; command: string; timeoutSeconds?: number }
+interface TemplateSource { key: keyof TemplateLabels['sources']; command: string; timeoutSeconds?: number; intervalSeconds?: number }
 interface TemplateCard { key: keyof TemplateLabels['cards']; source: TemplateSource['key']; display: MonitorDisplayConfig['display']; paths?: (keyof TemplateLabels['fields'])[]; unit?: string; decimals?: number; tableFormat?: MonitorDisplayConfig['tableFormat'] }
 export interface DashboardTemplate { id: DashboardTemplateId; sources: TemplateSource[]; cards: TemplateCard[] }
 
@@ -54,7 +54,7 @@ export function dashboardFromTemplate(template: DashboardTemplate, name: string,
   if (!name.trim() || (template.sources.length > 0 && ids.length === 0)) throw new Error('Dashboard template needs a name and SSH connections');
   const sources = template.sources.map(source => ({
     ...newDashboardSource(), name: t(`dashboard.templates.sources.${source.key}`),
-    command: source.command, connectionIds: [...ids], timeoutSeconds: source.timeoutSeconds ?? 10,
+    command: source.command, connectionIds: [...ids], timeoutSeconds: source.timeoutSeconds ?? 10, intervalSeconds: source.intervalSeconds ?? 10,
   }));
   const widgets = template.cards.map(card => ({
     ...newDashboardWidget(sources[template.sources.findIndex(source => source.key === card.source)].id),

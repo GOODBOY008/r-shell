@@ -196,6 +196,9 @@ pub struct ConnectRequest {
     pub identity: IdentityRequest,
     pub jump_hosts: Option<Vec<crate::ssh_config::SshEndpoint>>,
     pub connection_id: String,
+    /// Dashboard-only opt-in; normal terminal logins retain their own transport.
+    #[serde(default)]
+    pub reuse_existing: bool,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -373,10 +376,16 @@ pub async fn ssh_connect(
         x11: request.x11,
     };
 
-    match state
-        .create_connection(request.connection_id.clone(), config)
-        .await
-    {
+    let connected = if request.reuse_existing {
+        state
+            .create_reusable_connection(request.connection_id.clone(), config)
+            .await
+    } else {
+        state
+            .create_connection(request.connection_id.clone(), config)
+            .await
+    };
+    match connected {
         Ok(_) => Ok(SshConnectResponse {
             success: true,
             output: Some(format!("Connected: {}", request.connection_id)),
@@ -5825,6 +5834,7 @@ mod proxy_config_tests {
             jump_hosts: None,
             x11: None,
             connection_id: "c1".to_string(),
+            reuse_existing: false,
             host: "example.com".to_string(),
             port: 22,
             username: "root".to_string(),

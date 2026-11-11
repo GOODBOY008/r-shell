@@ -20,8 +20,9 @@ const displayIcons = { text: TerminalSquare, number: Hash, chart: Activity, tabl
 
 export function DashboardView({ dashboardId, visible = true }: { dashboardId: string; visible?: boolean }) {
   const { t } = useTranslation();
-  const { boards, connections, storageError, saveBoard } = useDashboards();
-  const runtime = useDashboardRuntime();
+  const { boards, connections, storageError, saveBoard, foreground = true } = useDashboards();
+  const shown = visible && foreground;
+  const runtime = useDashboardRuntime({ boardId: dashboardId, enabled: shown });
   const board = boards.find(item => item.id === dashboardId);
   const [editing, setEditing] = useState(false);
   const [manager, setManager] = useState(false);
@@ -99,7 +100,7 @@ export function DashboardView({ dashboardId, visible = true }: { dashboardId: st
                 <DropdownMenuItem className="text-destructive" onSelect={() => setRemove({ kind: 'widget', id: widget.id, name: widget.name })}><Trash2 className="size-4" />{t('common.delete')}</DropdownMenuItem>
               </DropdownMenuContent></DropdownMenu>
             </div>
-            <div className="flex-1 min-h-0 overflow-auto">{!command ? <DashboardNote widget={widget} /> : source ? <DashboardValue board={board} widget={widget} source={source} runtime={runtime} connections={connections} visible={visible} fill /> : <p className="text-sm text-destructive">{t('dashboard.missingSource')}</p>}</div>
+            <div className="flex-1 min-h-0 overflow-auto">{!command ? <DashboardNote widget={widget} /> : source ? <DashboardValue board={board} widget={widget} source={source} runtime={runtime} connections={connections} visible={shown} fill /> : <p className="text-sm text-destructive">{t('dashboard.missingSource')}</p>}</div>
           </section>;
         })}
       </DashboardGrid>}

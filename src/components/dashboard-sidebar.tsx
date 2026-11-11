@@ -14,7 +14,7 @@ import { DashboardCreateDialog } from './dashboard-create-dialog';
 export function DashboardSidebar() {
   const { t } = useTranslation();
   const { boards, storageError, openBoard, saveBoard } = useDashboards();
-  const runtime = useDashboardRuntime();
+  const runtime = useDashboardRuntime({ statusOnly: true });
   const { activeTab } = useTerminalGroups();
   const [search, setSearch] = useState('');
   const [creating, setCreating] = useState(false);

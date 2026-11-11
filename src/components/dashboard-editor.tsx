@@ -46,6 +46,7 @@ export function DashboardEditor({ board, initialWidget, initialSource, onSave, o
   const selectedPreview = source.connectionIds.includes(previewTarget) ? previewTarget : source.connectionIds[0];
   const sourceFingerprint = JSON.stringify([source.command, source.connectionIds, source.timeoutSeconds]);
   const result = trialResults[selectedPreview] ?? (savedSource?.command === source.command ? runtime.sourceReading(board.id, source.id, selectedPreview)?.success : undefined);
+  const previewEvicted = !result && savedSource?.command === source.command && runtime.sourceReading(board.id, source.id, selectedPreview)?.updatedAt !== undefined;
   let preview: MonitorData | undefined;
   let previewError: unknown;
   if (result?.status === 'success' && !sourceOnly) {
@@ -95,12 +96,14 @@ export function DashboardEditor({ board, initialWidget, initialSource, onSave, o
             <DashboardConnectionPicker connections={connections} selected={source.connectionIds} onChange={connectionIds => updateSource({ connectionIds })} />
             <div className="space-y-2"><Label htmlFor={`${prefix}-command`}>{t('monitor.command')}</Label><Textarea id={`${prefix}-command`} className="font-mono min-h-28" value={source.command} spellCheck={false} onChange={event => updateSource({ command: event.target.value })} required /><p className="text-xs text-muted-foreground">{t('monitor.commandHelp')}</p></div>
             <div className="grid grid-cols-2 gap-3"><div className="space-y-2"><Label htmlFor={`${prefix}-interval`}>{t('monitor.interval')}</Label><Input id={`${prefix}-interval`} type="number" min={5} max={86400} step={1} value={source.intervalSeconds} onChange={event => updateSource({ intervalSeconds: Number(event.target.value) })} required /></div><div className="space-y-2"><Label htmlFor={`${prefix}-timeout`}>{t('monitor.timeout')}</Label><Input id={`${prefix}-timeout`} type="number" min={1} max={60} step={1} value={source.timeoutSeconds} onChange={event => updateSource({ timeoutSeconds: Number(event.target.value) })} required /></div></div>
+            <p className="text-xs text-muted-foreground">{t('dashboard.collectionPolicy')}</p>
           </>}
           {step === 'display' && !sourceOnly && <MonitorDisplayFields value={widget} onChange={patch => { setWidget(current => ({ ...current, ...patch })); setError(''); }} />}
           {!!references.length && <div className="rounded-md bg-muted/50 p-3 text-xs space-y-2"><p>{t('dashboard.sharedBy', { count: references.length })}</p><p className="text-muted-foreground">{references.map(item => item.name).join(' · ')}</p>
             {mustChooseScope && <fieldset className="space-y-2"><legend className="font-medium mb-2">{t('dashboard.chooseSharedScope')}</legend><label className="flex gap-2"><input type="radio" name={`${prefix}-scope`} checked={scope === 'all'} onChange={() => setScope('all')} />{t('dashboard.applyShared')}</label><label className="flex gap-2"><input type="radio" name={`${prefix}-scope`} checked={scope === 'copy'} onChange={() => setScope('copy')} />{t('dashboard.forkSource')}</label></fieldset>}
           </div>}
           <div className="rounded-md border p-3 space-y-3">
+            {previewEvicted && <p className="text-xs text-muted-foreground">{t('dashboard.previewEvicted')}</p>}
             <div className="flex flex-wrap items-center gap-2"><select className="h-8 rounded-md border bg-background text-xs px-2 max-w-full" aria-label={t('dashboard.trialTarget')} value={trialTarget} onChange={event => setTrialTarget(event.target.value)}><option value="all">{t('dashboard.allConnections')}</option>{source.connectionIds.map(id => <option key={id} value={id}>{label(id)}</option>)}</select>
               <Button type="button" size="sm" variant="outline" disabled={busy || !validDashboardSource({ ...source, name: source.name || widget.name || 'trial' })} onClick={tryRun}><Play className="size-3" />{t('monitor.tryRun')}</Button>
               {busy && <Button type="button" size="sm" variant="ghost" onClick={stopTrial}><Square className="size-3" />{t('common.cancel')}</Button>}
