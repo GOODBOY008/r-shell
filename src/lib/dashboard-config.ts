@@ -27,6 +27,7 @@ export interface DashboardStore { version: 1; dashboards: Dashboard[] }
 export const DASHBOARD_STORAGE_KEY = 'r-shell-dashboards';
 export const DASHBOARD_CHANGED_EVENT = 'rshell-dashboards-changed';
 export const DASHBOARD_EDIT_CONNECTION_EVENT = 'rshell-dashboard-edit-connection';
+export const DASHBOARD_NEW_CONNECTION_EVENT = 'rshell-dashboard-new-connection';
 export const dashboardTabId = (id: string) => `dashboard:${id}`;
 
 export function newDashboard(name: string): Dashboard {

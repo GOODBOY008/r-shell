@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, ArrowDown, ArrowUp, Check, Copy, Eye, EyeOff, GripVertical, LayoutDashboard, MoreHorizontal, Pause, Pencil, Play, Plus, Settings2, Trash2 } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowDown, ArrowUp, Check, ChevronDown, Copy, Eye, EyeOff, GripVertical, Hash, LayoutDashboard, LayoutTemplate, MoreHorizontal, Pause, Pencil, Play, Plus, Settings2, Table2, TerminalSquare, Trash2 } from 'lucide-react';
 import { useDashboards, useDashboardRuntime } from '@/lib/use-dashboards';
 import { moveDashboardWidget, newDashboardSource, type CommandDataSource, type Dashboard, type DashboardWidget } from '@/lib/dashboard-config';
 import type { MonitorColumns } from '@/lib/monitor-config';
@@ -10,6 +10,9 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { DashboardEditor } from './dashboard-editor';
 import { DashboardConnectionStatus, DashboardValue } from './dashboard-value';
 import { dashboardConnectionLabel } from '@/lib/dashboard-labels';
+import { DashboardCreateDialog } from './dashboard-create-dialog';
+
+const displayIcons = { text: TerminalSquare, number: Hash, chart: Activity, table: Table2 };
 
 export function DashboardView({ dashboardId, visible = true }: { dashboardId: string; visible?: boolean }) {
   const { t } = useTranslation();
@@ -18,6 +21,7 @@ export function DashboardView({ dashboardId, visible = true }: { dashboardId: st
   const board = boards.find(item => item.id === dashboardId);
   const [editing, setEditing] = useState(false);
   const [manager, setManager] = useState(false);
+  const [templates, setTemplates] = useState(false);
   const [editor, setEditor] = useState<{ widget?: DashboardWidget; source?: CommandDataSource }>();
   const [remove, setRemove] = useState<{ kind: 'widget' | 'source'; id: string; name: string }>();
   const [saveError, setSaveError] = useState(false);
@@ -52,30 +56,31 @@ export function DashboardView({ dashboardId, visible = true }: { dashboardId: st
   const label = (id: string) => dashboardConnectionLabel(id, connections);
   const columns = board.columns === 3 ? '@[680px]:grid-cols-2 @[1000px]:grid-cols-3' : board.columns === 2 ? '@[680px]:grid-cols-2' : '';
   return <div className="h-full min-h-0 min-w-0 flex flex-col bg-muted/20 @container" data-testid="dashboard-view">
-    <header className="p-4 sm:p-5 space-y-3 border-b shrink-0">
-      <div className="flex items-start justify-between gap-3 flex-wrap"><div className="min-w-0"><h1 className="text-xl font-semibold break-words">{board.name}</h1><p className="text-xs text-muted-foreground mt-1">{t('dashboard.hostCount', { count: ids.length })} · {t(`dashboard.states.${runtime.collectionState(board.id)}`)}</p></div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <Button variant="outline" size="sm" onClick={() => persist({ ...board, paused: !board.paused })}>{board.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}{t(board.paused ? 'dashboard.resume' : 'dashboard.pause')}</Button>
-          <Button variant="outline" size="sm" onClick={() => setManager(true)}><Settings2 className="size-3.5" />{t('dashboard.sourceCount', { count: board.sources.length })}</Button>
+    <header className="p-4 space-y-3 border-b shrink-0 bg-background/60">
+      <div className="flex items-center justify-between gap-3 flex-wrap"><div className="min-w-0"><h1 className="text-lg font-semibold break-words">{board.name}</h1><p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5"><span className={`size-1.5 rounded-full ${runtime.isRunning(board.id) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />{t(`dashboard.states.${runtime.collectionState(board.id)}`)}<span aria-hidden>·</span>{t('dashboard.hostCount', { count: ids.length })}</p></div>
+        <div className="flex items-center gap-1 flex-wrap">
+          <Button variant="ghost" size="sm" disabled={!board.widgets.length} onClick={() => persist({ ...board, paused: !board.paused })}>{board.paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}{t(board.paused ? 'dashboard.resume' : 'dashboard.pause')}</Button>
+          <Button variant="ghost" size="sm" onClick={() => setManager(true)}><Settings2 className="size-3.5" />{t('dashboard.sourceCount', { count: board.sources.length })}</Button>
           <Button variant={editing ? 'secondary' : 'ghost'} size="sm" onClick={() => { stopDrag(); setEditing(!editing); }}>{editing ? <Check className="size-3.5" /> : <Pencil className="size-3.5" />}{t(editing ? 'dashboard.done' : 'monitor.editLayout')}</Button>
-          <select aria-label={t('dashboard.layoutColumns')} className="h-8 rounded-md border bg-background text-xs px-2" value={board.columns} onChange={event => persist({ ...board, columns: Number(event.target.value) as MonitorColumns })}>{[1, 2, 3].map(count => <option key={count} value={count}>{t('dashboard.columns', { count })}</option>)}</select>
-          <Button size="sm" onClick={() => setEditor({})}><Plus className="size-3.5" />{t('dashboard.addCard')}</Button>
+          <div className="flex ml-1"><Button size="sm" className="rounded-r-none" onClick={() => setEditor({})}><Plus className="size-3.5" />{t('dashboard.addCard')}</Button><DropdownMenu><DropdownMenuTrigger asChild><Button size="icon" className="size-8 rounded-l-none border-l border-primary-foreground/20" aria-label={t('dashboard.addOptions')}><ChevronDown className="size-3.5" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => setTemplates(true)}><LayoutTemplate className="size-4" />{t('dashboard.templates.addTitle')}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
         </div>
       </div>
       {!!ids.length && <div className="flex gap-2 items-center flex-wrap text-xs"><span className="rounded border bg-background px-2 py-1">{t('dashboard.connectedCount', { connected, total: ids.length })}</span>{errors > 0 && <span className="flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-400 px-2 py-1"><AlertTriangle className="size-3.5" />{t('dashboard.sourceErrors', { count: errors })}</span>}
-        <details className="group"><summary className="cursor-pointer rounded border bg-background px-2 py-1">{t('dashboard.connectionDetails')}</summary><div className="mt-2 space-y-3 rounded-md border bg-card p-3">{ids.map(id => <div key={id}><p className="font-medium">{label(id)}</p><DashboardConnectionStatus id={id} runtime={runtime} paused={board.paused} /></div>)}</div></details>
+        <details className="group"><summary className="cursor-pointer rounded border bg-background px-2 py-1">{t('dashboard.connectionDetails')}</summary><div className="mt-2 space-y-3 rounded-md border bg-card p-3 max-h-48 overflow-auto">{ids.map(id => <div key={id}><p className="font-medium">{label(id)}</p><DashboardConnectionStatus id={id} runtime={runtime} paused={board.paused} /></div>)}</div></details>
       </div>}
       {saveError && <p role="alert" className="text-xs text-destructive">{t('dashboard.saveError')}</p>}
+      {editing && <div className="flex items-center justify-between gap-3 flex-wrap rounded-lg bg-primary/5 px-3 py-2 text-xs"><span className="text-muted-foreground">{t('dashboard.layoutHelp')}</span><select aria-label={t('dashboard.layoutColumns')} className="h-8 rounded-md border bg-background text-xs px-2" value={board.columns} onChange={event => persist({ ...board, columns: Number(event.target.value) as MonitorColumns })}>{[1, 2, 3].map(count => <option key={count} value={count}>{t('dashboard.columns', { count })}</option>)}</select></div>}
     </header>
     <div ref={viewport} className="flex-1 min-h-0 overflow-auto p-4 sm:p-5">
-      {!board.widgets.length ? <div className="flex min-h-72 flex-col items-center justify-center text-center gap-4"><LayoutDashboard className="size-10 text-muted-foreground/50" /><div><h2 className="font-medium">{t('dashboard.emptyBoard')}</h2><p className="text-sm text-muted-foreground mt-2 max-w-md">{t('dashboard.emptyBoardHelp')}</p></div><Button onClick={() => setEditor({})}><Plus className="size-4" />{t('dashboard.addCard')}</Button></div> : <div className={`grid grid-cols-1 gap-4 items-stretch ${columns}`}>
+      {!board.widgets.length ? <div className="flex min-h-80 flex-col items-center justify-center text-center gap-5 rounded-xl border border-dashed p-6 bg-card/50"><div className="size-14 grid place-items-center rounded-2xl bg-primary/8"><LayoutDashboard className="size-7 text-primary" /></div><div><h2 className="font-semibold">{t('dashboard.emptyBoard')}</h2><p className="text-sm text-muted-foreground mt-2 max-w-md leading-relaxed">{t('dashboard.templates.emptyHelp')}</p></div><div className="flex flex-wrap justify-center gap-2"><Button onClick={() => setTemplates(true)}><LayoutTemplate className="size-4" />{t('dashboard.templates.browse')}</Button><Button variant="outline" onClick={() => setEditor({})}><Plus className="size-4" />{t('dashboard.addCard')}</Button></div></div> : <div className={`grid grid-cols-1 gap-4 items-start ${columns}`}>
         {board.widgets.filter(widget => editing || widget.enabled).map(widget => {
           const source = board.sources.find(item => item.id === widget.sourceId);
           const index = board.widgets.indexOf(widget);
           const refs = board.widgets.filter(item => item.sourceId === widget.sourceId).length;
-          return <section key={widget.id} data-dashboard-widget={widget.id} aria-label={widget.name} className={`min-w-0 rounded-lg border bg-card p-4 space-y-4 transform-gpu ${dropTarget === widget.id ? 'ring-2 ring-primary' : ''} ${!widget.enabled ? 'opacity-60' : ''}`}>
-            <div className="flex items-start justify-between gap-2"><div className="min-w-0"><h2 className="font-semibold text-sm break-words">{widget.name}</h2><p className="text-xs text-muted-foreground mt-1 truncate" title={source?.name}>{source?.name}{refs > 1 ? ` · ${t('dashboard.sharedBy', { count: refs })}` : ''}</p></div>
-              <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-6 shrink-0" aria-label={t('dashboard.actions', { name: widget.name })}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end">
+          const Icon = displayIcons[widget.display];
+          return <section key={widget.id} data-dashboard-widget={widget.id} aria-label={widget.name} className={`min-w-0 rounded-xl border bg-card p-4 space-y-4 transform-gpu shadow-xs ${dropTarget === widget.id ? 'ring-2 ring-primary' : ''} ${!widget.enabled ? 'opacity-60' : ''}`}>
+            <div className="flex items-start justify-between gap-2"><div className="flex gap-2.5 min-w-0"><div className="size-8 rounded-lg bg-primary/7 text-primary grid place-items-center shrink-0"><Icon className="size-4" /></div><div className="min-w-0"><h2 className="font-semibold text-sm break-words">{widget.name}</h2><p className="text-[11px] text-muted-foreground mt-1 truncate" title={source?.name}>{refs > 1 ? `${source?.name} · ${t('dashboard.sharedBy', { count: refs })}` : t('dashboard.refreshEvery', { seconds: source?.intervalSeconds ?? 10 })}</p></div></div>
+              <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="size-7 shrink-0 text-muted-foreground" aria-label={t('dashboard.actions', { name: widget.name })}><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end">
                 <DropdownMenuItem onSelect={() => setEditor({ widget })}><Pencil className="size-4" />{t('dashboard.editCard')}</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => persist({ ...board, widgets: [...board.widgets, { ...structuredClone(widget), id: crypto.randomUUID(), name: t('dashboard.copyName', { name: widget.name }) }] })}><Copy className="size-4" />{t('dashboard.copyCard')}</DropdownMenuItem>
                 <DropdownMenuItem className="text-destructive" onSelect={() => setRemove({ kind: 'widget', id: widget.id, name: widget.name })}><Trash2 className="size-4" />{t('common.delete')}</DropdownMenuItem>
@@ -98,6 +103,7 @@ export function DashboardView({ dashboardId, visible = true }: { dashboardId: st
       {!!board.widgets.length && board.widgets.every(widget => !widget.enabled) && !editing && <div className="py-12 text-center text-sm text-muted-foreground"><p>{t('dashboard.allHidden')}</p><Button variant="outline" className="mt-3" onClick={() => setEditing(true)}>{t('monitor.editLayout')}</Button></div>}
     </div>
     {editor && <DashboardEditor board={board} initialWidget={editor.widget} initialSource={editor.source} onSave={save} onClose={() => setEditor(undefined)} />}
+    {templates && <DashboardCreateDialog board={board} onClose={() => setTemplates(false)} />}
     {manager && !editor && !remove && <Dialog open onOpenChange={setManager}><DialogContent className="!inset-0 !m-auto !translate-x-0 !translate-y-0 !h-[75vh] max-h-[calc(100vh-2rem)] sm:max-w-2xl flex flex-col min-h-0">
       <DialogHeader><DialogTitle>{t('dashboard.manageSources')}</DialogTitle><DialogDescription>{t('dashboard.sourceHelp')}</DialogDescription></DialogHeader><div className="flex-1 min-h-0 overflow-auto space-y-3">
         {board.sources.map(source => { const refs = board.widgets.filter(widget => widget.sourceId === source.id); return <div key={source.id} className="rounded-md border p-3 space-y-2"><div className="flex justify-between gap-2"><div className="min-w-0"><h3 className="font-medium truncate">{source.name}</h3><p className="text-xs text-muted-foreground">{t('dashboard.hostCount', { count: source.connectionIds.length })} · {t(refs.length ? 'dashboard.sharedBy' : 'dashboard.unused', { count: refs.length })}</p></div><div className="flex gap-1 shrink-0">

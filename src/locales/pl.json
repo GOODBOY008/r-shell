@@ -2236,6 +2236,87 @@
     "trialScope_few": "Wykona się na {{count}} połączeniach",
     "trialScope_many": "Wykona się na {{count}} połączeniach",
     "trialScope_other": "Wykona się na {{count}} połączenia",
-    "back": "Wstecz"
+    "back": "Wstecz",
+    "workspaceSections": "Sekcje obszaru roboczego",
+    "clearSearch": "Wyczyść wyszukiwanie",
+    "noResults": "Brak pasujących pulpitów.",
+    "connectionSearch": "Szukaj nazwy lub hosta",
+    "noConnectionResults": "Brak pasujących połączeń SSH.",
+    "selectResults": "Zaznacz wyniki",
+    "addConnection": "Dodaj połączenie SSH",
+    "connectionsSelected_one": "Wybrano {{count}}",
+    "connectionsSelected_few": "Wybrano {{count}}",
+    "connectionsSelected_many": "Wybrano {{count}}",
+    "connectionsSelected_other": "Wybrano {{count}}",
+    "addOptions": "Więcej sposobów dodawania kart",
+    "layoutHelp": "Przeciągnij karty, aby zmienić kolejność. Zmiany zapisują się automatycznie.",
+    "refreshEvery": "Co {{seconds}} sekund",
+    "failed": "Błąd zbierania danych",
+    "noMetrics": "Wybierz co najmniej jedną metrykę.",
+    "templates": {
+      "browse": "Przeglądaj szablony",
+      "addTitle": "Dodaj z szablonu",
+      "intro": "Zacznij od gotowego pulpitu lub utwórz własny.",
+      "choose": "Wybierz punkt wyjścia",
+      "commands": "Pokaż polecenia",
+      "savePaused": "Zapisz jako wstrzymany; sprawdź przed uruchomieniem",
+      "pausedHelp": "Polecenia zostaną uruchomione dopiero po wznowieniu pulpitu.",
+      "startHelp": "Zbieranie rozpoczyna się po zapisaniu. Polecenia tylko odczytują dane i odświeżają je co 10 sekund.",
+      "create": "Utwórz pulpit",
+      "createStart": "Utwórz i uruchom",
+      "addCards": "Dodaj do pulpitu",
+      "emptyHelp": "Zacznij od szablonu Linux lub Docker. Wybierz połączenia SSH — polecenia i karty są gotowe.",
+      "linux": {
+        "name": "Hosty Linux",
+        "short": "Pamięć, obciążenie i dyski",
+        "description": "Monitoruj pamięć, obciążenie, miejsce na dysku i informacje o wielu hostach Linux.",
+        "requirements": "Wymaga Linux /proc, awk, df, hostname, uname i uptime. Obciążenie oznacza średnią liczbę zadań wykonywanych lub oczekujących, a nie procent użycia CPU."
+      },
+      "docker": {
+        "name": "Flota Docker",
+        "short": "Kontenery i zasoby",
+        "description": "Śledź uruchomione kontenery, trendy, stany kontenerów i użycie zasobów na hostach Docker.",
+        "requirements": "Wymaga Docker CLI i uprawnień do odczytu demona Docker. Bez jq i dodatkowego agenta. Statystyki mogą wymagać kilku sekund."
+      },
+      "blank": {
+        "name": "Pusty pulpit",
+        "short": "Własne polecenia i układ",
+        "description": "Zacznij od pustego obszaru roboczego i dodawaj własne karty poleceń."
+      },
+      "sources": {
+        "resources": "Zasoby Linux",
+        "disks": "Pojemność dysków",
+        "host": "Informacje o hoście",
+        "engine": "Silnik Docker",
+        "containers": "Lista kontenerów",
+        "usage": "Zasoby kontenerów"
+      },
+      "cards": {
+        "memory": "Użycie pamięci",
+        "load": "Obciążenie systemu",
+        "disks": "Miejsce na dysku",
+        "host": "Informacje o hoście",
+        "running": "Uruchomione kontenery",
+        "containerTrend": "Trend kontenerów",
+        "containers": "Lista kontenerów",
+        "usage": "Zasoby kontenerów"
+      },
+      "fields": {
+        "memoryUsedPercent": "Użycie pamięci",
+        "load1": "1 minuta",
+        "load5": "5 minut",
+        "load15": "15 minut",
+        "running": "Uruchomione",
+        "stopped": "Zatrzymane",
+        "Names": "Kontener",
+        "Name": "Kontener",
+        "Image": "Obraz",
+        "State": "Stan",
+        "Status": "Status",
+        "CPUPerc": "CPU %",
+        "MemUsage": "Pamięć / limit",
+        "NetIO": "Sieciowe I/O"
+      }
+    }
   }
 }

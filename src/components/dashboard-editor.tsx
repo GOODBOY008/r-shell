@@ -13,6 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { MonitorDisplayFields } from './monitor-display-fields';
 import { MonitorError, MonitorValue } from './monitor-value';
 import { dashboardConnectionLabel } from '@/lib/dashboard-labels';
+import { DashboardConnectionPicker } from './dashboard-connection-picker';
 
 export function DashboardEditor({ board, initialWidget, initialSource, onSave, onClose }: {
   board: Dashboard; initialWidget?: DashboardWidget; initialSource?: CommandDataSource;
@@ -74,7 +75,7 @@ export function DashboardEditor({ board, initialWidget, initialSource, onSave, o
     catch { setError('dashboard.saveError'); }
   };
   return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
-    <DialogContent className="!inset-0 !m-auto !translate-x-0 !translate-y-0 !h-[85vh] max-h-[calc(100vh-2rem)] sm:max-w-3xl flex flex-col min-h-0">
+    <DialogContent className="!inset-0 !m-auto !translate-x-0 !translate-y-0 !h-[min(85vh,840px)] max-h-[calc(100vh-2rem)] sm:max-w-3xl flex flex-col min-h-0">
       <DialogHeader><DialogTitle>{t(sourceOnly ? 'dashboard.editSource' : initialWidget ? 'dashboard.editCard' : 'dashboard.addCard')}</DialogTitle><DialogDescription>{t(sourceOnly ? 'dashboard.sourceHelp' : 'dashboard.editorHelp')}</DialogDescription></DialogHeader>
       <form className="flex flex-col flex-1 min-h-0" onSubmit={event => {
         event.preventDefault();
@@ -83,7 +84,7 @@ export function DashboardEditor({ board, initialWidget, initialSource, onSave, o
           else { setError(''); setStep('display'); }
         } else commit();
       }}>
-        {!sourceOnly && <div className="flex gap-2 border-b pb-3 mb-3"><Button type="button" size="sm" variant={step === 'source' ? 'secondary' : 'ghost'} onClick={() => setStep('source')}>{t('dashboard.stepSource')}</Button><Button type="button" size="sm" variant={step === 'display' ? 'secondary' : 'ghost'} disabled={!validDashboardSource(normalizedSource) || !widget.name.trim()} onClick={() => setStep('display')}>{t('dashboard.stepDisplay')}</Button></div>}
+        {!sourceOnly && <div className="grid grid-cols-2 gap-2 border-b pb-3 mb-3"><Button type="button" size="sm" variant={step === 'source' ? 'secondary' : 'ghost'} onClick={() => setStep('source')}>{t('dashboard.stepSource')}</Button><Button type="button" size="sm" variant={step === 'display' ? 'secondary' : 'ghost'} disabled={!validDashboardSource(normalizedSource) || !widget.name.trim()} onClick={() => setStep('display')}>{t('dashboard.stepDisplay')}</Button></div>}
         <div className="flex-1 min-h-0 overflow-auto space-y-4 pb-4 pr-1">
           <div className="space-y-2"><Label htmlFor={`${prefix}-name`}>{t(sourceOnly ? 'dashboard.sourceName' : 'monitor.name')}</Label><Input id={`${prefix}-name`} value={sourceOnly ? source.name : widget.name} maxLength={120} onChange={event => sourceOnly ? updateSource({ name: event.target.value }) : setWidget(current => ({ ...current, name: event.target.value }))} required /></div>
           {(step === 'source' || sourceOnly) && <>
@@ -91,13 +92,7 @@ export function DashboardEditor({ board, initialWidget, initialSource, onSave, o
               stopTrial(); setTrialResults({}); setTrialSpec(''); setScope(undefined);
               setSource(structuredClone(board.sources.find(item => item.id === event.target.value) ?? newDashboardSource()));
             }}><option value="new">{t('dashboard.newSource')}</option>{board.sources.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>}
-            <fieldset className="space-y-2"><legend className="text-sm font-medium mb-2">{t('dashboard.selectConnections')}</legend>
-              <div className="grid sm:grid-cols-2 gap-2 max-h-40 overflow-auto rounded-md border p-3">
-                {connections.filter(connection => connection.protocol === 'SSH').map(connection => <label key={connection.id} className="flex items-start gap-2 min-w-0 text-sm"><input className="mt-1" type="checkbox" checked={source.connectionIds.includes(connection.id)} onChange={event => updateSource({ connectionIds: event.target.checked ? [...source.connectionIds, connection.id] : source.connectionIds.filter(id => id !== connection.id) })} /><span className="min-w-0"><span className="block truncate">{label(connection.id)}</span><span className="block truncate text-xs text-muted-foreground">{connection.username}@{connection.host}:{connection.port}</span></span></label>)}
-                {source.connectionIds.filter(id => !connections.some(connection => connection.id === id && connection.protocol === 'SSH')).map(id => <label key={id} className="flex items-center gap-2 text-sm text-destructive"><input type="checkbox" checked onChange={() => updateSource({ connectionIds: source.connectionIds.filter(value => value !== id) })} /><span>{t('dashboard.missingConnection', { name: label(id) })}</span></label>)}
-                {!connections.some(connection => connection.protocol === 'SSH') && <p className="text-sm text-muted-foreground">{t('dashboard.noSshConnections')}</p>}
-              </div>
-            </fieldset>
+            <DashboardConnectionPicker connections={connections} selected={source.connectionIds} onChange={connectionIds => updateSource({ connectionIds })} />
             <div className="space-y-2"><Label htmlFor={`${prefix}-command`}>{t('monitor.command')}</Label><Textarea id={`${prefix}-command`} className="font-mono min-h-28" value={source.command} spellCheck={false} onChange={event => updateSource({ command: event.target.value })} required /><p className="text-xs text-muted-foreground">{t('monitor.commandHelp')}</p></div>
             <div className="grid grid-cols-2 gap-3"><div className="space-y-2"><Label htmlFor={`${prefix}-interval`}>{t('monitor.interval')}</Label><Input id={`${prefix}-interval`} type="number" min={5} max={86400} step={1} value={source.intervalSeconds} onChange={event => updateSource({ intervalSeconds: Number(event.target.value) })} required /></div><div className="space-y-2"><Label htmlFor={`${prefix}-timeout`}>{t('monitor.timeout')}</Label><Input id={`${prefix}-timeout`} type="number" min={1} max={60} step={1} value={source.timeoutSeconds} onChange={event => updateSource({ timeoutSeconds: Number(event.target.value) })} required /></div></div>
           </>}
@@ -112,7 +107,7 @@ export function DashboardEditor({ board, initialWidget, initialSource, onSave, o
               <span className="text-xs text-muted-foreground">{t('dashboard.trialScope', { count: trialTarget === 'all' || !source.connectionIds.includes(trialTarget) ? source.connectionIds.length : 1 })}</span>
             </div>
             {trialSpec && trialSpec !== sourceFingerprint && <p className="text-xs text-amber-600">{t('monitor.outdatedTrial')}</p>}
-            <div className="flex items-center gap-2 flex-wrap"><Label htmlFor={`${prefix}-preview`}>{t('dashboard.previewConnection')}</Label><select id={`${prefix}-preview`} className="h-8 rounded-md border bg-background px-2 text-xs max-w-full" value={selectedPreview ?? ''} onChange={event => setPreviewTarget(event.target.value)}>{source.connectionIds.map(id => <option key={id} value={id}>{label(id)}{trialResults[id] ? ` · ${t(trialResults[id].status === 'success' ? 'dashboard.updated' : 'dashboard.stale')}` : ''}</option>)}</select></div>
+            <div className="flex items-center gap-2 flex-wrap"><Label htmlFor={`${prefix}-preview`}>{t('dashboard.previewConnection')}</Label><select id={`${prefix}-preview`} className="h-8 rounded-md border bg-background px-2 text-xs max-w-full" value={selectedPreview ?? ''} onChange={event => setPreviewTarget(event.target.value)}>{source.connectionIds.map(id => <option key={id} value={id}>{label(id)}{trialResults[id] ? ` · ${t(trialResults[id].status === 'success' ? 'dashboard.updated' : 'dashboard.failed')}` : ''}</option>)}</select></div>
             {result ? <>
               <p className="text-xs text-muted-foreground">{t('monitor.duration', { ms: result.durationMs, code: result.exitCode ?? '—' })}</p>
               {result.status !== 'success' && <MonitorError error={result.status} result={result} />}
@@ -128,8 +123,8 @@ export function DashboardEditor({ board, initialWidget, initialSource, onSave, o
               </>}
             </> : <p className="text-xs text-muted-foreground">{busy ? t('monitor.refreshing') : t('monitor.previewHelp')}</p>}
           </div>
-          {error && <p role="alert" className="text-sm text-destructive">{t(error)}</p>}
         </div>
+        {error && <p role="alert" className="text-sm text-destructive py-2 shrink-0">{t(error)}</p>}
         <DialogFooter className="pt-3 border-t"><Button type="button" variant="outline" onClick={onClose}>{t('common.cancel')}</Button>{!sourceOnly && step === 'display' && <Button type="button" variant="outline" onClick={() => setStep('source')}><ArrowLeft className="size-3" />{t('dashboard.back')}</Button>}<Button type="submit">{!sourceOnly && step === 'source' ? <>{t('dashboard.next')}<ArrowRight className="size-3" /></> : t(sourceOnly && references.length ? 'dashboard.applyShared' : 'common.save')}</Button></DialogFooter>
       </form>
     </DialogContent>

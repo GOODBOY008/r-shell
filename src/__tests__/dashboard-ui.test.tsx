@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DashboardEditor } from '../components/dashboard-editor';
 import { DashboardValue } from '../components/dashboard-value';
 import { DashboardView } from '../components/dashboard-view';
+import { DashboardCreateDialog } from '../components/dashboard-create-dialog';
 import { newDashboard, newDashboardSource, newDashboardWidget } from '../lib/dashboard-config';
 import { DashboardRuntime } from '../lib/dashboard-runtime';
 import { useDashboards } from '../lib/use-dashboards';
@@ -32,6 +33,61 @@ beforeEach(() => {
   runtime.configure(context.boards, profiles, [], []);
 });
 afterEach(() => { cleanup(); context.runtime.stop(); vi.useRealTimers(); });
+
+describe('template onboarding', () => {
+  it('previews without execution and atomically creates a paused dashboard for selected SSH hosts', () => {
+    context.connections = [...profiles, { ...profiles[0], id: 'ftp', name: 'FTP host', protocol: 'FTP' }];
+    const close = vi.fn();
+    render(<DashboardCreateDialog onClose={close} />);
+    fireEvent.click(screen.getByRole('button', { name: /Docker fleet/ }));
+    expect(screen.queryByRole('checkbox', { name: /FTP host/ })).toBeNull();
+    expect((screen.getByRole('button', { name: 'Create and start' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByLabelText('Search name or host'), { target: { value: 'one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Select results' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Save paused; review before collecting' }));
+    expect(execute).not.toHaveBeenCalled();
+    expect(context.saveBoard).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create dashboard' }));
+    const saved = vi.mocked(context.saveBoard).mock.calls[0][0];
+    expect(saved.widgets).toHaveLength(4);
+    expect(saved.sources).toHaveLength(3);
+    expect(saved.paused).toBe(true);
+    expect(saved.sources.every(source => source.connectionIds.join() === 'one')).toBe(true);
+    expect(context.saveBoard).toHaveBeenCalledTimes(1);
+    expect(context.openBoard).toHaveBeenCalledWith(saved);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+  it('can create an empty dashboard with no saved SSH connections and preserves a custom name', () => {
+    context.connections = [];
+    render(<DashboardCreateDialog onClose={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Add SSH connection' })).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Dashboard name'), { target: { value: 'My workspace' } });
+    fireEvent.click(screen.getByRole('button', { name: /Blank dashboard/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create dashboard' }));
+    const saved = vi.mocked(context.saveBoard).mock.calls[0][0];
+    expect(saved.name).toBe('My workspace'); expect(saved.widgets).toEqual([]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it('appends a template without replacing existing cards or resume state', () => {
+    const board = { ...fixture(), paused: true };
+    render(<DashboardCreateDialog board={board} onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /one/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to dashboard' }));
+    const saved = vi.mocked(context.saveBoard).mock.calls[0][0];
+    expect(saved.id).toBe(board.id); expect(saved.paused).toBe(true);
+    expect(saved.widgets.slice(0, 2)).toEqual(board.widgets);
+    expect(saved.sources[0]).toEqual(board.sources[0]);
+    expect(saved.widgets).toHaveLength(6);
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it('cancels a template draft without saving or opening a session', () => {
+    const close = vi.fn();
+    render(<DashboardCreateDialog onClose={close} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /one/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(close).toHaveBeenCalled(); expect(context.saveBoard).not.toHaveBeenCalled(); expect(execute).not.toHaveBeenCalled();
+  });
+});
 
 describe('dashboard creation and shared editing', () => {
   it('does not execute on edits; creates the source and first card in one save', async () => {

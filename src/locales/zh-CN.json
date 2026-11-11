@@ -2154,6 +2154,84 @@
     "sharedBy_other": "{{count}} 张卡片共用",
     "sourceCount_other": "采集项 {{count}}",
     "sourceErrors_other": "{{count}} 个采集项异常",
-    "back": "上一步"
+    "back": "上一步",
+    "workspaceSections": "工作区入口",
+    "clearSearch": "清除搜索",
+    "noResults": "没有匹配的看板。",
+    "connectionSearch": "搜索名称或主机",
+    "noConnectionResults": "没有匹配的 SSH 连接。",
+    "selectResults": "全选搜索结果",
+    "addConnection": "添加 SSH 连接",
+    "connectionsSelected_other": "已选 {{count}} 个",
+    "addOptions": "更多添加方式",
+    "layoutHelp": "拖动卡片调整顺序，修改会自动保存。",
+    "refreshEvery": "每 {{seconds}} 秒刷新",
+    "failed": "采集失败",
+    "noMetrics": "请至少选择一个要显示的指标。",
+    "templates": {
+      "browse": "浏览模板",
+      "addTitle": "从模板添加",
+      "intro": "选择开箱即用的看板，也可以从空白开始。",
+      "choose": "选择起点",
+      "commands": "查看采集命令",
+      "savePaused": "保存为暂停，检查后再采集",
+      "pausedHelp": "点击看板的「继续」后才会执行命令。",
+      "startHelp": "保存后开始采集。所有命令均为只读，默认每 10 秒刷新。",
+      "create": "创建看板",
+      "createStart": "创建并开始采集",
+      "addCards": "添加到看板",
+      "emptyHelp": "从 Linux 或 Docker 模板快速开始。选择 SSH 连接，即可使用预置命令和卡片。",
+      "linux": {
+        "name": "Linux 主机",
+        "short": "内存、负载与磁盘",
+        "description": "集中查看多台 Linux 主机的内存使用、系统负载、磁盘空间和基本信息。",
+        "requirements": "需要 Linux /proc、awk、df、hostname、uname 和 uptime。负载表示运行或等待任务的平均数量，并非 CPU 百分比。"
+      },
+      "docker": {
+        "name": "Docker 集群",
+        "short": "容器状态与资源",
+        "description": "跨 Docker 主机查看运行容器数、变化趋势、容器清单和实时资源使用情况。",
+        "requirements": "需要 Docker CLI 及 Docker 守护进程的读取权限，无需 jq 或额外代理。资源统计可能需要几秒钟。"
+      },
+      "blank": {
+        "name": "空白看板",
+        "short": "自由设置命令和布局",
+        "description": "创建一个空工作区，按需添加自定义命令卡片。"
+      },
+      "sources": {
+        "resources": "Linux 资源",
+        "disks": "磁盘容量",
+        "host": "主机信息",
+        "engine": "Docker 引擎",
+        "containers": "容器清单",
+        "usage": "容器资源"
+      },
+      "cards": {
+        "memory": "内存使用率",
+        "load": "系统负载",
+        "disks": "磁盘空间",
+        "host": "主机信息",
+        "running": "运行容器",
+        "containerTrend": "容器趋势",
+        "containers": "容器清单",
+        "usage": "容器资源"
+      },
+      "fields": {
+        "memoryUsedPercent": "内存使用率",
+        "load1": "1 分钟",
+        "load5": "5 分钟",
+        "load15": "15 分钟",
+        "running": "运行中",
+        "stopped": "已停止",
+        "Names": "容器",
+        "Name": "容器",
+        "Image": "镜像",
+        "State": "状态",
+        "Status": "运行状态",
+        "CPUPerc": "CPU %",
+        "MemUsage": "内存 / 上限",
+        "NetIO": "网络 I/O"
+      }
+    }
   }
 }

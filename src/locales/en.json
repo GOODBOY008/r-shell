@@ -2166,6 +2166,85 @@
     "sourceCount_other": "Sources {{count}}",
     "sourceErrors_one": "{{count}} source with errors",
     "sourceErrors_other": "{{count}} sources with errors",
-    "back": "Back"
+    "back": "Back",
+    "workspaceSections": "Workspace sections",
+    "clearSearch": "Clear search",
+    "noResults": "No dashboards match your search.",
+    "connectionSearch": "Search name or host",
+    "noConnectionResults": "No SSH connections match your search.",
+    "selectResults": "Select results",
+    "addConnection": "Add SSH connection",
+    "connectionsSelected_one": "{{count}} selected",
+    "connectionsSelected_other": "{{count}} selected",
+    "addOptions": "More ways to add cards",
+    "layoutHelp": "Drag cards to reorder. Changes are saved automatically.",
+    "refreshEvery": "Every {{seconds}} seconds",
+    "failed": "Collection failed",
+    "noMetrics": "Select at least one metric to display.",
+    "templates": {
+      "browse": "Browse templates",
+      "addTitle": "Add from template",
+      "intro": "Start with a ready-to-use dashboard, or build your own.",
+      "choose": "Choose a starting point",
+      "commands": "View commands",
+      "savePaused": "Save paused; review before collecting",
+      "pausedHelp": "Commands stay idle until you resume the dashboard.",
+      "startHelp": "Collection starts after saving. All commands are read-only and refresh every 10 seconds.",
+      "create": "Create dashboard",
+      "createStart": "Create and start",
+      "addCards": "Add to dashboard",
+      "emptyHelp": "Start with Linux or Docker metrics in a few clicks. Choose your SSH connections; commands and cards are ready to use.",
+      "linux": {
+        "name": "Linux hosts",
+        "short": "Memory, load and disks",
+        "description": "Track memory, system load, disk space and host information across your Linux machines.",
+        "requirements": "Requires Linux /proc, awk, df, hostname, uname and uptime. Load is the average number of runnable or waiting tasks, not CPU percent."
+      },
+      "docker": {
+        "name": "Docker fleet",
+        "short": "Containers and resources",
+        "description": "See running containers, recent trends, container states and live resource use across Docker hosts.",
+        "requirements": "Requires Docker CLI and permission to read the Docker daemon. No jq or extra agent needed. Resource statistics may take a few seconds."
+      },
+      "blank": {
+        "name": "Blank dashboard",
+        "short": "Your commands, your layout",
+        "description": "Start with an empty workspace and add your own command cards at your own pace."
+      },
+      "sources": {
+        "resources": "Linux resources",
+        "disks": "Disk capacity",
+        "host": "Host information",
+        "engine": "Docker engine",
+        "containers": "Container inventory",
+        "usage": "Container resources"
+      },
+      "cards": {
+        "memory": "Memory used",
+        "load": "System load",
+        "disks": "Disk space",
+        "host": "Host information",
+        "running": "Running containers",
+        "containerTrend": "Container trend",
+        "containers": "Container inventory",
+        "usage": "Container resources"
+      },
+      "fields": {
+        "memoryUsedPercent": "Memory used",
+        "load1": "1 minute",
+        "load5": "5 minutes",
+        "load15": "15 minutes",
+        "running": "Running",
+        "stopped": "Stopped",
+        "Names": "Container",
+        "Name": "Container",
+        "Image": "Image",
+        "State": "State",
+        "Status": "Status",
+        "CPUPerc": "CPU %",
+        "MemUsage": "Memory / limit",
+        "NetIO": "Network I/O"
+      }
+    }
   }
 }

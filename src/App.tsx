@@ -1,5 +1,6 @@
 import { buildDesktopConnectRequest, desktopConnect, DesktopConnectCancelledError } from '@/lib/desktop-connect';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { LayoutDashboard, Server } from 'lucide-react';
 import type { PanelImperativeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { applyLanguageFromPreference } from './lib/i18n';
@@ -12,7 +13,7 @@ import { MenuBar } from './components/menu-bar';
 import { ConnectionManager } from './components/connection-manager';
 import { DashboardSidebar } from './components/dashboard-sidebar';
 import { DashboardProvider } from './lib/dashboard-context';
-import { DASHBOARD_EDIT_CONNECTION_EVENT } from './lib/dashboard-config';
+import { DASHBOARD_EDIT_CONNECTION_EVENT, DASHBOARD_NEW_CONNECTION_EVENT } from './lib/dashboard-config';
 import { SystemMonitor } from './components/system-monitor';
 import { LogMonitor } from './components/log-monitor';
 import { PortForwardingPanel } from './components/port-forwarding-panel';
@@ -137,7 +138,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 function AppContent() {
   const { t } = useTranslation();
   const appearance = useAppearanceSettings();
-  const [leftSidebarTab, setLeftSidebarTab] = useState('connections');
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
   useEffect(() => {
     const updateWidth = () => setWindowWidth(window.innerWidth);
@@ -153,6 +153,7 @@ function AppContent() {
 
   // Terminal group state from context
   const { state, dispatch, activeGroup, activeTab, activeConnection } = useTerminalGroups();
+  const [leftSidebarTab, setLeftSidebarTab] = useState(activeTab?.tabType === 'dashboard' ? 'dashboards' : 'connections');
   const editorTabs = useEditorTabs()!;
   const { confirmCloseTabs, focusTab } = editorTabs;
   const workingDirectorySequenceRef = useRef(0);
@@ -1839,9 +1840,14 @@ function AppContent() {
       const id: unknown = (event as CustomEvent).detail;
       if (typeof id === 'string') handleEditConnection({ id, name: '', type: 'connection' });
     };
+    const newConnection = () => handleNewTab();
     window.addEventListener(DASHBOARD_EDIT_CONNECTION_EVENT, editConnection);
-    return () => window.removeEventListener(DASHBOARD_EDIT_CONNECTION_EVENT, editConnection);
-  }, [handleEditConnection]);
+    window.addEventListener(DASHBOARD_NEW_CONNECTION_EVENT, newConnection);
+    return () => {
+      window.removeEventListener(DASHBOARD_EDIT_CONNECTION_EVENT, editConnection);
+      window.removeEventListener(DASHBOARD_NEW_CONNECTION_EVENT, newConnection);
+    };
+  }, [handleEditConnection, handleNewTab]);
 
   const handleSaveConnection = useCallback(async (config: ConnectionConfig) => {
     if (!config.id) return;
@@ -2234,11 +2240,11 @@ function AppContent() {
                 minSize={leftSidebarMinSize}
                 maxSize={35}
               >
-                <Tabs value={leftSidebarTab} onValueChange={setLeftSidebarTab} className="h-full min-h-0 flex flex-col bg-sidebar">
-                  <TabsList className="mx-2 mt-2 grid grid-cols-2 shrink-0">
-                    <TabsTrigger value="connections">{t('dashboard.connections')}</TabsTrigger>
-                    <TabsTrigger value="dashboards">{t('dashboard.title')}</TabsTrigger>
-                  </TabsList>
+                <Tabs value={leftSidebarTab} onValueChange={setLeftSidebarTab} className="h-full min-h-0 min-w-0 flex flex-col gap-0 bg-sidebar @container/sidebar">
+                  <div className="p-2 border-b shrink-0"><TabsList aria-label={t('dashboard.workspaceSections')} className="grid w-full min-w-0 grid-cols-2 h-10">
+                    <TabsTrigger value="connections" className="min-w-0 px-1.5 text-xs gap-1.5" title={t('dashboard.connections')}><Server className="size-3.5 hidden @[260px]/sidebar:block" /><span className="truncate">{t('dashboard.connections')}</span></TabsTrigger>
+                    <TabsTrigger value="dashboards" className="min-w-0 px-1.5 text-xs gap-1.5" title={t('dashboard.title')}><LayoutDashboard className="size-3.5 hidden @[260px]/sidebar:block" /><span className="truncate">{t('dashboard.title')}</span></TabsTrigger>
+                  </TabsList></div>
                   <TabsContent value="connections" forceMount className="flex-1 min-h-0 mt-0 data-[state=inactive]:hidden">
                 <ConnectionManager
                   onConnectionSelect={handleConnectionSelect}
