@@ -1,5 +1,5 @@
 use crate::connection_manager::ConnectionManager;
-use crate::cpu_stats::{parse_cpu_stats, CpuCoreUsage};
+use crate::cpu_stats::{parse_cpu_stats, CpuCoreGroup, CpuCoreUsage};
 use crate::ftp_client::FtpConfig;
 use crate::os_detect::{self, OsInfo};
 use crate::os_keypath::resolve_private_key_path;
@@ -263,6 +263,8 @@ pub struct SystemStats {
     pub cpu_percent: f64,
     pub cpu_logical_count: Option<usize>,
     pub cpu_cores: Vec<CpuCoreUsage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cpu_core_groups: Vec<CpuCoreGroup>,
     pub memory: MemoryStats,
     pub swap: MemoryStats,
     pub disk: DiskStats,
@@ -788,6 +790,7 @@ pub async fn get_system_stats(
         cpu_percent,
         cpu_logical_count: cpu.logical_count,
         cpu_cores: cpu.cores,
+        cpu_core_groups: cpu.core_groups,
         memory,
         swap,
         disk,

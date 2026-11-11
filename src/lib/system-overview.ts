@@ -1,13 +1,20 @@
+import { MONITOR_HISTORY_MAX_SAMPLES, MONITOR_HISTORY_WINDOW_MS } from './monitor-history';
+
 export const OVERVIEW_POLL_MS = 5_000;
-export const OVERVIEW_WINDOW_MS = 5 * 60_000;
-export const OVERVIEW_MAX_SAMPLES = 60;
+export const OVERVIEW_WINDOW_MS = MONITOR_HISTORY_WINDOW_MS;
+export const OVERVIEW_MAX_SAMPLES = MONITOR_HISTORY_MAX_SAMPLES;
 const MAX_CONTINUOUS_GAP_MS = 10_000;
+
+export const CPU_CORE_KINDS = ['super', 'performance', 'intermediate', 'efficiency', 'low_power_efficiency'] as const;
+export type CpuCoreKind = typeof CPU_CORE_KINDS[number];
 
 /** The existing get_system_stats payload reports memory and swap in MiB. */
 export interface SystemStatsResponse {
   cpu_percent?: number;
   cpu_logical_count?: number | null;
-  cpu_cores?: { id: number; percent?: number | null }[];
+  cpu_cores?: { id: number; percent?: number | null; kind?: CpuCoreKind }[];
+  cpu_core_groups?: { kind: CpuCoreKind; logical_count: number }[];
+  load_average?: string | null;
   memory?: { total?: number; used?: number };
   swap?: { total?: number; used?: number };
   disk?: { total?: string; used?: string; use_percent?: number };
@@ -22,7 +29,9 @@ interface MemoryReading {
 export interface OverviewReading {
   cpu: number | null;
   cpuCount: number | null;
-  cpuCores: { id: number; percent: number | null }[];
+  cpuCores: { id: number; percent: number | null; kind?: CpuCoreKind }[];
+  cpuCoreGroups: { kind: CpuCoreKind; count: number }[];
+  loadAverage: [number, number, number] | null;
   memory: MemoryReading;
   swap: MemoryReading;
   disk: { total: string | null; used: string | null; percent: number | null };
@@ -71,19 +80,37 @@ function memoryReading(memory: SystemStatsResponse['memory']): MemoryReading {
   };
 }
 
+function parseLoadAverage(output: SystemStatsResponse['load_average']): OverviewReading['loadAverage'] {
+  // Older hosts' readings can include comma separators from uptime.
+  const fields = output?.trim().split(/[\s,]+/);
+  if (fields?.length !== 3 || fields.some(field => field === '')) return null;
+  const [one, five, fifteen] = fields.map(field => nonnegative(Number(field)));
+  if (one === null || five === null || fifteen === null) return null;
+  return [one, five, fifteen];
+}
+
 /** Keep zero usage distinct from a missing/failed capacity measurement. */
 export function normalizeOverviewReading(response: SystemStatsResponse): OverviewReading {
   const diskTotal = response.disk?.total || null;
   const cpuCores = Array.from(new Map((response.cpu_cores ?? [])
     .filter(core => Number.isSafeInteger(core.id) && core.id >= 0)
-    .map(core => [core.id, { id: core.id, percent: percent(core.percent) }])).values())
+    .map(({ id, percent: usage, kind }) => [id, {
+      id, percent: percent(usage), ...(kind && CPU_CORE_KINDS.includes(kind) ? { kind } : {}),
+    }])).values())
     .sort((a, b) => a.id - b.id);
+  const reportedGroups = new Map(response.cpu_core_groups?.map(group => [group.kind, group.logical_count]));
+  const cpuCoreGroups = CPU_CORE_KINDS.flatMap(kind => {
+    const count = reportedGroups.get(kind) ?? cpuCores.filter(cpu => cpu.kind === kind).length;
+    return Number.isSafeInteger(count) && count > 0 ? [{ kind, count }] : [];
+  });
   const reportedCount = response.cpu_logical_count;
   const cpuCount = reportedCount != null && Number.isSafeInteger(reportedCount) && reportedCount > 0 ? reportedCount : 0;
   return {
     cpu: percent(response.cpu_percent),
     cpuCount: Math.max(cpuCount, cpuCores.length) || null,
     cpuCores,
+    cpuCoreGroups,
+    loadAverage: parseLoadAverage(response.load_average),
     memory: memoryReading(response.memory),
     swap: memoryReading(response.swap),
     disk: {

@@ -14,7 +14,8 @@ import { ConnectionManager } from './components/connection-manager';
 import { DashboardSidebar } from './components/dashboard-sidebar';
 import { DashboardProvider } from './lib/dashboard-context';
 import { DASHBOARD_EDIT_CONNECTION_EVENT, DASHBOARD_NEW_CONNECTION_EVENT } from './lib/dashboard-config';
-import { SystemMonitor } from './components/system-monitor';
+import { SessionMonitors } from './components/session-monitors';
+import type { MonitorColumns } from './lib/monitor-config';
 import { LogMonitor } from './components/log-monitor';
 import { PortForwardingPanel } from './components/port-forwarding-panel';
 import { initSocksProxyStore, savedProxiesFor, startSocksProxy } from './lib/socks-proxy-store';
@@ -213,6 +214,23 @@ function AppContent() {
 
   // Right sidebar tab & log monitor integration
   const rightSidebar = useLazyTabs("monitor");
+  // The sidebar is removed for file, desktop, and dashboard tabs. Keep the
+  // monitor portal's container stable and reattach it when the sidebar returns.
+  const [monitorHost] = useState(() => {
+    const node = document.createElement('div');
+    node.className = 'h-full';
+    return node;
+  });
+  const attachMonitorHost = useCallback((slot: HTMLDivElement | null) => {
+    if (!slot) return;
+    slot.appendChild(monitorHost);
+    return () => monitorHost.remove();
+  }, [monitorHost]);
+  const handleMonitorColumnsChange = useCallback((columns: MonitorColumns) => {
+    const panel = rightSidebarRef.current;
+    const width = columns * 260 + (columns - 1) * 16 + 8;
+    if (columns > 1 && panel && panel.getSize().inPixels < width) panel.resize(`${width}px`);
+  }, []);
   const [externalLogPath, setExternalLogPath] = useState<string | undefined>();
   const [externalLogPathKey, setExternalLogPathKey] = useState(0);
 
@@ -2164,6 +2182,7 @@ function AppContent() {
   // Keep the file list available while editing so users can open the next file.
   const hideExtraPanels = isFileBrowserTab || isDesktopTab || activeTab?.tabType === 'dashboard'
     || activeConnection?.protocol === 'SFTP' || activeConnection?.protocol === 'FTP';
+  const showRightSidebar = layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels;
 
   return (
     <div
@@ -2211,7 +2230,7 @@ function AppContent() {
         onToggleZenMode={toggleZenMode}
         onApplyPreset={applyPreset}
         leftSidebarVisible={layout.leftSidebarVisible}
-        rightSidebarVisible={layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels}
+        rightSidebarVisible={showRightSidebar}
         bottomPanelVisible={layout.bottomPanelVisible && !hideExtraPanels}
         zenMode={layout.zenMode}
       />
@@ -2227,7 +2246,7 @@ function AppContent() {
           panelIds={[
             ...(layout.leftSidebarVisible ? ['left-sidebar'] : []),
             'main-content',
-            ...(layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels ? ['right-sidebar'] : []),
+            ...(showRightSidebar ? ['right-sidebar'] : []),
           ]}
         >
           {/* Left Sidebar - Connection Manager */}
@@ -2273,7 +2292,7 @@ function AppContent() {
           <ResizablePanel
             id="main-content"
             order={2}
-            defaultSize={100 - (layout.leftSidebarVisible ? Math.max(layout.leftSidebarSize, leftSidebarMinSize) : 0) - ((layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels) ? Math.max(layout.rightSidebarSize, rightSidebarMinSize) : 0)}
+            defaultSize={100 - (layout.leftSidebarVisible ? Math.max(layout.leftSidebarSize, leftSidebarMinSize) : 0) - (showRightSidebar ? Math.max(layout.rightSidebarSize, rightSidebarMinSize) : 0)}
             minSize={30}
           >
             <div className="relative h-full flex flex-col">
@@ -2337,7 +2356,7 @@ function AppContent() {
             </div>
           </ResizablePanel>
 
-          {layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels && (
+          {showRightSidebar && (
             <>
               <ResizableHandle />
 
@@ -2360,24 +2379,7 @@ function AppContent() {
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
                     <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <div className="h-full overflow-hidden px-1 py-2">
-                        {activeConnection && rightSidebar.mounted.has('monitor') ? (
-                          <ErrorBoundary label={t('app.systemMonitor')}>
-                            <SystemMonitor
-                              savedConnectionId={activeConnection.savedConnectionId && ConnectionStorageManager.getConnection(activeConnection.savedConnectionId) ? activeConnection.savedConnectionId : undefined}
-                              protocol={activeConnection.protocol}
-                              connectionStatus={activeConnection.status}
-                              connectionId={activeConnection.connectionId}
-                              active={rightSidebar.active === 'monitor'}
-                              onColumnsChange={columns => {
-                                const panel = rightSidebarRef.current;
-                                const width = columns * 260 + (columns - 1) * 16 + 8;
-                                if (columns > 1 && panel && panel.getSize().inPixels < width) panel.resize(`${width}px`);
-                              }}
-                            />
-                          </ErrorBoundary>
-                        ) : null}
-                      </div>
+                      <div ref={attachMonitorHost} className="h-full overflow-hidden px-1 py-2" />
                     </TabsContent>
 
                     <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
@@ -2422,6 +2424,12 @@ function AppContent() {
         </ResizablePanelGroup>
       </div>
 
+      <SessionMonitors
+        host={monitorHost}
+        tabs={allTabs}
+        visibleConnectionId={showRightSidebar && rightSidebar.active === 'monitor' ? activeConnection?.connectionId : undefined}
+        onColumnsChange={handleMonitorColumnsChange}
+      />
       <StatusBar activeConnection={statusBarConnection} />
 
       {/* Modals */}

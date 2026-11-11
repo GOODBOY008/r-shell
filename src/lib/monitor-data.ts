@@ -1,4 +1,5 @@
 import type { MonitorDisplayConfig, MonitorField } from './monitor-config';
+import { MONITOR_HISTORY_MAX_SAMPLES, MONITOR_HISTORY_WINDOW_MS, type MonitorHistoryPoint } from './monitor-history';
 
 export type MonitorErrorCode = 'invalidJson' | 'invalidJsonLine' | 'invalidPath' | 'missingField' | 'invalidNumber' | 'invalidTable';
 export class MonitorParseError extends Error {
@@ -91,10 +92,10 @@ export function suggestMonitorFields(module: MonitorDisplayConfig, stdout: strin
 export interface MonitorSample { timestamp: number; values: number[]; breakBefore: boolean }
 export function appendMonitorSample(samples: MonitorSample[], values: number[], timestamp: number, intervalMs: number, gap: boolean): MonitorSample[] {
   const last = samples[samples.length - 1];
-  return [...samples.filter(sample => timestamp - sample.timestamp <= 300_000),
-    { timestamp, values, breakBefore: gap || !!last && timestamp - last.timestamp > intervalMs * 2 }].slice(-60);
+  return [...samples.filter(sample => timestamp - sample.timestamp <= MONITOR_HISTORY_WINDOW_MS),
+    { timestamp, values, breakBefore: gap || !!last && timestamp - last.timestamp > intervalMs * 2 }].slice(-MONITOR_HISTORY_MAX_SAMPLES);
 }
-export function monitorChartData(samples: MonitorSample[]): Array<Record<string, number | null>> {
+export function monitorChartData(samples: MonitorSample[]): MonitorHistoryPoint[] {
   return samples.flatMap(sample => {
     const point = Object.fromEntries(sample.values.map((value, index) => [`v${index}`, value]));
     return [...(sample.breakBefore ? [{ timestamp: sample.timestamp - 1, ...Object.fromEntries(sample.values.map((_, index) => [`v${index}`, null])) }] : []), { timestamp: sample.timestamp, ...point }];

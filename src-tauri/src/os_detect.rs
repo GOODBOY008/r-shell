@@ -265,8 +265,8 @@ impl OsInfo {
     /// internal second sample, but the command still depended on top's
     /// output wording, and its `|| cat /proc/stat` fallback was a single
     /// read — a since-boot average by construction on every host that hit it.
-    /// Linux returns aggregate and per-CPU counters from both snapshots.
-    /// macOS uses `top -l2` for the aggregate and sysctl for its logical count.
+    /// Linux returns aggregate and per-CPU counters, with sysfs topology when
+    /// available. macOS uses `top -l2` for usage and sysctl for core counts.
     pub fn cpu_cmd(&self) -> &'static str {
         match self.family {
             OsFamily::MacOS => crate::cpu_stats::MACOS_CPU_COMMAND,
@@ -351,9 +351,12 @@ impl OsInfo {
         }
     }
 
-    /// Load average command — works everywhere.
+    /// Load averages for the last 1, 5, and 15 minutes.
     pub fn load_average_cmd(&self) -> &'static str {
-        "uptime | awk -F'load average:' '{print $2}' | xargs"
+        match self.family {
+            OsFamily::MacOS => "LC_ALL=C sysctl -n vm.loadavg | awk 'NF == 5 {print $2, $3, $4}'",
+            _ => "awk 'NF >= 3 {print $1, $2, $3}' /proc/loadavg",
+        }
     }
 
     /// Process list command: headerless USER PID CPU MEM COMMAND columns.
