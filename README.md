@@ -2,21 +2,18 @@
 
 <img src="src/assets/r-shell-logo.svg" alt="R-Shell logo" width="128" height="128">
 
-# R-Shell — Lightweight SSH Client for macOS, Windows & Linux
+# R-Shell
 
 [![GitHub license](https://img.shields.io/github/license/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/blob/main/LICENSE)
 [![Test](https://github.com/GOODBOY008/r-shell/actions/workflows/test.yml/badge.svg)](https://github.com/GOODBOY008/r-shell/actions/workflows/test.yml)
-[![Release](https://github.com/GOODBOY008/r-shell/actions/workflows/release.yml/badge.svg)](https://github.com/GOODBOY008/r-shell/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/releases/latest)
 [![GitHub stars](https://img.shields.io/github/stars/GOODBOY008/r-shell)](https://github.com/GOODBOY008/r-shell/stargazers)
-[![Tauri](https://img.shields.io/badge/Tauri-2.0-blue?logo=tauri)](https://tauri.app/)
-[![React](https://img.shields.io/badge/React-19-61dafb?logo=react)](https://react.dev/)
-[![Rust](https://img.shields.io/badge/Rust-Latest-orange?logo=rust)](https://www.rust-lang.org/)
 
-A modern SSH/SFTP/FTP/RDP/VNC client built with Rust and Tauri 2. **~98% less memory** than Java-based alternatives (~34 MB vs ~1.7 GB). Installer under 10 MB.
+**Split SSH terminals, edit remote files, and monitor multiple hosts in one desktop workspace.**
 
-**Low memory** · **Native speed** · **Multi-protocol** · **Remote desktop** · **Split terminals** · **SFTP file manager** · **GPU monitoring** · **Log viewer** · **Directory sync**
+R-Shell supports SSH, SFTP, FTP/FTPS, RDP, and VNC on macOS, Windows, and Linux. It uses a Rust backend and the system webview through Tauri 2.
 
-[Features](#-features) · [Installation](#-installation) · [Screenshots](#-screenshots) · [Contributing](#-contributing)
+[Download](#-installation) · [Features](#-features) · [Screenshots](#-screenshots) · [Contributing](#-contributing)
 
 </div>
 
@@ -24,54 +21,35 @@ A modern SSH/SFTP/FTP/RDP/VNC client built with Rust and Tauri 2. **~98% less me
 
 ## 📸 Screenshots
 
-<div align="center">
-  <img src="screenshots/app-screenshot.png" alt="R-Shell Application Screenshot" width="100%">
-  <p><i>R-Shell — split terminals, SFTP file manager, and system monitor in a single window</i></p>
-</div>
+### SSH Workspace
 
----
+[![R-Shell showing deployment checks and color-coded gateway logs on edge-01, htop on edge-02, remote configuration files, and the system monitor](screenshots/ssh-workspace.png)](screenshots/ssh-workspace.png)
 
-## 🚀 Why R-Shell?
+*Inspect a canary deployment in split SSH terminals. The SFTP browser follows the shell into the remote configuration directory while the system monitor tracks the active host.*
 
-Most SSH clients (FinalShell, MobaXterm, Xshell) run on Java or Electron — burning memory even at idle. R-Shell uses Rust + Tauri 2 for native performance at a fraction of the cost.
+### Multi-Host Dashboard
 
-### Memory Comparison
+[![R-Shell's Edge fleet dashboard comparing request rates, P95 response times, and service readiness across two SSH hosts](screenshots/multi-host-dashboard.png)](screenshots/multi-host-dashboard.png)
 
-Measured on macOS (Apple Silicon, 16 GB RAM) using `footprint`:
-
-| App | Technology | Memory | Relative |
-|-----|-----------|--------|----------|
-| **R-Shell** | Rust + Tauri 2 | **~34 MB** | **1×** |
-| FinalShell | Java | **~1.7 GB** | **~50×** |
-
-### Installer Size
-
-| Platform | R-Shell | FinalShell | Savings |
-|----------|---------|-----------|----------|
-| **Windows** | **3.99 MB** | 64 MB | **16×** smaller |
-| **macOS** | **8.13 MB** | 102 MB | **12×** smaller |
-
-> No bundled JVM or Chromium — Tauri uses the OS native webview.
-
----
-
-## 🎯 About
-
-R-Shell combines an interactive terminal, dual-panel file manager, remote desktop viewer (RDP/VNC), real-time system/GPU monitoring, and log viewing in a single VS Code-like workspace. Built with Rust for native performance and minimal resource usage.
-
-- **Native Performance** — Tauri 2 + Rust backend, not Electron or Java
-- **Cross-Platform** — macOS, Windows, and Linux
-- **Multilingual UI** — English, Simplified Chinese and Polish, with more languages welcome
+*Compare traffic, latency, and readiness across the same two demo hosts, with the canary rollout checklist alongside the metrics.*
 
 ---
 
 ## ✨ Features
 
+### 📊 Multi-Host Dashboards
+
+- **Combine templates** — Choose from Linux host, Docker, storage, process, network, systemd, and NVIDIA GPU templates. Assign each group of cards to the hosts it should monitor.
+- **Collect over SSH** — Turn command output into charts, numbers, tables, or text. Dashboards reuse compatible SSH connections and keep collecting as you switch tabs.
+- **Arrange cards and runbooks** — Drag and resize cards, compare readings by host, and keep Markdown checklists alongside the metrics.
+
+Save an SSH connection, then open **Dashboards → Browse templates** to create a board. [Dashboard guide](docs/dashboards.md)
+
 ### 🔌 Multi-Protocol Connections
 
 | Protocol | Authentication | Description |
 |----------|---------------|-------------|
-| **SSH** | Password, Public Key | Full interactive PTY terminal |
+| **SSH** | Password, public key, SSH agent, keyboard-interactive | Full interactive PTY terminal |
 | **SFTP** | Password, Public Key | Standalone file transfer sessions |
 | **FTP** | Password, Anonymous | Plain FTP file transfers |
 | **FTPS** | Password, Anonymous | FTP over TLS |
@@ -79,6 +57,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 | **VNC** | Standard VNC password or None | RFB 3.3, 3.7, and 3.8 over TCP |
 
 - **Connection Manager** — Tree-view sidebar with folders, favorites, tags, and drag-and-drop reordering
+- **OpenSSH import** — Preview hosts and jump chains from `~/.ssh/config` and save them as editable connections. [OpenSSH import guide](docs/openssh-import.md)
 - **SSH Tunnel (Jump Host)** — Route connections through a bastion or jump server
 - **Connection Profiles** — Save, import/export (JSON), duplicate, and edit connections
 - **Session Restore** — Chrome-style lazy restore: reopens your workspace on launch, reconnects the tab you were on, and reconnects the rest as you open them
@@ -87,6 +66,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 
 ### 🖥️ RDP Display
 
+- **Remote desktop workspace** — Keep an RDP session in a tab or pop it out into a native window.
 - **Balanced Auto (default)** — Adapts to the window using logical pixels, capped at 1920×1080 while preserving the aspect ratio. Fullscreen uses the same limit and resizing waits for the window transition to settle.
 - **Fixed resolution** — Choose 720p, 1080p, or 1440p for a stable remote desktop. Fit to Window scales the image locally; fullscreen does not change the selected resolution.
 - **Retina (optional)** — Requests physical pixels with matching Windows text scaling (200% on a 2× display). Requires more bandwidth and processing, and depends on server support.
@@ -112,6 +92,8 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 - **Keyboard shortcuts** — Remappable split, group-focus, and tab commands with [terminal alternatives that preserve shell input](docs/keyboard-shortcuts.md)
 
 ### 📁 Dual-Panel File Manager (FileZilla-style)
+
+![R-Shell with an SSH terminal and a remote configuration file open side by side above the SFTP browser](screenshots/app-screenshot.png)
 
 - **Local + Remote panels** — Side-by-side browsing with upload/download buttons
 - **Multi-protocol** — Works over SSH, SFTP, FTP, and FTPS
@@ -169,6 +151,7 @@ R-Shell combines an interactive terminal, dual-panel file manager, remote deskto
 
 ### 🎨 Appearance & Customization
 
+- **Languages** — English, Simplified Chinese, and Polish
 - **10 terminal color themes** — VS Code Dark, Monokai, Solarized Dark/Light, Dracula, One Dark, Nord, Gruvbox Dark, Tokyo Night, Matrix
 - **Dark / Light / Auto** — Application theme follows system preference
 - **7 font families** — Menlo, JetBrains Mono, Fira Code, Source Code Pro, Consolas, Monaco, Courier New
@@ -230,9 +213,9 @@ R-Shell ships on two release lines:
 | | **Stable** (recommended) | **Current** (evolution line) |
 |---|---|---|
 | Audience | Most users | Early adopters |
-| Versions | `2.9.x`, `3.1.x`… | `3.0.0-current.1`, `-current.2`… |
+| Versions | `3.1.x`, `3.2.x`… | `3.0.0-current.1`, `-current.2`… |
 | macOS | 10.13+, Apple Silicon & Intel | macOS 26+, Apple Silicon only |
-| Content | Bug fixes & security patches | All new features, promoted to stable every 4–6 weeks |
+| Content | Released features, bug fixes & security patches | All new features, promoted to stable every 4–6 weeks |
 | Where | [`releases/latest`](https://github.com/GOODBOY008/r-shell/releases/latest) (marked "Latest") | [Current-channel prereleases](https://github.com/GOODBOY008/r-shell/releases/tag/current) |
 
 ### 🍺 Homebrew (macOS — Recommended)
@@ -286,7 +269,7 @@ The evolution line carries all new features and requires **macOS 26 or later on 
 
 ### Backend
 - **Tauri 2** — Native desktop framework using the OS webview (no bundled Chromium)
-- **Rust** — Zero-cost abstractions, no GC, no JVM — ~34 MB vs ~1.7 GB
+- **Rust** — SSH, file transfer, remote desktop, and monitoring
 - **russh / russh-sftp** — Pure Rust SSH & SFTP implementation
 - **suppaftp** — FTP/FTPS client
 - **tokio** — Async runtime with minimal overhead
