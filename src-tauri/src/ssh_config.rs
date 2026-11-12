@@ -35,6 +35,8 @@ pub struct SshEndpoint {
     pub identity_agent: Option<String>,
     #[serde(default)]
     pub identities_only: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_known_host_key: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connect_timeout: Option<u64>,
     #[serde(default)]
@@ -231,7 +233,7 @@ fn wildcard(pattern: &str, value: &str) -> bool {
     i == p.len()
 }
 
-fn host_matches(patterns: &[String], alias: &str) -> bool {
+pub(crate) fn host_matches(patterns: &[String], alias: &str) -> bool {
     let mut positive = false;
     for p in patterns {
         if let Some(negative) = p.strip_prefix('!') {
@@ -603,6 +605,7 @@ impl Parser {
             identity_files: None,
             identity_agent: None,
             identities_only: false,
+            require_known_host_key: false,
             connect_timeout: None,
             compression: false,
             keep_alive: false,
@@ -660,6 +663,7 @@ impl Parser {
             identity_files: None,
             identity_agent: value("identityagent"),
             identities_only: false,
+            require_known_host_key: false,
             connect_timeout: None,
             compression: false,
             keep_alive: false,
@@ -687,6 +691,14 @@ impl Parser {
                     Some("false") if key == "identitiesonly" => *target = false,
                     _ => diagnostics.push(n.diagnostic("error", Reason::ExpectedBoolean)),
                 }
+            }
+        }
+        if let Some(n) = values.get("stricthostkeychecking") {
+            let value = &n.args[0];
+            if value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true") {
+                endpoint.require_known_host_key = true;
+            } else {
+                diagnostics.push(n.diagnostic("error", Reason::UnsupportedOption));
             }
         }
         for key in [
@@ -1068,6 +1080,7 @@ fn evaluate(
             | "port"
             | "identityagent"
             | "identitiesonly"
+            | "stricthostkeychecking"
             | "compression"
             | "connecttimeout"
             | "serveraliveinterval"
@@ -1094,7 +1107,6 @@ fn evaluate(
             | "userknownhostsfile"
             | "globalknownhostsfile"
             | "knownhostscommand"
-            | "stricthostkeychecking"
             | "verifyhostkeydns"
             | "checkhostip"
             | "revokedhostkeys"
@@ -1304,6 +1316,47 @@ mod tests {
             dev.identity_files.as_ref().unwrap()[0],
             home.path().join(".ssh/key one").to_str().unwrap()
         );
+    }
+
+    #[test]
+    fn strict_host_key_checking_imports_the_effective_yes_for_each_endpoint() {
+        let (_, preview) = fixture(
+            "Host target\n\
+             HostName target.example.test\n\
+             IdentityFile ~/.ssh/target_key\n\
+             IdentitiesOnly yes\n\
+             AddKeysToAgent yes\n\
+             UseKeychain yes\n\
+             StrictHostKeyChecking yes\n\
+             ForwardAgent no\n\
+             ProxyJump jump\n\
+             Host jump\n\
+             StrictHostKeyChecking TrUe\n\
+             Host blocked\n\
+             StrictHostKeyChecking no\n\
+             Host *\n\
+             StrictHostKeyChecking accept-new\n",
+        );
+        let target = preview
+            .entries
+            .iter()
+            .find(|e| e.alias == "target")
+            .unwrap();
+        assert!(target.importable);
+        assert!(target.config.endpoint.require_known_host_key);
+        assert!(target.config.jump_hosts[0].require_known_host_key);
+        assert_eq!(target.diagnostics.len(), 3);
+        assert!(target.diagnostics.iter().all(|d| d.severity == "warning"));
+        let blocked = preview
+            .entries
+            .iter()
+            .find(|e| e.alias == "blocked")
+            .unwrap();
+        assert!(!blocked.importable);
+        assert!(blocked
+            .diagnostics
+            .iter()
+            .any(|d| d.option == "stricthostkeychecking" && d.line == 13 && d.severity == "error"));
     }
 
     #[test]

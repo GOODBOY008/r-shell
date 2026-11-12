@@ -50,6 +50,7 @@ export const SSH_IMPORT_FIELDS = [
   'identityFiles',
   'identityAgent',
   'identitiesOnly',
+  'requireKnownHostKey',
   'connectTimeout',
   'compression',
   'keepAlive',

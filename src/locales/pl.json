@@ -1918,6 +1918,7 @@
       "identityFiles": "Pliki tożsamości",
       "identityAgent": "Agent SSH",
       "identitiesOnly": "Używaj tylko skonfigurowanych tożsamości",
+      "requireKnownHostKey": "Wymagaj zgodnego zapisanego klucza hosta",
       "connectTimeout": "Limit czasu połączenia (sekundy)",
       "compression": "Kompresja",
       "keepAlive": "Podtrzymywanie połączenia",

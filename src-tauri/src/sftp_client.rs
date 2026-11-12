@@ -23,6 +23,8 @@ pub struct SftpConfig {
     /// names the one hop it applies to).
     #[serde(default)]
     pub host_key_policy: HostKeyPolicy,
+    #[serde(default)]
+    pub require_known_host_key: bool,
     /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
     /// Timeout" slider. `None` keeps the backend default (10 s).
     #[serde(default = "default_sftp_connect_timeout")]
@@ -170,6 +172,7 @@ fn sftp_transport_config(config: &SftpConfig, window_size: u32) -> client::Confi
         keepalive_interval: options.keepalive_interval,
         keepalive_max: options.keepalive_max,
         host_key_policy: config.host_key_policy.clone(),
+        require_known_host_key: config.require_known_host_key,
         connect_timeout: config.connect_timeout,
         x11: None,
     });
@@ -198,6 +201,7 @@ impl StandaloneSftpClient {
             &config.host,
             config.port,
             config.host_key_policy.clone(),
+            config.require_known_host_key,
             config.tunnel.as_ref(),
             None,
             crate::ssh::fresh_x11_registry(),
@@ -294,6 +298,7 @@ impl StandaloneSftpClient {
                     &config.host,
                     config.port,
                     config.host_key_policy.clone(),
+                    config.require_known_host_key,
                     config.tunnel.as_ref(),
                     None,
                     crate::ssh::fresh_x11_registry(),

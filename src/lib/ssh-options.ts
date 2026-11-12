@@ -14,6 +14,7 @@ export interface SshJumpHost extends SshIdentityOptions {
   password?: string;
   privateKeyPath?: string;
   passphrase?: string;
+  requireKnownHostKey?: boolean;
   compression?: boolean;
   keepAlive?: boolean;
   keepAliveInterval?: number;
@@ -31,6 +32,7 @@ export interface SshConfigSource {
 }
 
 export interface SshExtendedOptions extends SshIdentityOptions {
+  requireKnownHostKey?: boolean;
   jumpHosts?: SshJumpHost[];
   sshConfigSource?: SshConfigSource;
 }
@@ -42,6 +44,7 @@ export function sshExtendedOptions(source: SshExtendedOptions): SshExtendedOptio
     identityAgent: source.identityAgent,
     identitiesOnly: source.identitiesOnly,
     connectTimeout: source.connectTimeout,
+    requireKnownHostKey: source.requireKnownHostKey,
     jumpHosts: source.jumpHosts,
     sshConfigSource: source.sshConfigSource,
   };

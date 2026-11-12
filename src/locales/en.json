@@ -1862,6 +1862,7 @@
       "identityFiles": "Identity files",
       "identityAgent": "SSH Agent",
       "identitiesOnly": "Use only configured identities",
+      "requireKnownHostKey": "Require a matching saved host key",
       "connectTimeout": "Connection timeout (seconds)",
       "compression": "Compression",
       "keepAlive": "Keep alive",

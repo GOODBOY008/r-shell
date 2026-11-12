@@ -176,6 +176,7 @@ fn build_jump_chain(
             auth_method,
             via: chain.map(Box::new),
             options: Some(crate::ssh::JumpConnectionOptions {
+                require_known_host_key: hop.require_known_host_key,
                 connect_timeout: hop.connect_timeout,
                 compression: hop.compression,
                 keepalive_interval: if hop.keep_alive && hop.keep_alive_interval > 0 {
@@ -209,6 +210,8 @@ pub struct ConnectRequest {
     /// "strict" (default), "accept-new" (after the user confirmed a changed
     /// key) or "off" (Host Key Verification switched off in Settings).
     pub host_key_policy: Option<String>,
+    #[serde(default)]
+    pub require_known_host_key: bool,
     /// With "accept-new": the endpoint (target or jump host) whose changed
     /// key the user confirmed. Missing means the target.
     pub accept_new_for: Option<AcceptNewFor>,
@@ -372,6 +375,7 @@ pub async fn ssh_connect(
         proxy,
         tunnel,
         host_key_policy,
+        require_known_host_key: request.require_known_host_key,
         connect_timeout: request.connect_timeout.unwrap_or(3),
         x11: request.x11,
     };
@@ -2860,6 +2864,8 @@ pub struct SftpConnectRequest {
     pub passphrase: Option<String>,
     /// "strict" (default), "accept-new" or "off" — see `HostKeyPolicy`.
     pub host_key_policy: Option<String>,
+    #[serde(default)]
+    pub require_known_host_key: bool,
     /// TCP/SSH handshake timeout in seconds — from the Settings "Connection
     /// Timeout" slider. `None` keeps the backend default (10 s).
     pub connect_timeout: Option<u64>,
@@ -2927,6 +2933,7 @@ pub async fn sftp_connect(
         username: request.username,
         auth_method: auth,
         options: Some(crate::ssh::JumpConnectionOptions {
+            require_known_host_key: false,
             connect_timeout: request.connect_timeout,
             compression: request.compression.unwrap_or(false),
             keepalive_interval: request
@@ -2937,6 +2944,7 @@ pub async fn sftp_connect(
         }),
         tunnel,
         host_key_policy,
+        require_known_host_key: request.require_known_host_key,
         connect_timeout: request.connect_timeout.unwrap_or(10),
     };
 
@@ -5843,6 +5851,7 @@ mod proxy_config_tests {
             key_path: None,
             passphrase: None,
             host_key_policy: None,
+            require_known_host_key: false,
             accept_new_for: None,
             compression: None,
             keepalive_enabled: None,

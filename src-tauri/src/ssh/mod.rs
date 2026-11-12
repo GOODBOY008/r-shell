@@ -132,6 +132,9 @@ pub struct SshConfig {
     /// names the one hop it applies to).
     #[serde(default)]
     pub host_key_policy: HostKeyPolicy,
+    /// Require an already trusted key for the target, independently of Settings.
+    #[serde(default)]
+    pub require_known_host_key: bool,
     /// TCP/SSH handshake timeout in seconds. `None` in the request keeps the
     /// historical hard-coded default; the Settings "Connection Timeout"
     /// slider overrides it per launch.
@@ -224,6 +227,8 @@ pub struct TunnelConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct JumpConnectionOptions {
+    #[serde(default)]
+    pub require_known_host_key: bool,
     pub connect_timeout: Option<u64>,
     pub compression: bool,
     pub keepalive_interval: Option<u64>,
@@ -336,6 +341,8 @@ pub enum HostKeyPolicy {
     /// Verify against known_hosts; record unknown hosts; refuse a changed key.
     #[default]
     Strict,
+    /// OpenSSH StrictHostKeyChecking yes. Verify without modifying known_hosts.
+    KnownHostsOnly,
     /// Like `Strict`, but a changed key of exactly this `host:port` replaces
     /// the recorded one. Sent only after the user confirmed that key in the
     /// "host key changed" dialog; every other hop stays `Strict`.
@@ -450,6 +457,8 @@ pub(crate) fn forget_known_host_lines(path: &Path, lines: &[usize]) -> std::io::
 pub(crate) enum HostKeyVerdict {
     /// The recorded key for this host:port matches.
     Known,
+    /// A matching key was required but no key was recorded.
+    Unknown,
     /// No key was recorded for this host:port; it has now been recorded
     /// (trust on first use).
     Learned,
@@ -458,20 +467,14 @@ pub(crate) enum HostKeyVerdict {
     Replaced,
 }
 
-/// Verify `key` for `host:port` against the known_hosts file at `path`.
-///
-/// A mismatch — including a host recorded with a key of another type —
-/// surfaces as `russh::keys::Error::KeyChanged { line }`; the caller must
-/// refuse the connection. An unknown host is recorded and accepted, which is
-/// what most GUI clients do; a confirmation prompt can be layered on top later.
-pub(crate) fn verify_host_key(
+/// Check the recorded key without adding or replacing an entry.
+fn check_recorded_host_key(
     host: &str,
     port: u16,
     key: &PublicKey,
     path: &Path,
-    accept_new: bool,
-) -> std::result::Result<HostKeyVerdict, russh::keys::Error> {
-    let checked = match check_known_hosts_path(host, port, key, path) {
+) -> std::result::Result<bool, russh::keys::Error> {
+    match check_known_hosts_path(host, port, key, path) {
         // russh only compares keys of the presented algorithm, so a host
         // recorded with another key type looks unknown. Treat that as a
         // changed key: otherwise an impostor could offer just a key type the
@@ -484,8 +487,71 @@ pub(crate) fn verify_host_key(
             }
         }
         other => other,
+    }
+}
+
+fn reject_revoked_host_key(host: &str, port: u16, key: &PublicKey, path: &Path) -> Result<()> {
+    use anyhow::Context;
+    use openssl::{hash::MessageDigest, pkey::PKey, sign::Signer};
+    use ssh_key::known_hosts::HostPatterns;
+    use std::io::{BufRead, BufReader};
+
+    // Russh's known_hosts lookup skips marker lines. Check revocations before
+    // accepting an otherwise matching key under StrictHostKeyChecking yes.
+    let file =
+        std::fs::File::open(path).with_context(|| format!("Could not read {}", path.display()))?;
+    let hostname = host.to_ascii_lowercase();
+    let endpoint = if port == 22 {
+        hostname
+    } else {
+        format!("[{hostname}]:{port}")
     };
-    match checked {
+    for (index, line) in BufReader::new(file).lines().enumerate() {
+        let line = line.with_context(|| format!("Could not read {}", path.display()))?;
+        let mut fields = line.split_ascii_whitespace();
+        if fields.next() != Some("@revoked") {
+            continue;
+        }
+        let (Some(patterns), Some(encoded_key)) = (fields.next(), fields.nth(1)) else {
+            continue;
+        };
+        let Ok(revoked) = parse_public_key_base64(encoded_key) else {
+            continue;
+        };
+        if revoked.key_data() != key.key_data() {
+            continue;
+        }
+
+        let matches = match patterns.parse::<HostPatterns>() {
+            Ok(HostPatterns::Patterns(patterns)) => {
+                crate::ssh_config::host_matches(&patterns, &endpoint)
+            }
+            Ok(HostPatterns::HashedName { salt, hash }) => {
+                let hmac = PKey::hmac(&salt)?;
+                let mut signer = Signer::new(MessageDigest::sha1(), &hmac)?;
+                signer.sign_oneshot_to_vec(endpoint.as_bytes())? == hash
+            }
+            Err(_) => continue,
+        };
+        anyhow::ensure!(
+            !matches,
+            "HOST KEY REVOKED for {host}:{port}. The key is marked revoked at line {} of {}.",
+            index + 1,
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Verify a host key, learning it on first use or replacing it after confirmation.
+pub(crate) fn verify_host_key(
+    host: &str,
+    port: u16,
+    key: &PublicKey,
+    path: &Path,
+    accept_new: bool,
+) -> std::result::Result<HostKeyVerdict, russh::keys::Error> {
+    match check_recorded_host_key(host, port, key, path) {
         Ok(true) => Ok(HostKeyVerdict::Known),
         Ok(false) => {
             russh::keys::known_hosts::learn_known_hosts_path(host, port, key, path)?;
@@ -615,9 +681,36 @@ impl client::Handler for Client {
                 return Ok(false);
             };
             let fingerprint = presented.fingerprint(HashAlg::Sha256).to_string();
-            let accept_new = self.policy.accepts_new_key_for(&self.host, self.port);
-            match verify_host_key(&self.host, self.port, &presented, path, accept_new) {
+            let verdict = if self.policy == HostKeyPolicy::KnownHostsOnly {
+                check_recorded_host_key(&self.host, self.port, &presented, path).map(|known| {
+                    if known {
+                        HostKeyVerdict::Known
+                    } else {
+                        HostKeyVerdict::Unknown
+                    }
+                })
+            } else {
+                let accept_new = self.policy.accepts_new_key_for(&self.host, self.port);
+                verify_host_key(&self.host, self.port, &presented, path, accept_new)
+            };
+            match verdict {
+                Ok(HostKeyVerdict::Known) if self.policy == HostKeyPolicy::KnownHostsOnly => {
+                    match reject_revoked_host_key(&self.host, self.port, &presented, path) {
+                        Ok(()) => Ok(true),
+                        Err(error) => {
+                            self.report.set(HostKeyRejection::Other(error.to_string()));
+                            Ok(false)
+                        }
+                    }
+                }
                 Ok(HostKeyVerdict::Known) => Ok(true),
+                Ok(HostKeyVerdict::Unknown) => {
+                    self.report.set(HostKeyRejection::Other(format!(
+                        "Refusing to connect to {}:{}: StrictHostKeyChecking yes requires an existing matching host key in {}.",
+                        self.host, self.port, path.display()
+                    )));
+                    Ok(false)
+                }
                 Ok(HostKeyVerdict::Learned) => {
                     tracing::info!(
                         "Host key for {}:{} was not in {}; recorded it (trust on first use). Fingerprint: {}",
@@ -639,13 +732,19 @@ impl client::Handler for Client {
                     Ok(true)
                 }
                 Err(russh::keys::Error::KeyChanged { line }) => {
-                    self.report.set(HostKeyRejection::Changed(HostKeyChanged {
+                    let changed = HostKeyChanged {
                         host: self.host.clone(),
                         port: self.port,
                         fingerprint,
                         line,
                         file: path.display().to_string(),
-                    }));
+                    };
+                    self.report
+                        .set(if self.policy == HostKeyPolicy::KnownHostsOnly {
+                            HostKeyRejection::Other(changed.to_string())
+                        } else {
+                            HostKeyRejection::Changed(changed)
+                        });
                     Ok(false)
                 }
                 Err(e) => {
@@ -968,6 +1067,7 @@ pub async fn connect_via_ssh_tunnel(
         &tunnel.host,
         tunnel.port,
         policy,
+        options.require_known_host_key,
         tunnel.via.as_deref(),
         None,
         fresh_x11_registry(),
@@ -1028,12 +1128,18 @@ pub(crate) async fn dial_ssh(
     host: &str,
     port: u16,
     policy: HostKeyPolicy,
+    require_known_host_key: bool,
     tunnel: Option<&TunnelConfig>,
     proxy: Option<&ProxyConfig>,
     registry: Arc<crate::x11::X11DispatcherRegistry>,
     timeout: Duration,
 ) -> Result<client::Handle<Client>> {
-    let (handler, report) = Client::new(host, port, policy.clone(), registry);
+    let endpoint_policy = if require_known_host_key {
+        HostKeyPolicy::KnownHostsOnly
+    } else {
+        policy.clone()
+    };
+    let (handler, report) = Client::new(host, port, endpoint_policy, registry);
     let config = Arc::new(config);
     let result = if let Some(tunnel) = tunnel {
         let stream = connect_via_ssh_tunnel(tunnel, host, port, timeout, policy).await?;
@@ -1113,6 +1219,7 @@ impl SshClient {
             &config.host,
             config.port,
             config.host_key_policy.clone(),
+            config.require_known_host_key,
             config.tunnel.as_ref(),
             config.proxy.as_ref(),
             self.x11_registry.clone(),
@@ -1176,6 +1283,7 @@ impl SshClient {
                     &config.host,
                     config.port,
                     config.host_key_policy.clone(),
+                    config.require_known_host_key,
                     config.tunnel.as_ref(),
                     config.proxy.as_ref(),
                     fresh_x11_registry(),
@@ -2152,6 +2260,96 @@ mod host_key_tests {
             "{reason}"
         );
         assert!(reason.contains("man-in-the-middle"), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn known_hosts_only_refuses_unknown_and_changed_keys_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let genuine = fresh_key();
+        let key = russh::keys::PublicKeyOrCertificate::PublicKey {
+            key: genuine.clone(),
+            hash_alg: None,
+        };
+        let (mut handler, report) = Client::with_known_hosts(
+            "example.test",
+            2222,
+            Some(path.clone()),
+            HostKeyPolicy::KnownHostsOnly,
+            fresh_x11_registry(),
+        );
+
+        assert!(!client::Handler::check_server_key(&mut handler, &key)
+            .await
+            .unwrap());
+        assert!(!path.exists());
+        assert!(report
+            .explain_or(anyhow::anyhow!("fallback"))
+            .to_string()
+            .contains("StrictHostKeyChecking yes requires an existing matching host key"));
+
+        russh::keys::known_hosts::learn_known_hosts_path("example.test", 2222, &genuine, &path)
+            .unwrap();
+        let saved = std::fs::read(&path).unwrap();
+        assert!(client::Handler::check_server_key(&mut handler, &key)
+            .await
+            .unwrap());
+        let impostor = russh::keys::PublicKeyOrCertificate::PublicKey {
+            key: fresh_key(),
+            hash_alg: None,
+        };
+        assert!(!client::Handler::check_server_key(&mut handler, &impostor)
+            .await
+            .unwrap());
+        let error = report.explain_or(anyhow::anyhow!("fallback"));
+        assert!(error.to_string().contains("HOST KEY CHANGED"));
+        assert!(error.downcast_ref::<HostKeyChanged>().is_none());
+        assert_eq!(std::fs::read(path).unwrap(), saved);
+    }
+
+    #[tokio::test]
+    async fn known_hosts_only_refuses_a_matching_key_marked_revoked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_hosts");
+        let genuine = fresh_key();
+        let openssh_key = genuine.to_openssh().unwrap();
+        let key = russh::keys::PublicKeyOrCertificate::PublicKey {
+            key: genuine,
+            hash_alg: None,
+        };
+        let (mut handler, report) = Client::with_known_hosts(
+            "example.test",
+            2222,
+            Some(path.clone()),
+            HostKeyPolicy::KnownHostsOnly,
+            fresh_x11_registry(),
+        );
+        // The hash corresponds to [example.test]:2222.
+        for (pattern, revoked) in [
+            ("[example.test]:2222", true),
+            ("[*.test]:2222", true),
+            (
+                "|1|AAECAwQFBgcICQoLDA0ODxAREhM=|/g38uz6gRmO/plWgFJRPmq0BgG8=",
+                true,
+            ),
+            ("[other.test]:2222", false),
+            ("[*.test]:2222,![example.test]:2222", false),
+        ] {
+            let saved = format!(
+                "[example.test]:2222 {openssh_key}\n@revoked\t{pattern}\t{openssh_key}\n"
+            );
+            std::fs::write(&path, &saved).unwrap();
+            let accepted = client::Handler::check_server_key(&mut handler, &key)
+                .await
+                .unwrap();
+            assert_eq!(accepted, !revoked, "{pattern}");
+            if revoked {
+                let error = report.explain_or(anyhow::anyhow!("fallback"));
+                assert!(error.to_string().contains("HOST KEY REVOKED"));
+                assert!(error.downcast_ref::<HostKeyChanged>().is_none());
+            }
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), saved);
+        }
     }
 
     #[tokio::test]

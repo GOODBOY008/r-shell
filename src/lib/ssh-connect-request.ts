@@ -104,6 +104,7 @@ export interface SshConnectRequest extends SshIdentityRequest, ProxyConnectField
   passphrase: string | null;
   /** See `HostKeyPolicy`; derived from Settings unless overridden for a retry. */
   host_key_policy: HostKeyPolicy;
+  require_known_host_key?: boolean;
   /** With `accept-new`: the endpoint (target or jump host) whose changed key the user confirmed. */
   accept_new_for?: { host: string; port: number };
   /** Seconds; `null` keeps the backend default (see `getConnectionTimeoutSetting`). */
@@ -152,6 +153,7 @@ export function buildSshConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
+    require_known_host_key: source.requireKnownHostKey,
     connect_timeout: source.connectTimeout ?? getConnectionTimeoutSetting(),
     compression: source.compression !== false,
     keepalive_enabled: keepAlive,
@@ -210,6 +212,7 @@ export interface SftpConnectRequest extends SshIdentityRequest {
   passphrase: string | null;
   /** Same policy as SSH sessions; derived from the Settings switch. */
   host_key_policy: HostKeyPolicy;
+  require_known_host_key?: boolean;
   /** Seconds; `null` keeps the backend default (see `getConnectionTimeoutSetting`). */
   connect_timeout: number | null;
   tunnel_enabled: boolean;
@@ -249,6 +252,7 @@ export function buildSftpConnectRequest(
     key_path: source.privateKeyPath || null,
     passphrase: source.passphrase || null,
     host_key_policy: getHostKeyPolicy(),
+    require_known_host_key: source.requireKnownHostKey,
     connect_timeout: source.connectTimeout ?? getConnectionTimeoutSetting(),
     tunnel_enabled: tunnelEnabled,
     tunnel_host: tunnelEnabled ? (source.tunnelHost || null) : null,
