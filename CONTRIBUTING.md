@@ -23,22 +23,11 @@ This project adheres to a code of conduct that all contributors are expected to 
 
 ### 🐛 Reporting Bugs
 
-Before creating bug reports, please check existing issues to avoid duplicates. When creating a bug report, include:
-
-- **Clear title and description**
-- **Steps to reproduce** the issue
-- **Expected vs actual behavior**
-- **Screenshots** if applicable
-- **Environment details** (OS, Rust version, Node version)
+Search [existing issues](https://github.com/GOODBOY008/r-shell/issues?q=is%3Aissue), then choose **Bug report** in the [issue chooser](https://github.com/GOODBOY008/r-shell/issues/new/choose). Include your R-Shell version, local OS, steps to reproduce, and what you expected to happen. If the issue involves a remote connection, include the protocol and any relevant server details. Remove credentials and sensitive host details from logs and screenshots.
 
 ### 💡 Suggesting Enhancements
 
-Enhancement suggestions are tracked as GitHub issues. When suggesting an enhancement:
-
-- **Use a clear and descriptive title**
-- **Provide a detailed description** of the suggested enhancement
-- **Explain why this enhancement would be useful**
-- **Include mockups or examples** if applicable
+Use [Ideas](https://github.com/GOODBOY008/r-shell/discussions/categories/ideas) to explore a proposal with the community. For a specific change you want the project to track, choose **Feature request** in the [issue chooser](https://github.com/GOODBOY008/r-shell/issues/new/choose) and describe your use case and proposed behavior.
 
 ### 🔧 Pull Requests
 
@@ -198,7 +187,7 @@ We especially welcome contributions in these areas:
 
 - 📖 Read the [README](README.md) and documentation
 - 🔍 Search existing [issues](https://github.com/GOODBOY008/r-shell/issues)
-- 💬 Ask questions in [Discussions](https://github.com/GOODBOY008/r-shell/discussions)
+- 💬 Ask installation, configuration, and usage questions in [Discussions Q&A](https://github.com/GOODBOY008/r-shell/discussions/categories/q-a)
 
 ### Recognition
 

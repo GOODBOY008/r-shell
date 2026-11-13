@@ -1,0 +1,44 @@
+name: Bug report
+description: Report something that does not work as expected in R-Shell.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please [search existing issues](https://github.com/GOODBOY008/r-shell/issues?q=is%3Aissue) before opening a report.
+        For setup or troubleshooting questions, use [Q&A](https://github.com/GOODBOY008/r-shell/discussions/categories/q-a).
+        Remove passwords, tokens, private keys, and sensitive host details from anything you share.
+  - type: input
+    id: version
+    attributes:
+      label: R-Shell version
+      description: Include how you installed it (e.g. Homebrew, installer, or a build from source).
+      placeholder: "Example: 3.2.0 via Homebrew"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Local operating system and architecture
+      placeholder: "Example: macOS 26 on Apple Silicon"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: If it involves a remote connection, include the protocol and remote OS or server software if known.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual and expected behavior
+      description: Tell us what happened, what you expected, and whether it happens every time.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or additional context
+      description: Include relevant error messages or sanitized attachments if available.

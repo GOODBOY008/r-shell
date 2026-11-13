@@ -321,8 +321,8 @@ MIT — see [LICENSE](LICENSE).
 
 ## 💬 Community
 
-- [Issues](https://github.com/GOODBOY008/r-shell/issues)
-- [Discussions](https://github.com/GOODBOY008/r-shell/discussions)
+- [Issues](https://github.com/GOODBOY008/r-shell/issues) — Search existing reports, then [report a bug or request a feature](https://github.com/GOODBOY008/r-shell/issues/new/choose).
+- [Discussions](https://github.com/GOODBOY008/r-shell/discussions) — Ask for help in [Q&A](https://github.com/GOODBOY008/r-shell/discussions/categories/q-a) or talk through a proposal in [Ideas](https://github.com/GOODBOY008/r-shell/discussions/categories/ideas).
 - [Pull Requests](https://github.com/GOODBOY008/r-shell/pulls)
 
 ## 🙏 Acknowledgments

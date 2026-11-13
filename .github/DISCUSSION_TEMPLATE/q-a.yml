@@ -1,0 +1,19 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please [check existing questions](https://github.com/GOODBOY008/r-shell/discussions/categories/q-a) first.
+        If you can reproduce a bug, [open an issue](https://github.com/GOODBOY008/r-shell/issues/new/choose).
+        Remove passwords, tokens, private keys, and sensitive host details before posting.
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+      description: Tell us where you're stuck and include any relevant error message.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Environment and what you tried
+      description: Include your R-Shell version, operating system, and connection protocol if relevant.
