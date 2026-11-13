@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and troubleshooting
+    url: https://github.com/GOODBOY008/r-shell/discussions/categories/q-a
+    about: Get help with installation, configuration, and using R-Shell.
+  - name: Ideas and feedback
+    url: https://github.com/GOODBOY008/r-shell/discussions/categories/ideas
+    about: Discuss an idea with the community or share feedback.

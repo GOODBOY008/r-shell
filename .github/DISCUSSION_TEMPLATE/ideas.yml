@@ -1,0 +1,18 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please [check existing ideas](https://github.com/GOODBOY008/r-shell/discussions/categories/ideas) first.
+        For a specific change you would like the project to track, use the [Feature request form](https://github.com/GOODBOY008/r-shell/issues/new?template=02-feature-request.yml).
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to see?
+      description: Describe the idea and how it would help you use R-Shell.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Examples or alternatives
+      description: Share a workflow, mockup, or workaround that illustrates the idea.
