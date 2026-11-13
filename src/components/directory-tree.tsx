@@ -17,6 +17,8 @@ interface DirectoryTreeProps {
   onNavigate: (path: string) => void;
   disabled?: boolean;
   renderContextMenu?: (path: string) => React.ReactNode;
+  /** Reload these directory listings when the caller completes a mutation. */
+  refreshPaths?: readonly string[];
   /**
    * Cached expanded paths to restore on loadDirectory change (connection switch).
    * When provided, the tree uses these instead of resetting to just "/".
@@ -82,6 +84,7 @@ export function DirectoryTree({
   onNavigate,
   disabled = false,
   renderContextMenu,
+  refreshPaths,
   initialExpanded,
   initialNodes,
   onSaveState,
@@ -101,22 +104,22 @@ export function DirectoryTree({
   const lastAutoScrolledPathRef = useRef<string | null>(null);
 
   const nodesRef = useRef(nodes);
-  const loadingRef = useRef(loading);
+  const requestsRef = useRef(new Map<string, symbol>());
 
   useEffect(() => {
     nodesRef.current = nodes;
   }, [nodes]);
 
-  useEffect(() => {
-    loadingRef.current = loading;
-  }, [loading]);
-
   const loadChildren = useCallback(
-    async (path: string) => {
+    async (path: string, refresh = false) => {
       const normalizedPath = normalizePath(path);
       if (disabled) return;
-      if (nodesRef.current.has(normalizedPath)) return;
-      if (loadingRef.current.has(normalizedPath)) return;
+      if (!refresh && (nodesRef.current.has(normalizedPath) || requestsRef.current.has(normalizedPath))) return;
+
+      // A refresh replaces any earlier request for this path. Connection
+      // changes clear all requests so a response from the old host is ignored.
+      const request = Symbol();
+      requestsRef.current.set(normalizedPath, request);
 
       setLoading((prev) => {
         const next = new Set(prev);
@@ -126,6 +129,7 @@ export function DirectoryTree({
 
       try {
         const names = await loadDirectory(normalizedPath);
+        if (requestsRef.current.get(normalizedPath) !== request) return;
 
         const childNodes = names
           .map((name) => ({
@@ -142,15 +146,20 @@ export function DirectoryTree({
           return next;
         });
       } catch (err) {
-        notify.error(t('directoryTree.loadFailed'), {
-          description: `${normalizedPath}: ${err instanceof Error ? err.message : String(err)}`,
-        });
+        if (requestsRef.current.get(normalizedPath) === request) {
+          notify.error(t('directoryTree.loadFailed'), {
+            description: `${normalizedPath}: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
       } finally {
-        setLoading((prev) => {
-          const next = new Set(prev);
-          next.delete(normalizedPath);
-          return next;
-        });
+        if (requestsRef.current.get(normalizedPath) === request) {
+          requestsRef.current.delete(normalizedPath);
+          setLoading((prev) => {
+            const next = new Set(prev);
+            next.delete(normalizedPath);
+            return next;
+          });
+        }
       }
     },
     [loadDirectory, disabled],
@@ -161,20 +170,16 @@ export function DirectoryTree({
   // restore those — preserving which directories were expanded and already loaded.
   // Without cached state (fresh connection), fall back to clean defaults.
   //
-  // IMPORTANT: nodesRef and loadingRef are updated synchronously here (not just
-  // via their own useEffect) so that loadChildren — which runs later in the same
-  // effect cycle — sees the reset/restored values instead of stale data from the
-  // previous connection.  Without this, loadChildren's guard
-  // `nodesRef.current.has(path)` would return true for the old connection's
-  // loaded paths and skip the fresh load, leaving the tree showing only "/".
+  // Reset the refs before the loading effects below run. Otherwise a cached
+  // listing or pending request from the old connection could skip a new load.
   useEffect(() => {
-    const newNodes = initialNodes ? new Map(initialNodes) : new Map();
+    const newNodes = new Map<string, TreeNode[]>(initialNodes);
     setNodes(newNodes);
     nodesRef.current = newNodes;
 
     setExpanded(initialExpanded ? new Set(initialExpanded) : new Set(["/"]));
     setLoading(new Set());
-    loadingRef.current = new Set();
+    requestsRef.current.clear();
 
     // Restore cached scroll position after the reset render.
     // The currentPath effect below will scroll to the active row afterwards,
@@ -186,6 +191,12 @@ export function DirectoryTree({
     // brought into view again even if it did not change.
     lastAutoScrolledPathRef.current = null;
   }, [loadDirectory, initialExpanded, initialNodes, initialScrollTop]);
+
+  useEffect(() => {
+    for (const path of refreshPaths ?? []) {
+      void loadChildren(path, true);
+    }
+  }, [refreshPaths, loadChildren]);
 
   useEffect(() => {
     const normalized = normalizePath(currentPath);

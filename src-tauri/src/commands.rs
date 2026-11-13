@@ -1273,34 +1273,12 @@ async fn copy_remote_path(
 }
 
 fn exact_remote_file_command(operation: &str, source_path: &str, dest_path: &str) -> String {
-    let source = quote_remote_shell_arg(source_path);
-    let target = quote_remote_shell_arg(dest_path);
-    // Use sh for the guard, regardless of the remote account's login shell.
-    // Pass both paths as arguments so they cannot affect the script.
-    format!(
-        r#"sh -c '
-if [ -d "$2" ]; then
-    printf "Destination is an existing directory: %s\n" "$2" >&2
-    exit 1
-fi
-exec {operation} -- "$1" "$2"
-' sh {source} {target}"#
+    crate::ssh::remote_shell::sh_with_args(
+        &format!(
+            r#"if [ -d "$2" ]; then printf "Destination is an existing directory: %s\n" "$2" >&2; exit 1; fi; exec {operation} -- "$1" "$2""#
+        ),
+        &[source_path, dest_path],
     )
-}
-
-fn quote_remote_shell_arg(value: &str) -> String {
-    let mut quoted = String::from("'");
-    for character in value.chars() {
-        match character {
-            '\'' => quoted.push_str("'\"'\"'"),
-            // Fish treats a backslash before a quote or backslash as an
-            // escape inside single quotes. Use a double-quoted fragment.
-            '\\' => quoted.push_str("'\"\\\\\"'"),
-            other => quoted.push(other),
-        }
-    }
-    quoted.push('\'');
-    quoted
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -6086,10 +6064,10 @@ mod deadline_tests {
 #[cfg(test)]
 mod shell_escape_tests {
     use super::{
-        copy_remote_path, exact_remote_file_command, quote_remote_shell_arg,
-        shell_escape_single_quoted, validate_kill_args,
+        copy_remote_path, exact_remote_file_command, shell_escape_single_quoted, validate_kill_args,
     };
     use crate::ls_parser::parse_ls_long_line;
+    use crate::ssh::remote_shell::sh_with_args;
     use crate::ssh::{AuthMethod, HostKeyPolicy, SshClient, SshConfig};
 
     #[test]
@@ -6109,8 +6087,7 @@ mod shell_escape_tests {
         let mut client = SshClient::new();
         client
             .connect(&SshConfig {
-                host: std::env::var("RSHELL_TEST_SSH_HOST")
-                    .unwrap_or_else(|_| "127.0.0.1".into()),
+                host: std::env::var("RSHELL_TEST_SSH_HOST").unwrap_or_else(|_| "127.0.0.1".into()),
                 port: std::env::var("RSHELL_TEST_SSH_PORT")
                     .ok()
                     .and_then(|value| value.parse().ok())
@@ -6133,23 +6110,22 @@ mod shell_escape_tests {
             .await
             .expect("connect to Docker SSH fixture");
 
-        let directory = client.execute_command("mktemp -d").await.unwrap();
-        let directory = directory.trim();
-        let quoted = quote_remote_shell_arg(directory);
-        let name = "  采购  O'Brien 2024-12-25 23:59.pdf";
+        let scratch = client.execute_command("mktemp -d").await.unwrap();
+        let scratch = scratch.trim();
+        let directory = format!("{scratch}/report's folder!\\");
+        let name = "  采购  O'Brien 2024-12-25 23:59!.pdf";
         let source = format!("{directory}/{name}");
         let dest = format!("{directory}/dist/{name}");
-        let quoted_source = quote_remote_shell_arg(&source);
-        let quoted_dest = quote_remote_shell_arg(&dest);
         let outcome = async {
             client
-                .execute_command(&format!(
-                    "mkdir {quoted}/dist && printf '%s' '%PDF-1.7' > {quoted_source}"
+                .execute_command(&sh_with_args(
+                    r#"mkdir -p "$1/dist" && printf "%s" "%PDF-1.7" > "$2""#,
+                    &[&directory, &source],
                 ))
                 .await?;
             let info = crate::os_detect::detect_os(&client).await;
             let listing = client
-                .execute_command(&info.list_files_cmd(directory))
+                .execute_command(&info.list_files_cmd(&directory))
                 .await?;
             let entry = listing
                 .lines()
@@ -6162,7 +6138,7 @@ mod shell_escape_tests {
                 .await
                 .map_err(anyhow::Error::msg)?;
             client
-                .execute_command(&format!("cmp {quoted_source} {quoted_dest}"))
+                .execute_command(&sh_with_args(r#"cmp "$1" "$2""#, &[&source, &dest]))
                 .await?;
 
             let error = copy_remote_path(&client, &source, &format!("{directory}/missing/{name}"))
@@ -6173,8 +6149,9 @@ mod shell_escape_tests {
             let folder = format!("{directory}/release");
             let folder_dest = format!("{directory}/dist/release");
             client
-                .execute_command(&format!(
-                    "mkdir {quoted}/release && cp -- {quoted_source} {quoted}/release/"
+                .execute_command(&sh_with_args(
+                    r#"mkdir "$1" && cp -- "$2" "$1/""#,
+                    &[&folder, &source],
                 ))
                 .await?;
             copy_remote_path(&client, &folder, &folder_dest)
@@ -6183,16 +6160,21 @@ mod shell_escape_tests {
             let error = copy_remote_path(&client, &folder, &folder_dest)
                 .await
                 .expect_err("pasting a folder twice should report a directory conflict");
-            assert!(error.contains("Destination is an existing directory"), "{error}");
+            assert!(
+                error.contains("Destination is an existing directory"),
+                "{error}"
+            );
             client
-                .execute_command(&format!("test ! -e {quoted}/dist/release/release"))
+                .execute_command(&sh_with_args(
+                    r#"if [ -e "$1/release" ]; then exit 1; fi"#,
+                    &[&folder_dest],
+                ))
                 .await?;
 
-            let literal_name = r"quote' and backslash\";
+            let literal_name = "quote' and backslash!\\\n";
             let old_path = format!("{directory}/{literal_name}");
-            let quoted_old_path = quote_remote_shell_arg(&old_path);
             client
-                .execute_command(&format!("printf data > {quoted_old_path}"))
+                .execute_command(&sh_with_args(r#"printf data > "$1""#, &[&old_path]))
                 .await?;
             let new_path = format!("{directory}/moved");
             client
@@ -6206,7 +6188,7 @@ mod shell_escape_tests {
                 .to_string()
                 .contains("Destination is an existing directory"));
             client
-                .execute_command(&format!("test -f {quoted}/moved"))
+                .execute_command(&sh_with_args(r#"test -f "$1""#, &[&new_path]))
                 .await?;
             assert_eq!(
                 client
@@ -6217,7 +6199,9 @@ mod shell_escape_tests {
             Ok::<(), anyhow::Error>(())
         }
         .await;
-        let _ = client.execute_command(&format!("rm -rf -- {quoted}")).await;
+        let _ = client
+            .execute_command(&sh_with_args(r#"rm -rf -- "$1""#, &[scratch]))
+            .await;
         outcome.unwrap();
     }
 

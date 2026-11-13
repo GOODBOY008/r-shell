@@ -24,6 +24,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+pub(crate) mod remote_shell;
+
 /// Preferred host-key algorithms advertised to the server, ordered from most to
 /// least preferred.  The legacy `ssh-rsa` (SHA-1) entry is kept so that older
 /// servers that only offer bare-RSA host keys are still reachable. In russh

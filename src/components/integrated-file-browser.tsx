@@ -198,6 +198,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [isPasting, setIsPasting] = useState(false);
   const pasteInProgressRef = useRef(false);
   const pendingPasteChangeRef = useRef<PasteChange | null>(null);
+  const [treeRefresh, setTreeRefresh] = useState<{ connectionId: string; paths: string[] } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [newFileName, setNewFileName] = useState('');
   const [deletingFiles, setDeletingFiles] = useState<FileItem[] | null>(null);
@@ -1259,11 +1260,28 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         });
       }
       if (pastedCount > 0) {
+        const pastedEntries = entries.slice(0, pastedCount);
         pendingPasteChangeRef.current = {
           connectionId,
           destination: directory,
-          movedFrom: operation === 'cut' ? entries.slice(0, pastedCount).map(file => parentPath(file.path)) : [],
+          movedFrom: operation === 'cut' ? pastedEntries.map(file => parentPath(file.path)) : [],
         };
+        const pastedFolders = pastedEntries.filter(file => file.type === 'directory');
+        if (pastedFolders.length) {
+          const paths = new Set([normalizePathSeparators(directory)]);
+          if (operation === 'cut') {
+            for (const folder of pastedFolders) paths.add(parentPath(folder.path));
+          }
+          // A paste can complete after switching sessions. Invalidate the
+          // source session's saved listings as well as refreshing the live tree.
+          const cached = treeStateCache.get(connectionId);
+          if (cached) {
+            const nodes = new Map(cached.nodes);
+            for (const path of paths) nodes.delete(path);
+            treeStateCache.set(connectionId, { ...cached, nodes });
+          }
+          setTreeRefresh({ connectionId, paths: [...paths] });
+        }
       }
       pasteInProgressRef.current = false;
       setIsPasting(false);
@@ -1804,6 +1822,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
               initialScrollTop={treeInitialScrollTop}
               onSaveState={handleSaveTreeState}
               onSaveScroll={handleSaveTreeScroll}
+              refreshPaths={treeRefresh?.connectionId === connectionId ? treeRefresh.paths : undefined}
               renderContextMenu={path => (
                 <ContextMenuContent>
                   <ContextMenuItem onSelect={() => navigateTo(path)}>

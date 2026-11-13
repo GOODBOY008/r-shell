@@ -392,6 +392,35 @@ describe('IntegratedFileBrowser copy and paste menus', () => {
     expect(list.getByText('release.txt')).toBeTruthy();
   });
 
+  it('refreshes the source and destination branches after moving a folder from the tree menu', async () => {
+    const folder = { ...dist, name: 'release' };
+    const existing = { ...dist, name: 'existing' };
+    let moved = false;
+    mocks.invoke.mockImplementation(async (command: string, { path }: { path?: string }) => {
+      if (command === 'rename_file') {
+        moved = true;
+        return true;
+      }
+      if (path === '/') return [{ ...dist, name: 'home' }];
+      if (path === '/home') return moved ? [dist] : [dist, folder];
+      if (path === '/home/dist') return moved ? [existing, folder] : [existing];
+      return [];
+    });
+    render(<IntegratedFileBrowser connectionId="tree-move-folder" isConnected onClose={() => {}} />);
+    const list = within(screen.getByRole('region', { name: 'Remote files' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand home' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand dist' }));
+    expect(await screen.findByRole('button', { name: 'Navigate to /home/dist/existing' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Navigate to /home/release' })).toBeTruthy();
+
+    await chooseMenuItem(await list.findByText('release'), 'Cut');
+    await chooseMenuItem(screen.getByRole('button', { name: 'Navigate to /home/dist' }), 'Paste into Folder');
+
+    expect(await screen.findByRole('button', { name: 'Navigate to /home/dist/release' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Navigate to /home/release' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Navigate to /home/dist/existing' })).toBeTruthy();
+  });
+
   it.each(['/home/dist', '/home//dist/'])('refreshes %s when it is opened before a paste completes', async destination => {
     let completeCopy!: () => void;
     let copied = false;

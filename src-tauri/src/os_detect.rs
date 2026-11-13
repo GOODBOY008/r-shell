@@ -115,52 +115,17 @@ impl OsInfoCache {
     }
 }
 
-/// The single round-trip OS/tool probe run by [`detect_os`]. A const (not a
-/// local) so tests can pin its shape — see `test_os_probe_scans_all_top_output`.
-const OS_PROBE_COMMAND: &str = r#"
-sh -c '
-  # 1. /etc/os-release (present on all modern distros)
-  if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    echo "ID=${ID:-unknown}"
-    echo "PRETTY_NAME=${PRETTY_NAME:-unknown}"
-    echo "ID_LIKE=${ID_LIKE:-}"
-  else
-    echo "ID=unknown"
-    echo "PRETTY_NAME=unknown"
-    echo "ID_LIKE="
-  fi
-
-  # 2. Kernel name
-  echo "UNAME=$(uname -s 2>/dev/null || echo unknown)"
-
-  # 3. Tool probes
-  command -v ss >/dev/null 2>&1 && echo "HAS_SS=1" || echo "HAS_SS=0"
-
-  # procps-ng top prints "top -"/"procps-ng" in its version line; BusyBox
-  # prints "BusyBox" — but since BusyBox ~1.31 `top -v` prints its
-  # option-error line FIRST and the banner second, so the whole output is
-  # scanned, never just the first line (#244: head -1 made every modern
-  # Alpine host read as procps, emptying the process panel). Scanning to
-  # EOF is deliberate: every real top (procps, BusyBox, toybox, macOS/BSD)
-  # exits on -v, and a hypothetical non-terminating one is bounded by the
-  # command timeout anyway.
-  if top -v 2>&1 | grep -qi busybox; then
-    echo "HAS_PROCPS_TOP=0"
-  else
-    echo "HAS_PROCPS_TOP=1"
-  fi
-
-  # GNU ls supports --version; BusyBox does not. (The GNU banner is the first
-  # line, so head -1 is fine here — and a BusyBox miss lands on the correct
-  # side of the default either way.)
-  if ls --version 2>&1 | head -1 | grep -Eqi "GNU|coreutils"; then
-    echo "HAS_GNU_COREUTILS=1"
-  else
-    echo "HAS_GNU_COREUTILS=0"
-  fi
-'
-"#;
+/// The single round-trip OS/tool probe run by [`detect_os`].
+const OS_PROBE_SCRIPT: &str = concat!(
+    r#"if [ -f /etc/os-release ]; then . /etc/os-release; fi; "#,
+    r#"echo "ID=${ID:-unknown}"; echo "PRETTY_NAME=${PRETTY_NAME:-unknown}"; echo "ID_LIKE=${ID_LIKE:-}"; "#,
+    r#"echo "UNAME=$(uname -s 2>/dev/null || echo unknown)"; "#,
+    r#"command -v ss >/dev/null 2>&1 && echo "HAS_SS=1" || echo "HAS_SS=0"; "#,
+    // BusyBox top prints the banner after the option-error line (#244).
+    r#"if top -v 2>&1 | grep -qi busybox; then echo "HAS_PROCPS_TOP=0"; else echo "HAS_PROCPS_TOP=1"; fi; "#,
+    // GNU ls prints its banner on the first line; BusyBox does not support --version.
+    r#"if ls --version 2>&1 | head -1 | grep -Eqi "GNU|coreutils"; then echo "HAS_GNU_COREUTILS=1"; else echo "HAS_GNU_COREUTILS=0"; fi"#,
+);
 
 /// Detect the remote OS by running a lightweight probe command over SSH.
 ///
@@ -168,7 +133,8 @@ sh -c '
 /// falls back to uname, and probes for tool availability — all in one
 /// round-trip to minimise latency.
 pub async fn detect_os(client: &crate::ssh::SshClient) -> OsInfo {
-    let output = match client.execute_command(OS_PROBE_COMMAND).await {
+    let command = crate::ssh::remote_shell::sh_with_args(OS_PROBE_SCRIPT, &[]);
+    let output = match client.execute_command(&command).await {
         Ok(o) => o,
         Err(_) => return OsInfo::default(),
     };
@@ -490,17 +456,13 @@ done
     /// List files command.
     /// GNU ls supports `--time-style=long-iso`; BusyBox and macOS do not.
     pub fn list_files_cmd(&self, path: &str) -> String {
-        fn shell_quote(value: &str) -> String {
-            format!("'{}'", value.replace('\'', "'\"'\"'"))
-        }
-
-        let quoted_path = shell_quote(path);
-        if self.has_gnu_coreutils {
-            format!("LC_ALL=C ls -laN --color=never --time-style=long-iso -- {quoted_path}")
+        let script = if self.has_gnu_coreutils {
+            r#"LC_ALL=C ls -laN --color=never --time-style=long-iso -- "$1""#
         } else {
             // BusyBox replaces Unicode filenames with '?' in the C locale.
-            format!("LC_ALL=C.UTF-8 ls -la -- {quoted_path}")
-        }
+            r#"LC_ALL=C.UTF-8 ls -la -- "$1""#
+        };
+        crate::ssh::remote_shell::sh_with_args(script, &[path])
     }
 }
 
@@ -517,11 +479,11 @@ mod tests {
     #[test]
     fn test_os_probe_scans_all_top_output() {
         assert!(
-            OS_PROBE_COMMAND.contains("top -v 2>&1 | grep -qi busybox"),
+            OS_PROBE_SCRIPT.contains("top -v 2>&1 | grep -qi busybox"),
             "the busybox probe must scan the whole top -v output"
         );
         assert!(
-            !OS_PROBE_COMMAND.contains("head -1 | grep -qi busybox"),
+            !OS_PROBE_SCRIPT.contains("head -1 | grep -qi busybox"),
             "head -1 misses the banner on BusyBox >= 1.31 (option-error line first)"
         );
     }
@@ -696,19 +658,6 @@ mod tests {
             ..Default::default()
         };
         assert!(!info.list_files_cmd("/tmp").contains("--time-style"));
-    }
-
-    #[test]
-    fn test_list_files_quotes_apostrophes() {
-        let info = OsInfo {
-            has_gnu_coreutils: true,
-            ..Default::default()
-        };
-
-        assert_eq!(
-            info.list_files_cmd("/tmp/dir's folder"),
-            "LC_ALL=C ls -laN --color=never --time-style=long-iso -- '/tmp/dir'\"'\"'s folder'"
-        );
     }
 
     // Regression for #188: the macOS memory command parsed vm_stat with the
