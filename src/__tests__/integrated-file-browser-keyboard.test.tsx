@@ -392,7 +392,7 @@ describe('IntegratedFileBrowser copy and paste menus', () => {
     expect(list.getByText('release.txt')).toBeTruthy();
   });
 
-  it('refreshes the destination when it is opened before a paste completes', async () => {
+  it.each(['/home/dist', '/home//dist/'])('refreshes %s when it is opened before a paste completes', async destination => {
     let completeCopy!: () => void;
     let copied = false;
     mocks.invoke.mockImplementation(async (command: string, { path }: { path?: string }) => {
@@ -402,13 +402,16 @@ describe('IntegratedFileBrowser copy and paste menus', () => {
         });
       }
       if (command === 'list_files' && path === '/home') return [source, dist];
-      return command === 'list_files' && path === '/home/dist' && copied ? [source] : [];
+      return command === 'list_files' && path === destination && copied ? [source] : [];
     });
-    render(<IntegratedFileBrowser connectionId="paste-while-navigating" isConnected onClose={() => {}} />);
+    render(<IntegratedFileBrowser connectionId={`paste-while-navigating:${destination}`} isConnected onClose={() => {}} />);
     const list = within(screen.getByRole('region', { name: 'Remote files' }));
     await chooseMenuItem(await list.findByText('release.txt'), 'Copy');
     await chooseMenuItem(list.getByText('dist'), 'Paste into Folder');
-    fireEvent.doubleClick(list.getByText('dist'));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit path' }));
+    const path = screen.getByRole('textbox', { name: 'Edit path' });
+    fireEvent.change(path, { target: { value: destination } });
+    fireEvent.keyDown(path, { key: 'Enter' });
     await list.findByText('This folder is empty');
 
     await act(async () => { completeCopy(); });

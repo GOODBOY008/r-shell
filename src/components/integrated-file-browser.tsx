@@ -98,8 +98,12 @@ interface PasteChange {
   movedFrom: string[];
 }
 
+function normalizePathSeparators(path: string) {
+  return path.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+}
+
 function pasteDestination(directory: string, name: string) {
-  return pathJoin(directory.replace(/\/+$/, '') || '/', name);
+  return pathJoin(normalizePathSeparators(directory), name);
 }
 
 function fileOperationError(error: unknown, fallback: string) {
@@ -1195,14 +1199,29 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     notify.success(t('fileBrowser.toast.cutToClipboard', { count: files.length }));
   };
 
+  const pasteSources = useMemo(() => {
+    const parentDirectories = new Set<string>();
+    const copiedDirectories = new Set<string>();
+    for (const file of clipboard?.files ?? []) {
+      parentDirectories.add(parentPath(file.path));
+      if (file.type === 'directory') copiedDirectories.add(normalizePathSeparators(file.path));
+    }
+    return { parentDirectories, copiedDirectories };
+  }, [clipboard]);
+
   function canPasteInto(directory: string) {
     if (!clipboard || !isConnected || isLoading || isPasting) return false;
-    return clipboard.files.every(file => {
-      const source = file.path.replace(/\/+/g, '/');
-      const dest = pasteDestination(directory, file.name).replace(/\/+/g, '/');
-      return source !== dest && (file.type !== 'directory' || !dest.startsWith(`${source}/`));
-    });
+    let path = normalizePathSeparators(directory);
+    if (pasteSources.parentDirectories.has(path)) return false;
+    // Check destination ancestors against copied folders, independent of the clipboard size.
+    while (path !== '/') {
+      if (pasteSources.copiedDirectories.has(path)) return false;
+      path = parentPath(path);
+    }
+    return true;
   }
+
+  const canPasteHere = canPasteInto(currentPath);
 
   async function handlePasteFiles(directory: string) {
     if (!clipboard || pasteInProgressRef.current || !canPasteInto(directory)) return;
@@ -1257,8 +1276,9 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     const pasteChange = pendingPasteChangeRef.current;
     if (!pasteChange || isLoading || isPasting) return;
     pendingPasteChangeRef.current = null;
+    const visiblePath = normalizePathSeparators(currentPath);
     if (isConnected && pasteChange.connectionId === connectionId &&
-      (pasteChange.destination === currentPath || pasteChange.movedFrom.includes(currentPath))) {
+      (normalizePathSeparators(pasteChange.destination) === visiblePath || pasteChange.movedFrom.includes(visiblePath))) {
       void loadFiles();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles closes over the view state listed below
@@ -1268,9 +1288,9 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     ? t('fileBrowser.contextMenu.pasteWithCount', { count: clipboard.files.length })
     : t('fileBrowser.contextMenu.paste');
 
-  function pasteMenuItem(path: string, label = pasteLabel) {
+  function pasteMenuItem(path: string, label = pasteLabel, enabled = canPasteInto(path)) {
     return (
-      <ContextMenuItem disabled={!canPasteInto(path)} onSelect={() => { void handlePasteFiles(path); }}>
+      <ContextMenuItem disabled={!enabled} onSelect={() => { void handlePasteFiles(path); }}>
         <ClipboardPaste className="h-4 w-4" />
         {label}
       </ContextMenuItem>
@@ -1721,7 +1741,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           <Button
             variant="ghost" size="sm" className="h-7 shrink-0 rounded-md px-2"
             title={pasteLabel} aria-label={pasteLabel}
-            disabled={!canPasteInto(currentPath)}
+            disabled={!canPasteHere}
             onClick={() => { void handlePasteFiles(currentPath); }}
           >
             <ClipboardPaste className="h-3.5 w-3.5" />
@@ -2080,7 +2100,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                         <Scissors className="mr-2 h-4 w-4" />
                         {t('fileBrowser.contextMenu.cut')}
                       </ContextMenuItem>
-                      {file.type === 'file' && clipboard && pasteMenuItem(currentPath)}
+                      {file.type === 'file' && clipboard && pasteMenuItem(currentPath, pasteLabel, canPasteHere)}
                       <ContextMenuSeparator />
                       
                       <ContextMenuItem onClick={() => handleRenameFile(file)}>
@@ -2144,7 +2164,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
                   {/* Empty space context menu */}
                   <ContextMenuContent className="w-48">
-              {pasteMenuItem(currentPath)}
+              {pasteMenuItem(currentPath, pasteLabel, canPasteHere)}
               <ContextMenuSeparator />
               <ContextMenuItem onClick={handleNewFile}>
                 <File className="mr-2 h-4 w-4" />
