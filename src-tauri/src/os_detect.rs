@@ -118,7 +118,7 @@ impl OsInfoCache {
 /// The single round-trip OS/tool probe run by [`detect_os`]. A const (not a
 /// local) so tests can pin its shape — see `test_os_probe_scans_all_top_output`.
 const OS_PROBE_COMMAND: &str = r#"
-(
+sh -c '
   # 1. /etc/os-release (present on all modern distros)
   if [ -f /etc/os-release ]; then
     . /etc/os-release
@@ -151,15 +151,15 @@ const OS_PROBE_COMMAND: &str = r#"
     echo "HAS_PROCPS_TOP=1"
   fi
 
-  # GNU ls supports --version; BusyBox does not. (GNU's banner IS the first
+  # GNU ls supports --version; BusyBox does not. (The GNU banner is the first
   # line, so head -1 is fine here — and a BusyBox miss lands on the correct
   # side of the default either way.)
-  if ls --version 2>&1 | head -1 | grep -qi 'GNU\|coreutils'; then
+  if ls --version 2>&1 | head -1 | grep -Eqi "GNU|coreutils"; then
     echo "HAS_GNU_COREUTILS=1"
   else
     echo "HAS_GNU_COREUTILS=0"
   fi
-)
+'
 "#;
 
 /// Detect the remote OS by running a lightweight probe command over SSH.

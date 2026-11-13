@@ -1090,13 +1090,7 @@ pub async fn rename_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let target = shell_escape_single_quoted(&new_path);
-    // An existing directory would make mv move the source inside it.
-    let command = format!(
-        "{} && mv -- '{}' '{target}'",
-        reject_directory_destination(&target),
-        shell_escape_single_quoted(&old_path),
-    );
+    let command = exact_remote_file_command("mv", &old_path, &new_path);
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -1270,13 +1264,7 @@ async fn copy_remote_path(
     source_path: &str,
     dest_path: &str,
 ) -> Result<(), String> {
-    let target = shell_escape_single_quoted(dest_path);
-    // Keep the destination exact when the same folder is pasted again.
-    let command = format!(
-        "{} && cp -R -- '{}' '{target}'",
-        reject_directory_destination(&target),
-        shell_escape_single_quoted(source_path),
-    );
+    let command = exact_remote_file_command("cp -R", source_path, dest_path);
     client
         .execute_command(&command)
         .await
@@ -1284,10 +1272,35 @@ async fn copy_remote_path(
         .map_err(|error| error.to_string())
 }
 
-fn reject_directory_destination(escaped_path: &str) -> String {
+fn exact_remote_file_command(operation: &str, source_path: &str, dest_path: &str) -> String {
+    let source = quote_remote_shell_arg(source_path);
+    let target = quote_remote_shell_arg(dest_path);
+    // Use sh for the guard, regardless of the remote account's login shell.
+    // Pass both paths as arguments so they cannot affect the script.
     format!(
-        "(if [ -d '{escaped_path}' ]; then printf 'Destination is an existing directory: %s\\n' '{escaped_path}' >&2; exit 1; fi)"
+        r#"sh -c '
+if [ -d "$2" ]; then
+    printf "Destination is an existing directory: %s\n" "$2" >&2
+    exit 1
+fi
+exec {operation} -- "$1" "$2"
+' sh {source} {target}"#
     )
+}
+
+fn quote_remote_shell_arg(value: &str) -> String {
+    let mut quoted = String::from("'");
+    for character in value.chars() {
+        match character {
+            '\'' => quoted.push_str("'\"'\"'"),
+            // Fish treats a backslash before a quote or backslash as an
+            // escape inside single quotes. Use a double-quoted fragment.
+            '\\' => quoted.push_str("'\"\\\\\"'"),
+            other => quoted.push(other),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -6072,7 +6085,10 @@ mod deadline_tests {
 
 #[cfg(test)]
 mod shell_escape_tests {
-    use super::{copy_remote_path, shell_escape_single_quoted, validate_kill_args};
+    use super::{
+        copy_remote_path, exact_remote_file_command, quote_remote_shell_arg,
+        shell_escape_single_quoted, validate_kill_args,
+    };
     use crate::ls_parser::parse_ls_long_line;
     use crate::ssh::{AuthMethod, HostKeyPolicy, SshClient, SshConfig};
 
@@ -6119,12 +6135,12 @@ mod shell_escape_tests {
 
         let directory = client.execute_command("mktemp -d").await.unwrap();
         let directory = directory.trim();
-        let quoted = format!("'{}'", shell_escape_single_quoted(directory));
+        let quoted = quote_remote_shell_arg(directory);
         let name = "  采购  O'Brien 2024-12-25 23:59.pdf";
         let source = format!("{directory}/{name}");
         let dest = format!("{directory}/dist/{name}");
-        let quoted_source = format!("'{}'", shell_escape_single_quoted(&source));
-        let quoted_dest = format!("'{}'", shell_escape_single_quoted(&dest));
+        let quoted_source = quote_remote_shell_arg(&source);
+        let quoted_dest = quote_remote_shell_arg(&dest);
         let outcome = async {
             client
                 .execute_command(&format!(
@@ -6172,8 +6188,30 @@ mod shell_escape_tests {
                 .execute_command(&format!("test ! -e {quoted}/dist/release/release"))
                 .await?;
 
+            let literal_name = r"quote' and backslash\";
+            let old_path = format!("{directory}/{literal_name}");
+            let quoted_old_path = quote_remote_shell_arg(&old_path);
+            client
+                .execute_command(&format!("printf data > {quoted_old_path}"))
+                .await?;
+            let new_path = format!("{directory}/moved");
+            client
+                .execute_command(&exact_remote_file_command("mv", &old_path, &new_path))
+                .await?;
+            let conflict = client
+                .execute_command(&exact_remote_file_command("mv", &new_path, &folder_dest))
+                .await
+                .expect_err("moving to an existing directory must fail");
+            assert!(conflict
+                .to_string()
+                .contains("Destination is an existing directory"));
+            client
+                .execute_command(&format!("test -f {quoted}/moved"))
+                .await?;
             assert_eq!(
-                client.execute_command("printf 'stdout'; printf 'stderr' >&2").await?,
+                client
+                    .execute_command("sh -c 'printf stdout; printf stderr >&2'")
+                    .await?,
                 "stdout"
             );
             Ok::<(), anyhow::Error>(())
