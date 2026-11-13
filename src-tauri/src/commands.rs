@@ -1090,10 +1090,12 @@ pub async fn rename_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
+    let target = shell_escape_single_quoted(&new_path);
+    // An existing directory would make mv move the source inside it.
     let command = format!(
-        "mv '{}' '{}'",
+        "{} && mv -- '{}' '{target}'",
+        reject_directory_destination(&target),
         shell_escape_single_quoted(&old_path),
-        shell_escape_single_quoted(&new_path)
     );
 
     match client.execute_command(&command).await {
@@ -1268,16 +1270,24 @@ async fn copy_remote_path(
     source_path: &str,
     dest_path: &str,
 ) -> Result<(), String> {
+    let target = shell_escape_single_quoted(dest_path);
+    // Keep the destination exact when the same folder is pasted again.
     let command = format!(
-        "cp -R -- '{}' '{}'",
+        "{} && cp -R -- '{}' '{target}'",
+        reject_directory_destination(&target),
         shell_escape_single_quoted(source_path),
-        shell_escape_single_quoted(dest_path)
     );
     client
         .execute_command(&command)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn reject_directory_destination(escaped_path: &str) -> String {
+    format!(
+        "(if [ -d '{escaped_path}' ]; then printf 'Destination is an existing directory: %s\\n' '{escaped_path}' >&2; exit 1; fi)"
+    )
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -6143,6 +6153,25 @@ mod shell_escape_tests {
                 .await
                 .expect_err("copy should fail when the destination parent is missing");
             assert!(error.contains("No such file or directory"), "{error}");
+
+            let folder = format!("{directory}/release");
+            let folder_dest = format!("{directory}/dist/release");
+            client
+                .execute_command(&format!(
+                    "mkdir {quoted}/release && cp -- {quoted_source} {quoted}/release/"
+                ))
+                .await?;
+            copy_remote_path(&client, &folder, &folder_dest)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            let error = copy_remote_path(&client, &folder, &folder_dest)
+                .await
+                .expect_err("pasting a folder twice should report a directory conflict");
+            assert!(error.contains("Destination is an existing directory"), "{error}");
+            client
+                .execute_command(&format!("test ! -e {quoted}/dist/release/release"))
+                .await?;
+
             assert_eq!(
                 client.execute_command("printf 'stdout'; printf 'stderr' >&2").await?,
                 "stdout"
