@@ -743,6 +743,7 @@
     "disconnected": "与 {{name}} 的连接已断开",
     "notConnected": "未连接",
     "searchFiles": "搜索文件...",
+    "fileList": "远程文件",
     "items": "{{count}} 项",
     "local": "本地",
     "remote": "远程",
@@ -762,11 +763,12 @@
       "copy": "复制",
       "cut": "剪切",
       "paste": "粘贴",
+      "pasteIntoFolder": "粘贴到文件夹",
       "copyPath": "复制路径",
       "fileInfo": "文件信息",
       "newFile": "新建文件",
       "newFolder": "新建文件夹",
-      "duplicate": "复制",
+      "duplicate": "在此创建副本",
       "openInEditor": "在编辑器中打开",
       "openInLogMonitor": "在日志监视器中打开",
       "openInOS": "在系统中打开",
@@ -790,7 +792,7 @@
       "transferFailed": "传输失败：{{name}}",
       "copiedToClipboard": "{{count}} 项已复制到剪贴板",
       "cutToClipboard": "{{count}} 项已剪切到剪贴板",
-      "pasted": "{{count}} 项{{operation}}成功",
+      "pasted_other": "已将 {{count}} 个项目粘贴到 {{path}}",
       "deleted": "{{name}} 删除成功",
       "deleteFailed": "删除文件失败",
       "deleteFailedDesc": "无法从服务器删除文件。",
@@ -803,9 +805,9 @@
       "renamed": "\"{{oldName}}\" 已重命名为 \"{{newName}}\"",
       "renameFailed": "重命名文件失败",
       "renameFailedDesc": "无法在服务器上重命名文件。",
-      "duplicated": "\"{{name}}\" 已复制为 \"{{newName}}\"",
-      "duplicateFailed": "复制文件失败",
-      "duplicateFailedDesc": "无法在服务器上复制文件。",
+      "duplicated": "已为“{{name}}”创建副本“{{newName}}”",
+      "duplicateFailed": "创建副本失败",
+      "duplicateFailedDesc": "无法在当前文件夹中创建副本。",
       "pathCopied": "路径已复制到剪贴板",
       "loadFailed": "加载文件失败",
       "loadFailedDesc": "无法加载远程目录内容。",
@@ -862,7 +864,8 @@
       "selectedSize": "已选择 {{size}}"
     },
     "empty": {
-      "noResults": "没有匹配搜索的文件"
+      "noResults": "没有匹配搜索的文件",
+      "folder": "此文件夹为空"
     },
     "time": {
       "justNow": "刚刚",

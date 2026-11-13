@@ -756,6 +756,7 @@
     "disconnected": "Utracono połączenie z {{name}}",
     "notConnected": "Brak połączenia",
     "searchFiles": "Szukaj plików...",
+    "fileList": "Pliki zdalne",
     "items": "Elementy: {{count}}",
     "local": "Lokalne",
     "remote": "Zdalne",
@@ -775,11 +776,12 @@
       "copy": "Kopiuj",
       "cut": "Wytnij",
       "paste": "Wklej",
+      "pasteIntoFolder": "Wklej do folderu",
       "copyPath": "Kopiuj ścieżkę",
       "fileInfo": "Informacje o pliku",
       "newFile": "Nowy plik",
       "newFolder": "Nowy folder",
-      "duplicate": "Powiel",
+      "duplicate": "Powiel w tym folderze",
       "openInEditor": "Otwórz w edytorze",
       "openInLogMonitor": "Otwórz w monitorze logów",
       "openInOS": "Otwórz w systemie",
@@ -809,7 +811,10 @@
       "transferFailed": "Transfer nie powiódł się: {{name}}",
       "copiedToClipboard": "Skopiowano do schowka elementy: {{count}}",
       "cutToClipboard": "Wycięto do schowka elementy: {{count}}",
-      "pasted": "Pomyślnie wykonano operację {{operation}} na elementach: {{count}}",
+      "pasted_one": "Wklejono {{count}} element do {{path}}",
+      "pasted_few": "Wklejono {{count}} elementy do {{path}}",
+      "pasted_many": "Wklejono {{count}} elementów do {{path}}",
+      "pasted_other": "Wklejono {{count}} elementu do {{path}}",
       "deleted": "Pomyślnie usunięto {{name}}",
       "deleteFailed": "Nie udało się usunąć pliku",
       "deleteFailedDesc": "Nie można usunąć pliku z serwera.",
@@ -885,7 +890,8 @@
       "selectedSize": "Zaznaczono: {{size}}"
     },
     "empty": {
-      "noResults": "Żaden plik nie pasuje do wyszukiwania"
+      "noResults": "Żaden plik nie pasuje do wyszukiwania",
+      "folder": "Ten folder jest pusty"
     },
     "time": {
       "justNow": "przed chwilą",

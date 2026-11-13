@@ -496,10 +496,10 @@ done
 
         let quoted_path = shell_quote(path);
         if self.has_gnu_coreutils {
-            format!("ls -la --time-style=long-iso {}", quoted_path)
+            format!("LC_ALL=C ls -laN --color=never --time-style=long-iso -- {quoted_path}")
         } else {
-            // BusyBox / macOS ls — no --time-style, but -la still works
-            format!("ls -la {}", quoted_path)
+            // BusyBox replaces Unicode filenames with '?' in the C locale.
+            format!("LC_ALL=C.UTF-8 ls -la -- {quoted_path}")
         }
     }
 }
@@ -707,7 +707,7 @@ mod tests {
 
         assert_eq!(
             info.list_files_cmd("/tmp/dir's folder"),
-            "ls -la --time-style=long-iso '/tmp/dir'\"'\"'s folder'"
+            "LC_ALL=C ls -laN --color=never --time-style=long-iso -- '/tmp/dir'\"'\"'s folder'"
         );
     }
 

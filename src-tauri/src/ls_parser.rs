@@ -33,12 +33,12 @@ use crate::sftp_client::{FileEntry, FileEntryType};
 /// Returns `None` for blank lines, `total NNN` summary lines, or lines that
 /// don't match any recognised layout.
 pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
-    let line = line.trim();
+    let line = line.trim_start();
     if line.is_empty() {
         return None;
     }
 
-    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let tokens: Vec<&str> = line.split_ascii_whitespace().collect();
 
     // `ls -l` emits a "total NNN" summary as its first line — never a file entry.
     if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("total") {
@@ -63,28 +63,20 @@ pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
     // `date_len` is the number of tokens occupied by the date/time columns.
     let (date_start, date_len, modified) = locate_date(&tokens)?;
 
-    // Name is everything after the date columns (preserves embedded spaces).
-    let name_end = date_start + date_len;
-    if name_end >= tokens.len() {
-        return None;
-    }
-    let name_raw = tokens[name_end..].join(" ");
+    // The date is followed by one separator; everything after it is part of
+    // the name. Joining tokens would change the path used by copy and rename.
+    let last_date_token = tokens[date_start + date_len - 1];
+    let name_offset =
+        last_date_token.as_ptr() as usize - line.as_ptr() as usize + last_date_token.len();
+    let name_raw = line.get(name_offset..)?.strip_prefix(' ')?;
     // For symlinks, strip the " -> target" suffix.
     let name = if matches!(file_type, FileEntryType::Symlink) {
-        name_raw
-            .split(" -> ")
-            .next()
-            .unwrap_or(&name_raw)
-            .to_string()
+        name_raw.split_once(" -> ").map_or(name_raw, |(name, _)| name)
     } else {
         name_raw
     };
 
     if name.is_empty() || name == "." || name == ".." {
-        // Caller filters `.`/`..` too, but be defensive.
-        if name == "." || name == ".." {
-            return None;
-        }
         return None;
     }
 
@@ -108,7 +100,7 @@ pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
     };
 
     Some(FileEntry {
-        name,
+        name: name.to_owned(),
         size,
         modified,
         permissions: Some(perms_str.to_string()),
@@ -145,15 +137,18 @@ fn is_perms_token(s: &str) -> bool {
 /// Locate the date columns inside `tokens` and return
 /// `(start_index, token_count, parsed_modified_string)`.
 ///
-/// Tries the GNU long-iso layout first (`YYYY-MM-DD` followed by `HH:MM`),
-/// then the BusyBox/BSD layout (`Mon DD HH:MM` or `Mon DD YYYY`).
+/// Accepts the first GNU long-iso or BusyBox/BSD date in the listing.
 fn locate_date(tokens: &[&str]) -> Option<(usize, usize, Option<String>)> {
-    if let Some(idx) = find_long_iso_date(tokens) {
+    let iso = find_long_iso_date(tokens);
+    let month = find_month_date(tokens);
+    // Use the first date field: a filename can itself contain a date and time
+    // that look like GNU long-iso output, even in a BusyBox or BSD listing.
+    if let Some(idx) = iso.filter(|&idx| month.is_none_or(|month_idx| idx < month_idx)) {
         // GNU long-iso: date(1) + time(1) = 2 tokens, then filename.
         let date_str = tokens[idx];
         let time_str = tokens[idx + 1];
         Some((idx, 2, Some(format!("{} {}", date_str, time_str))))
-    } else if let Some(idx) = find_month_date(tokens) {
+    } else if let Some(idx) = month {
         // BusyBox/BSD: month + day + time_or_year = 3 tokens, then filename.
         let month = tokens[idx];
         let day = tokens[idx + 1];
@@ -166,8 +161,8 @@ fn locate_date(tokens: &[&str]) -> Option<(usize, usize, Option<String>)> {
 
 /// Find a GNU long-iso date pair (`YYYY-MM-DD` at `i`, `HH:MM` at `i+1`).
 fn find_long_iso_date(tokens: &[&str]) -> Option<usize> {
-    // Need at least: [.., date, time, name] → 1 token after the pair.
-    let upper = tokens.len().saturating_sub(2);
+    // A valid name can consist entirely of whitespace and have no tokens.
+    let upper = tokens.len().saturating_sub(1);
     (0..upper).find(|&i| {
         is_long_iso_date(tokens[i]) && is_hh_mm(tokens.get(i + 1).copied())
     })
@@ -175,7 +170,7 @@ fn find_long_iso_date(tokens: &[&str]) -> Option<usize> {
 
 /// Find a BusyBox/BSD date triple (`Mon` at `i`, day at `i+1`, time/year at `i+2`).
 fn find_month_date(tokens: &[&str]) -> Option<usize> {
-    let upper = tokens.len().saturating_sub(3);
+    let upper = tokens.len().saturating_sub(2);
     (0..upper).find(|&i| {
         is_month_abbr(tokens[i])
             && is_day_token(tokens.get(i + 1).copied())
@@ -379,6 +374,22 @@ mod tests {
         assert_eq!(entry.name, "my report.pdf");
         assert_eq!(entry.size, 100);
         assert_eq!(entry.modified.as_deref(), Some("2024-12-25 23:59"));
+    }
+
+    #[test]
+    fn preserves_filename_whitespace_exactly() {
+        let name = "  采购  report\tfinal.pdf ";
+        let line = format!("-rw-r--r-- 1 root root 100 2024-12-25 23:59 {name}");
+        assert_eq!(parse_ls_long_line(&line).unwrap().name, name);
+    }
+
+    #[test]
+    fn bsd_listing_keeps_a_date_and_time_in_the_filename() {
+        let name = "Q4  2024-12-25 23:59 report.pdf";
+        let line = format!("-rw-r--r--@ 1 root staff 100 Nov  9  2020 {name}");
+        let entry = parse_ls_long_line(&line).unwrap();
+        assert_eq!(entry.name, name);
+        assert_eq!(entry.modified.as_deref(), Some("2020-11-09 00:00:00"));
     }
 
     #[test]

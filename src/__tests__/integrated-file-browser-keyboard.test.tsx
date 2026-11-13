@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, cleanup, configure, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IntegratedFileBrowser } from '../components/integrated-file-browser';
 
@@ -12,6 +12,7 @@ vi.setConfig({ testTimeout: 15000 });
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   open: vi.fn(),
+  error: vi.fn(),
   warning: vi.fn(),
   events: new Map<string, (event: {payload: unknown}) => void>(),
 }));
@@ -32,7 +33,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
 
 vi.mock('sonner', () => ({
   toast: {
-    error: vi.fn(),
+    error: mocks.error,
     info: vi.fn(),
     success: vi.fn(),
     warning: mocks.warning,
@@ -44,8 +45,8 @@ vi.mock('../lib/async-retry', () => ({
   withRetry: (operation: () => Promise<unknown>) => operation(),
 }));
 
-vi.mock('../components/directory-tree', () => ({
-  DirectoryTree: () => <div data-testid="directory-tree" />,
+vi.mock('../lib/use-webview-file-drop', () => ({
+  useWebviewFileDrop: () => ({ isDragOver: false, clearDragOver: () => {} }),
 }));
 
 vi.mock('../components/transfer-queue', () => ({
@@ -64,16 +65,6 @@ vi.mock('../components/directory-transfer-dialog', () => ({
   }) => <div data-testid="directory-transfer">{sourcePath} → {destPath}/{destinationDirectoryName}</div>,
 }));
 
-vi.mock('../components/ui/context-menu', () => ({
-  ContextMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ContextMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ContextMenuItem: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => (
-    <button onClick={onClick}>{children}</button>
-  ),
-  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  ContextMenuSeparator: () => <hr />,
-}));
-
 vi.mock('../components/ui/resizable', () => ({
   ResizableHandle: () => <div data-testid="resize-handle" />,
   ResizablePanel: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
@@ -85,6 +76,7 @@ beforeEach(() => {
   mocks.invoke.mockReset();
   mocks.invoke.mockResolvedValue([]);
   mocks.open.mockReset();
+  mocks.error.mockReset();
   mocks.warning.mockReset();
 });
 
@@ -312,12 +304,133 @@ describe('IntegratedFileBrowser directory download', () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Download directory' }));
+    fireEvent.contextMenu(await within(screen.getByRole('region', { name: 'Remote files' })).findByText('release files'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Download directory' }));
 
     expect(mocks.open).toHaveBeenCalledWith({ directory: true });
     expect((await screen.findByTestId('directory-transfer')).textContent).toBe(
       '/home/release files → C:/Downloads/release files',
     );
+  });
+});
+
+describe('IntegratedFileBrowser copy and paste menus', () => {
+  const source = { name: 'release.txt', file_type: 'File', size: 10 };
+  const dist = { name: 'dist', file_type: 'Directory', size: 0 };
+
+  beforeEach(() => {
+    mocks.invoke.mockImplementation(async (command: string, { path }: { path?: string }) => {
+      if (command !== 'list_files') return true;
+      if (path === '/') return [{ name: 'home', file_type: 'Directory', size: 0 }];
+      if (path === '/home') return [source, dist];
+      return [];
+    });
+  });
+
+  async function chooseMenuItem(target: HTMLElement, name: string) {
+    fireEvent.contextMenu(target);
+    const menu = await screen.findByRole('menu');
+    fireEvent.click(within(menu).getByRole('menuitem', { name }));
+  }
+
+  it('keeps the PDF extension, avoids an existing copy, and shows the server error', async () => {
+    const connectionId = 'duplicate-pdf';
+    const name = "O'Brien  采购.pdf";
+    const diagnostic = 'cp: Permission denied';
+    mocks.invoke.mockImplementation(async (command: string, { path }: { path?: string }) => {
+      if (command === 'copy_file') throw diagnostic;
+      return command === 'list_files' && path === '/home'
+        ? [{ ...source, name }, { ...source, name: "O'Brien  采购_copy.pdf" }]
+        : [];
+    });
+    render(<IntegratedFileBrowser connectionId={connectionId} isConnected onClose={() => {}} />);
+    const list = within(screen.getByRole('region', { name: 'Remote files' }));
+    await chooseMenuItem(await list.findByText(name, { normalizer: text => text }), 'Duplicate Here');
+
+    expect(mocks.invoke).toHaveBeenCalledWith('copy_file', {
+      connectionId, sourcePath: `/home/${name}`, destPath: "/home/O'Brien  采购_copy_2.pdf",
+    });
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Failed to Duplicate File', { description: diagnostic }));
+  });
+
+  it('pastes from blank space in an empty directory and keeps the copy available', async () => {
+    const connectionId = 'paste-blank';
+    render(<IntegratedFileBrowser connectionId={connectionId} isConnected onClose={() => {}} />);
+    const list = within(screen.getByRole('region', { name: 'Remote files' }));
+    await chooseMenuItem(await list.findByText('release.txt'), 'Copy');
+    expect(screen.getByRole('button', { name: 'Paste 1 item' })).toHaveProperty('disabled', true);
+
+    fireEvent.doubleClick(list.getByText('dist'));
+    await list.findByText('This folder is empty');
+    await chooseMenuItem(screen.getByRole('region', { name: 'Remote files' }), 'Paste 1 item');
+    const args = { connectionId, sourcePath: '/home/release.txt', destPath: '/home/dist/release.txt' };
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('copy_file', args));
+
+    const toolbarPaste = await screen.findByRole('button', { name: 'Paste 1 item' });
+    await waitFor(() => expect(toolbarPaste).toHaveProperty('disabled', false));
+    fireEvent.click(toolbarPaste);
+    await waitFor(() => expect(mocks.invoke.mock.calls.filter(([cmd]) => cmd === 'copy_file')).toEqual([
+      ['copy_file', args], ['copy_file', args],
+    ]));
+  });
+
+  it.each(['row', 'tree'])('pastes directly into a folder in the %s without navigating', async target => {
+    const connectionId = `paste-${target}`;
+    render(<IntegratedFileBrowser connectionId={connectionId} isConnected onClose={() => {}} />);
+    const list = within(screen.getByRole('region', { name: 'Remote files' }));
+    await chooseMenuItem(await list.findByText('release.txt'), 'Copy');
+    let folder = list.getByText('dist');
+    if (target === 'tree') {
+      fireEvent.click(await screen.findByRole('button', { name: 'Expand home' }));
+      folder = await screen.findByRole('button', { name: 'Navigate to /home/dist' });
+    }
+
+    await chooseMenuItem(folder, 'Paste into Folder');
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('copy_file', {
+      connectionId, sourcePath: '/home/release.txt', destPath: '/home/dist/release.txt',
+    }));
+    expect(list.getByText('release.txt')).toBeTruthy();
+  });
+
+  it('refreshes the destination when it is opened before a paste completes', async () => {
+    let completeCopy!: () => void;
+    let copied = false;
+    mocks.invoke.mockImplementation(async (command: string, { path }: { path?: string }) => {
+      if (command === 'copy_file') {
+        return new Promise<boolean>(resolve => {
+          completeCopy = () => { copied = true; resolve(true); };
+        });
+      }
+      if (command === 'list_files' && path === '/home') return [source, dist];
+      return command === 'list_files' && path === '/home/dist' && copied ? [source] : [];
+    });
+    render(<IntegratedFileBrowser connectionId="paste-while-navigating" isConnected onClose={() => {}} />);
+    const list = within(screen.getByRole('region', { name: 'Remote files' }));
+    await chooseMenuItem(await list.findByText('release.txt'), 'Copy');
+    await chooseMenuItem(list.getByText('dist'), 'Paste into Folder');
+    fireEvent.doubleClick(list.getByText('dist'));
+    await list.findByText('This folder is empty');
+
+    await act(async () => { completeCopy(); });
+    expect(await list.findByText('release.txt')).toBeTruthy();
+  });
+
+  it('keeps a cut scoped to its SSH session and consumes it after a successful paste', async () => {
+    const view = render(<IntegratedFileBrowser connectionId="paste-source" isConnected onClose={() => {}} />);
+    const list = within(screen.getByRole('region', { name: 'Remote files' }));
+    await chooseMenuItem(await list.findByText('release.txt'), 'Cut');
+    view.rerender(<IntegratedFileBrowser connectionId="paste-other-host" isConnected onClose={() => {}} />);
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('list_files', { connectionId: 'paste-other-host', path: '/home' }));
+    fireEvent.contextMenu(await list.findByText('dist'));
+    expect((await screen.findByRole('menuitem', { name: 'Paste into Folder' })).getAttribute('aria-disabled')).toBe('true');
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+
+    view.rerender(<IntegratedFileBrowser connectionId="paste-source" isConnected onClose={() => {}} />);
+    await chooseMenuItem(await list.findByText('dist'), 'Paste into Folder');
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('rename_file', {
+      connectionId: 'paste-source', oldPath: '/home/release.txt', newPath: '/home/dist/release.txt',
+    }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Paste' })).toHaveProperty('disabled', true));
   });
 });
 
@@ -440,14 +553,8 @@ describe('IntegratedFileBrowser multi-select and batch delete', () => {
     fireEvent.click(screen.getByText('b.txt'), { ctrlKey: true });
     expect(await screen.findByText('2 selected')).toBeTruthy();
 
-    // Right-click a row that is part of the selection. The context-menu mock
-    // renders every row's menu (unlike real Radix, which renders only the open
-    // one), so multiple Delete buttons are expected — clicking any of them
-    // triggers the batch delete for the whole selection.
     fireEvent.contextMenu(screen.getByText('a.txt'));
-
-    const deleteItems = await screen.findAllByText('Delete');
-    fireEvent.click(deleteItems[0]);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
 
     expect(await screen.findByText('Delete 2 Items?')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
@@ -543,7 +650,7 @@ describe('file list to editor workflow', () => {
   it('does not delete a directory containing an open editor buffer', async () => {
     mocks.invoke.mockImplementation(async command => command === 'list_files' ? [{...entry, name:'config', file_type:'Directory'}] : []);
     render(<IntegratedFileBrowser connectionId="flow-protect" isConnected onClose={() => {}} />);
-    fireEvent.click(await screen.findByText('config'));
+    fireEvent.click(await within(screen.getByRole('region', { name: 'Remote files' })).findByText('config'));
     await act(async () => { mocks.events.get('editor-file-state')!({payload:{connectionId:'flow-protect',filePath:'/home/config/app.conf',state:'modified'}}); });
     fireEvent.keyDown(document.querySelector('[data-shortcut-scope="files"]')!, {key:'Delete'});
     fireEvent.click(screen.getByRole('button', { name: 'Delete', exact: true }));

@@ -1259,16 +1259,25 @@ pub async fn copy_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!(
-        "cp -r '{}' '{}'",
-        shell_escape_single_quoted(&source_path),
-        shell_escape_single_quoted(&dest_path)
-    );
+    copy_remote_path(&client, &source_path, &dest_path).await?;
+    Ok(true)
+}
 
-    match client.execute_command(&command).await {
-        Ok(_) => Ok(true),
-        Err(e) => Err(e.to_string()),
-    }
+async fn copy_remote_path(
+    client: &crate::ssh::SshClient,
+    source_path: &str,
+    dest_path: &str,
+) -> Result<(), String> {
+    let command = format!(
+        "cp -R -- '{}' '{}'",
+        shell_escape_single_quoted(source_path),
+        shell_escape_single_quoted(dest_path)
+    );
+    client
+        .execute_command(&command)
+        .await
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -6053,7 +6062,9 @@ mod deadline_tests {
 
 #[cfg(test)]
 mod shell_escape_tests {
-    use super::{shell_escape_single_quoted, validate_kill_args};
+    use super::{copy_remote_path, shell_escape_single_quoted, validate_kill_args};
+    use crate::ls_parser::parse_ls_long_line;
+    use crate::ssh::{AuthMethod, HostKeyPolicy, SshClient, SshConfig};
 
     #[test]
     fn single_quotes_are_escaped_for_posix_shell() {
@@ -6064,6 +6075,83 @@ mod shell_escape_tests {
             shell_escape_single_quoted("x'; touch /tmp/pwned; #"),
             "x'\\''; touch /tmp/pwned; #"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the Docker SSH fixture"]
+    async fn docker_ssh_copies_listed_pdf_and_reports_server_errors() {
+        let mut client = SshClient::new();
+        client
+            .connect(&SshConfig {
+                host: std::env::var("RSHELL_TEST_SSH_HOST")
+                    .unwrap_or_else(|_| "127.0.0.1".into()),
+                port: std::env::var("RSHELL_TEST_SSH_PORT")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(2225),
+                username: "testuser".into(),
+                auth_method: AuthMethod::Password {
+                    password: "testpass".into(),
+                },
+                compression: false,
+                keepalive_interval: None,
+                keepalive_max: None,
+                proxy: None,
+                // The Docker fixture generates a throwaway host key.
+                host_key_policy: HostKeyPolicy::Off,
+                require_known_host_key: false,
+                connect_timeout: 3,
+                tunnel: None,
+                x11: None,
+            })
+            .await
+            .expect("connect to Docker SSH fixture");
+
+        let directory = client.execute_command("mktemp -d").await.unwrap();
+        let directory = directory.trim();
+        let quoted = format!("'{}'", shell_escape_single_quoted(directory));
+        let name = "  采购  O'Brien 2024-12-25 23:59.pdf";
+        let source = format!("{directory}/{name}");
+        let dest = format!("{directory}/dist/{name}");
+        let quoted_source = format!("'{}'", shell_escape_single_quoted(&source));
+        let quoted_dest = format!("'{}'", shell_escape_single_quoted(&dest));
+        let outcome = async {
+            client
+                .execute_command(&format!(
+                    "mkdir {quoted}/dist && printf '%s' '%PDF-1.7' > {quoted_source}"
+                ))
+                .await?;
+            let info = crate::os_detect::detect_os(&client).await;
+            let listing = client
+                .execute_command(&info.list_files_cmd(directory))
+                .await?;
+            let entry = listing
+                .lines()
+                .filter_map(parse_ls_long_line)
+                .find(|entry| entry.name.ends_with(".pdf"))
+                .ok_or_else(|| anyhow::anyhow!("PDF missing from parsed listing: {listing}"))?;
+            assert_eq!(entry.name, name);
+
+            copy_remote_path(&client, &format!("{directory}/{}", entry.name), &dest)
+                .await
+                .map_err(anyhow::Error::msg)?;
+            client
+                .execute_command(&format!("cmp {quoted_source} {quoted_dest}"))
+                .await?;
+
+            let error = copy_remote_path(&client, &source, &format!("{directory}/missing/{name}"))
+                .await
+                .expect_err("copy should fail when the destination parent is missing");
+            assert!(error.contains("No such file or directory"), "{error}");
+            assert_eq!(
+                client.execute_command("printf 'stdout'; printf 'stderr' >&2").await?,
+                "stdout"
+            );
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        let _ = client.execute_command(&format!("rm -rf -- {quoted}")).await;
+        outcome.unwrap();
     }
 
     #[test]

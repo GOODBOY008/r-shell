@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { notify } from '@/lib/notifications';
 import { ChevronRight, Folder, Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
+import { ContextMenu, ContextMenuTrigger } from "./ui/context-menu";
 import { parentPath } from "@/lib/file-entry-types";
 
 interface DirectoryTreeProps {
@@ -15,6 +16,7 @@ interface DirectoryTreeProps {
   currentPath: string;
   onNavigate: (path: string) => void;
   disabled?: boolean;
+  renderContextMenu?: (path: string) => React.ReactNode;
   /**
    * Cached expanded paths to restore on loadDirectory change (connection switch).
    * When provided, the tree uses these instead of resetting to just "/".
@@ -79,6 +81,7 @@ export function DirectoryTree({
   currentPath,
   onNavigate,
   disabled = false,
+  renderContextMenu,
   initialExpanded,
   initialNodes,
   onSaveState,
@@ -288,7 +291,7 @@ export function DirectoryTree({
   );
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (visibleRows.length === 0) return;
+    if (e.defaultPrevented || !e.currentTarget.contains(e.target as Node) || visibleRows.length === 0) return;
 
     const activePath = normalizePath(focusPath || currentPath || "/");
     const currentIndex = visibleRows.findIndex((row) => row.path === activePath);
@@ -366,8 +369,7 @@ export function DirectoryTree({
           const isFocused = row.path === focusPath;
           const canExpand = row.path === "/" || !hasLoadedChildren || childCount > 0;
 
-          return (
-            <div key={row.path} role="treeitem" aria-expanded={canExpand ? isExpanded : undefined}>
+          const rowContent = (
               <div
                 className={`group flex items-center rounded-sm ${
                   isSelected
@@ -416,6 +418,16 @@ export function DirectoryTree({
                   {isLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </button>
               </div>
+          );
+
+          return (
+            <div key={row.path} role="treeitem" aria-expanded={canExpand ? isExpanded : undefined}>
+              {renderContextMenu ? (
+                <ContextMenu>
+                  <ContextMenuTrigger asChild disabled={disabled}>{rowContent}</ContextMenuTrigger>
+                  {renderContextMenu(row.path)}
+                </ContextMenu>
+              ) : rowContent}
             </div>
           );
         })}
