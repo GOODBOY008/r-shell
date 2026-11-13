@@ -744,6 +744,7 @@
     "disconnected": "Connection lost to {{name}}",
     "notConnected": "Not Connected",
     "searchFiles": "Search files...",
+    "fileList": "Remote files",
     "items": "{{count}} item(s)",
     "local": "Local",
     "remote": "Remote",
@@ -763,11 +764,12 @@
       "copy": "Copy",
       "cut": "Cut",
       "paste": "Paste",
+      "pasteIntoFolder": "Paste into Folder",
       "copyPath": "Copy Path",
       "fileInfo": "File Info",
       "newFile": "New File",
       "newFolder": "New Folder",
-      "duplicate": "Duplicate",
+      "duplicate": "Duplicate Here",
       "openInEditor": "Open in Editor",
       "openInLogMonitor": "Open in Log Monitor",
       "openInOS": "Open in OS",
@@ -791,7 +793,8 @@
       "transferFailed": "Transfer failed: {{name}}",
       "copiedToClipboard": "{{count}} item(s) copied to clipboard",
       "cutToClipboard": "{{count}} item(s) cut to clipboard",
-      "pasted": "{{count}} item(s) {{operation}} successfully",
+      "pasted_one": "Pasted {{count}} item into {{path}}",
+      "pasted_other": "Pasted {{count}} items into {{path}}",
       "deleted": "{{name}} deleted successfully",
       "deleteFailed": "Failed to Delete File",
       "deleteFailedDesc": "Unable to delete file from server.",
@@ -863,7 +866,8 @@
       "selectedSize": "{{size}} selected"
     },
     "empty": {
-      "noResults": "No files match your search"
+      "noResults": "No files match your search",
+      "folder": "This folder is empty"
     },
     "time": {
       "justNow": "just now",

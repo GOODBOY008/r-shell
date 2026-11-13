@@ -16,9 +16,8 @@
 //!   - SELinux security context as an extra column
 //!   - Symlink targets (`name -> target`)
 //!
-//! The parser is column-count agnostic: it locates the date field by pattern
-//! and treats everything to its right as the filename, so adding or removing
-//! an owner/group/context column does not corrupt the result.
+//! The parser looks for a timestamp after the size in the supported layouts.
+//! Everything after the timestamp separator belongs to the filename.
 //!
 //! `owner`/`group` are extracted from the fixed left-hand columns
 //! (`perms links owner group [context] size`): owner is always token 2, and
@@ -33,12 +32,12 @@ use crate::sftp_client::{FileEntry, FileEntryType};
 /// Returns `None` for blank lines, `total NNN` summary lines, or lines that
 /// don't match any recognised layout.
 pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
-    let line = line.trim();
+    let line = line.trim_start();
     if line.is_empty() {
         return None;
     }
 
-    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let tokens: Vec<&str> = line.split_ascii_whitespace().collect();
 
     // `ls -l` emits a "total NNN" summary as its first line — never a file entry.
     if tokens.len() >= 2 && tokens[0].eq_ignore_ascii_case("total") {
@@ -63,52 +62,35 @@ pub fn parse_ls_long_line(line: &str) -> Option<FileEntry> {
     // `date_len` is the number of tokens occupied by the date/time columns.
     let (date_start, date_len, modified) = locate_date(&tokens)?;
 
-    // Name is everything after the date columns (preserves embedded spaces).
-    let name_end = date_start + date_len;
-    if name_end >= tokens.len() {
-        return None;
-    }
-    let name_raw = tokens[name_end..].join(" ");
+    // The date is followed by one separator; everything after it is part of
+    // the name. Joining tokens would change the path used by copy and rename.
+    let last_date_token = tokens[date_start + date_len - 1];
+    let name_offset =
+        last_date_token.as_ptr() as usize - line.as_ptr() as usize + last_date_token.len();
+    let name_raw = line.get(name_offset..)?.strip_prefix(' ')?;
     // For symlinks, strip the " -> target" suffix.
     let name = if matches!(file_type, FileEntryType::Symlink) {
-        name_raw
-            .split(" -> ")
-            .next()
-            .unwrap_or(&name_raw)
-            .to_string()
+        name_raw.split_once(" -> ").map_or(name_raw, |(name, _)| name)
     } else {
         name_raw
     };
 
     if name.is_empty() || name == "." || name == ".." {
-        // Caller filters `.`/`..` too, but be defensive.
-        if name == "." || name == ".." {
-            return None;
-        }
         return None;
     }
 
-    // Size is the rightmost numeric token strictly left of the date columns.
-    // Record its index too so owner/group can be read relative to it.
-    let size_idx = tokens[..date_start]
-        .iter()
-        .rposition(|t| t.parse::<u64>().is_ok());
-    let size = size_idx
-        .and_then(|i| tokens[i].parse::<u64>().ok())
-        .unwrap_or(0);
+    let size_idx = date_start - 1;
+    let size = tokens[size_idx].parse::<u64>().ok()?;
 
     // Owner/group: `ls -l` lays out `perms links owner group [context] size`.
     // Owner is always the 3rd column; group is the 4th whenever the size token
     // sits at index 4 or later — a size at index 3 marks the no-group BusyBox
     // variant, and an optional SELinux context column pushes size further right.
     let owner = tokens.get(2).map(|s| s.to_string());
-    let group = match size_idx {
-        Some(i) if i > 3 => tokens.get(3).map(|s| s.to_string()),
-        _ => None,
-    };
+    let group = (size_idx > 3).then(|| tokens[3].to_owned());
 
     Some(FileEntry {
-        name,
+        name: name.to_owned(),
         size,
         modified,
         permissions: Some(perms_str.to_string()),
@@ -145,42 +127,29 @@ fn is_perms_token(s: &str) -> bool {
 /// Locate the date columns inside `tokens` and return
 /// `(start_index, token_count, parsed_modified_string)`.
 ///
-/// Tries the GNU long-iso layout first (`YYYY-MM-DD` followed by `HH:MM`),
-/// then the BusyBox/BSD layout (`Mon DD HH:MM` or `Mon DD YYYY`).
+/// A valid timestamp follows a numeric size, which is token 3 (no group),
+/// 4 (owner and group), or 5 (also a SELinux context).
 fn locate_date(tokens: &[&str]) -> Option<(usize, usize, Option<String>)> {
-    if let Some(idx) = find_long_iso_date(tokens) {
-        // GNU long-iso: date(1) + time(1) = 2 tokens, then filename.
-        let date_str = tokens[idx];
-        let time_str = tokens[idx + 1];
-        Some((idx, 2, Some(format!("{} {}", date_str, time_str))))
-    } else if let Some(idx) = find_month_date(tokens) {
-        // BusyBox/BSD: month + day + time_or_year = 3 tokens, then filename.
-        let month = tokens[idx];
-        let day = tokens[idx + 1];
-        let time_or_year = tokens[idx + 2];
-        Some((idx, 3, parse_month_style_date(month, day, time_or_year)))
-    } else {
-        None
+    for index in 4..=6 {
+        let (Some(size), Some(date), Some(next)) = (
+            tokens.get(index - 1),
+            tokens.get(index),
+            tokens.get(index + 1),
+        ) else {
+            break;
+        };
+        if size.parse::<u64>().is_err() {
+            continue;
+        }
+        if is_long_iso_date(date) && is_hh_mm(Some(next)) {
+            return Some((index, 2, Some(format!("{date} {next}"))));
+        }
+        let time_or_year = tokens.get(index + 2).copied();
+        if is_month_abbr(date) && is_day_token(Some(next)) && is_time_or_year_token(time_or_year) {
+            return Some((index, 3, parse_month_style_date(date, next, time_or_year?)));
+        }
     }
-}
-
-/// Find a GNU long-iso date pair (`YYYY-MM-DD` at `i`, `HH:MM` at `i+1`).
-fn find_long_iso_date(tokens: &[&str]) -> Option<usize> {
-    // Need at least: [.., date, time, name] → 1 token after the pair.
-    let upper = tokens.len().saturating_sub(2);
-    (0..upper).find(|&i| {
-        is_long_iso_date(tokens[i]) && is_hh_mm(tokens.get(i + 1).copied())
-    })
-}
-
-/// Find a BusyBox/BSD date triple (`Mon` at `i`, day at `i+1`, time/year at `i+2`).
-fn find_month_date(tokens: &[&str]) -> Option<usize> {
-    let upper = tokens.len().saturating_sub(3);
-    (0..upper).find(|&i| {
-        is_month_abbr(tokens[i])
-            && is_day_token(tokens.get(i + 1).copied())
-            && is_time_or_year_token(tokens.get(i + 2).copied())
-    })
+    None
 }
 
 fn is_long_iso_date(s: &str) -> bool {
@@ -379,6 +348,33 @@ mod tests {
         assert_eq!(entry.name, "my report.pdf");
         assert_eq!(entry.size, 100);
         assert_eq!(entry.modified.as_deref(), Some("2024-12-25 23:59"));
+    }
+
+    #[test]
+    fn preserves_filename_whitespace_exactly() {
+        let name = "  采购  report\tfinal.pdf ";
+        let line = format!("-rw-r--r-- 1 root root 100 2024-12-25 23:59 {name}");
+        assert_eq!(parse_ls_long_line(&line).unwrap().name, name);
+    }
+
+    #[test]
+    fn bsd_listing_keeps_a_date_and_time_in_the_filename() {
+        let name = "Q4  2024-12-25 23:59 report.pdf";
+        let line = format!("-rw-r--r--@ 1 root staff 100 Nov  9  2020 {name}");
+        let entry = parse_ls_long_line(&line).unwrap();
+        assert_eq!(entry.name, name);
+        assert_eq!(entry.modified.as_deref(), Some("2020-11-09 00:00:00"));
+    }
+
+    #[test]
+    fn gnu_listing_does_not_parse_owner_and_group_as_a_date() {
+        let line = "-rw-r--r-- 1 Jan 20 4096 2024-12-25 23:59 report.pdf";
+        let entry = parse_ls_long_line(line).unwrap();
+        assert_eq!(entry.name, "report.pdf");
+        assert_eq!(entry.modified.as_deref(), Some("2024-12-25 23:59"));
+        assert_eq!(entry.size, 4096);
+        assert_eq!(entry.owner.as_deref(), Some("Jan"));
+        assert_eq!(entry.group.as_deref(), Some("20"));
     }
 
     #[test]
