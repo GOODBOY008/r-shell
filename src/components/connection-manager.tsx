@@ -699,10 +699,15 @@ export function ConnectionManager({
     }
   };
 
+  const nodeLabel = (node: ConnectionNode) =>
+    node.type === 'folder' && node.path === 'All Connections'
+      ? t('connectionManager.folder.allConnections')
+      : node.name;
+
   // Filter a derived tree so searching never overwrites saved folder expansion.
   const query = searchQuery.trim().toLocaleLowerCase();
   const filterNodes = (nodes: ConnectionNode[]): ConnectionNode[] => nodes.flatMap(node => {
-    const matches = [node.name, node.host, node.username, node.protocol]
+    const matches = [nodeLabel(node), node.name, node.host, node.username, node.protocol]
       .some(value => value?.toLocaleLowerCase().includes(query));
     const children = node.children ? filterNodes(node.children) : undefined;
     if (matches) return [{ ...node, children: node.children?.map(expandForSearch), isExpanded: true }];
@@ -715,6 +720,7 @@ export function ConnectionManager({
   const visibleConnections = query ? filterNodes(connections) : connections;
 
   const renderNode = (node: ConnectionNode, level: number = 0) => {
+    const label = nodeLabel(node);
     const isSelected = selectedConnectionId === node.id;
     const isConnected = node.type === 'connection' && node.isConnected;
     const isDragging = draggedItem?.node.id === node.id;
@@ -765,7 +771,7 @@ export function ConnectionManager({
             variant="ghost"
             size="sm"
             className="p-0 h-5 w-5 shrink-0"
-            aria-label={t(node.isExpanded ? 'connectionManager.collapseFolder' : 'connectionManager.expandFolder', { name: node.name })}
+            aria-label={t(node.isExpanded ? 'connectionManager.collapseFolder' : 'connectionManager.expandFolder', { name: label })}
             aria-expanded={node.isExpanded}
             disabled={!!query}
             onClick={(e) => {
@@ -783,8 +789,8 @@ export function ConnectionManager({
         <button
           type="button"
           className="flex min-w-0 flex-1 items-center gap-2 rounded text-left"
-          aria-label={node.name}
-          title={node.host ? `${node.name} · ${node.host}` : node.name}
+          aria-label={label}
+          title={node.host ? `${label} · ${node.host}` : label}
           aria-pressed={isSelected}
           onKeyDown={(event) => {
             if (event.key === 'Enter' && node.type === 'connection') {
@@ -795,7 +801,7 @@ export function ConnectionManager({
         >
           <span className="shrink-0 text-muted-foreground">{getIcon(node)}</span>
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium" style={connectionNameStyle}>{node.name}</span>
+            <span className="block truncate font-medium" style={connectionNameStyle}>{label}</span>
             {showConnectionHost && node.type === 'connection' && node.host && (
               <span className="block truncate font-mono text-muted-foreground" style={connectionHostStyle}>{node.host}</span>
             )}

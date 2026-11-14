@@ -314,7 +314,7 @@ export function SshConfigImportDialog({
                           <ChevronRight className="size-4 shrink-0" />
                         )}
                         <span className="min-w-0">
-                          <span className="font-medium">{entry.alias}</span>
+                          <span className="block font-medium [overflow-wrap:anywhere]">{entry.alias}</span>
                           <span className="block text-xs text-muted-foreground break-all">
                             {route}
                           </span>
