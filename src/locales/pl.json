@@ -155,6 +155,7 @@
       "maxCount": "Maksymalna liczba",
       "domain": "Domena (opcjonalna)",
       "displayResolution": "Rozdzielczość ekranu",
+      "defaultScaling": "Domyślne skalowanie",
       "colorDepth": "Głębia kolorów",
       "tunnelHost": "Host tunelu",
       "tunnelPort": "Port tunelu",
@@ -219,6 +220,7 @@
     },
     "rdp": {
       "fitToWindow": "Automatycznie — tryb zrównoważony (do 1080p)",
+      "fitScaling": "Dopasuj do okna",
       "h1024x768": "1024×768",
       "h1280x720": "1280×720 (HD)",
       "h1920x1080": "1920×1080 (Full HD)",

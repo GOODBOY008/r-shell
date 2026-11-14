@@ -30,6 +30,7 @@ const lifecycle = vi.hoisted(() => ({
   activeConnections: [] as Array<{ tabId: string; connectionId: string; order: number; tabType: string; protocol: string }>,
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
   toasterProps: {} as Record<string, unknown>,
+  desktopProps: vi.fn(),
   clearActiveConnectionsCalls: 0,
 }));
 
@@ -153,7 +154,10 @@ vi.mock('@/components/ui/sonner', async () => {
 });
 vi.mock('@/components/desktop-viewer', async () => {
   const ReactModule = await import('react');
-  return { DesktopViewer: () => ReactModule.createElement('div') };
+  return { DesktopViewer: (props: Record<string, unknown>) => {
+    lifecycle.desktopProps(props);
+    return ReactModule.createElement('div');
+  } };
 });
 vi.mock('@/components/file-browser-view', async () => {
   const ReactModule = await import('react');
@@ -327,6 +331,7 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       connectionStatus: 'connected' as const,
       reconnectCount: 0,
       originalConnectionId: 'rdp-1',
+      rdpScalingMode: 'fit' as const,
     };
     saveState({
       groups: { 'group-1': { id: 'group-1', tabs: [rdpTab], activeTabId: 'rdp-1' } },
@@ -342,6 +347,7 @@ describe('"Reconnect Sessions on Startup" setting', () => {
       port: 3389,
       username: 'user',
       protocol: 'RDP',
+      rdpScalingMode: 'native',
       authMethod: 'password',
       password: 'secret',
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -374,5 +380,8 @@ describe('"Reconnect Sessions on Startup" setting', () => {
     expect(request).toEqual(
       expect.objectContaining({ host: '192.168.64.2', protocol: 'rdp', port: 3389 }),
     );
+    await vi.waitFor(() => expect(lifecycle.desktopProps).toHaveBeenLastCalledWith(expect.objectContaining({
+      connectionId: 'rdp-1', isConnected: true, rdpScalingMode: 'native',
+    })));
   });
 });

@@ -4,6 +4,7 @@ import i18n from './i18n';
 import { notify } from './notifications';
 import type { ConnectionData } from './connection-storage';
 import { rdpConnectDisplay } from './rdp-display';
+import { normalizeDesktopScalingMode } from './desktop-utils';
 import { buildProxyConnectFields, type ProxyConnectFields, type ProxyConnectSource } from './ssh-connect-request';
 
 type DesktopConnectSource = Pick<ConnectionData,
@@ -34,6 +35,13 @@ export function buildDesktopConnectRequest(source: DesktopConnectSource): Deskto
     ...rdpConnectDisplay(source.rdpResolution),
     color_depth: source.vncColorDepth ? Number.parseInt(source.vncColorDepth, 10) : 24,
     ...(protocol === 'vnc' ? buildProxyConnectFields(source) : {}),
+  };
+}
+
+export function desktopTabDisplay(source: Pick<ConnectionData, 'rdpResolution' | 'rdpScalingMode'>) {
+  return {
+    rdpResolution: source.rdpResolution || 'fit',
+    rdpScalingMode: normalizeDesktopScalingMode(source.rdpScalingMode),
   };
 }
 

@@ -36,6 +36,7 @@ import {
   Waypoints,
 } from 'lucide-react';
 import { getDefaultPort, getAuthMethods, getHiddenFields, isDesktopProtocol } from '@/lib/protocol-config';
+import { normalizeDesktopScalingMode, type DesktopScalingMode } from '@/lib/desktop-utils';
 
 interface ConnectionDialogProps {
   open: boolean;
@@ -96,6 +97,7 @@ export interface ConnectionConfig extends SshExtendedOptions {
   // RDP specific
   domain?: string;
   rdpResolution?: '1024x768' | '1280x720' | '1920x1080' | '2560x1440' | 'fit' | 'retina';
+  rdpScalingMode?: DesktopScalingMode;
 
   // VNC specific
   vncColorDepth?: '24' | '16' | '8';
@@ -674,6 +676,7 @@ export function ConnectionDialog({
             x11: config.x11,
             domain: config.domain,
             rdpResolution: config.rdpResolution,
+            rdpScalingMode: config.rdpScalingMode,
             vncColorDepth: config.vncColorDepth,
             lastConnected: new Date().toISOString(),
           });
@@ -715,6 +718,7 @@ export function ConnectionDialog({
             x11: config.x11,
             domain: config.domain,
             rdpResolution: config.rdpResolution,
+            rdpScalingMode: config.rdpScalingMode,
             vncColorDepth: config.vncColorDepth,
           });
         }
@@ -942,6 +946,7 @@ const handleCancelConnectionAttempt = async () => {
             x11: config.x11,
       domain: config.domain,
       rdpResolution: config.rdpResolution,
+      rdpScalingMode: config.rdpScalingMode,
       vncColorDepth: config.vncColorDepth,
     });
 
@@ -1122,7 +1127,7 @@ const handleCancelConnectionAttempt = async () => {
                   </div>
                 )}
 
-                {/* RDP-specific: domain and resolution */}
+                {/* RDP-specific: domain and display */}
                 {config.protocol === 'RDP' && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
@@ -1155,6 +1160,21 @@ const handleCancelConnectionAttempt = async () => {
                       <p className="text-xs leading-relaxed text-muted-foreground">
                         {t(config.rdpResolution === 'retina' ? 'connectionDialog.rdp.retinaHint' : 'connectionDialog.rdp.balancedHint')}
                       </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="rdp-scaling-mode">{t('connectionDialog.label.defaultScaling')}</Label>
+                      <Select
+                        value={normalizeDesktopScalingMode(config.rdpScalingMode)}
+                        onValueChange={(value) => updateConfig({ rdpScalingMode: normalizeDesktopScalingMode(value) })}
+                      >
+                        <SelectTrigger id="rdp-scaling-mode">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fit">{t('connectionDialog.rdp.fitScaling')}</SelectItem>
+                          <SelectItem value="native">{t('desktopToolbar.oneToOne')}</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                   </div>
                 )}

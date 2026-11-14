@@ -8,7 +8,7 @@ import { readText as readClipboardText, writeText as writeClipboardText } from '
 import { notify } from '@/lib/notifications';
 import { DesktopToolbar } from './desktop-toolbar';
 import { observeDevicePixelRatio, rdpDisplaySize } from '@/lib/rdp-display';
-import { computeFitScale, translateCoordinates } from '@/lib/desktop-utils';
+import { computeFitScale, normalizeDesktopScalingMode, translateCoordinates, type DesktopScalingMode } from '@/lib/desktop-utils';
 import { Monitor, RefreshCw, ExternalLink, Unplug, Undo2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { RdpSessionStatus } from './rdp-session-status';
@@ -26,6 +26,7 @@ interface DesktopViewerProps {
   protocol?: string;
   /** Live session resolution; Balanced Auto and Retina adapt the remote desktop. */
   rdpResolution?: string;
+  rdpScalingMode?: DesktopScalingMode;
   isConnected: boolean;
   isActive?: boolean;
   onReconnect?: () => void;
@@ -40,6 +41,7 @@ export function DesktopViewer({
   host,
   protocol = 'RDP',
   rdpResolution = 'fit',
+  rdpScalingMode,
   isConnected,
   isActive = true,
   onReconnect,
@@ -55,7 +57,14 @@ export function DesktopViewer({
 
   const [desktopWidth, setDesktopWidth] = useState(1024);
   const [desktopHeight, setDesktopHeight] = useState(768);
-  const [scalingMode, setScalingMode] = useState<'fit' | 'native'>('fit');
+  const isRdp = protocol.toUpperCase() === 'RDP';
+  const [scalingOverride, setScalingOverride] = useState<DesktopScalingMode | null>(null);
+  const defaultScalingMode = isRdp ? normalizeDesktopScalingMode(rdpScalingMode) : 'fit';
+  const scalingMode = scalingOverride ?? defaultScalingMode;
+  // Reconnecting reuses the viewer but starts with the saved default again.
+  if (isRdp && !isConnected && scalingOverride !== null) {
+    setScalingOverride(null);
+  }
   const [isFullScreen, setIsFullScreen] = useState(false);
   const fullscreenSettleUntilRef = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -639,8 +648,8 @@ export function DesktopViewer({
 
   // Toolbar actions
   const handleToggleScaling = useCallback(() => {
-    setScalingMode(prev => prev === 'fit' ? 'native' : 'fit');
-  }, []);
+    setScalingOverride(previous => (previous ?? defaultScalingMode) === 'fit' ? 'native' : 'fit');
+  }, [defaultScalingMode]);
 
   const handleSendCtrlAltDel = useCallback(() => {
     if (!isConnected) return;
@@ -847,14 +856,14 @@ export function DesktopViewer({
       )}
 
       {/* Canvas */}
-      <div className={`h-full w-full flex items-center justify-center ${
+      <div className={`h-full w-full flex ${
         scalingMode === 'native' ? 'overflow-auto' : 'overflow-hidden'
       }`}>
         <canvas
           ref={canvasRef}
           width={desktopWidth}
           height={desktopHeight}
-          className="block"
+          className="m-auto block shrink-0"
           style={{
             width: displayedWidth,
             height: displayedHeight,

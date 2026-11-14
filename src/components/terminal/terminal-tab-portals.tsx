@@ -158,13 +158,17 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
   if (tab.tabType === 'dashboard') {
     content = <DashboardView dashboardId={tab.dashboardId ?? ''} visible={isVisible} />;
   } else if (tab.tabType === 'desktop') {
+    const profile = tab.rdpResolution === undefined || tab.rdpScalingMode === undefined
+      ? ConnectionStorageManager.getConnection(tab.originalConnectionId || tab.id)
+      : undefined;
     content = (
       <DesktopViewer
         connectionId={tab.id}
         connectionName={tab.name}
         host={tab.host}
         protocol={tab.protocol}
-        rdpResolution={tab.rdpResolution ?? ConnectionStorageManager.getConnection(tab.originalConnectionId || tab.id)?.rdpResolution}
+        rdpResolution={tab.rdpResolution ?? profile?.rdpResolution}
+        rdpScalingMode={tab.rdpScalingMode ?? profile?.rdpScalingMode}
         isConnected={tab.connectionStatus === 'connected'}
         isActive={isActive}
         onReconnect={handleReconnect}

@@ -555,6 +555,25 @@ describe('DesktopViewer window-fit scaling', () => {
     expect(lifecycle.invoke.mock.calls.some(([cmd]) => cmd === 'desktop_resize')).toBe(false);
   });
 
+  it('starts at the configured RDP scale, resets a temporary switch on reconnect, and keeps VNC at fit', async () => {
+    const props = viewerProps({ rdpScalingMode: 'native' });
+    const view = render(<DesktopViewer {...props} />);
+    await measure(800, 450);
+    expect(screen.getByRole('button', { name: '1:1', exact: true })).toBeTruthy();
+    expect(view.container.querySelector('canvas')?.style.width).toBe('1024px');
+    expect(resizeRequests()).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: '1:1', exact: true }));
+    expect(screen.getByRole('button', { name: 'Fit', exact: true })).toBeTruthy();
+    view.rerender(<DesktopViewer {...props} isConnected={false} />);
+    view.rerender(<DesktopViewer {...props} />);
+    expect(screen.getByRole('button', { name: '1:1', exact: true })).toBeTruthy();
+
+    view.unmount();
+    render(<DesktopViewer {...props} protocol="VNC" />);
+    expect(screen.getByRole('button', { name: 'Fit', exact: true })).toBeTruthy();
+  });
+
   it('returns to the initial logical resolution after a fullscreen round trip on a Retina display', async () => {
     vi.stubGlobal('devicePixelRatio', 2);
     const view = render(<DesktopViewer {...viewerProps({ rdpResolution: 'fit' })} />);

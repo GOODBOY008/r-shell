@@ -1,5 +1,6 @@
 import { mergeSshImport, SshImportError, type SshImportPreview, type ImportSelection } from './ssh-config-import';
 import type { SshExtendedOptions } from '@/lib/ssh-options';
+import type { DesktopScalingMode } from './desktop-utils';
 /**
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
@@ -67,6 +68,7 @@ export interface ConnectionData extends SshExtendedOptions {
   // RDP-specific
   domain?: string;
   rdpResolution?: string;
+  rdpScalingMode?: DesktopScalingMode;
   // VNC-specific
   vncColorDepth?: string;
   vncPassword?: string;

@@ -603,6 +603,7 @@ export function terminalGroupReducer(
         ...newTabs[tabIndex],
         connectionStatus: status,
         ...(action.rdpResolution !== undefined ? { rdpResolution: action.rdpResolution } : {}),
+        ...(action.rdpScalingMode !== undefined ? { rdpScalingMode: action.rdpScalingMode } : {}),
       };
 
       return {
