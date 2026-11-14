@@ -3,9 +3,10 @@
  */
 
 export type DesktopScalingMode = 'fit' | 'native';
+export type RdpScalingPreference = DesktopScalingMode | 'remember';
 
-export function normalizeDesktopScalingMode(value: unknown): DesktopScalingMode {
-  return value === 'native' ? 'native' : 'fit';
+export function normalizeRdpScalingPreference(value: unknown): RdpScalingPreference {
+  return value === 'fit' || value === 'native' ? value : 'remember';
 }
 
 /**

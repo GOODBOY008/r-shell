@@ -74,8 +74,9 @@ it('saves the default RDP scaling and shows it when the connection is reopened',
     <ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} onSave={onSave} editingConnection={toConnectionConfig(saved)} />,
   );
   const scaling = screen.getByRole('combobox', { name: 'Default Scaling' });
-  expect(scaling.textContent).toBe('Fit to Window');
+  expect(scaling.textContent).toBe('Remember Last Used');
   fireEvent.keyDown(scaling, { key: 'ArrowDown' });
+  expect(await screen.findByRole('option', { name: 'Fit to Window' })).toBeTruthy();
   fireEvent.click(await screen.findByRole('option', { name: '1:1' }));
   fireEvent.click(screen.getByRole('button', { name: 'Save' }));
   await waitFor(() => expect(onSave).toHaveBeenCalled());

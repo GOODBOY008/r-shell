@@ -4,7 +4,7 @@ import i18n from './i18n';
 import { notify } from './notifications';
 import type { ConnectionData } from './connection-storage';
 import { rdpConnectDisplay } from './rdp-display';
-import { normalizeDesktopScalingMode } from './desktop-utils';
+import { normalizeRdpScalingPreference } from './desktop-utils';
 import { buildProxyConnectFields, type ProxyConnectFields, type ProxyConnectSource } from './ssh-connect-request';
 
 type DesktopConnectSource = Pick<ConnectionData,
@@ -38,10 +38,12 @@ export function buildDesktopConnectRequest(source: DesktopConnectSource): Deskto
   };
 }
 
-export function desktopTabDisplay(source: Pick<ConnectionData, 'rdpResolution' | 'rdpScalingMode'>) {
+export function desktopTabDisplay(source: Pick<ConnectionData, 'rdpResolution' | 'rdpScalingMode' | 'rdpLastScalingMode'>) {
+  const preference = normalizeRdpScalingPreference(source.rdpScalingMode);
+  const lastScalingMode = source.rdpLastScalingMode === 'native' ? 'native' : 'fit';
   return {
     rdpResolution: source.rdpResolution || 'fit',
-    rdpScalingMode: normalizeDesktopScalingMode(source.rdpScalingMode),
+    rdpScalingMode: preference === 'remember' ? lastScalingMode : preference,
   };
 }
 

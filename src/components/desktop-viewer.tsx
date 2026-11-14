@@ -8,7 +8,7 @@ import { readText as readClipboardText, writeText as writeClipboardText } from '
 import { notify } from '@/lib/notifications';
 import { DesktopToolbar } from './desktop-toolbar';
 import { observeDevicePixelRatio, rdpDisplaySize } from '@/lib/rdp-display';
-import { computeFitScale, normalizeDesktopScalingMode, translateCoordinates, type DesktopScalingMode } from '@/lib/desktop-utils';
+import { computeFitScale, translateCoordinates, type DesktopScalingMode } from '@/lib/desktop-utils';
 import { Monitor, RefreshCw, ExternalLink, Unplug, Undo2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { RdpSessionStatus } from './rdp-session-status';
@@ -27,6 +27,7 @@ interface DesktopViewerProps {
   /** Live session resolution; Balanced Auto and Retina adapt the remote desktop. */
   rdpResolution?: string;
   rdpScalingMode?: DesktopScalingMode;
+  onScalingChange?: (mode: DesktopScalingMode) => void;
   isConnected: boolean;
   isActive?: boolean;
   onReconnect?: () => void;
@@ -42,6 +43,7 @@ export function DesktopViewer({
   protocol = 'RDP',
   rdpResolution = 'fit',
   rdpScalingMode,
+  onScalingChange,
   isConnected,
   isActive = true,
   onReconnect,
@@ -59,9 +61,9 @@ export function DesktopViewer({
   const [desktopHeight, setDesktopHeight] = useState(768);
   const isRdp = protocol.toUpperCase() === 'RDP';
   const [scalingOverride, setScalingOverride] = useState<DesktopScalingMode | null>(null);
-  const defaultScalingMode = isRdp ? normalizeDesktopScalingMode(rdpScalingMode) : 'fit';
+  const defaultScalingMode = isRdp ? rdpScalingMode ?? 'fit' : 'fit';
   const scalingMode = scalingOverride ?? defaultScalingMode;
-  // Reconnecting reuses the viewer but starts with the saved default again.
+  // Reconnecting applies the latest profile preference.
   if (isRdp && !isConnected && scalingOverride !== null) {
     setScalingOverride(null);
   }
@@ -648,8 +650,10 @@ export function DesktopViewer({
 
   // Toolbar actions
   const handleToggleScaling = useCallback(() => {
-    setScalingOverride(previous => (previous ?? defaultScalingMode) === 'fit' ? 'native' : 'fit');
-  }, [defaultScalingMode]);
+    const nextMode = scalingMode === 'fit' ? 'native' : 'fit';
+    setScalingOverride(nextMode);
+    if (isRdp) onScalingChange?.(nextMode);
+  }, [isRdp, onScalingChange, scalingMode]);
 
   const handleSendCtrlAltDel = useCallback(() => {
     if (!isConnected) return;

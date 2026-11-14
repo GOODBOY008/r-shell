@@ -36,7 +36,7 @@ import {
   Waypoints,
 } from 'lucide-react';
 import { getDefaultPort, getAuthMethods, getHiddenFields, isDesktopProtocol } from '@/lib/protocol-config';
-import { normalizeDesktopScalingMode, type DesktopScalingMode } from '@/lib/desktop-utils';
+import { normalizeRdpScalingPreference, type DesktopScalingMode, type RdpScalingPreference } from '@/lib/desktop-utils';
 
 interface ConnectionDialogProps {
   open: boolean;
@@ -97,7 +97,8 @@ export interface ConnectionConfig extends SshExtendedOptions {
   // RDP specific
   domain?: string;
   rdpResolution?: '1024x768' | '1280x720' | '1920x1080' | '2560x1440' | 'fit' | 'retina';
-  rdpScalingMode?: DesktopScalingMode;
+  rdpScalingMode?: RdpScalingPreference;
+  rdpLastScalingMode?: DesktopScalingMode;
 
   // VNC specific
   vncColorDepth?: '24' | '16' | '8';
@@ -1164,13 +1165,14 @@ const handleCancelConnectionAttempt = async () => {
                     <div className="space-y-2">
                       <Label htmlFor="rdp-scaling-mode">{t('connectionDialog.label.defaultScaling')}</Label>
                       <Select
-                        value={normalizeDesktopScalingMode(config.rdpScalingMode)}
-                        onValueChange={(value) => updateConfig({ rdpScalingMode: normalizeDesktopScalingMode(value) })}
+                        value={normalizeRdpScalingPreference(config.rdpScalingMode)}
+                        onValueChange={(value) => updateConfig({ rdpScalingMode: normalizeRdpScalingPreference(value) })}
                       >
                         <SelectTrigger id="rdp-scaling-mode">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
+                          <SelectItem value="remember">{t('connectionDialog.rdp.rememberScaling')}</SelectItem>
                           <SelectItem value="fit">{t('connectionDialog.rdp.fitScaling')}</SelectItem>
                           <SelectItem value="native">{t('desktopToolbar.oneToOne')}</SelectItem>
                         </SelectContent>
