@@ -4,10 +4,11 @@ import { Button } from './ui/button';
 import { ChevronDown, ExternalLink, Maximize2, Minimize2, Monitor, Power, RectangleHorizontal } from 'lucide-react';
 import { RdpSessionStatus } from './rdp-session-status';
 import type { RdpSessionInfo } from '@/lib/rdp-session-info';
+import type { DesktopScalingMode } from '@/lib/desktop-utils';
 
 interface DesktopToolbarProps {
   protocol: string;
-  scalingMode: 'fit' | 'native';
+  scalingMode: DesktopScalingMode;
   isFullScreen: boolean;
   onToggleScalingMode: () => void;
   onSendCtrlAltDel: () => void;

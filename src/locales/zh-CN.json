@@ -153,6 +153,7 @@
       "maxCount": "最大次数",
       "domain": "域（可选）",
       "displayResolution": "显示分辨率",
+      "defaultScaling": "默认缩放",
       "colorDepth": "色彩深度",
       "tunnelHost": "隧道主机",
       "tunnelPort": "隧道端口",
@@ -217,6 +218,8 @@
     },
     "rdp": {
       "fitToWindow": "自动均衡（最高 1080p）",
+      "fitScaling": "适应窗口",
+      "rememberScaling": "记住上次使用的缩放",
       "h1024x768": "1024×768",
       "h1280x720": "1280×720（高清）",
       "h1920x1080": "1920×1080（全高清）",

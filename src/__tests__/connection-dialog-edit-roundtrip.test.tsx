@@ -5,7 +5,7 @@
  * Uses the real ConnectionStorageManager + localStorage, so it exercises the
  * same storage path as the desktop app.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { ConnectionDialog, type ConnectionConfig } from '../components/connection-dialog';
 import { ConnectionStorageManager, type ConnectionData } from '../lib/connection-storage';
@@ -51,6 +51,11 @@ function toConfig(data: ConnectionData): ConnectionConfig {
   };
 }
 
+beforeAll(() => {
+  // Radix Select scrolls the focused option into view when it opens.
+  Element.prototype.scrollIntoView = vi.fn();
+});
+
 beforeEach(() => {
   localStorage.clear();
 });
@@ -58,6 +63,30 @@ beforeEach(() => {
 async function switchToAdvancedTab() {
   fireEvent.mouseDown(screen.getByRole('tab', { name: 'Advanced' }), { button: 0 });
 }
+
+it('saves the default RDP scaling and shows it when the connection is reopened', async () => {
+  const saved = ConnectionStorageManager.saveConnectionWithId('rdp-scaling', {
+    name: 'Remote Desktop', host: 'example.com', port: 3389, protocol: 'RDP',
+    username: 'operator', authMethod: 'password', rdpResolution: 'retina',
+  });
+  const onSave = vi.fn();
+  const dialog = render(
+    <ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} onSave={onSave} editingConnection={toConnectionConfig(saved)} />,
+  );
+  const scaling = screen.getByRole('combobox', { name: 'Default Scaling' });
+  expect(scaling.textContent).toBe('Remember Last Used');
+  fireEvent.keyDown(scaling, { key: 'ArrowDown' });
+  expect(await screen.findByRole('option', { name: 'Fit to Window' })).toBeTruthy();
+  fireEvent.click(await screen.findByRole('option', { name: '1:1' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() => expect(onSave).toHaveBeenCalled());
+  const updated = ConnectionStorageManager.getConnection(saved.id)!;
+  expect(updated).toMatchObject({ rdpResolution: 'retina', rdpScalingMode: 'native' });
+
+  dialog.unmount();
+  render(<ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} editingConnection={toConnectionConfig(updated)} />);
+  expect(screen.getByRole('combobox', { name: 'Default Scaling' }).textContent).toBe('1:1');
+});
 
 describe('edit advanced options round-trip (real storage)', () => {
   it.each([false, true])('removes a target secret while retaining jump credentials (saving enabled: %s)', async (savePassword) => {

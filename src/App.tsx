@@ -1,4 +1,4 @@
-import { buildDesktopConnectRequest, desktopConnect, DesktopConnectCancelledError } from '@/lib/desktop-connect';
+import { buildDesktopConnectRequest, desktopConnect, desktopTabDisplay, DesktopConnectCancelledError } from '@/lib/desktop-connect';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { LayoutDashboard, Server } from 'lucide-react';
 import type { PanelImperativeHandle } from 'react-resizable-panels';
@@ -704,7 +704,7 @@ function AppContent() {
         type: 'UPDATE_TAB_STATUS',
         tabId: tab.id,
         status: isDesktop || isFileBrowser ? 'connected' : 'connecting',
-        ...(isDesktop ? { rdpResolution: connectionData.rdpResolution || 'fit' } : {}),
+        ...(isDesktop ? desktopTabDisplay(connectionData) : {}),
       });
       return true;
     } catch (error) {
@@ -998,7 +998,7 @@ function AppContent() {
           id: sessionId,
           name: connectionData.name,
           tabType: 'desktop',
-          rdpResolution: connectionData.rdpResolution || 'fit',
+          ...desktopTabDisplay(connectionData),
           protocol: connectionData.protocol,
           host: connectionData.host,
           username: connectionData.username,
@@ -1336,7 +1336,7 @@ function AppContent() {
         if (!tabToReconnect.originalConnectionId) {
           ConnectionStorageManager.updateLastConnected(originalConnectionId);
         }
-        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: connectionData.rdpResolution || 'fit' });
+        dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', ...desktopTabDisplay(connectionData) });
         notify.success(t('app.reconnected'), {
           description: t('app.reconnectedDesc', { name: tabToReconnect.name }),
         });
@@ -1678,7 +1678,7 @@ function AppContent() {
         // RDP/VNC reconnect flow
         try {
           await desktopConnect({ connectionId: tabId, request: buildDesktopConnectRequest(config) });
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', ...desktopTabDisplay(config) });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
           if (error instanceof DesktopConnectCancelledError) return;
@@ -1702,7 +1702,7 @@ function AppContent() {
           id: tabId,
           name: config.name,
           tabType: 'desktop',
-          rdpResolution: config.rdpResolution || 'fit',
+          ...desktopTabDisplay(config),
           protocol: config.protocol,
           host: config.host,
           username: config.username,
@@ -1714,7 +1714,7 @@ function AppContent() {
         try {
           await desktopConnect({ connectionId: tabId, request: buildDesktopConnectRequest(config) });
           ConnectionStorageManager.updateLastConnected(config.id || tabId);
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'connected' });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId, status: 'disconnected' });
           if (error instanceof DesktopConnectCancelledError) return;
@@ -1925,7 +1925,7 @@ function AppContent() {
             id: sessionId,
             name: config.name,
             tabType: 'desktop',
-            rdpResolution: config.rdpResolution || 'fit',
+            ...desktopTabDisplay(config),
             protocol: config.protocol,
             host: config.host,
             username: config.username,
@@ -1942,7 +1942,7 @@ function AppContent() {
         try {
           await desktopConnect({ connectionId: sessionId, request: buildDesktopConnectRequest(config) });
           ConnectionStorageManager.updateLastConnected(config.id);
-          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected', rdpResolution: config.rdpResolution || 'fit' });
+          dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'connected', ...desktopTabDisplay(config) });
         } catch (error) {
           dispatch({ type: 'UPDATE_TAB_STATUS', tabId: sessionId, status: 'disconnected' });
           if (error instanceof DesktopConnectCancelledError) return;

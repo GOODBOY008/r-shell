@@ -405,22 +405,21 @@ describe('App connection dialog and reconnect', () => {
     mockState.tabToGroupMap = {};
     localStorage.removeItem('r-shell-connections');
     mockDialogConfig = {
-      ...mockDialogConfig, id: 'unsaved-rdp', protocol: 'RDP', port: 3389, rdpResolution,
+      ...mockDialogConfig, id: 'unsaved-rdp', protocol: 'RDP', port: 3389, rdpResolution, rdpScalingMode: 'native',
     };
     lifecycle.invoke.mockResolvedValue({});
     render(<App />);
     fireEvent.click(screen.getByTestId('trigger-onconnect'));
     await vi.waitFor(() => expect(lifecycle.desktopProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      connectionId: 'unsaved-rdp', isConnected: true, rdpResolution,
+      connectionId: 'unsaved-rdp', isConnected: true, rdpResolution, rdpScalingMode: 'native',
     })));
     expect(JSON.parse(localStorage.getItem('r-shell-connections') || '[]')).toEqual([]);
 
-    // Reconnecting the same unsaved tab with another mode must refresh the
-    // existing tab as well, including an explicit reset to Balanced Auto.
-    mockDialogConfig = { ...mockDialogConfig, rdpResolution: undefined };
+    // Reconnecting the same unsaved tab without either setting uses the defaults.
+    mockDialogConfig = { ...mockDialogConfig, rdpResolution: undefined, rdpScalingMode: undefined };
     fireEvent.click(screen.getByTestId('trigger-onconnect'));
     await vi.waitFor(() => expect(lifecycle.desktopProps).toHaveBeenLastCalledWith(expect.objectContaining({
-      connectionId: 'unsaved-rdp', isConnected: true, rdpResolution: 'fit',
+      connectionId: 'unsaved-rdp', isConnected: true, rdpResolution: 'fit', rdpScalingMode: 'fit',
     })));
   });
 
