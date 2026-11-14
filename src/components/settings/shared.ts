@@ -95,7 +95,7 @@ export function settingMatchesQuery(query: string, keywords: Array<string | unde
 /**
  * English text of an i18n key regardless of the active UI language, so the
  * global search finds rows by their English name too (typing "theme" finds
- * 主题 rows in zh-CN). All three locales ship in the bundle.
+ * 主题 rows in zh-CN).
  */
 export function englishText(key: string): string {
   // Widen the strictly-keyed TFunction once at this boundary (callers pass

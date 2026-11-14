@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ConnectionDialog } from '../components/connection-dialog';
+import i18n from '../lib/i18n';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -88,6 +89,17 @@ describe('ConnectionDialog folder pre-selection', () => {
 
     const folderSelect = getFolderSelect();
     expect(folderSelect.textContent).toContain('All Connections');
+  });
+
+  it('displays the translated root folder for the stored root path', async () => {
+    await i18n.changeLanguage('pt-BR');
+    const view = renderDialog({ initialFolder: 'All Connections' });
+    try {
+      expect(getFolderSelect().textContent).toBe('Todas as conexões');
+    } finally {
+      view.unmount();
+      await i18n.changeLanguage('en');
+    }
   });
 
   it('hides the folder select when editing (initialFolder is ignored gracefully)', () => {

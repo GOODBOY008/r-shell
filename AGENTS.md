@@ -279,7 +279,7 @@ VS Code-like resizable panel layout with presets:
 
 R-Shell supports multiple languages via `react-i18next`. All user-facing strings must go through the translation system.
 
-- **Translation files**: `src/locales/en.json` (English, source of truth), `src/locales/zh-CN.json` (Chinese) and `src/locales/pl.json` (Polish)
+- **Translation files**: `src/locales/en.json` (English, source of truth), `src/locales/zh-CN.json` (Chinese), `src/locales/pl.json` (Polish), and `src/locales/pt-BR.json` (Brazilian Portuguese)
 - **i18n config**: `src/lib/i18n.ts` — initialization, language detection, `changeLanguage()` helper
 - **Hook**: Use `const { t } = useTranslation()` from `react-i18next` in every component with user-facing strings
 - **Key naming**: `{component}.{category}.{name}` — e.g. `connectionDialog.title.new`, `common.cancel`

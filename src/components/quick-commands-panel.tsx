@@ -193,7 +193,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
       )}
 
       {/* Snippet list */}
-      <ScrollArea className="min-h-0 flex-1">
+      <ScrollArea className="min-h-0 flex-1 [&_[data-radix-scroll-area-viewport]>div]:block!">
         {visibleSnippets.length > 0 ? (
           <div className="flex flex-col gap-1.5 pr-1.5">
             {visibleSnippets.map((snippet) => (
@@ -313,7 +313,7 @@ export function QuickCommandsPanel({ activeTerminalId }: QuickCommandsPanelProps
                     {t('quickCommands.emptyDescription')}
                   </p>
                 </div>
-                <Button variant="outline" size="sm" onClick={handleCreate}>
+                <Button variant="outline" size="sm" className="h-auto min-h-8 max-w-full whitespace-normal py-1.5" onClick={handleCreate}>
                   <Plus className="h-3.5 w-3.5" />
                   {t('quickCommands.emptyCreate')}
                 </Button>

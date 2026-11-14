@@ -3,7 +3,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { LayoutDashboard, Server } from 'lucide-react';
 import type { PanelImperativeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
-import { applyLanguageFromPreference } from './lib/i18n';
 import { folderPathFromArg } from './lib/connection-folder';
 import { useLazyTabs } from './lib/use-lazy-tabs';
 import { reconcileSessionHealth } from './lib/session-health';
@@ -319,11 +318,6 @@ function AppContent() {
       dispatchTerminalCommand(activeTerminalId, command);
     }
   }, [activeTerminalId]);
-
-  // Apply stored language preference (follows OS locale when set to "auto")
-  useEffect(() => {
-    void applyLanguageFromPreference();
-  }, []);
 
   useEffect(() => {
     const refreshShortcutBindings = () => {
@@ -2374,7 +2368,7 @@ function AppContent() {
                     <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
                     <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
                     <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
-                    <TabsTrigger value="port-forwarding" className="text-xs px-2">{t('app.portForwarding')}</TabsTrigger>
+                    <TabsTrigger value="port-forwarding" className="text-xs px-2" title={t('portForwarding.title')}>{t('app.portForwarding')}</TabsTrigger>
                   </TabsList>
 
                   <div className="flex-1 mt-0 overflow-hidden relative">
@@ -2408,7 +2402,7 @@ function AppContent() {
 
                     <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
                       {rightSidebar.mounted.has('port-forwarding') ? (
-                        <ErrorBoundary label={t('app.portForwarding')}>
+                        <ErrorBoundary label={t('portForwarding.title')}>
                           <PortForwardingPanel
                             connectionId={activeConnection?.connectionId ?? null}
                             connectionNames={connectionNames}

@@ -452,7 +452,8 @@
       "auto": "Auto (System)",
       "en": "English",
       "zhCN": "Chinese (Simplified)",
-      "pl": "Polish"
+      "pl": "Polish",
+      "ptBR": "Portuguese (Brazil)"
     },
     "button": {
       "resetToDefaults": "Reset to Defaults",

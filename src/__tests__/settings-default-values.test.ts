@@ -78,7 +78,13 @@ it.each(['', '   ', 'unknown'])('falls back to the system language for an invali
   expect(getLanguagePreference()).toBe(AUTO);
 });
 
-it.each([['zh-Hans', 'zh-CN'], ['en-US', 'en'], ['pl-PL', 'pl']])('normalizes the supported locale alias %s', (value, expected) => {
+it.each([
+  ['zh-Hans', 'zh-CN'],
+  ['en-US', 'en'],
+  ['pl-PL', 'pl'],
+  ['pt', 'pt-BR'],
+  [' PT_br ', 'pt-BR'],
+])('normalizes the supported locale alias %s', (value, expected) => {
   localStorage.setItem('r-shell-language', value);
   expect(getLanguagePreference()).toBe(expected);
 });

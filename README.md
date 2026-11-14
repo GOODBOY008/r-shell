@@ -151,7 +151,7 @@ Save an SSH connection, then open **Dashboards → Browse templates** to create 
 
 ### 🎨 Appearance & Customization
 
-- **Languages** — English, Simplified Chinese, and Polish
+- **Languages** — English, Simplified Chinese, Polish, and Brazilian Portuguese
 - **10 terminal color themes** — VS Code Dark, Monokai, Solarized Dark/Light, Dracula, One Dark, Nord, Gruvbox Dark, Tokyo Night, Matrix
 - **Dark / Light / Auto** — Application theme follows system preference
 - **7 font families** — Menlo, JetBrains Mono, Fira Code, Source Code Pro, Consolas, Monaco, Courier New
@@ -283,7 +283,7 @@ The evolution line carries all new features and requires **macOS 26 or later on 
 - **xterm.js 6** — Terminal emulation with WebGL, search, web-links, fit, and overlay addons
 - **CodeMirror 6** — Embedded code editor with syntax highlighting
 - **Recharts** — Data visualization for monitoring
-- **i18next** — Internationalization (English, Simplified Chinese, Polish)
+- **i18next** — Internationalization (English, Simplified Chinese, Polish, Brazilian Portuguese)
 - **Lucide Icons** — Icon set
 
 ---

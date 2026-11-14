@@ -46,14 +46,15 @@ export function InterfaceSection({
     settingMatchesQuery(query, [tt(labelKey), englishText(labelKey), ...aliases]);
   const showListFont = show('settings.interface.connectionListFontSize', 'sidebar saved hosts font size');
   const showListHost = show('settings.interface.showConnectionHost', 'sidebar saved hosts address hostname ip compact');
+  const showLanguage = show('settings.language.label', 'language locale english chinese polish portuguese português brazil brasil pt-br');
 
   // In search mode, hide the section entirely when nothing in it matches.
   const searching = query.trim().length > 0;
 
   if (searching) {
     const anyVisible = [
-      'settings.interface.appTheme', 'settings.language.label', 'settings.interface.autostart',
-    ].some(key => settingMatchesQuery(query, [tt(key), englishText(key)])) || showListFont || showListHost;
+      'settings.interface.appTheme', 'settings.interface.autostart',
+    ].some(key => settingMatchesQuery(query, [tt(key), englishText(key)])) || showListFont || showListHost || showLanguage;
     if (!anyVisible) {
       return null;
     }
@@ -122,7 +123,7 @@ export function InterfaceSection({
 
         {(showListFont || showListHost) && <Separator />}
 
-        {show('settings.language.label', 'language locale english chinese polish') && (
+        {showLanguage && (
           <div className="space-y-2">
             <Label>{t('settings.language.label')}</Label>
             <Select value={languagePref} onValueChange={onLanguageChange}>
@@ -134,6 +135,7 @@ export function InterfaceSection({
                 <SelectItem value="en">{t('settings.language.en')}</SelectItem>
                 <SelectItem value="zh-CN">{t('settings.language.zhCN')}</SelectItem>
                 <SelectItem value="pl">{t('settings.language.pl')}</SelectItem>
+                <SelectItem value="pt-BR">{t('settings.language.ptBR')}</SelectItem>
               </SelectContent>
             </Select>
           </div>

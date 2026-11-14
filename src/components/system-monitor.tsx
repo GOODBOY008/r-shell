@@ -26,6 +26,8 @@ interface SystemMonitorProps {
   visible?: boolean;
   onColumnsChange?: (columns: MonitorColumns) => void;
 }
+const TOOLBAR_BUTTON_CLASS = 'h-auto min-h-7 max-w-full whitespace-normal px-2 py-1 text-xs';
+
 const TITLES = {
   overview: 'systemMonitor.systemOverview', gpu: 'systemMonitor.gpuMonitor', processes: 'systemMonitor.runningProcesses',
   disks: 'systemMonitor.diskUsage', network: 'systemMonitor.networkUsage', latency: 'systemMonitor.networkLatency',
@@ -124,7 +126,7 @@ function MonitorDashboard({
   const title = (module: MonitorModule) => module.kind === 'builtin' ? t(TITLES[module.builtin]) : module.name;
   const changeModule = (module: MonitorModule) => persist({ ...config, modules: config.modules.map(item => item.id === module.id ? module : item) });
   const scopeMenu = (action: 'add' | 'layout') => <DropdownMenu>
-    <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" className="h-7 px-2 text-xs">{action === 'add' ? <Plus className="size-3" /> : <Settings2 className="size-3" />}{t(action === 'add' ? 'monitor.addModule' : 'monitor.editLayout')}</Button></DropdownMenuTrigger>
+    <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" className={TOOLBAR_BUTTON_CLASS}>{action === 'add' ? <Plus className="size-3" /> : <Settings2 className="size-3" />}{t(action === 'add' ? 'monitor.addModule' : 'monitor.editLayout')}</Button></DropdownMenuTrigger>
     <DropdownMenuContent align="end"><DropdownMenuItem onSelect={() => chooseScope('global', action)}>{t('monitor.editGlobal')}</DropdownMenuItem>
       <DropdownMenuItem disabled={!savedConnectionId} onSelect={() => chooseScope('connection', action)}>{t(override ? 'monitor.editConnection' : 'monitor.customizeConnection')}</DropdownMenuItem>
       {action === 'add' && <DropdownMenuItem onSelect={() => setDockerDialog(true)}>{t('monitor.docker.title')}</DropdownMenuItem>}
@@ -133,14 +135,21 @@ function MonitorDashboard({
   return <div className="@container/monitor h-full min-h-0 min-w-0 flex flex-col">
     <Activity mode={viewMode}>
       <div className="shrink-0 mb-2 px-1 space-y-1">
-        <div className="flex items-center justify-between gap-1 flex-wrap"><span className="text-[11px] text-muted-foreground" role="status">{scopeLabel}</span><div className="flex gap-1">{scopeMenu('add')}{!editing && scopeMenu('layout')}{editing && <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { clearDrag(); setEditing(false); setEditScope(null); }}>{t('monitor.done')}</Button>}</div></div>
+        <div className="flex flex-wrap items-center justify-between gap-1">
+          <span className="text-[11px] text-muted-foreground" role="status">{scopeLabel}</span>
+          <div className="flex min-w-0 flex-wrap gap-1">
+            {scopeMenu('add')}
+            {!editing && scopeMenu('layout')}
+            {editing && <Button variant="outline" size="sm" className={TOOLBAR_BUTTON_CLASS} onClick={() => { clearDrag(); setEditing(false); setEditScope(null); }}>{t('monitor.done')}</Button>}
+          </div>
+        </div>
         {editing && <div role="group" aria-label={t('monitor.layoutColumns')} className="flex items-center gap-1 flex-wrap">
           {COLUMN_OPTIONS.map(({ value, label, icon: Icon }) => <Button key={value} variant={config.columns === value ? 'secondary' : 'ghost'} size="sm" className="h-7 px-2 text-xs"
             aria-pressed={config.columns === value} onClick={() => { clearDrag(); if (persist({ ...config, columns: value })) onColumnsChange?.(value); }}><Icon className="size-3" />{t(label)}</Button>)}
         </div>}
         {config.columns > 1 && <p className="text-[11px] text-muted-foreground">{t('monitor.columnsHint')}</p>}
-        {editing && <div className="flex gap-1 flex-wrap"><Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => persist(restoreMonitorOrder(config))}>{t('monitor.restoreOrder')}</Button>
-          {scope === 'connection' && savedConnectionId && <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => { try { inheritMonitorConfig(savedConnectionId); setEditScope(null); setEditing(false); } catch { notify.error(t('monitor.saveFailed')); } }}>{t('monitor.useGlobal')}</Button>}
+        {editing && <div className="flex gap-1 flex-wrap"><Button variant="ghost" size="sm" className={TOOLBAR_BUTTON_CLASS} onClick={() => persist(restoreMonitorOrder(config))}>{t('monitor.restoreOrder')}</Button>
+          {scope === 'connection' && savedConnectionId && <Button variant="ghost" size="sm" className={TOOLBAR_BUTTON_CLASS} onClick={() => { try { inheritMonitorConfig(savedConnectionId); setEditScope(null); setEditing(false); } catch { notify.error(t('monitor.saveFailed')); } }}>{t('monitor.useGlobal')}</Button>}
         </div>}
         {protocol !== 'SSH' && <p className="text-xs text-muted-foreground">{t('monitor.sshOnly')}</p>}
       </div>

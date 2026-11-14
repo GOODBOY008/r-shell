@@ -77,8 +77,8 @@ export function DashboardView({ dashboardId, visible = true }: { dashboardId: st
       {saveError && <p role="alert" className="text-xs text-destructive">{t('dashboard.saveError')}</p>}
       {editing && <div className="space-y-2 rounded-lg bg-primary/5 px-3 py-2 text-xs"><p className="text-muted-foreground">{t('dashboard.layoutHelp')}</p><div className="flex items-center gap-2 flex-wrap">
         <label className="flex items-center gap-2">{t('dashboard.layoutPreset')}<select aria-label={t('dashboard.layoutColumns')} className="h-8 rounded-md border bg-background text-xs px-2" value={board.columns} onChange={event => commitLayout(resetDashboardLayout(board, Number(event.target.value) as MonitorColumns))}>{[1, 2, 3].map(count => <option key={count} value={count}>{t('dashboard.columns', { count })}</option>)}</select></label>
-        <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => commitLayout(resetDashboardLayout(board))}><RotateCcw className="size-3.5" />{t('dashboard.resetLayout')}</Button>
-        <Button variant="ghost" size="sm" className="h-8 text-xs" disabled={!layoutUndo} onClick={() => { if (!layoutUndo) return; try { save(restoreDashboardLayout(board, layoutUndo)); setLayoutUndo(undefined); } catch { setSaveError(true); } }}><Undo2 className="size-3.5" />{t('dashboard.undoLayout')}</Button>
+        <Button variant="ghost" size="sm" className="h-auto min-h-8 max-w-full whitespace-normal py-1.5 text-xs" onClick={() => commitLayout(resetDashboardLayout(board))}><RotateCcw className="size-3.5" />{t('dashboard.resetLayout')}</Button>
+        <Button variant="ghost" size="sm" className="h-auto min-h-8 max-w-full whitespace-normal py-1.5 text-xs" disabled={!layoutUndo} onClick={() => { if (!layoutUndo) return; try { save(restoreDashboardLayout(board, layoutUndo)); setLayoutUndo(undefined); } catch { setSaveError(true); } }}><Undo2 className="size-3.5" />{t('dashboard.undoLayout')}</Button>
         <span className="text-muted-foreground sm:ml-auto">{t(`dashboard.layoutViews.${breakpoint}`)}</span>
       </div></div>}
     </header>

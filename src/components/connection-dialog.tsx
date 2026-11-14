@@ -1782,7 +1782,7 @@ const handleCancelConnectionAttempt = async () => {
                       {availableFolders.length > 0 ? (
                         availableFolders.map((folder) => (
                           <SelectItem key={folder} value={folder}>
-                            {folder}
+                            {folder === 'All Connections' ? t('connectionDialog.allConnections') : folder}
                           </SelectItem>
                         ))
                       ) : (

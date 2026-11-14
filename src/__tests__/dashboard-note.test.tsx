@@ -4,7 +4,7 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 import { DashboardNote } from '../components/dashboard-note';
 import { DashboardNoteEditor } from '../components/dashboard-note-editor';
 import { newDashboard, newDashboardNote, type DashboardNoteWidget } from '../lib/dashboard-config';
-import '../lib/i18n';
+import i18n from '../lib/i18n';
 
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn(async () => {}) }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => {}) }));
@@ -41,6 +41,19 @@ describe('static dashboard content', () => {
 });
 
 describe('static card editor', () => {
+  it('shows the Portuguese preview heading and its empty message in different places', async () => {
+    await i18n.changeLanguage('pt-BR');
+    try {
+      render(<DashboardNoteEditor board={newDashboard('Ops')} onSave={vi.fn()} onClose={vi.fn()} />);
+      const preview = screen.getByRole('region', { name: 'Prévia' });
+      expect(within(preview).getByRole('heading', { name: 'Prévia' })).toBeTruthy();
+      expect(within(preview).getByText('Seu conteúdo aparecerá aqui enquanto você digita.')).toBeTruthy();
+    } finally {
+      cleanup();
+      await i18n.changeLanguage('en');
+    }
+  });
+
   it('previews without saving and cancels a draft without creating sources', () => {
     const save = vi.fn(); const close = vi.fn(); const board = newDashboard('Offline');
     render(<DashboardNoteEditor board={board} onSave={save} onClose={close} />);

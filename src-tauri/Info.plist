@@ -13,6 +13,7 @@
     <string>zh-Hans</string>
     <string>zh-Hant</string>
     <string>pl</string>
+    <string>pt-BR</string>
   </array>
   <key>NSLocalNetworkUsageDescription</key>
   <string>R-Shell connects to SSH, file transfer, and remote desktop servers on your local network.</string>

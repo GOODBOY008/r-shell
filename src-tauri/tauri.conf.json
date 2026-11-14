@@ -52,7 +52,8 @@
       "files": {
         "Resources/zh-Hans.lproj/InfoPlist.strings": "zh-Hans.lproj/InfoPlist.strings",
         "Resources/zh-Hant.lproj/InfoPlist.strings": "zh-Hant.lproj/InfoPlist.strings",
-        "Resources/pl.lproj/InfoPlist.strings": "pl.lproj/InfoPlist.strings"
+        "Resources/pl.lproj/InfoPlist.strings": "pl.lproj/InfoPlist.strings",
+        "Resources/pt-BR.lproj/InfoPlist.strings": "pt-BR.lproj/InfoPlist.strings"
       }
     }
   }
