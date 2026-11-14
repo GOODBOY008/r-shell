@@ -2,10 +2,18 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import i18n from '../lib/i18n';
 import { changeLanguage, applyLanguageFromPreference, getLanguagePreference, AUTO } from '../lib/i18n';
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import en from '../locales/en.json';
 import zhCN from '../locales/zh-CN.json';
 import pl from '../locales/pl.json';
+import ptBR from '../locales/pt-BR.json';
+import { invoke } from '@tauri-apps/api/core';
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (command: string) => {
+    if (command === 'get_system_locale') throw new Error('Tauri bridge unavailable');
+  }),
+}));
 
 describe('i18n', () => {
   it('should initialize with English', () => {
@@ -53,6 +61,23 @@ describe('i18n', () => {
     await i18n.changeLanguage('en');
   });
 
+  it('uses Brazilian Portuguese plural forms and syncs the native menu and document language', async () => {
+    await i18n.changeLanguage('pt-BR');
+    try {
+      expect(i18n.t('filePanel.statusBar.items', { count: 0 })).toBe('Nenhum item');
+      expect(i18n.t('filePanel.statusBar.items', { count: 1 })).toBe('1 item');
+      expect(i18n.t('filePanel.statusBar.items', { count: 2 })).toBe('2 itens');
+      expect(i18n.t('filePanel.statusBar.items', { count: 1_000_000 })).toBe('1.000.000 de itens');
+      expect(i18n.t('connectionDialog.toast.profileSaved', { name: 'My Server' })).toBe('Perfil salvo: My Server');
+      expect(document.documentElement.lang).toBe('pt-BR');
+      expect(invoke).toHaveBeenLastCalledWith('update_menu_language', {
+        translations: expect.objectContaining({ 'menuBar.file': 'Arquivo', 'menuBar.quit': 'Encerrar R-Shell' }),
+      });
+    } finally {
+      await i18n.changeLanguage('en');
+    }
+  });
+
   it('every t() key used in source code exists in every locale', () => {
     // Guard against future hardcoded translation keys: collect every literal
     // t('...') / i18n.t('...') key from the source tree and assert it resolves
@@ -75,6 +100,7 @@ describe('i18n', () => {
     const locales: Record<string, Record<string, unknown>> = {
       'zh-CN': flatten(zhCN),
       pl: flatten(pl),
+      'pt-BR': flatten(ptBR),
     };
 
     const suffixes = ['one', 'other', 'zero', 'two', 'few', 'many', 'plural'];
@@ -143,26 +169,46 @@ describe('i18n language preference', () => {
     expect(getLanguagePreference()).toBe(AUTO);
   });
 
-  it('resolves AUTO to navigator.language when the Tauri bridge is unavailable', async () => {
-    // jsdom has no Tauri bridge, so resolvePreference(AUTO) must fall through
-    // to navigator.language. Stub it to a Chinese locale and verify the
-    // applied language follows, while the stored preference stays AUTO.
-    const original = navigator.language;
-    Object.defineProperty(navigator, 'language', { value: 'zh-CN', configurable: true });
-    try {
-      await changeLanguage(AUTO);
-      expect(getLanguagePreference()).toBe(AUTO);
-      expect(i18n.language).toBe('zh-CN');
-    } finally {
-      Object.defineProperty(navigator, 'language', { value: original, configurable: true });
-    }
+  it('follows the OS locale when Brazilian Portuguese is selected in the system', async () => {
+    vi.mocked(invoke).mockResolvedValueOnce('pt_BR');
+    await changeLanguage(AUTO);
+    expect(getLanguagePreference()).toBe(AUTO);
+    expect(i18n.language).toBe('pt-BR');
   });
 
-  it('applyLanguageFromPreference re-applies the stored concrete preference', async () => {
-    await changeLanguage('zh-CN');
-    // Simulate the app restarting: i18n resets to en, but storage holds zh-CN.
+  it('keeps a manual choice when the startup system locale resolves later', async () => {
+    let resolveSystemLocale!: (locale: string) => void;
+    const systemLocale = new Promise<string>(resolve => { resolveSystemLocale = resolve; });
+    vi.mocked(invoke).mockReturnValueOnce(systemLocale);
+    const startup = applyLanguageFromPreference();
+
+    await changeLanguage('pt-BR');
+    resolveSystemLocale('en-US');
+    await startup;
+
+    expect(getLanguagePreference()).toBe('pt-BR');
+    expect(i18n.language).toBe('pt-BR');
+  });
+
+  it.each([['zh-CN', 'zh-CN'], ['pt-BR', 'pt-BR'], ['pt', 'pt-BR'], ['de-DE', 'en']])(
+    'resolves AUTO from browser locale %s when the Tauri bridge is unavailable',
+    async (locale, expected) => {
+      const language = vi.spyOn(navigator, 'language', 'get').mockReturnValue(locale);
+      try {
+        await changeLanguage(AUTO);
+        expect(getLanguagePreference()).toBe(AUTO);
+        expect(i18n.language).toBe(expected);
+      } finally {
+        language.mockRestore();
+      }
+    },
+  );
+
+  it.each(['zh-CN', 'pt-BR'])('re-applies the stored %s preference on startup', async locale => {
+    await changeLanguage(locale);
+    expect(localStorage.getItem('r-shell-language')).toBe(locale);
     await i18n.changeLanguage('en');
     await applyLanguageFromPreference();
-    expect(i18n.language).toBe('zh-CN');
+    expect(i18n.language).toBe(locale);
   });
 });

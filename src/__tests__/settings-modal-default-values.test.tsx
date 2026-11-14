@@ -4,6 +4,7 @@ import { SettingsModal } from '../components/settings-modal';
 import { DEFAULT_SETTINGS } from '../components/settings/shared';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import { pickConfigBundle } from '../lib/config-export-import';
+import i18n from '../lib/i18n';
 
 vi.mock('../lib/config-export-import', async importOriginal => ({
   ...await importOriginal<typeof import('../lib/config-export-import')>(),
@@ -65,6 +66,25 @@ describe('SettingsModal default values', () => {
     expect(screen.getByRole('combobox', { name: 'Context' }).textContent).toContain('All contexts');
     section('Advanced');
     selectValue('Update Channel', 'Stable (recommended)');
+  });
+
+  it('can find and select Brazilian Portuguese and shows it when settings are reopened', async () => {
+    const view = render(<SettingsModal open onOpenChange={vi.fn()} />);
+    try {
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Search settings' }), { target: { value: 'Portuguese' } });
+      fireEvent.keyDown(screen.getByRole('combobox', { name: 'Language' }), { key: 'ArrowDown' });
+      fireEvent.click(screen.getByRole('option', { name: 'Portuguese (Brazil)' }));
+      await screen.findByRole('heading', { name: 'Configurações e preferências' });
+
+      expect(localStorage.getItem('r-shell-language')).toBe('pt-BR');
+      view.rerender(<SettingsModal open={false} onOpenChange={vi.fn()} />);
+      view.rerender(<SettingsModal open onOpenChange={vi.fn()} />);
+      section('Interface');
+      selectValue('Idioma', 'Português (Brasil)');
+    } finally {
+      view.unmount();
+      await i18n.changeLanguage('en');
+    }
   });
 
   it.each([

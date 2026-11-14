@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import en from '@/locales/en.json';
 import zhCN from '@/locales/zh-CN.json';
 import pl from '@/locales/pl.json';
+import ptBR from '@/locales/pt-BR.json';
 
 /** Keys used by the native macOS menu bar */
 const NATIVE_MENU_KEYS = [
@@ -49,24 +50,22 @@ const STORAGE_KEY = 'r-shell-language';
  */
 export const AUTO = 'auto';
 
-/**
- * Resolve a locale string (e.g. "zh-CN", "zh", "zh-Hans", "pl-PL") to one of
- * the supported language codes: "en", "zh-CN" or "pl".
- */
-function resolveCode(raw: string): string {
-  if (raw.startsWith('zh')) return 'zh-CN';
-  if (raw.startsWith('pl')) return 'pl';
-  return 'en';
+/** Map OS, browser, and imported locale codes to a supported app language. */
+function resolveCode(raw: string): string | undefined {
+  switch (raw.trim().toLowerCase().split(/[-_]/, 1)[0]) {
+    case 'en': return 'en';
+    case 'zh': return 'zh-CN';
+    case 'pl': return 'pl';
+    case 'pt': return 'pt-BR';
+    default: return undefined;
+  }
 }
 
 /** Read the stored language preference, defaulting to {@link AUTO}. */
 function readPreference(): string {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY)?.trim();
-    if (!saved || saved === AUTO) return AUTO;
-    // Older/imported preferences may use an OS locale (zh-Hans, pl-PL).
-    // Resolve those to a picker option; unknown values follow the system.
-    return /^(en|zh|pl)(-|$)/i.test(saved) ? resolveCode(saved.toLowerCase()) : AUTO;
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? resolveCode(saved) ?? AUTO : AUTO;
   } catch {
     return AUTO;
   }
@@ -76,13 +75,11 @@ function readPreference(): string {
  * Synchronous first-paint guess for the applied language, derived from the
  * stored preference via {@link readPreference}. For {@link AUTO} we can't yet
  * await the OS-locale Tauri call, so we fall back to navigator.language;
- * `applyLanguageFromPreference()` corrects this shortly after mount once the
- * async OS locale resolves.
+ * `applyLanguageFromPreference()` corrects this after the OS locale resolves.
  */
 const INITIAL_LANG = (() => {
   const pref = readPreference();
-  if (pref === AUTO) return resolveCode(navigator.language ?? 'en');
-  return resolveCode(pref);
+  return pref === AUTO ? resolveCode(navigator.language ?? 'en') ?? 'en' : pref;
 })();
 
 i18n.use(initReactI18next).init({
@@ -90,6 +87,7 @@ i18n.use(initReactI18next).init({
     en: { translation: en },
     'zh-CN': { translation: zhCN },
     pl: { translation: pl },
+    'pt-BR': { translation: ptBR },
   },
   lng: INITIAL_LANG,
   fallbackLng: 'en',
@@ -103,19 +101,25 @@ i18n.use(initReactI18next).init({
  * - Otherwise → the stored concrete code (already resolved).
  */
 async function resolvePreference(pref: string): Promise<string> {
-  if (pref !== AUTO) return resolveCode(pref);
+  if (pref !== AUTO) return pref;
   try {
     const locale = await invoke<string>('get_system_locale');
-    if (locale) return resolveCode(locale);
+    if (locale) return resolveCode(locale) ?? 'en';
   } catch {
     // Tauri bridge unavailable (e.g. browser) — fall through to navigator.
   }
-  return resolveCode(navigator.language ?? 'en');
+  return resolveCode(navigator.language ?? 'en') ?? 'en';
 }
 
-/** Apply a concrete language code to i18next without touching storage. */
-function applyCode(code: string): void {
-  if (i18n.language !== code) i18n.changeLanguage(code);
+let latestPreferenceRequest = 0;
+
+async function applyPreference(pref: string): Promise<void> {
+  const request = ++latestPreferenceRequest;
+  const code = await resolvePreference(pref);
+  // A delayed system locale lookup may finish after a manual language change.
+  if (request === latestPreferenceRequest && i18n.language !== code) {
+    await i18n.changeLanguage(code);
+  }
 }
 
 /**
@@ -126,11 +130,11 @@ function applyCode(code: string): void {
  * explicit language choice. The preference (not the resolved code) is persisted.
  */
 export async function changeLanguage(lang: string): Promise<void> {
-  const pref = lang === AUTO ? AUTO : resolveCode(lang);
+  const pref = lang === AUTO ? AUTO : resolveCode(lang) ?? 'en';
   try {
     localStorage.setItem(STORAGE_KEY, pref);
   } catch { /* ignore */ }
-  applyCode(await resolvePreference(pref));
+  await applyPreference(pref);
 }
 
 /**
@@ -139,7 +143,7 @@ export async function changeLanguage(lang: string): Promise<void> {
  * picked up on the next app start. Safe in browsers (Tauri call fails silently).
  */
 export async function applyLanguageFromPreference(): Promise<void> {
-  applyCode(await resolvePreference(readPreference()));
+  await applyPreference(readPreference());
 }
 
 /** The user's stored preference: {@link AUTO} or a concrete language code. */
@@ -147,9 +151,12 @@ export function getLanguagePreference(): string {
   return readPreference();
 }
 
-// Sync native menu whenever language changes (covers both changeLanguage() and
-// any programmatic i18n.changeLanguage() calls) plus once on startup.
-i18n.on('languageChanged', () => { void syncNativeMenu(); });
-void syncNativeMenu();
+function syncLanguage(language: string): void {
+  document.documentElement.lang = language;
+  void syncNativeMenu();
+}
+
+i18n.on('languageChanged', syncLanguage);
+syncLanguage(i18n.language);
 
 export default i18n;

@@ -3,7 +3,6 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { LayoutDashboard, Server } from 'lucide-react';
 import type { PanelImperativeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
-import { applyLanguageFromPreference } from './lib/i18n';
 import { folderPathFromArg } from './lib/connection-folder';
 import { useLazyTabs } from './lib/use-lazy-tabs';
 import { reconcileSessionHealth } from './lib/session-health';
@@ -319,11 +318,6 @@ function AppContent() {
       dispatchTerminalCommand(activeTerminalId, command);
     }
   }, [activeTerminalId]);
-
-  // Apply stored language preference (follows OS locale when set to "auto")
-  useEffect(() => {
-    void applyLanguageFromPreference();
-  }, []);
 
   useEffect(() => {
     const refreshShortcutBindings = () => {
