@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
@@ -10,6 +10,7 @@ import { withRetry, CancelledError } from '@/lib/async-retry';
 import { Button } from './ui/button';
 import { Toggle } from './ui/toggle';
 import { Input } from './ui/input';
+import { Label } from './ui/label';
 import { useTransferQueue, onItemSettled } from '@/lib/transfer-queue-service';
 import { confinedFileDownload } from '@/lib/confined-download';
 import { parentPath, pathJoin } from '@/lib/file-entry-types';
@@ -72,6 +73,7 @@ import {
 } from 'lucide-react';
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from './ui/context-menu';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./ui/alert-dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './ui/dialog';
 import { notify } from '@/lib/notifications';
 import { isEditableTarget, getShortcutContext, useCommandShortcuts } from '@/lib/keyboard-shortcuts';
 
@@ -92,10 +94,9 @@ interface FileClipboard {
   operation: 'copy' | 'cut';
 }
 
-interface PasteChange {
+interface FileListChange {
   connectionId: string;
-  destination: string;
-  movedFrom: string[];
+  directories: string[];
 }
 
 function normalizePathSeparators(path: string) {
@@ -109,6 +110,90 @@ function pasteDestination(directory: string, name: string) {
 function fileOperationError(error: unknown, fallback: string) {
   const message = typeof error === 'string' ? error : error instanceof Error ? error.message : '';
   return message.trim() || fallback;
+}
+
+interface RemoteCreateTarget {
+  kind: 'file' | 'folder';
+  connectionId: string;
+  directory: string;
+  returnFocus: HTMLElement | null;
+}
+
+function RemoteCreateDialog({ target, onCreate, onClose }: {
+  target: RemoteCreateTarget;
+  onCreate: (name: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const inputId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const submittingRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = inputRef.current?.value;
+    if (!name || submittingRef.current) return;
+
+    submittingRef.current = true;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await onCreate(name);
+      onClose();
+    } catch (error) {
+      const fallback = t(target.kind === 'folder' ? 'fileBrowser.toast.folderCreateFailedDesc' : 'fileBrowser.toast.fileCreateFailedDesc');
+      setError(fileOperationError(error, fallback));
+      inputRef.current?.focus();
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open && !submittingRef.current) onClose(); }}>
+      <DialogContent onCloseAutoFocus={(event) => {
+        event.preventDefault();
+        target.returnFocus?.focus({ preventScroll: true });
+      }}>
+        <DialogHeader>
+          <DialogTitle>{t(target.kind === 'folder' ? 'fileBrowser.contextMenu.newFolder' : 'fileBrowser.contextMenu.newFile')}</DialogTitle>
+          <DialogDescription className="break-all">{t('fileBrowser.createDialog.destination', { path: target.directory })}</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(event) => { void handleSubmit(event); }} aria-busy={submitting} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor={inputId}>{t('fileBrowser.column.name')}</Label>
+            <Input
+              id={inputId}
+              ref={inputRef}
+              name="name"
+              required
+              autoFocus
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              readOnly={submitting}
+              aria-describedby={error ? `${inputId}-error` : undefined}
+              onChange={() => setError(null)}
+            />
+            {error && <p id={`${inputId}-error`} role="alert" className="break-words text-sm text-destructive">{error}</p>}
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button type="button" variant="outline" disabled={submitting}>{t('common.cancel')}</Button>
+            </DialogClose>
+            <Button type="submit" disabled={submitting}>
+              {submitting && <Loader2 className="size-3.5 animate-spin" />}
+              {t('common.create')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 interface IntegratedFileBrowserProps {
@@ -151,6 +236,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const [openingFiles, setOpeningFiles] = useState<Set<string>>(new Set());
   const openingRef = useRef(new Set<string>());
   const browserRef = useRef<HTMLDivElement>(null);
+  const fileListRef = useRef<HTMLDivElement>(null);
   const [editorStates, setEditorStates] = useState<Record<string, EditorFileStateEvent['state']>>({});
   const [lastSavedFile, setLastSavedFile] = useState<{ connectionId: string; name: string } | null>(null);
 
@@ -197,10 +283,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   const clipboard = fileClipboard?.connectionId === connectionId ? fileClipboard : null;
   const [isPasting, setIsPasting] = useState(false);
   const pasteInProgressRef = useRef(false);
-  const pendingPasteChangeRef = useRef<PasteChange | null>(null);
+  const pendingFileListChangesRef = useRef<FileListChange[]>([]);
   const [treeRefresh, setTreeRefresh] = useState<{ connectionId: string; paths: string[] } | null>(null);
   const [renamingFile, setRenamingFile] = useState<FileItem | null>(null);
   const [newFileName, setNewFileName] = useState('');
+  const [createTarget, setCreateTarget] = useState<RemoteCreateTarget | null>(null);
   const [deletingFiles, setDeletingFiles] = useState<FileItem[] | null>(null);
   const [directoryTransfer, setDirectoryTransfer] = useState<{
     sourcePath: string;
@@ -321,6 +408,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   // auto-reconnecting) and later became true.
   useEffect(() => {
     prevConnectionIdRef.current = connectionId;
+    setCreateTarget(null);
     if (isConnected && connectionId) {
       void loadFiles(committedPathRef.current);
     }
@@ -1100,24 +1188,24 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   };
 
-  const handleCreateFolder = async () => {
-    const folderName = prompt(t('fileBrowser.toast.enterFolderName'));
-    if (folderName) {
-      try {
-        const folderPath = currentPath === '/' ? `/${folderName}` : `${currentPath}/${folderName}`;
-        await invoke<boolean>('create_directory', {
-          connectionId,
-          path: folderPath
-        });
-        notify.success(t('fileBrowser.toast.folderCreated', { name: folderName }));
-        void loadFiles();
-      } catch (error) {
-        console.error('Failed to create folder:', error);
-        notify.error(t('fileBrowser.toast.folderCreateFailed'), {
-          description: error instanceof Error ? error.message : t('fileBrowser.toast.folderCreateFailedDesc'),
-        });
-      }
+  const openCreateDialog = (kind: RemoteCreateTarget['kind'], returnFocus: HTMLElement | null) => {
+    setCreateTarget({ kind, connectionId, directory: currentPath, returnFocus });
+  };
+
+  const createRemoteItem = async (target: RemoteCreateTarget, name: string) => {
+    const path = pathJoin(target.directory, name);
+    const isFolder = target.kind === 'folder';
+    const created = isFolder
+      ? await invoke<boolean>('create_directory', { connectionId: target.connectionId, path })
+      : await invoke<boolean>('create_file', { connectionId: target.connectionId, path, content: '' });
+    if (!created) {
+      throw new Error(t(isFolder ? 'fileBrowser.toast.folderCreateFailedDesc' : 'fileBrowser.toast.fileCreateFailedDesc'));
     }
+    notify.success(t(isFolder ? 'fileBrowser.toast.folderCreated' : 'fileBrowser.toast.fileCreated', { name }));
+    pendingFileListChangesRef.current.push({
+      connectionId: target.connectionId,
+      directories: [normalizePathSeparators(target.directory)],
+    });
   };
 
   function handleDeleteFile(file: FileItem) {
@@ -1261,11 +1349,12 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       }
       if (pastedCount > 0) {
         const pastedEntries = entries.slice(0, pastedCount);
-        pendingPasteChangeRef.current = {
+        pendingFileListChangesRef.current.push({
           connectionId,
-          destination: directory,
-          movedFrom: operation === 'cut' ? pastedEntries.map(file => parentPath(file.path)) : [],
-        };
+          directories: operation === 'cut'
+            ? [normalizePathSeparators(directory), ...pastedEntries.map(file => parentPath(file.path))]
+            : [normalizePathSeparators(directory)],
+        });
         const pastedFolders = pastedEntries.filter(file => file.type === 'directory');
         if (pastedFolders.length) {
           const paths = new Set([normalizePathSeparators(directory)]);
@@ -1288,19 +1377,18 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     }
   }
 
-  // Refresh the affected directory if it is visible when the paste finishes.
+  // Refresh a changed directory if it is still visible when the operation finishes.
   // Wait for pending navigation so the refresh cannot pull the user away.
   useEffect(() => {
-    const pasteChange = pendingPasteChangeRef.current;
-    if (!pasteChange || isLoading || isPasting) return;
-    pendingPasteChangeRef.current = null;
+    const changes = pendingFileListChangesRef.current;
+    if (!changes.length || isLoading || isPasting) return;
+    pendingFileListChangesRef.current = [];
     const visiblePath = normalizePathSeparators(currentPath);
-    if (isConnected && pasteChange.connectionId === connectionId &&
-      (normalizePathSeparators(pasteChange.destination) === visiblePath || pasteChange.movedFrom.includes(visiblePath))) {
+    if (isConnected && changes.some(change => change.connectionId === connectionId && change.directories.includes(visiblePath))) {
       void loadFiles();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles closes over the view state listed below
-  }, [connectionId, currentPath, isConnected, isLoading, isPasting]);
+  }, [connectionId, currentPath, isConnected, isLoading, isPasting, createTarget]);
 
   const pasteLabel = clipboard
     ? t('fileBrowser.contextMenu.pasteWithCount', { count: clipboard.files.length })
@@ -1367,27 +1455,6 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       modified: formatDate(file.modified),
       permissions: file.permissions,
     }));
-  };
-
-  const handleNewFile = async () => {
-    const fileName = prompt(t('fileBrowser.toast.enterFileName'));
-    if (fileName) {
-      try {
-        const filePath = currentPath === '/' ? `/${fileName}` : `${currentPath}/${fileName}`;
-        await invoke<boolean>('create_file', {
-          connectionId,
-          path: filePath,
-          content: ''
-        });
-        notify.success(t('fileBrowser.toast.fileCreated', { name: fileName }));
-        void loadFiles();
-      } catch (error) {
-        console.error('Failed to create file:', error);
-        notify.error(t('fileBrowser.toast.fileCreateFailed'), {
-          description: error instanceof Error ? error.message : t('fileBrowser.toast.fileCreateFailedDesc'),
-        });
-      }
-    }
   };
 
   const handleDuplicateFile = async (file: FileItem) => {
@@ -1692,6 +1759,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 value={editPathValue}
                 onChange={(e) => setEditPathValue(e.target.value)}
                 onKeyDown={(e) => {
+                  if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                   if (e.key === 'Enter') handlePathSubmit();
                   if (e.key === 'Escape') setIsEditingPath(false);
                 }}
@@ -1747,7 +1815,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
 
           <div className="mx-1 h-4 w-px shrink-0 bg-border/60" />
 
-          <Button variant="ghost" size="sm" className="h-7 shrink-0 rounded-md px-2" title={t('fileBrowser.toolbar.newFolder')} onClick={handleCreateFolder}>
+          <Button variant="ghost" size="sm" className="h-7 shrink-0 rounded-md px-2" title={t('fileBrowser.toolbar.newFolder')} onClick={(event) => openCreateDialog('folder', event.currentTarget)}>
             <FolderPlus className="h-3.5 w-3.5" />
           </Button>
           <Button variant="ghost" size="sm" className="h-7 shrink-0 rounded-md px-2" title={t('fileBrowser.toolbar.uploadFiles')} onClick={handleUpload}>
@@ -1961,6 +2029,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                 <ContextMenu>
                   <ContextMenuTrigger asChild>
                     <div
+                      ref={fileListRef}
                       className={`flex-1 py-1 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring transition-opacity duration-150 ${showLoadingOverlay && files.length > 0 ? 'opacity-40' : ''}`}
                       data-columns-container
                       role="region"
@@ -2030,9 +2099,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                       {getFileIcon(file)}
                       {renamingFile?.name === file.name ? (
                         <Input
+                          aria-label={t('fileBrowser.column.name')}
                           value={newFileName}
                           onChange={(e) => setNewFileName(e.target.value)}
                           onKeyDown={(e) => {
+                            if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                             if (e.key === 'Enter') void handleRenameConfirm();
                             if (e.key === 'Escape') handleRenameCancel();
                           }}
@@ -2185,11 +2256,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                   <ContextMenuContent className="w-48">
               {pasteMenuItem(currentPath, pasteLabel, canPasteHere)}
               <ContextMenuSeparator />
-              <ContextMenuItem onClick={handleNewFile}>
+              <ContextMenuItem onSelect={() => openCreateDialog('file', fileListRef.current)}>
                 <File className="mr-2 h-4 w-4" />
                 {t('fileBrowser.contextMenu.newFile')}
               </ContextMenuItem>
-              <ContextMenuItem onClick={handleCreateFolder}>
+              <ContextMenuItem onSelect={() => openCreateDialog('folder', fileListRef.current)}>
                 <FolderPlus className="mr-2 h-4 w-4" />
                 {t('fileBrowser.contextMenu.newFolder')}
               </ContextMenuItem>
@@ -2255,6 +2326,14 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           destPath={directoryTransfer.destinationRoot}
           destinationDirectoryName={directoryTransfer.destinationDirectoryName}
           onComplete={() => {}}
+        />
+      )}
+
+      {createTarget?.connectionId === connectionId && (
+        <RemoteCreateDialog
+          target={createTarget}
+          onCreate={(name) => createRemoteItem(createTarget, name)}
+          onClose={() => setCreateTarget((active) => active === createTarget ? null : active)}
         />
       )}
 

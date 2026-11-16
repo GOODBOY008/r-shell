@@ -3,7 +3,7 @@
  * left them: collapsing a folder is persisted immediately and honoured by a
  * fresh mount (which is what an app restart is, as far as the tree knows).
  */
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ConnectionManager } from '../components/connection-manager';
@@ -152,5 +152,32 @@ describe('ConnectionManager folder expansion persistence', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: 'Home box' }), { key: 'Enter' });
     expect(onConnect).toHaveBeenCalledTimes(2);
     expect(onConnect).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Home box' }));
+  });
+});
+
+describe('ConnectionManager folder forms', () => {
+  beforeEach(seedStorage);
+  afterEach(cleanup);
+
+  it.each(['create', 'rename'] as const)('waits for explicit submission when composing a folder name to %s', async (action) => {
+    mount();
+    if (action === 'create') {
+      fireEvent.click(screen.getByRole('button', { name: 'New Folder' }));
+    } else {
+      fireEvent.contextMenu(screen.getByRole('button', { name: 'Personal' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename Folder' }));
+    }
+    const dialog = within(await screen.findByRole('dialog'));
+    const input = dialog.getByRole('textbox', { name: 'Folder Name' });
+    fireEvent.change(input, { target: { value: '项目' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229, isComposing: false });
+    expect(ConnectionStorageManager.getFolders().some(({ name }) => name === '项目')).toBe(false);
+    expect(dialog.getByRole('textbox', { name: 'Folder Name' })).toBe(input);
+
+    fireEvent.click(dialog.getByRole('button', { name: action === 'create' ? 'Create' : 'Rename' }));
+    expect(ConnectionStorageManager.getFolders().some(({ name }) => name === '项目')).toBe(true);
+    expect(ConnectionStorageManager.getFolders().some(({ name }) => name === 'Personal')).toBe(action === 'create');
   });
 });

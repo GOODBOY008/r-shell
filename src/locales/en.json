@@ -782,6 +782,9 @@
       "pasteWithCount_one": "Paste {{count}} item",
       "pasteWithCount_other": "Paste {{count}} items"
     },
+    "createDialog": {
+      "destination": "Create in {{path}}"
+    },
     "toast": {
       "queuedUpload_one": "Queued {{count}} file for upload",
       "queuedUpload_other": "Queued {{count}} files for upload",

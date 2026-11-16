@@ -1197,28 +1197,25 @@ export function ConnectionManager({
             {newFolderParentPath && ` ${t('connectionManager.parent')}: ${newFolderParentPath}`}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
+        <form onSubmit={(event) => { event.preventDefault(); handleCreateFolder(); }}>
+          <div className="space-y-2 py-4">
             <Label htmlFor="folder-name">{t('connectionManager.folderName')}</Label>
             <Input
               id="folder-name"
+              name="folderName"
+              required
               placeholder={t('connectionManager.enterFolderName')}
               value={newFolderName}
               onChange={(e) => setNewFolderName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleCreateFolder();
-                }
-              }}
             />
           </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setNewFolderDialogOpen(false)}>
-            {t('common.cancel')}
-          </Button>
-          <Button onClick={handleCreateFolder}>{t('connectionManager.create')}</Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setNewFolderDialogOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit">{t('connectionManager.create')}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
     
@@ -1249,28 +1246,25 @@ export function ConnectionManager({
             {t('connectionManager.renameFolderDesc', { name: folderToRename?.name })}
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
+        <form onSubmit={(event) => { event.preventDefault(); handleRenameFolder(); }}>
+          <div className="space-y-2 py-4">
             <Label htmlFor="rename-folder-name">{t('connectionManager.folderName')}</Label>
             <Input
               id="rename-folder-name"
+              name="folderName"
+              required
               placeholder={t('connectionManager.enterNewFolderName')}
               value={renameFolderNewName}
               onChange={(e) => setRenameFolderNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleRenameFolder();
-                }
-              }}
             />
           </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setRenameFolderDialogOpen(false)}>
-            {t('common.cancel')}
-          </Button>
-          <Button onClick={handleRenameFolder}>{t('connectionManager.rename')}</Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setRenameFolderDialogOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit">{t('connectionManager.rename')}</Button>
+          </DialogFooter>
+        </form>
       </DialogContent>
     </Dialog>
 

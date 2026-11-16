@@ -84,22 +84,12 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose,
   }, [performSearch]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (e.key === 'Escape') {
       onClose();
-    } else if (e.key === 'Enter') {
-      if (e.shiftKey) {
-        performSearch('previous');
-      } else {
-        performSearch('next');
-      }
+    } else if (e.key === 'F3' || (e.key === 'Enter' && e.shiftKey)) {
       e.preventDefault();
-    } else if (e.key === 'F3') {
-      if (e.shiftKey) {
-        performSearch('previous');
-      } else {
-        performSearch('next');
-      }
-      e.preventDefault();
+      performSearch(e.shiftKey ? 'previous' : 'next');
     }
   }, [onClose, performSearch]);
 
@@ -123,6 +113,8 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose,
         <Input
           ref={inputRef}
           type="text"
+          name="query"
+          aria-label={t('terminalSearchBar.findInTerminal')}
           placeholder={t('terminalSearchBar.findInTerminal')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -169,11 +161,10 @@ export function TerminalSearchBar({ searchAddon, visible, focusTrigger, onClose,
           </Button>
           
           <Button
-            type="button"
+            type="submit"
             variant="ghost"
             size="icon"
             className="h-8 w-8"
-            onClick={() => performSearch('next')}
             title={t('terminalSearchBar.nextMatch')}
           >
             <ChevronDown className="h-4 w-4" />
