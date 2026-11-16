@@ -42,4 +42,20 @@ describe('LogMonitor search feedback', () => {
     expect(message?.querySelector('mark')?.textContent).toBe('retry retry');
     expect(container.querySelectorAll('.log-message')).toHaveLength(1);
   });
+
+  it('adds a custom log path after submission and keeps the draft during IME confirmation', async () => {
+    await load();
+    fireEvent.click(screen.getByRole('button', { name: 'Add custom log path' }));
+    const input = screen.getByRole('textbox', { name: 'Add custom log path' });
+    const path = '/var/log/应用.log';
+    fireEvent.change(input, { target: { value: path } });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229, isComposing: false });
+    expect(screen.getByRole('textbox', { name: 'Add custom log path' })).toBe(input);
+    expect(invoke).not.toHaveBeenCalledWith('read_log', expect.objectContaining({ path }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add', exact: true }));
+    expect(screen.queryByRole('textbox', { name: 'Add custom log path' })).toBeNull();
+    expect(await screen.findByTitle(path)).toBeTruthy();
+  });
 });

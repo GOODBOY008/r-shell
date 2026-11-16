@@ -796,6 +796,9 @@
       "pasteWithCount_many": "Wklej {{count}} elementów",
       "pasteWithCount_other": "Wklej {{count}} elementów"
     },
+    "createDialog": {
+      "destination": "Utwórz w {{path}}"
+    },
     "toast": {
       "queuedUpload_one": "Dodano {{count}} plik do kolejki wysyłania",
       "queuedUpload_few": "Dodano {{count}} pliki do kolejki wysyłania",

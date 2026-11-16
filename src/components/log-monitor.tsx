@@ -966,25 +966,29 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
 
         {/* ── Optional: Custom path input ── */}
         {showCustomInput && (
-          <div className="flex items-center gap-1.5 px-2 py-1 border-b border-border bg-muted/20 shrink-0">
+          <form
+            className="flex items-center gap-1.5 px-2 py-1 border-b border-border bg-muted/20 shrink-0"
+            onSubmit={(event) => { event.preventDefault(); handleAddCustomPath(); }}
+          >
             <Input
+              name="path"
               placeholder={t('logMonitor.customPathPlaceholder')}
               value={customPath}
               aria-label={t('logMonitor.addCustomPath')}
               onChange={(e) => setCustomPath(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleAddCustomPath()}
               className="h-7 text-xs flex-1"
               autoFocus
             />
             <Button
+              type="submit"
               size="sm"
               className="h-7 text-xs px-2"
-              onClick={handleAddCustomPath}
               disabled={!customPath.trim()}
             >
               {t('logMonitor.add')}
             </Button>
             <Button
+              type="button"
               size="icon"
               variant="ghost"
               className="h-7 w-7"
@@ -993,7 +997,7 @@ export function LogMonitor({ connectionId, externalLogPath, externalLogPathKey, 
             >
               <X className="h-3.5 w-3.5" />
             </Button>
-          </div>
+          </form>
         )}
 
         {/* ── Row 2: Filters ── */}

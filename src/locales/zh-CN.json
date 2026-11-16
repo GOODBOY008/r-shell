@@ -781,6 +781,9 @@
       "pasteWithCount_one": "粘贴 {{count}} 个项目",
       "pasteWithCount_other": "粘贴 {{count}} 个项目"
     },
+    "createDialog": {
+      "destination": "在 {{path}} 中创建"
+    },
     "toast": {
       "queuedUpload_one": "已排队 {{count}} 个文件等待上传",
       "queuedUpload_other": "已排队 {{count}} 个文件等待上传",

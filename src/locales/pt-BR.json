@@ -789,6 +789,9 @@
       "pasteWithCount_many": "Colar {{count, number}} de itens",
       "pasteWithCount_other": "Colar {{count}} itens"
     },
+    "createDialog": {
+      "destination": "Criar em {{path}}"
+    },
     "toast": {
       "queuedUpload_one": "{{count}} arquivo na fila de envio",
       "queuedUpload_many": "{{count, number}} de arquivos na fila de envio",
