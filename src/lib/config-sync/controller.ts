@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { isPasswordSavingAllowed } from '../credential-crypto';
 import { applyLanguageFromPreference } from '../i18n';
 import { applyTheme, getSavedTheme } from '../utils';
-import { buildStorageImage, captureConfig, readStorageImage, stable, writeStorageImage, type StorageImage } from './storage';
+import { buildStorageImage, captureConfig, readStorageImage, stable, validateShortcutRecords, writeStorageImage, type StorageImage } from './storage';
 import type { SyncBatch, SyncChoices, SyncOptions, SyncPreview, SyncRecords, SyncStatus } from './types';
 
 export type SyncPhase = 'disabled' | 'locked' | 'paused' | 'pending' | 'syncing' | 'synced' | 'review' | 'conflict' | 'error';
@@ -141,17 +141,20 @@ export async function prepareSync(manual = true): Promise<void> {
     previewRecords = records;
     // A platform-specific reserved chord is a conflict even when only one
     // device edited it. Local choices are passed through the same CAS commit.
-    if (!preview.conflicts.length) {
-      try { buildStorageImage(preview.snapshot, readStorageImage(), view.status.options.credentials); }
-      catch (error) {
-        if (errorCode(error) !== 'SYNC_SHORTCUTS') throw error;
-        const keys = new Set([...Object.keys(records), ...Object.keys(preview.snapshot.records)]);
-        for (const key of keys) if (key.startsWith('shortcuts/') && stable(records[key]) !== stable(preview.snapshot.records[key])) {
+    try { validateShortcutRecords(preview.snapshot.records); }
+    catch (error) {
+      if (errorCode(error) !== 'SYNC_SHORTCUTS') throw error;
+      const keys = new Set([...Object.keys(records), ...Object.keys(preview.snapshot.records)]);
+      let hasChoice = false;
+      for (const key of keys) if (key.startsWith('shortcuts/') && stable(records[key]) !== stable(preview.snapshot.records[key])) {
+        hasChoice = true;
+        if (!preview.conflicts.some(conflict => conflict.key === key)) {
           preview.conflicts.push({ key, local: records[key] ?? null, remote: preview.snapshot.records[key] ?? null });
         }
-        if (!preview.conflicts.length) throw error;
       }
+      if (!hasChoice) throw error;
     }
+    if (!preview.conflicts.length) buildStorageImage(preview.snapshot, readStorageImage(), view.status.options.credentials);
     update({ busy: false, preview, reviewOpen: manual, phase: preview.conflicts.length ? 'conflict' : 'review' });
     if (!manual && !preview.firstSync && !preview.conflicts.length) await commitSync({}, true);
   } catch (error) { fail(error); }

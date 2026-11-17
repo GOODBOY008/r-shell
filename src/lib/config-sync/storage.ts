@@ -194,7 +194,16 @@ export function captureConfig(image = readStorageImage(), includeCredentials = f
   }
   const dashboards = object(json(image, CONFIG_KEYS[9], { version: 3, dashboards: [] }));
   if (![1, 2, 3].includes(dashboards.version as number)) throw new Error('SYNC_VERSION');
-  for (const row of unique(array(dashboards.dashboards))) records[`dashboards/${id(row.id)}`] = dashboard(row);
+  for (const row of unique(array(dashboards.dashboards))) {
+    const projected = dashboard(row); // Validate before retiring stale local references.
+    const sources: Row[] = array(projected.sources).map(source => ({ ...source,
+      connectionIds: (source.connectionIds as string[]).filter(connectionId => !!records[`connections/${id(connectionId)}`]),
+    })).filter(source => source.connectionIds.length > 0);
+    const sourceIds = new Set(sources.map(source => source.id));
+    records[`dashboards/${id(row.id)}`] = { ...projected, sources,
+      widgets: array(projected.widgets).filter(widget => widget.kind === 'note' || sourceIds.has(widget.sourceId)),
+    };
+  }
   validateReferences(records);
   return records;
 }
@@ -235,6 +244,18 @@ export function authBinding(row: Row, profiles: Row[] = []): string {
   };
   const profile = profiles.find(p => p.id === row.profileId);
   return stable({ target: route(row), profile: profile ? route(profile) : null });
+}
+
+/** Check platform shortcuts independently of unresolved record relationships. */
+export function validateShortcutRecords(records: SyncRecords): Record<string, string> {
+  const overrides: Record<string, string> = {};
+  for (const [key, value] of Object.entries(records)) if (key.startsWith('shortcuts/')) {
+    const command = key.slice(10);
+    if (!SHORTCUT_DEFINITIONS.some(definition => definition.id === command) || typeof value !== 'string') throw new Error('SYNC_INVALID_DATA');
+    overrides[command] = value;
+  }
+  if (findConflicts(overrides).length) throw new Error('SYNC_SHORTCUTS');
+  return overrides;
 }
 
 /** Build the entire write set first; no partial applies or default-on remote commands. */
@@ -313,10 +334,7 @@ export function buildStorageImage(snapshot: SyncSnapshot, before: StorageImage, 
   const normalized = normalizeSettings(preferences(sharedApp, DEFAULT_SETTINGS));
   for (const [key, value] of Object.entries(sharedApp)) if (value !== (normalized as unknown as Row)[key]) throw new Error('SYNC_INVALID_DATA');
   Object.assign(app, pick(normalized as unknown as Row, APP_FIELDS));
-  const overrides = Object.fromEntries(entries('shortcuts').map(([key, value]) => [key.slice(10), value]));
-  for (const [key, value] of Object.entries(overrides)) if (!SHORTCUT_DEFINITIONS.some(d => d.id === key) || typeof value !== 'string') throw new Error('SYNC_INVALID_DATA');
-  if (findConflicts(overrides).length) throw new Error('SYNC_SHORTCUTS');
-  app.shortcutBindings = overrides; app.shortcutBindingsVersion = SHORTCUT_BINDINGS_VERSION;
+  app.shortcutBindings = validateShortcutRecords(records); app.shortcutBindingsVersion = SHORTCUT_BINDINGS_VERSION;
   const appearance = Object.fromEntries(entries('terminal').map(([key, value]) => [key.slice(9), value])); allowed(appearance, Object.keys(defaultAppearanceSettings));
   const editor = Object.fromEntries(entries('editor').map(([key, value]) => [key.slice(7), value])); allowed(editor, Object.keys(DEFAULT_EDITOR_CONFIG));
   const terminalDefaults = preferences(appearance, defaultAppearanceSettings);

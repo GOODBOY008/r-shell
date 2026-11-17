@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { buildStorageImage, captureConfig, readStorageImage, stable, writeStorageImage } from '../config-sync/storage';
 import type { SyncRecords, SyncSnapshot } from '../config-sync/types';
-import { newDashboard, newDashboardSource, newDashboardWidget } from '../dashboard-config';
+import { newDashboard, newDashboardSource, newDashboardWidget, newDashboardNote } from '../dashboard-config';
 import { defaultMonitorConfig, newCommandMonitor } from '../monitor-config';
 import { assertLocalKeyBindings } from '../config-sync/key-bindings';
 import type { LocalKeyRequirements } from '../config-sync/key-bindings';
@@ -117,6 +117,36 @@ describe('portable configuration projection', () => {
     expect(Object.keys(JSON.parse(localStorage.getItem('r-shell-monitor-config')!).overrides)).toEqual(['kept']);
     const invalidRemote = { ...records, 'monitors/missing': records['monitors/kept'] };
     expect(() => buildStorageImage(snapshot(invalidRemote), before, false)).toThrow('SYNC_REFERENCES');
+  });
+
+  it('retires deleted dashboard targets and orphaned cards while preserving surviving sources and notes', () => {
+    localStorage.setItem('r-shell-connections', JSON.stringify([conn(), conn('kept')]));
+    const board = newDashboard('Fleet');
+    const shared = { ...newDashboardSource(), name: 'Shared', command: 'uptime', connectionIds: ['a', 'kept'] };
+    const orphan = { ...newDashboardSource(), name: 'Deleted target', command: 'free', connectionIds: ['a'] };
+    const survivor = { ...newDashboardWidget(shared.id), name: 'Load' };
+    const removed = { ...newDashboardWidget(orphan.id), name: 'Memory' };
+    const note = { ...newDashboardNote(), name: 'Runbook', content: 'Keep this note.' };
+    board.sources = [shared, orphan]; board.widgets = [survivor, removed, note];
+    const empty = { ...newDashboard('Deleted targets'), sources: [orphan], widgets: [removed] };
+    const stored = JSON.stringify({ version: 3, dashboards: [board, empty] });
+    localStorage.setItem('r-shell-dashboards', stored);
+    expect(ConnectionStorageManager.deleteConnection('a')).toBe(true);
+    localStorage.setItem('sshClientSettings', JSON.stringify({ theme: 'dark' }));
+    const records = captureConfig();
+    expect(records[`dashboards/${board.id}`]).toMatchObject({ sources: [{ ...shared, connectionIds: ['kept'] }], widgets: [survivor, note] });
+    expect(records[`dashboards/${empty.id}`]).toMatchObject({ sources: [], widgets: [] });
+    expect(records['settings/theme']).toBe('dark');
+    expect(localStorage.getItem('r-shell-dashboards')).toBe(stored);
+    const before = readStorageImage();
+    writeStorageImage(buildStorageImage(snapshot(records), before, false));
+    const applied = JSON.parse(localStorage.getItem('r-shell-dashboards')!);
+    expect(applied.dashboards[0]).toMatchObject({ id: board.id, sources: [{ ...shared, connectionIds: ['kept'] }], widgets: [survivor, note] });
+    const invalidRemote = structuredClone(records);
+    (invalidRemote[`dashboards/${board.id}`] as typeof board).sources[0].connectionIds.push('a');
+    expect(() => buildStorageImage(snapshot(invalidRemote), before, false)).toThrow('SYNC_REFERENCES');
+    localStorage.setItem('r-shell-dashboards', JSON.stringify({ version: 3, dashboards: [{ ...board, sources: [{ ...orphan, command: 42 }] }] }));
+    expect(() => captureConfig()).toThrow('SYNC_INVALID_DATA');
   });
 
   it.each([

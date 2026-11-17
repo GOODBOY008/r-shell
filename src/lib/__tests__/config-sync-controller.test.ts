@@ -171,6 +171,29 @@ describe('sync commit coordination', () => {
     expect(called('config_sync_commit')).toBe(false); expect(readStorageImage()).toEqual(before);
   });
 
+  it.each([
+    ['MacIntel', 'Meta+Q', false], ['Win32', 'Alt+F4', false],
+    ['MacIntel', 'Meta+Q', true], ['Win32', 'Alt+F4', true],
+  ] as const)('resolves reserved shortcuts alongside ordinary conflicts on %s: %s (already listed: %s)', async (platform, chord, alreadyListed) => {
+    vi.spyOn(window.navigator, 'platform', 'get').mockReturnValue(platform);
+    const key = 'shortcuts/newSession';
+    preview.snapshot.records[key] = chord;
+    preview.conflicts = [{ key: 'settings/theme', local: 'light', remote: 'dark' }];
+    if (alreadyListed) preview.conflicts.push({ key, local: null, remote: chord });
+    const defaultInvoke = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command, args) => {
+      if (command !== 'config_sync_commit') return defaultInvoke(command, args);
+      const resolved = structuredClone(preview.snapshot); delete resolved.records[key]; resolved.records['settings/theme'] = 'light';
+      return { id: 'batch', snapshot: resolved };
+    });
+    const sync = await controller(); await sync.prepareSync(true);
+    expect(sync.getSyncView().error).toBeNull();
+    expect(sync.getSyncView().preview?.conflicts.map(conflict => conflict.key)).toEqual(['settings/theme', key]);
+    await sync.commitSync({ 'settings/theme': 'local', [key]: 'local' });
+    expect(sync.getSyncView().error).toBeNull(); expect(called('config_sync_ack')).toBe(true);
+    expect(invoke).toHaveBeenCalledWith('config_sync_commit', expect.objectContaining({ choices: { 'settings/theme': 'local', [key]: 'local' } }));
+  });
+
   it('retries an automatic preview after an editor opened during preparation is closed', async () => {
     vi.useFakeTimers(); const defaultInvoke = invoke.getMockImplementation()!; let prepares = 0;
     invoke.mockImplementation(async (command, args) => {
