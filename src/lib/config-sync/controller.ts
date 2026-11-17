@@ -40,9 +40,12 @@ function errorCode(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return message.startsWith('SYNC_') ? message : 'SYNC_UNKNOWN';
 }
+function isTransientError(code: string): boolean {
+  return ['SYNC_NETWORK', 'SYNC_STALE', 'SYNC_RATE_LIMIT'].some(c => code.startsWith(c));
+}
 function fail(error: unknown): void {
   const code = errorCode(error);
-  const transient = ['SYNC_NETWORK', 'SYNC_STALE', 'SYNC_RATE_LIMIT'].some(c => code.startsWith(c));
+  const transient = isTransientError(code);
   failures++;
   const wait = code.startsWith('SYNC_RATE_LIMIT:') ? Number(code.split(':')[1]) * 1000 : Math.min(300_000, 5000 * 2 ** Math.min(failures, 6));
   retryAt = transient ? Date.now() + wait : Infinity;
@@ -108,8 +111,11 @@ export function discardSyncPreview(): void {
   due = Infinity; pullDue = Date.now() + 300_000;
 }
 
-function resolvedSnapshot(preview: SyncPreview, choices: SyncChoices) {
+function resolvedPublicSnapshot(preview: SyncPreview, choices: SyncChoices) {
   const snapshot = structuredClone(preview.snapshot);
+  // Credential choices are opaque to the webview. Their resolved shape is
+  // checked by Rust before upload and again with the returned local batch.
+  for (const key of Object.keys(snapshot.records)) if (key.startsWith('credentials/')) delete snapshot.records[key];
   const related = (key: string) => ['folders/', 'connections/', 'profiles/', 'monitors/', 'dashboards/'].some(prefix => key.startsWith(prefix));
   for (const conflict of preview.conflicts) {
     const choice = choices[conflict.key];
@@ -147,14 +153,20 @@ export async function prepareSync(manual = true): Promise<void> {
       }
     }
     update({ busy: false, preview, reviewOpen: manual, phase: preview.conflicts.length ? 'conflict' : 'review' });
-    if (!manual && !preview.firstSync && !preview.conflicts.length) await commitSync({});
+    if (!manual && !preview.firstSync && !preview.conflicts.length) await commitSync({}, true);
   } catch (error) { fail(error); }
 }
 
-export async function commitSync(choices: SyncChoices): Promise<void> {
+export async function commitSync(choices: SyncChoices, automatic = false): Promise<void> {
   const preview = view.preview;
   if (!preview || !previewRecords || view.busy || !view.status) return;
-  if (editing()) { update({ error: 'SYNC_EDITING' }); return; }
+  if (editing()) {
+    if (automatic) {
+      previewRecords = null; due = Date.now() + 1000;
+      update({ preview: null, reviewOpen: false, phase: 'pending', error: null });
+    } else update({ error: 'SYNC_EDITING' });
+    return;
+  }
   update({ busy: true, error: null, phase: 'syncing' });
   let journalId: string | null = null;
   const root = document.getElementById('root');
@@ -163,7 +175,7 @@ export async function commitSync(choices: SyncChoices): Promise<void> {
     const records = recordsNow();
     if (stable(records) !== stable(previewRecords)) throw new Error('SYNC_STALE');
     // Validate the selected public records before any remote mutation.
-    buildStorageImage(resolvedSnapshot(preview, choices), readStorageImage(), view.status.options.credentials);
+    buildStorageImage(resolvedPublicSnapshot(preview, choices), readStorageImage(), false);
     const batch = await invoke<SyncBatch>('config_sync_commit', { planId: preview.planId, records, choices });
     // Network I/O never holds a UI editing lock. If edits raced it, retain the
     // old baseline and merge again; never treat un-applied records as deletions.
@@ -189,7 +201,10 @@ export async function commitSync(choices: SyncChoices): Promise<void> {
       try { await recoverConfigSync(); notifyStores(); }
       catch { fail('SYNC_RECOVERY_REQUIRED'); window.location.reload(); return; }
     }
-    if (errorCode(error) === 'SYNC_STALE') { previewRecords = null; update({ preview: null, reviewOpen: false }); due = Date.now() + 2000; }
+    const code = errorCode(error);
+    if (code === 'SYNC_STALE' || (automatic && isTransientError(code))) {
+      previewRecords = null; update({ preview: null, reviewOpen: false });
+    }
     fail(error);
   } finally { if (root) root.inert = previousInert; }
 }
@@ -203,7 +218,10 @@ function tick(): void {
     if (!observedImage || Object.keys(image).some(key => image[key] !== observedImage?.[key])) {
       observedImage = image;
       const fingerprint = stable(recordsNow());
-      if (fingerprint !== observedRecords && (observedRecords || view.error)) { due = now + 10_000; retryAt = 0; }
+      if (fingerprint !== observedRecords && (observedRecords || view.error)) {
+        due = now + 10_000;
+        if (!view.error?.startsWith('SYNC_RATE_LIMIT')) retryAt = 0;
+      }
       observedRecords = fingerprint;
     }
     if (now >= retryAt && now >= Math.min(due, pullDue)) { due = Infinity; pullDue = now + 300_000; void prepareSync(false); }

@@ -43,7 +43,7 @@ pub fn secret_key(key: &str) -> bool {
 }
 
 // Compare authentication destinations, including inherited routing. Cosmetic
-// changes do not invalidate a credential, but changing a proxy or hop does.
+// and operational changes do not invalidate credentials; auth identity does.
 pub fn binding(records: &Records, owner: &str) -> Value {
     const FIELDS: &[&str] = &[
         "host",
@@ -72,6 +72,9 @@ pub fn binding(records: &Records, owner: &str) -> Value {
                 out.insert((*key).into(), v.clone());
             }
         }
+        if let Some(hops) = out.get_mut("jumpHosts") {
+            *hops = hop_binding(hops);
+        }
         Value::Object(out)
     }
     let value = records.get(owner).unwrap_or(&Value::Null);
@@ -81,6 +84,45 @@ pub fn binding(records: &Records, owner: &str) -> Value {
         .and_then(|id| records.get(&format!("profiles/{id}")))
         .map(route);
     json!({"target": route(value), "profile": profile})
+}
+
+fn hop_binding(value: &Value) -> Value {
+    let Some(hops) = value.as_array() else {
+        return value.clone();
+    };
+    Value::Array(
+        hops.iter()
+            .map(|hop| {
+                let Some(fields) = hop.as_object() else {
+                    return hop.clone();
+                };
+                Value::Object(
+                    fields
+                        .iter()
+                        .filter(|(key, _)| {
+                            ["host", "port", "username", "authMethod"].contains(&key.as_str())
+                        })
+                        .map(|(key, value)| (key.clone(), value.clone()))
+                        .collect(),
+                )
+            })
+            .collect(),
+    )
+}
+
+pub fn binding_matches(records: &Records, owner: &str, previous: &Value) -> bool {
+    // Normalize hop options in bindings from older encrypted vaults. Preserve
+    // every other field so target, proxy and inherited routing still match exactly.
+    let mut previous = previous.clone();
+    for scope in ["target", "profile"] {
+        if let Some(hops) = previous
+            .get_mut(scope)
+            .and_then(|route| route.get_mut("jumpHosts"))
+        {
+            *hops = hop_binding(hops);
+        }
+    }
+    previous == binding(records, owner)
 }
 
 pub fn validate(snapshot: &Snapshot) -> Result<(), String> {
@@ -504,5 +546,85 @@ mod tests {
         assert_eq!(before, binding(&records, "connections/a"));
         records.get_mut("connections/a").unwrap()["proxyHost"] = json!("another");
         assert_ne!(before, binding(&records, "connections/a"));
+    }
+
+    #[test]
+    fn routing_binding_ignores_hop_tuning_in_connections_and_profiles() {
+        for owner in ["connections/a", "profiles/p"] {
+            let mut records = fixture().records;
+            records.get_mut("connections/a").unwrap()["profileId"] = json!("p");
+            records.insert("profiles/p".into(), json!({"name":"Profile"}));
+            records.get_mut(owner).unwrap()["jumpHosts"] = json!([
+                {"host":"jump","port":22,"username":"user","authMethod":"publickey"}
+            ]);
+            let before = binding(&records, "connections/a");
+            for (field, value) in [
+                ("keepAliveInterval", json!(90)),
+                ("compression", json!(true)),
+                ("connectTimeout", json!(60)),
+                ("keepAlive", json!(false)),
+                ("serverAliveCountMax", json!(8)),
+                ("requireKnownHostKey", json!(true)),
+                ("identitiesOnly", json!(false)),
+                ("privateKeyPath", json!("/device/key")),
+            ] {
+                records.get_mut(owner).unwrap()["jumpHosts"][0][field] = value;
+                assert_eq!(
+                    before,
+                    binding(&records, "connections/a"),
+                    "{owner}: {field}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn routing_binding_tracks_ordered_hop_authentication_in_connections_and_profiles() {
+        for owner in ["connections/a", "profiles/p"] {
+            let mut records = fixture().records;
+            records.get_mut("connections/a").unwrap()["profileId"] = json!("p");
+            records.insert("profiles/p".into(), json!({"name":"Profile"}));
+            records.get_mut(owner).unwrap()["jumpHosts"] = json!([
+                {"host":"jump","port":22,"username":"user","authMethod":"publickey"},
+                {"host":"second","port":22,"username":"user","authMethod":"publickey"}
+            ]);
+            let before = binding(&records, "connections/a");
+            for (field, value) in [
+                ("host", json!("other")),
+                ("port", json!(2222)),
+                ("username", json!("other")),
+                ("authMethod", json!("password")),
+            ] {
+                let mut changed = records.clone();
+                changed.get_mut(owner).unwrap()["jumpHosts"][0][field] = value;
+                assert_ne!(
+                    before,
+                    binding(&changed, "connections/a"),
+                    "{owner}: {field}"
+                );
+            }
+            records.get_mut(owner).unwrap()["jumpHosts"]
+                .as_array_mut()
+                .unwrap()
+                .reverse();
+            assert_ne!(before, binding(&records, "connections/a"));
+        }
+    }
+
+    #[test]
+    fn deleted_connection_and_projected_override_retire_together() {
+        let mut base = fixture();
+        base.records
+            .insert("monitors/a".into(), json!({"columns":2,"modules":[]}));
+        let mut local = base.records.clone();
+        local.remove("connections/a");
+        local.remove("monitors/a");
+        local.insert("settings/theme".into(), json!("dark"));
+        let (merged, conflicts) = merge(Some(&base), &local, &base, &BTreeMap::new());
+        assert!(conflicts.is_empty());
+        validate(&merged).unwrap();
+        assert!(merged.tombstones.contains("connections/a"));
+        assert!(merged.tombstones.contains("monitors/a"));
+        assert_eq!(merged.records["settings/theme"], "dark");
     }
 }

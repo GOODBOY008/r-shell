@@ -329,13 +329,41 @@ fn for_device(
     result.records.retain(|name, value| {
         !model::secret_key(name)
             || (enabled
-                && value.get("binding") == Some(&model::binding(&snapshot.records, &name[12..])))
+                && value.get("binding").is_some_and(|binding| {
+                    model::binding_matches(&snapshot.records, &name[12..], binding)
+                }))
     });
     for (name, value) in result
         .records
         .iter_mut()
         .filter(|(k, _)| model::secret_key(k))
     {
+        // This runs before the cloud write. The webview can validate public
+        // choices, but only Rust sees the resolved opaque credential blocks.
+        let values = value
+            .get("values")
+            .and_then(serde_json::Value::as_object)
+            .ok_or("SYNC_INVALID_DATA")?;
+        if let Some(hops) = values.get("jumpHosts") {
+            let hops = hops.as_array().ok_or("SYNC_INVALID_DATA")?;
+            let owner = snapshot.records.get(&name[12..]).ok_or("SYNC_REFERENCES")?;
+            let hop_count = owner
+                .get("jumpHosts")
+                .map(|hops| hops.as_array().map(Vec::len).ok_or("SYNC_INVALID_DATA"))
+                .transpose()?
+                .unwrap_or(0);
+            if hops.len() != hop_count {
+                return Err("SYNC_INVALID_DATA".into());
+            }
+            for hop in hops {
+                let fields = hop.as_object().ok_or("SYNC_INVALID_DATA")?;
+                if fields.iter().any(|(name, value)| {
+                    !["password", "passphrase"].contains(&name.as_str()) || !value.is_string()
+                }) {
+                    return Err("SYNC_INVALID_DATA".into());
+                }
+            }
+        }
         if plain.get(name) == Some(value) {
             *value = raw.get(name).ok_or("SYNC_INVALID_DATA")?.clone();
         } else {
@@ -735,5 +763,115 @@ mod tests {
             .unwrap()
             .records
             .contains_key("credentials/connections/a"));
+    }
+
+    fn hop_credentials_fixture() -> (Records, Snapshot) {
+        let sealed = crate::commands::seal_with_key(&[1u8; 32], "password", b"").unwrap();
+        let raw = Records::from([
+            (model::ROOT.into(), json!({"name":"All Connections"})),
+            (
+                "connections/a".into(),
+                json!({"host":"target","folderId":"$root","jumpHosts":[
+                    {"host":"jump","port":22,"username":"user","authMethod":"password","keepAliveInterval":30}
+                ]}),
+            ),
+            (
+                "credentials/connections/a".into(),
+                json!({"values":{"password":sealed,"jumpHosts":[{"password":sealed}]}}),
+            ),
+        ]);
+        let snapshot = Snapshot {
+            version: 1,
+            vault_id: "v".into(),
+            revision: 1,
+            records: local_plain(&raw, &[1u8; 32], true).unwrap(),
+            ..Default::default()
+        };
+        (raw, snapshot)
+    }
+
+    #[test]
+    fn legacy_hop_binding_retains_secrets_after_tuning_but_not_retargeting() {
+        let (_, mut snapshot) = hop_credentials_fixture();
+        let destination = Records::from([(model::ROOT.into(), json!({"name":"All Connections"}))]);
+        // Older vaults included every public hop option in the binding.
+        snapshot
+            .records
+            .get_mut("credentials/connections/a")
+            .unwrap()["binding"]["target"]["jumpHosts"] =
+            snapshot.records["connections/a"]["jumpHosts"].clone();
+        snapshot.records.get_mut("connections/a").unwrap()["jumpHosts"][0]["keepAliveInterval"] =
+            json!(90);
+        let restored = for_device(&snapshot, &destination, &[2u8; 32], true).unwrap();
+        let values = &restored.records["credentials/connections/a"]["values"];
+        for secret in [&values["password"], &values["jumpHosts"][0]["password"]] {
+            assert_eq!(
+                crate::commands::open_with_key(&[2u8; 32], secret.as_str().unwrap(), b"").unwrap(),
+                "password"
+            );
+        }
+        snapshot.records.get_mut("connections/a").unwrap()["jumpHosts"][0]["host"] =
+            json!("unrelated-host");
+        assert!(!for_device(&snapshot, &destination, &[2u8; 32], true)
+            .unwrap()
+            .records
+            .contains_key("credentials/connections/a"));
+    }
+
+    #[test]
+    fn resolved_credential_shapes_are_rejected_before_publication() {
+        let (raw, snapshot) = hop_credentials_fixture();
+        for values in [
+            json!({"jumpHosts":[{},{}]}),
+            json!({"jumpHosts":[{"proxyPassword":"invalid-hop-field"}]}),
+            json!({"jumpHosts":[[{"password":"nested"}]]}),
+            json!({"jumpHosts":"not-an-array"}),
+            json!([]),
+        ] {
+            let mut malformed = snapshot.clone();
+            malformed
+                .records
+                .get_mut("credentials/connections/a")
+                .unwrap()["values"] = values;
+            assert_eq!(
+                for_device(&malformed, &raw, &[1u8; 32], true).unwrap_err(),
+                "SYNC_INVALID_DATA"
+            );
+        }
+    }
+
+    #[test]
+    fn local_connection_and_credential_choices_restore_the_same_hop_chain() {
+        let (mut raw, base) = hop_credentials_fixture();
+        raw.get_mut("connections/a").unwrap()["jumpHosts"][0]["host"] = json!("local-hop");
+        let local = local_plain(&raw, &[1u8; 32], true).unwrap();
+        let mut remote = base.clone();
+        remote.records.get_mut("connections/a").unwrap()["jumpHosts"] = json!([
+            {"host":"remote-one","port":22,"username":"user","authMethod":"password"},
+            {"host":"remote-two","port":22,"username":"user","authMethod":"password"}
+        ]);
+        remote.records.get_mut("credentials/connections/a").unwrap()["values"]["jumpHosts"] = json!([
+            {"password":"remote-one"}, {"password":"remote-two"}
+        ]);
+        remote.records.get_mut("credentials/connections/a").unwrap()["binding"] =
+            model::binding(&remote.records, "connections/a");
+        let choices = BTreeMap::from([
+            ("connections/a".into(), Choice::Local),
+            ("credentials/connections/a".into(), Choice::Local),
+        ]);
+        let (merged, conflicts) = model::merge(Some(&base), &local, &remote, &choices);
+        assert!(conflicts.is_empty());
+        let restored = for_device(&merged, &raw, &[1u8; 32], true).unwrap();
+        assert_eq!(
+            restored.records["connections/a"]["jumpHosts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            restored.records["credentials/connections/a"],
+            raw["credentials/connections/a"]
+        );
     }
 }

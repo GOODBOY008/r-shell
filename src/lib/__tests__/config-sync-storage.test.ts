@@ -5,6 +5,7 @@ import { newDashboard, newDashboardSource, newDashboardWidget } from '../dashboa
 import { defaultMonitorConfig, newCommandMonitor } from '../monitor-config';
 import { assertLocalKeyBindings } from '../config-sync/key-bindings';
 import type { LocalKeyRequirements } from '../config-sync/key-bindings';
+import { ConnectionStorageManager } from '../connection-storage';
 
 const conn = (id = 'a') => ({ id, name: 'Server', host: 'server', port: 22, username: 'user', protocol: 'SSH', authMethod: 'password', folder: 'All Connections', createdAt: '2020-01-01' });
 const snapshot = (records: SyncRecords): SyncSnapshot => ({ version: 1, vaultId: 'test', revision: 1, records, tombstones: [] });
@@ -98,6 +99,61 @@ describe('portable configuration projection', () => {
     const records = captureConfig();
     expect(stable(records)).not.toContain('lastConnected'); expect(stable(records)).not.toContain('usageCount');
     expect(stable(records['monitors/$global'])).not.toContain('enabled');
+  });
+
+  it('retires only orphaned local monitor overrides after deleting a connection', () => {
+    localStorage.setItem('r-shell-connections', JSON.stringify([conn(), conn('kept')]));
+    const config = { ...defaultMonitorConfig(), modules: [{ ...newCommandMonitor(), name: 'Load', command: 'uptime' }] };
+    const storedMonitors = JSON.stringify({ version: 1, global: defaultMonitorConfig(), overrides: { a: config, kept: config } });
+    localStorage.setItem('r-shell-monitor-config', storedMonitors);
+    expect(ConnectionStorageManager.deleteConnection('a')).toBe(true);
+    localStorage.setItem('sshClientSettings', JSON.stringify({ theme: 'dark' }));
+    const records = captureConfig();
+    expect(records['connections/a']).toBeUndefined(); expect(records['monitors/a']).toBeUndefined();
+    expect(records['monitors/kept']).toBeDefined(); expect(records['settings/theme']).toBe('dark');
+    expect(localStorage.getItem('r-shell-monitor-config')).toBe(storedMonitors);
+    const before = readStorageImage();
+    writeStorageImage(buildStorageImage(snapshot(records), before, false));
+    expect(Object.keys(JSON.parse(localStorage.getItem('r-shell-monitor-config')!).overrides)).toEqual(['kept']);
+    const invalidRemote = { ...records, 'monitors/missing': records['monitors/kept'] };
+    expect(() => buildStorageImage(snapshot(invalidRemote), before, false)).toThrow('SYNC_REFERENCES');
+  });
+
+  it.each([
+    { keepAliveInterval: 90 }, { compression: false }, { connectTimeout: 60 },
+    { keepAlive: false }, { serverAliveCountMax: 8 }, { requireKnownHostKey: true }, { identitiesOnly: false },
+  ])('preserves local authentication when only jump-host options change: %j', updates => {
+    const saved = { ...conn(), authMethod: 'publickey', password: 'v1:n:target', passphrase: 'v1:n:target-passphrase', privateKeyPath: '/local/target',
+      jumpHosts: [{ host: 'jump', port: 22, username: 'jump-user', authMethod: 'publickey', password: 'v1:n:hop', passphrase: 'v1:n:hop-passphrase',
+        privateKeyPath: '/local/jump', identityFiles: ['/local/identity'], identityAgent: '/local/agent',
+        keepAliveInterval: 30, compression: true, connectTimeout: 10, keepAlive: true, serverAliveCountMax: 3, identitiesOnly: true }] };
+    localStorage.setItem('r-shell-connections', JSON.stringify([saved]));
+    const before = readStorageImage(); const records = captureConfig();
+    const hops = (records['connections/a'] as { jumpHosts: Record<string, unknown>[] }).jumpHosts;
+    Object.assign(hops[0], updates);
+    const restored = JSON.parse(buildStorageImage(snapshot(records), before, false)['r-shell-connections']!)[0];
+    expect(restored).toMatchObject({ password: saved.password, passphrase: saved.passphrase, privateKeyPath: saved.privateKeyPath });
+    expect(restored.jumpHosts[0]).toMatchObject({ ...saved.jumpHosts[0], ...updates });
+  });
+
+  it('preserves connection credentials when only inherited profile jump-host tuning changes', () => {
+    localStorage.setItem('r-shell-connections', JSON.stringify([{ ...conn(), profileId: 'profile', password: 'v1:n:target', privateKeyPath: '/local/target' }]));
+    localStorage.setItem('r-shell-connection-profiles', JSON.stringify([{ id: 'profile', name: 'Profile', host: 'profile.test', port: 22, username: 'user', authMethod: 'auto',
+      jumpHosts: [{ host: 'jump', port: 22, username: 'user', authMethod: 'auto', keepAliveInterval: 10 }] }]));
+    const before = readStorageImage(); const records = captureConfig();
+    (records['profiles/profile'] as { jumpHosts: { keepAliveInterval: number }[] }).jumpHosts[0].keepAliveInterval = 90;
+    expect(JSON.parse(buildStorageImage(snapshot(records), before, false)['r-shell-connections']!)[0])
+      .toMatchObject({ password: 'v1:n:target', privateKeyPath: '/local/target' });
+  });
+
+  it.each([{ host: 'other' }, { port: 2222 }, { username: 'other' }, { authMethod: 'password' }])('does not reuse authentication after a jump-host identity change: %j', updates => {
+    localStorage.setItem('r-shell-connections', JSON.stringify([{ ...conn(), password: 'v1:n:target', privateKeyPath: '/local/target',
+      jumpHosts: [{ host: 'jump', port: 22, username: 'user', authMethod: 'publickey', password: 'v1:n:hop', privateKeyPath: '/local/hop' }] }]));
+    const before = readStorageImage(); const records = captureConfig();
+    Object.assign((records['connections/a'] as { jumpHosts: Record<string, unknown>[] }).jumpHosts[0], updates);
+    const restored = JSON.parse(buildStorageImage(snapshot(records), before, false)['r-shell-connections']!)[0];
+    expect(restored.password).toBeUndefined(); expect(restored.privateKeyPath).toBeUndefined();
+    expect(restored.jumpHosts[0].password).toBeUndefined(); expect(restored.jumpHosts[0].privateKeyPath).toBeUndefined();
   });
 
   it('pauses new or changed monitor commands and dashboards, but preserves layout-only edits', () => {

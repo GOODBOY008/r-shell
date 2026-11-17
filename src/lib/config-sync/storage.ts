@@ -187,7 +187,11 @@ export function captureConfig(image = readStorageImage(), includeCredentials = f
   const monitors = object(json(image, CONFIG_KEYS[8], { version: 1, global: defaultMonitorConfig(), overrides: {} }));
   if (monitors.version !== 1) throw new Error('SYNC_VERSION');
   records['monitors/$global'] = monitor(monitors.global);
-  for (const [name, config] of Object.entries(object(monitors.overrides))) records[`monitors/${id(name)}`] = monitor(config);
+  for (const [name, config] of Object.entries(object(monitors.overrides))) {
+    // Deleted connections can leave device-local overrides behind. Omitting
+    // them here lets the merge retire their previous synchronized records.
+    if (records[`connections/${id(name)}`]) records[`monitors/${name}`] = monitor(config);
+  }
   const dashboards = object(json(image, CONFIG_KEYS[9], { version: 3, dashboards: [] }));
   if (![1, 2, 3].includes(dashboards.version as number)) throw new Error('SYNC_VERSION');
   for (const row of unique(array(dashboards.dashboards))) records[`dashboards/${id(row.id)}`] = dashboard(row);
@@ -220,13 +224,17 @@ function folderPath(records: SyncRecords, folderId: string, seen = new Set<strin
   return `${folderPath(records, text(folder.parentId), seen)}/${name}`;
 }
 
-/** Authentication identity is deliberately independent of local filesystem paths. */
+/** Authentication identity excludes local paths and operational hop options. */
 export function authBinding(row: Row, profiles: Row[] = []): string {
   const fields = ['host', 'port', 'username', 'protocol', 'authMethod', 'domain', 'proxyType', 'proxyHost', 'proxyPort', 'proxyUsername',
     'tunnelEnabled', 'tunnelHost', 'tunnelPort', 'tunnelUsername', 'tunnelAuthMethod', 'jumpHosts', 'profileId', 'ftpsEnabled'];
-  const route = pick(connection(row), fields);
+  const route = (value: Row): Row => {
+    const result = pick(connection(value), fields);
+    if (result.jumpHosts !== undefined) result.jumpHosts = array(result.jumpHosts).map(hop => pick(hop, ['host', 'port', 'username', 'authMethod']));
+    return result;
+  };
   const profile = profiles.find(p => p.id === row.profileId);
-  return stable({ target: route, profile: profile ? pick(connection(profile), fields) : null });
+  return stable({ target: route(row), profile: profile ? route(profile) : null });
 }
 
 /** Build the entire write set first; no partial applies or default-on remote commands. */
