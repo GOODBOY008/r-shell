@@ -1,0 +1,12 @@
+{
+  "bundle": {
+    "linux": {
+      "appimage": {
+        "files": {
+          "/usr/lib/libfreetype.so.6": "/usr/lib/x86_64-linux-gnu/libfreetype.so.6",
+          "/usr/share/doc/libfreetype6/copyright": "/usr/share/doc/libfreetype6/copyright"
+        }
+      }
+    }
+  }
+}
