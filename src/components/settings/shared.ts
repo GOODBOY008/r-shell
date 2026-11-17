@@ -112,6 +112,7 @@ export const SETTINGS_SECTION_IDS = [
   'security',
   'interface',
   'keyboard',
+  'cloudSync',
   'advanced',
 ] as const;
 

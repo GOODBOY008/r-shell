@@ -1,3 +1,4 @@
+import { assertLocalKeyBindings } from './config-sync/key-bindings';
 import { type SshExtendedOptions, type SshIdentityRequest, sshIdentityRequest } from './ssh-options';
 import { getHostKeyPolicy, type HostKeyPolicy } from './host-key';
 import type { X11Config } from './connection-storage';
@@ -137,6 +138,7 @@ export function buildSshConnectRequest(
   connectionId: string,
   source: SshConnectRequestSource,
 ): SshConnectRequest {
+  assertLocalKeyBindings(source);
   const keepAlive = source.keepAlive !== false;
   const tunnelEnabled = source.tunnelEnabled === true;
 
@@ -235,6 +237,7 @@ export function buildSftpConnectRequest(
   connectionId: string,
   source: SftpConnectRequestSource,
 ): SftpConnectRequest {
+  assertLocalKeyBindings(source);
   const tunnelEnabled = source.tunnelEnabled === true;
 
   return {
