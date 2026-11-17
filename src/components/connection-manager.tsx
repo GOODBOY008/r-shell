@@ -175,28 +175,37 @@ export function ConnectionManager({
   const suppressClickRef = useRef(false);
   const treeContainerRef = useRef<HTMLDivElement>(null);
 
-  // Reload connections when active connections or refreshTrigger changes,
-  // preserving expand state across tree rebuilds.
+  // Reload saved records after sync as well as session changes, preserving
+  // expand state without reconnecting or replacing active sessions.
   useEffect(() => {
-    const newTree = loadConnections();
-    setConnections(prev => {
-      // Merge isExpanded from the previous tree to preserve the user's
-      // expand/collapse state across tree rebuilds (the storage backend
-      // always returns isExpanded: true).
-      const mergeExpanded = (newNodes: ConnectionNode[]): ConnectionNode[] =>
-        newNodes.map(newNode => {
-          const prevNode = prev.find(n => n.id === newNode.id);
-          const merged: ConnectionNode = {
-            ...newNode,
-            isExpanded: prevNode !== undefined ? prevNode.isExpanded : newNode.isExpanded,
-          };
-          if (newNode.children && prevNode?.children) {
-            merged.children = mergeExpanded(newNode.children);
-          }
-          return merged;
-        });
-      return mergeExpanded(newTree);
-    });
+    const refresh = () => {
+      const newTree = loadConnections();
+      setConnections(prev => {
+        // Merge isExpanded from the previous tree to preserve the user's
+        // expand/collapse state across tree rebuilds (the storage backend
+        // always returns isExpanded: true).
+        const mergeExpanded = (newNodes: ConnectionNode[]): ConnectionNode[] =>
+          newNodes.map(newNode => {
+            const prevNode = prev.find(n => n.id === newNode.id);
+            const merged: ConnectionNode = {
+              ...newNode,
+              isExpanded: prevNode !== undefined ? prevNode.isExpanded : newNode.isExpanded,
+            };
+            if (newNode.children && prevNode?.children) {
+              merged.children = mergeExpanded(newNode.children);
+            }
+            return merged;
+          });
+        return mergeExpanded(newTree);
+      });
+    };
+    refresh();
+    window.addEventListener('rshell-connections-changed', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('rshell-connections-changed', refresh);
+      window.removeEventListener('storage', refresh);
+    };
   }, [activeConnections, refreshTrigger]);
 
   // Handle connection deletion

@@ -2,6 +2,7 @@ mod desktop_frames;
 #[cfg(test)]
 mod acl_tests;
 mod commands;
+mod config_sync;
 mod connection_manager;
 mod cpu_stats;
 mod desktop_protocol;
@@ -517,7 +518,17 @@ pub fn run() {
         .manage(connection_manager)
         .manage(quit_guard::QuitGuard::default())
         .manage(commands::PendingUpdate::default())
+        .manage(config_sync::SyncService::default())
         .invoke_handler(tauri::generate_handler![
+            config_sync::config_sync_status,
+            config_sync::config_sync_test,
+            config_sync::config_sync_configure,
+            config_sync::config_sync_prepare,
+            config_sync::config_sync_commit,
+            config_sync::config_sync_ack,
+            config_sync::config_sync_stage_apply,
+            config_sync::config_sync_recovery,
+            config_sync::config_sync_finish_apply,
             commands::authorize_local_file,
             commands::ssh_connect,
             commands::preview_ssh_config_import,

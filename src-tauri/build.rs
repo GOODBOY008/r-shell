@@ -5,6 +5,15 @@ fn main() {
     // with the `invoke_handler!` block in src/lib.rs.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "config_sync_status",
+            "config_sync_test",
+            "config_sync_configure",
+            "config_sync_prepare",
+            "config_sync_commit",
+            "config_sync_ack",
+            "config_sync_stage_apply",
+            "config_sync_recovery",
+            "config_sync_finish_apply",
             "authorize_local_file",
             "backup_open",
             "backup_seal",

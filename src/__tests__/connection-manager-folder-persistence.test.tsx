@@ -153,6 +153,39 @@ describe('ConnectionManager folder expansion persistence', () => {
     expect(onConnect).toHaveBeenCalledTimes(2);
     expect(onConnect).toHaveBeenLastCalledWith(expect.objectContaining({ name: 'Home box' }));
   });
+
+  it.each(['rshell-connections-changed', 'storage'])('refreshes synchronized records on %s without changing active sessions or collapsed folders', event => {
+    const onConnect = vi.fn(); const onSelect = vi.fn();
+    const activeConnections = new Set<string>();
+    const mounted = render(<ConnectionManager onConnectionSelect={onSelect} onConnectionConnect={onConnect} selectedConnectionId={null} activeConnections={activeConnections} />);
+    fireEvent.click(chevronOf(mounted.container, workId));
+    const folders = ConnectionStorageManager.getFolders().map(folder => folder.id === personalId
+      ? { ...folder, name: 'Synced personal', path: 'Synced personal' } : folder);
+    const connections = ConnectionStorageManager.getConnections().map(connection => connection.folder === 'Personal'
+      ? { ...connection, name: 'Synced home', folder: 'Synced personal' } : connection);
+    folders.push({ id: 'cloud-folder', name: 'Cloud folder', path: 'Cloud folder', createdAt: '2026-01-01' });
+    connections.push({ id: 'cloud-connection', name: 'Cloud server', host: 'cloud.test', port: 22, username: 'user', protocol: 'SSH', folder: 'Cloud folder', createdAt: '2026-01-01' });
+    localStorage.setItem('r-shell-connection-folders', JSON.stringify(folders));
+    localStorage.setItem('r-shell-connections', JSON.stringify(connections));
+    fireEvent(window, new Event(event));
+    expect(screen.queryByText('Home box')).toBeNull();
+    expect(screen.getByText('Synced home')).toBeTruthy();
+    expect(screen.getByText('Synced personal')).toBeTruthy();
+    expect(screen.getByText('Cloud server')).toBeTruthy();
+    expect(screen.queryByText('Prod')).toBeNull();
+
+    localStorage.setItem('r-shell-connection-folders', JSON.stringify(folders.filter(folder => folder.id !== personalId)));
+    localStorage.setItem('r-shell-connections', JSON.stringify(connections.filter(connection => connection.folder !== 'Synced personal')));
+    fireEvent(window, new Event(event));
+    expect(screen.queryByText('Synced home')).toBeNull();
+    expect(screen.queryByText('Synced personal')).toBeNull();
+    expect(screen.getByText('Cloud server')).toBeTruthy();
+    expect(onConnect).not.toHaveBeenCalled(); expect(onSelect).not.toHaveBeenCalled();
+
+    const build = vi.spyOn(ConnectionStorageManager, 'buildConnectionTree');
+    mounted.unmount(); fireEvent(window, new Event(event));
+    expect(build).not.toHaveBeenCalled(); build.mockRestore();
+  });
 });
 
 describe('ConnectionManager folder forms', () => {

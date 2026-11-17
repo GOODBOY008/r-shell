@@ -117,6 +117,15 @@
     "process:allow-exit",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
-    "autostart:default"
+    "autostart:default",
+    "allow-config-sync-status",
+    "allow-config-sync-test",
+    "allow-config-sync-configure",
+    "allow-config-sync-prepare",
+    "allow-config-sync-commit",
+    "allow-config-sync-ack",
+    "allow-config-sync-stage-apply",
+    "allow-config-sync-recovery",
+    "allow-config-sync-finish-apply"
   ]
 }

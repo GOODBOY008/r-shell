@@ -32,6 +32,7 @@ export interface SshConfigSource {
 }
 
 export interface SshExtendedOptions extends SshIdentityOptions {
+  syncKeyRequirements?: import('./config-sync/key-bindings').LocalKeyRequirements;
   requireKnownHostKey?: boolean;
   jumpHosts?: SshJumpHost[];
   sshConfigSource?: SshConfigSource;
@@ -40,6 +41,7 @@ export interface SshExtendedOptions extends SshIdentityOptions {
 /** Keep every explicit mapping path in sync without copying runtime secrets. */
 export function sshExtendedOptions(source: SshExtendedOptions): SshExtendedOptions {
   return {
+    syncKeyRequirements: source.syncKeyRequirements,
     identityFiles: source.identityFiles,
     identityAgent: source.identityAgent,
     identitiesOnly: source.identitiesOnly,

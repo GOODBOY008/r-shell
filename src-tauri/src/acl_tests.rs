@@ -18,22 +18,24 @@ fn manifest_dir() -> PathBuf {
 
 /// Commands registered in the `invoke_handler!` block of `src/lib.rs`.
 ///
-/// Only `commands::<name>,` entries count — `commands::SomeType::default()`
-/// is a type reference, not a command.
+/// Both app command modules count; `SomeType::default()` is a type reference,
+/// not a registered command.
 fn registered_commands() -> BTreeSet<String> {
     let lib =
         fs::read_to_string(manifest_dir().join("src/lib.rs")).expect("src/lib.rs must be readable");
     let mut commands = BTreeSet::new();
-    let mut rest = lib.as_str();
-    while let Some(idx) = rest.find("commands::") {
-        rest = &rest[idx + "commands::".len()..];
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .collect();
-        let after = rest[name.len()..].trim_start();
-        if !name.is_empty() && after.starts_with(',') {
-            commands.insert(name);
+    for prefix in ["commands::", "config_sync::"] {
+        let mut rest = lib.as_str();
+        while let Some(idx) = rest.find(prefix) {
+            rest = &rest[idx + prefix.len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let after = rest[name.len()..].trim_start();
+            if !name.is_empty() && after.starts_with(',') {
+                commands.insert(name);
+            }
         }
     }
     commands
@@ -170,6 +172,9 @@ fn file_viewer_permissions_are_a_subset_of_the_main_window() {
 #[test]
 fn file_viewer_does_not_grant_connection_or_credential_commands() {
     let permissions = capability_permissions("file-viewer.json");
+    assert!(!permissions
+        .iter()
+        .any(|permission| permission.starts_with("allow-config-sync-")));
     for forbidden in [
         "allow-ssh-connect",
         "allow-credential-open",

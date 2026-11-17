@@ -5109,7 +5109,7 @@ const BACKUP_KDF_PASSES: u32 = 3;
 const BACKUP_SALT_LEN: usize = 16;
 
 /// Derive the 32-byte backup key from the user's export passphrase.
-fn backup_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
+pub(crate) fn backup_key(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
     let params = argon2::Params::new(BACKUP_KDF_MEMORY_KIB, BACKUP_KDF_PASSES, 1, Some(32))
         .map_err(|e| format!("Invalid backup KDF parameters: {e}"))?;
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);

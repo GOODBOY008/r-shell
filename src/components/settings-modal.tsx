@@ -15,6 +15,7 @@ import {
   Code2,
   Search,
   X,
+  Cloud,
 } from 'lucide-react';
 import {
   TerminalAppearanceSettings,
@@ -66,6 +67,8 @@ import { SecuritySection } from './settings/security-section';
 import { InterfaceSection } from './settings/interface-section';
 import { KeyboardSection } from './settings/keyboard-section';
 import { AdvancedSection } from './settings/advanced-section';
+import { CloudSyncSection } from './settings/cloud-sync-section';
+import { getSyncView, openSyncReview, prepareSync } from '@/lib/config-sync/controller';
 import { AUTO, getLanguagePreference, changeLanguage, applyLanguageFromPreference } from '@/lib/i18n';
 
 interface SettingsModalProps {
@@ -81,6 +84,7 @@ const SECTION_ICONS: Record<SettingsSectionId, typeof TerminalIcon> = {
   security: Shield,
   interface: Palette,
   keyboard: Keyboard,
+  cloudSync: Cloud,
   advanced: Monitor,
 };
 
@@ -318,6 +322,12 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
 
   const renderSection = (section: SettingsSectionId) => {
     switch (section) {
+      case 'cloudSync':
+        return <CloudSyncSection query={searchQuery} onSync={() => {
+          if (!handleSave()) return;
+          // Let the settings dialog unmount before opening a sync review.
+          setTimeout(() => { if (getSyncView().preview) openSyncReview(); else void prepareSync(true); }, 100);
+        }} />;
       case 'terminal':
         return (
           <TerminalSection
