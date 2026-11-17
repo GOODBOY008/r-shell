@@ -63,13 +63,18 @@ jobs:
           # on anything older — including the AppImage catalog's ubuntu-22.04
           # test runner (AppImage/appimage.github.io#4426). jammy's glibc
           # 2.35 keeps the AppImage runnable on distros back to 22.04.
+          # Jammy's WebKitGTK uses FreeType's pre-2.13 COLRv1 ABI. Ship the
+          # matching library so newer host FreeType versions cannot crash
+          # the web process when it renders color fonts (#322).
+          LINUX_ARGS='--config src-tauri/tauri.appimage-jammy.conf.json'
           if [[ "$GITHUB_REF_NAME" == *-current.* ]]; then
             ENTRIES=$(jq -cn \
               --arg macArgs '--target aarch64-apple-darwin --config '\''{"bundle":{"macOS":{"minimumSystemVersion":"26.0"}}}'\''' \
               --arg winArgs '--config '\''{"bundle":{"targets":["nsis"]}}'\''' \
+              --arg linuxArgs "$LINUX_ARGS" \
               '{include: [
                  {platform: "macos-latest",  args: $macArgs, baseline: "current"},
-                 {platform: "ubuntu-22.04",  args: "",       baseline: "current"},
+                 {platform: "ubuntu-22.04",  args: $linuxArgs, baseline: "current"},
                  {platform: "windows-latest", args: $winArgs, baseline: "current"}
                ]}')
           else
@@ -78,12 +83,13 @@ jobs:
               WIN_ARGS='--config ''{"bundle":{"targets":["nsis"]}}'''
             fi
             ENTRIES=$(jq -cn \
+              --arg linuxArgs "$LINUX_ARGS" \
               --arg winArgs "$WIN_ARGS" \
               '{include: [
                  # Stable / compat line (minimumSystemVersion stays at the Tauri default)
                  {platform: "macos-latest",  args: "--target aarch64-apple-darwin", baseline: "compat"},
                  {platform: "macos-latest",  args: "--target x86_64-apple-darwin",  baseline: "compat"},
-                 {platform: "ubuntu-22.04",  args: "",                              baseline: "compat"},
+                 {platform: "ubuntu-22.04",  args: $linuxArgs,                       baseline: "compat"},
                  {platform: "windows-latest", args: $winArgs,                       baseline: "compat"}
                ]}')
           fi
@@ -136,6 +142,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev \
+            libfreetype6 \
             build-essential \
             curl \
             wget \

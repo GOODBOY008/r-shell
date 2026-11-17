@@ -244,9 +244,13 @@ Download from the [Releases](https://github.com/GOODBOY008/r-shell/releases) pag
 | macOS (Apple Silicon) | `r-shell_x.x.x_aarch64.dmg` |
 | macOS (Intel) | `r-shell_x.x.x_x64.dmg` |
 | Windows | `r-shell_x.x.x_x64-setup.exe` |
-| Linux | `r-shell_x.x.x_amd64.AppImage` / `.deb` |
+| Linux | `r-shell_x.x.x_amd64.AppImage` / `.deb` / `.rpm` |
 
 Direct downloads update themselves in-app on the stable channel.
+
+On Fedora, use `sudo dnf install` with the downloaded `.rpm` to install R-Shell with Fedora's WebKitGTK.
+
+The Linux AppImage includes software based in part on the work of the FreeType Team.
 
 On macOS 15 or later, choose **Allow** when macOS asks for Local Network access while connecting to a LAN server or local virtual machine. RDP retries the initial TCP connection for up to 30 seconds after a macOS **“No route to host”** error, so accepting the prompt can continue the same connection. A waiting notice offers **Cancel**; closing the tab also cancels the pending connection. Password and certificate failures are not retried by this permission recovery.
 
