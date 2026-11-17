@@ -2,6 +2,13 @@
  * Desktop viewer utility functions for coordinate translation and scaling.
  */
 
+export type DesktopScalingMode = 'fit' | 'native';
+export type RdpScalingPreference = DesktopScalingMode | 'remember';
+
+export function normalizeRdpScalingPreference(value: unknown): RdpScalingPreference {
+  return value === 'fit' || value === 'native' ? value : 'remember';
+}
+
 /**
  * Compute the scale factor for "Fit to Window" mode.
  * Returns a factor that preserves the aspect ratio while fitting the desktop

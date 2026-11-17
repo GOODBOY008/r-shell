@@ -18,6 +18,8 @@ import { APP_SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcuts';
 import type { TerminalTab } from '../../lib/terminal-group-types';
 import { isTerminalTabVisible } from '../../lib/terminal-group-reducer';
 import { ConnectionStorageManager } from '../../lib/connection-storage';
+import { desktopTabDisplay } from '../../lib/desktop-connect';
+import type { DesktopScalingMode } from '../../lib/desktop-utils';
 import { PtyTerminal } from '../pty-terminal';
 import { FileBrowserView } from '../file-browser-view';
 import { DesktopViewer } from '../desktop-viewer';
@@ -79,6 +81,7 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
   const { state, dispatch } = useTerminalGroups();
   const editorTabs = useEditorTabs();
   const { onReconnectTab, onDetachTab, onCloseTab, failedPendingTabIds } = useTerminalCallbacks();
+  const savedConnectionId = tab.originalConnectionId || tab.id;
   const groupId = state.tabToGroupMap[tab.id];
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
@@ -153,18 +156,31 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
     [dispatch],
   );
 
+  const handleScalingChange = useCallback((mode: DesktopScalingMode) => {
+    try {
+      ConnectionStorageManager.rememberRdpScalingMode(savedConnectionId, mode);
+    } catch (error) {
+      console.warn('Failed to save RDP scaling preference:', error);
+    }
+  }, [savedConnectionId]);
+
   let content: React.ReactNode;
 
   if (tab.tabType === 'dashboard') {
     content = <DashboardView dashboardId={tab.dashboardId ?? ''} visible={isVisible} />;
   } else if (tab.tabType === 'desktop') {
+    const profile = tab.rdpResolution === undefined || tab.rdpScalingMode === undefined
+      ? ConnectionStorageManager.getConnection(savedConnectionId)
+      : undefined;
     content = (
       <DesktopViewer
         connectionId={tab.id}
         connectionName={tab.name}
         host={tab.host}
         protocol={tab.protocol}
-        rdpResolution={tab.rdpResolution ?? ConnectionStorageManager.getConnection(tab.originalConnectionId || tab.id)?.rdpResolution}
+        rdpResolution={tab.rdpResolution ?? profile?.rdpResolution}
+        rdpScalingMode={tab.rdpScalingMode ?? (profile && desktopTabDisplay(profile).rdpScalingMode)}
+        onScalingChange={handleScalingChange}
         isConnected={tab.connectionStatus === 'connected'}
         isActive={isActive}
         onReconnect={handleReconnect}
@@ -236,7 +252,7 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
       <PtyTerminal
         key={`${tab.id}-${tab.reconnectCount}`}
         connectionId={tab.id}
-        savedConnectionId={tab.originalConnectionId || tab.id}
+        savedConnectionId={savedConnectionId}
         connectionName={tab.name}
         host={tab.host}
         username={tab.username}

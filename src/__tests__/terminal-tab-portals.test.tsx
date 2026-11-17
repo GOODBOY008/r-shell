@@ -2,6 +2,8 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
+import type { DesktopScalingMode } from '../lib/desktop-utils';
+import { ConnectionStorageManager } from '../lib/connection-storage';
 import { APP_SETTINGS_CHANGED_EVENT } from '../lib/keyboard-shortcuts';
 import {
   TerminalTabPortalHost,
@@ -182,6 +184,33 @@ describe('TerminalTabPortalProvider', () => {
     expect(lifecycle.desktopProps).toHaveBeenCalledWith(expect.objectContaining({
       connectionId: tabA.id, rdpResolution,
     }));
+  });
+
+  it('remembers scaling for the saved RDP profile shared by its session tabs', () => {
+    const profile = { name: 'Windows', host: 'rdp.example.test', port: 3389, username: 'user', protocol: 'RDP' };
+    ConnectionStorageManager.saveConnectionWithId('saved-rdp', profile);
+    ConnectionStorageManager.saveConnectionWithId('other-rdp', { ...profile, rdpScalingMode: 'fit' });
+    mockState.groups['1'].tabs = [
+      { ...tabA, tabType: 'desktop', protocol: 'RDP', originalConnectionId: 'saved-rdp' },
+      { ...tabB, tabType: 'desktop', protocol: 'RDP', originalConnectionId: 'other-rdp' },
+    ];
+    const viewer = (id: string) => lifecycle.desktopProps.mock.calls
+      .findLast(([props]) => props.connectionId === id)?.[0] as {
+        rdpScalingMode: DesktopScalingMode;
+        onScalingChange: (mode: DesktopScalingMode) => void;
+      };
+    const view = render(<PortalHosts split={false} />);
+    expect(viewer(tabA.id).rdpScalingMode).toBe('fit');
+    viewer(tabA.id).onScalingChange('native');
+    viewer(tabB.id).onScalingChange('native');
+    expect(ConnectionStorageManager.getConnection('saved-rdp')?.rdpLastScalingMode).toBe('native');
+    expect(ConnectionStorageManager.getConnection('other-rdp')?.rdpLastScalingMode).toBeUndefined();
+
+    view.unmount();
+    render(<PortalHosts split={false} />);
+    expect(viewer(tabA.id).rdpScalingMode).toBe('native');
+    expect(viewer(tabB.id).rdpScalingMode).toBe('fit');
+    expect(ConnectionStorageManager.getConnection(tabA.id)).toBeUndefined();
   });
 
   it('keeps live terminal components mounted when a tab moves to a new group', () => {

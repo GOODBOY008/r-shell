@@ -154,6 +154,7 @@
       "maxCount": "Limite de tentativas",
       "domain": "Domínio (opcional)",
       "displayResolution": "Resolução de tela",
+      "defaultScaling": "Escala padrão",
       "colorDepth": "Profundidade de cor",
       "tunnelHost": "Host do túnel",
       "tunnelPort": "Porta do túnel",
@@ -218,6 +219,8 @@
     },
     "rdp": {
       "fitToWindow": "Auto equilibrado (até 1080p)",
+      "fitScaling": "Ajustar à janela",
+      "rememberScaling": "Lembrar a última escala usada",
       "h1024x768": "1024×768",
       "h1280x720": "1280×720 (HD)",
       "h1920x1080": "1920×1080 (Full HD)",

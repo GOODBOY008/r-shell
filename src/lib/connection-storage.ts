@@ -1,5 +1,6 @@
 import { mergeSshImport, SshImportError, type SshImportPreview, type ImportSelection } from './ssh-config-import';
 import type { SshExtendedOptions } from '@/lib/ssh-options';
+import { normalizeRdpScalingPreference, type DesktopScalingMode, type RdpScalingPreference } from './desktop-utils';
 /**
  * Connection Storage Management
  * Handles saving, loading, and managing SSH connections with hierarchical organization
@@ -67,6 +68,9 @@ export interface ConnectionData extends SshExtendedOptions {
   // RDP-specific
   domain?: string;
   rdpResolution?: string;
+  rdpScalingMode?: RdpScalingPreference;
+  /** The most recent toolbar selection in Remember Last Used mode. */
+  rdpLastScalingMode?: DesktopScalingMode;
   // VNC-specific
   vncColorDepth?: string;
   vncPassword?: string;
@@ -522,6 +526,19 @@ export class ConnectionStorageManager {
 
     persistConnections(connections);
     return connections[index];
+  }
+
+  static rememberRdpScalingMode(id: string, mode: DesktopScalingMode): void {
+    const connections = this.getConnections();
+    const connection = connections.find(item => item.id === id);
+    if (
+      connection?.protocol !== 'RDP' ||
+      normalizeRdpScalingPreference(connection.rdpScalingMode) !== 'remember' ||
+      connection.rdpLastScalingMode === mode
+    ) return;
+
+    connection.rdpLastScalingMode = mode;
+    persistConnections(connections);
   }
 
   /**

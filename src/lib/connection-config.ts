@@ -32,6 +32,8 @@ export function toConnectionConfig(data: ConnectionData): ConnectionConfig {
     ftpsVerifyCert: data.ftpsVerifyCert,
     domain: data.domain,
     rdpResolution: data.rdpResolution as ConnectionConfig['rdpResolution'],
+    rdpScalingMode: data.rdpScalingMode,
+    rdpLastScalingMode: data.rdpLastScalingMode,
     vncColorDepth: data.vncColorDepth as ConnectionConfig['vncColorDepth'],
     proxyType: data.proxyType ?? 'none',
     proxyHost: data.proxyHost,
