@@ -1,6 +1,13 @@
 mod crypto;
 mod model;
 mod provider;
+mod s3;
+#[cfg(test)]
+mod s3_integration;
+mod settings;
+
+use provider::ObjectStore;
+use settings::{Options, Target};
 
 use model::{Choice, Conflict, Records, Snapshot};
 use serde::{Deserialize, Serialize};
@@ -15,22 +22,24 @@ use tokio::sync::Mutex;
 const FILE: &str = "r-shell-sync-v1.enc";
 const STATE_AAD: &[u8] = b"r-shell-config-sync-state-v1";
 
-#[derive(Clone, Default, Serialize, Deserialize, PartialEq)]
+/// A replacement credential pair. Omitting the pair reuses a stored secret
+/// only within its original scope; replacing it also replaces its session token.
+#[derive(Clone, Default, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Options {
-    pub enabled: bool,
-    pub paused: bool,
-    pub url: String,
-    pub username: String,
-    pub credentials: bool,
-    pub remember_passphrase: bool,
+pub struct ProviderAuth {
+    secret: String,
+    session_token: Option<String>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Stored {
+    #[serde(deserialize_with = "settings::read_stored_options")]
     options: Options,
-    server_password: String,
+    #[serde(alias = "serverPassword")]
+    provider_secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_token: Option<String>,
     passphrase: Option<String>,
     base: Option<Snapshot>,
     pending: Option<Pending>,
@@ -64,7 +73,8 @@ pub struct SyncService {
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     options: Options,
-    has_server_password: bool,
+    has_secret: bool,
+    has_session_token: bool,
     unlocked: bool,
     initialized: bool,
     last_applied_id: Option<String>,
@@ -250,15 +260,19 @@ fn ensure_process_lock(runtime: &mut Runtime, app: &tauri::AppHandle) -> Result<
     // Read only after acquiring the lock: another app process may have created
     // this state since our disabled initial status query.
     if path.exists() {
-        let encrypted = std::fs::read_to_string(&path).map_err(|_| "SYNC_LOCAL_STORAGE")?;
-        let text = crate::commands::open_with_key(&machine_key(app)?, &encrypted, STATE_AAD)
-            .map_err(|_| "SYNC_LOCAL_SECRET")?;
-        let stored: Stored = serde_json::from_str(&text).map_err(|_| "SYNC_LOCAL_STORAGE")?;
+        let stored = read_state(&path, &machine_key(app)?)?;
         runtime.passphrase = stored.passphrase.clone();
         runtime.stored = stored;
     }
     runtime.process_lock = Some(lock);
     Ok(())
+}
+
+fn read_state(path: &Path, key: &[u8]) -> Result<Stored, String> {
+    let encrypted = std::fs::read_to_string(path).map_err(|_| "SYNC_LOCAL_STORAGE")?;
+    let text = crate::commands::open_with_key(key, &encrypted, STATE_AAD)
+        .map_err(|_| "SYNC_LOCAL_SECRET")?;
+    serde_json::from_str(&text).map_err(|_| "SYNC_LOCAL_STORAGE".into())
 }
 
 fn write_state(path: &Path, stored: &Stored, key: &[u8]) -> Result<(), String> {
@@ -280,7 +294,8 @@ fn write_state(path: &Path, stored: &Stored, key: &[u8]) -> Result<(), String> {
 fn status(runtime: &Runtime) -> Status {
     Status {
         options: runtime.stored.options.clone(),
-        has_server_password: !runtime.stored.server_password.is_empty(),
+        has_secret: !runtime.stored.provider_secret.is_empty(),
+        has_session_token: runtime.stored.session_token.is_some(),
         unlocked: runtime.passphrase.is_some(),
         initialized: runtime.stored.base.is_some(),
         last_applied_id: runtime.stored.last_applied_id.clone(),
@@ -377,12 +392,40 @@ fn for_device(
     Ok(result)
 }
 
-fn dav(runtime: &Runtime) -> Result<provider::WebDav, String> {
-    provider::WebDav::new(
-        &runtime.stored.options.url,
-        &runtime.stored.options.username,
-        &runtime.stored.server_password,
-    )
+impl Stored {
+    fn auth_for(&self, target: &Target, replacement: Option<ProviderAuth>) -> ProviderAuth {
+        replacement.unwrap_or_else(|| {
+            if self.options.target.same_credential_scope(target) {
+                ProviderAuth {
+                    secret: self.provider_secret.clone(),
+                    session_token: self.session_token.clone(),
+                }
+            } else {
+                ProviderAuth::default()
+            }
+        })
+    }
+
+    fn provider(&self) -> Result<Box<dyn ObjectStore>, String> {
+        provider_for(
+            &self.options.target,
+            &self.provider_secret,
+            self.session_token.as_deref(),
+        )
+    }
+}
+
+fn provider_for(
+    target: &Target,
+    secret: &str,
+    token: Option<&str>,
+) -> Result<Box<dyn ObjectStore>, String> {
+    match target {
+        Target::WebDav { url, username } => {
+            Ok(Box::new(provider::WebDav::new(url, username, secret)?))
+        }
+        Target::S3(target) => Ok(Box::new(s3::S3::new(target, secret, token)?)),
+    }
 }
 
 #[tauri::command]
@@ -398,21 +441,14 @@ pub async fn config_sync_status(
 pub async fn config_sync_test(
     app: tauri::AppHandle,
     service: tauri::State<'_, SyncService>,
-    url: String,
-    username: String,
-    password: Option<String>,
+    target: Target,
+    auth: Option<ProviderAuth>,
 ) -> Result<(), String> {
-    let password = if let Some(password) = password {
-        password
-    } else {
+    let auth = {
         let mut lock = service.inner.lock().await;
-        let runtime = load(&mut lock, &app)?;
-        if runtime.stored.options.url != url || runtime.stored.options.username != username {
-            return Err("SYNC_AUTH".into());
-        }
-        runtime.stored.server_password.clone()
+        load(&mut lock, &app)?.stored.auth_for(&target, auth)
     };
-    provider::WebDav::new(&url, &username, &password)?
+    provider_for(&target, &auth.secret, auth.session_token.as_deref())?
         .probe()
         .await
 }
@@ -422,31 +458,58 @@ pub async fn config_sync_configure(
     app: tauri::AppHandle,
     service: tauri::State<'_, SyncService>,
     options: Options,
-    server_password: Option<String>,
+    auth: Option<ProviderAuth>,
     passphrase: Option<String>,
 ) -> Result<Status, String> {
     let mut lock = service.inner.lock().await;
     let runtime = load(&mut lock, &app)?;
     ensure_process_lock(runtime, &app)?;
-    let target_changed = options.url != runtime.stored.options.url
-        || options.username != runtime.stored.options.username;
-    let password = server_password.unwrap_or_else(|| {
-        if target_changed {
-            String::new()
-        } else {
-            runtime.stored.server_password.clone()
-        }
-    });
-    let mut next = runtime.stored.clone();
-    if options.enabled {
-        let provider = provider::WebDav::new(&options.url, &options.username, &password)?;
-        if target_changed
-            || !runtime.stored.options.enabled
-            || password != runtime.stored.server_password
-        {
+    configure(
+        runtime,
+        &state_path(&app)?,
+        &machine_key(&app)?,
+        options,
+        auth,
+        passphrase,
+    )
+    .await?;
+    let current = status(runtime);
+    let _ = app.emit("config-sync-state", &current);
+    Ok(current)
+}
+
+async fn configure(
+    runtime: &mut Runtime,
+    path: &Path,
+    key: &[u8],
+    options: Options,
+    replacement: Option<ProviderAuth>,
+    passphrase: Option<String>,
+) -> Result<(), String> {
+    // The webview applies any outstanding journal before this command. Keep
+    // its acknowledgment intact until then, including for direct IPC callers.
+    if path
+        .with_file_name("apply.enc")
+        .try_exists()
+        .map_err(|_| "SYNC_LOCAL_STORAGE")?
+    {
+        return Err("SYNC_RECOVERY_REQUIRED".into());
+    }
+    let target_changed = !options.target.same_vault(&runtime.stored.options.target);
+    let auth = runtime.stored.auth_for(&options.target, replacement);
+    let credentials_changed = auth.secret != runtime.stored.provider_secret
+        || auth.session_token != runtime.stored.session_token
+        || !options
+            .target
+            .same_credential_scope(&runtime.stored.options.target);
+    let linked = runtime.stored.base.is_some() || runtime.stored.pending.is_some();
+    if options.enabled || (target_changed && linked) {
+        let provider = provider_for(&options.target, &auth.secret, auth.session_token.as_deref())?;
+        if target_changed || credentials_changed || !runtime.stored.options.enabled {
             provider.probe().await?;
         }
     }
+    let mut next = runtime.stored.clone();
     if target_changed {
         next.base = None;
         next.pending = None;
@@ -462,19 +525,18 @@ pub async fn config_sync_configure(
         })
         .filter(|s| !s.is_empty());
     next.options = options;
-    next.server_password = password;
+    next.provider_secret = auth.secret;
+    next.session_token = auth.session_token;
     next.passphrase = if next.options.remember_passphrase {
         phrase.clone()
     } else {
         None
     };
-    write_state(&state_path(&app)?, &next, &machine_key(&app)?)?;
+    write_state(path, &next, key)?;
     runtime.stored = next;
     runtime.passphrase = phrase;
     runtime.plan = None;
-    let current = status(runtime);
-    let _ = app.emit("config-sync-state", &current);
-    Ok(current)
+    Ok(())
 }
 
 #[tauri::command]
@@ -488,10 +550,20 @@ pub async fn config_sync_prepare(
     if !runtime.stored.options.enabled {
         return Err("SYNC_DISABLED".into());
     }
+    let provider = runtime.stored.provider()?;
+    prepare(runtime, provider.as_ref(), &machine_key(&app)?, records).await
+}
+
+async fn prepare(
+    runtime: &mut Runtime,
+    provider: &dyn ObjectStore,
+    key: &[u8],
+    records: Records,
+) -> Result<Preview, String> {
     let phrase = runtime.passphrase.clone().ok_or("SYNC_LOCKED")?;
-    let key = machine_key(&app)?;
-    let mut local = local_plain(&records, &key, runtime.stored.options.credentials)?;
-    let file = dav(runtime)?.read(FILE).await?;
+    runtime.plan = None;
+    let mut local = local_plain(&records, key, runtime.stored.options.credentials)?;
+    let file = provider.read(FILE).await?;
     let (remote, etag) = if let Some(file) = file {
         let remote = tokio::task::spawn_blocking(move || crypto::decrypt(&phrase, &file.body))
             .await
@@ -574,7 +646,7 @@ pub async fn config_sync_prepare(
         snapshot: for_device(
             &candidate,
             &records,
-            &key,
+            key,
             runtime.stored.options.credentials,
         )?,
         conflicts,
@@ -600,6 +672,28 @@ pub async fn config_sync_commit(
 ) -> Result<ApplyBatch, String> {
     let mut lock = service.inner.lock().await;
     let runtime = load(&mut lock, &app)?;
+    let provider = runtime.stored.provider()?;
+    commit(
+        runtime,
+        provider.as_ref(),
+        &state_path(&app)?,
+        &machine_key(&app)?,
+        &plan_id,
+        records,
+        &choices,
+    )
+    .await
+}
+
+async fn commit(
+    runtime: &mut Runtime,
+    provider: &dyn ObjectStore,
+    path: &Path,
+    key: &[u8],
+    plan_id: &str,
+    records: Records,
+    choices: &BTreeMap<String, Choice>,
+) -> Result<ApplyBatch, String> {
     let plan = runtime
         .plan
         .as_ref()
@@ -612,21 +706,19 @@ pub async fn config_sync_commit(
         runtime.stored.base.as_ref(),
         &plan.local,
         &plan.remote,
-        &choices,
+        choices,
     );
     if !conflicts.is_empty() {
         return Err("SYNC_CONFLICT".into());
     }
     model::validate(&candidate)?;
-    let key = machine_key(&app)?;
     // Prepare every local secret before publishing; no partial credential restore.
     let mut local = for_device(
         &candidate,
         &records,
-        &key,
+        key,
         runtime.stored.options.credentials,
     )?;
-    let provider = dav(runtime)?;
     // Revalidate even a download-only plan: choices cannot target an obsolete revision.
     let current = provider.read(FILE).await?;
     if current.as_ref().map(|f| f.etag.as_str()) != plan.etag.as_deref() {
@@ -657,7 +749,7 @@ pub async fn config_sync_commit(
         id: id.clone(),
         snapshot: candidate,
     });
-    write_state(&state_path(&app)?, &next, &key)?;
+    write_state(path, &next, key)?;
     runtime.stored = next;
     runtime.plan = None;
     Ok(ApplyBatch {
@@ -674,6 +766,12 @@ pub async fn config_sync_ack(
 ) -> Result<(), String> {
     let mut lock = service.inner.lock().await;
     let runtime = load(&mut lock, &app)?;
+    acknowledge(runtime, &state_path(&app)?, &machine_key(&app)?, id)?;
+    let _ = app.emit("config-sync-state", status(runtime));
+    Ok(())
+}
+
+fn acknowledge(runtime: &mut Runtime, path: &Path, key: &[u8], id: String) -> Result<(), String> {
     if runtime.stored.last_applied_id.as_ref() == Some(&id) {
         return Ok(());
     }
@@ -687,9 +785,8 @@ pub async fn config_sync_ack(
     next.base = Some(pending.snapshot.clone());
     next.pending = None;
     next.last_applied_id = Some(id);
-    write_state(&state_path(&app)?, &next, &machine_key(&app)?)?;
+    write_state(path, &next, key)?;
     runtime.stored = next;
-    let _ = app.emit("config-sync-state", status(runtime));
     Ok(())
 }
 
@@ -697,6 +794,132 @@ pub async fn config_sync_ack(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn upgrading_an_encrypted_webdav_state_preserves_pending_and_acknowledged_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.enc");
+        let key = [7; 32];
+        let base = json!({"version":1,"vaultId":"old","revision":7,"records":{model::ROOT:{"name":"All Connections"}},"tombstones":[]});
+        let legacy = json!({
+            "options":{"enabled":true,"paused":true,"url":"https://dav.example/team/","username":"owner",
+                       "credentials":true,"rememberPassphrase":true},
+            "serverPassword":"dav-password","passphrase":"original phrase","base":base,
+            "pending":{"id":"next","snapshot":base},"lastAppliedId":"applied"
+        });
+        let sealed = crate::commands::seal_with_key(&key, &legacy.to_string(), STATE_AAD).unwrap();
+        std::fs::write(&path, &sealed).unwrap();
+        let stored = read_state(&path, &key).unwrap();
+        assert!(
+            matches!(&stored.options.target, Target::WebDav {url, username} if url=="https://dav.example/team/" && username=="owner")
+        );
+        let options = stored.options.clone();
+        let mut rt = Runtime {
+            passphrase: stored.passphrase.clone(),
+            stored,
+            plan: None,
+            process_lock: None,
+        };
+        // A journal must be recovered against the old ID before any config write.
+        let journal = path.with_file_name("apply.enc");
+        std::fs::write(&journal, b"pending").unwrap();
+        assert_eq!(
+            configure(&mut rt, &path, &key, options.clone(), None, None)
+                .await
+                .unwrap_err(),
+            "SYNC_RECOVERY_REQUIRED"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), sealed);
+        std::fs::remove_file(journal).unwrap();
+        configure(&mut rt, &path, &key, options, None, None)
+            .await
+            .unwrap();
+        let loaded = read_state(&path, &key).unwrap();
+        assert!(loaded.options.enabled && loaded.options.paused && loaded.options.credentials);
+        assert_eq!(loaded.provider_secret, "dav-password");
+        assert_eq!(loaded.passphrase.as_deref(), Some("original phrase"));
+        assert_eq!(loaded.last_applied_id.as_deref(), Some("applied"));
+        assert_eq!(serde_json::to_value(loaded.base).unwrap(), base);
+        assert_eq!(loaded.pending.unwrap().id, "next");
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("dav-password"));
+        let mut unsupported = legacy;
+        unsupported["options"]["target"] = json!({"kind":"unknown"});
+        assert!(serde_json::from_value::<Stored>(unsupported).is_err());
+    }
+
+    #[test]
+    fn rotating_keys_preserves_vault_identity_and_never_sends_secrets_to_another_endpoint() {
+        use settings::{Addressing, S3Target};
+        let s3 = S3Target {
+            endpoint: "https://objects.example".into(),
+            region: "test".into(),
+            bucket: "one".into(),
+            prefix: "config".into(),
+            addressing: Addressing::Path,
+            access_key_id: "original".into(),
+        };
+        let target = Target::S3(s3.clone());
+        let stored = Stored {
+            options: Options {
+                target: target.clone(),
+                ..Default::default()
+            },
+            provider_secret: "local-secret".into(),
+            session_token: Some("token".into()),
+            ..Default::default()
+        };
+        let rotated = Target::S3(S3Target {
+            access_key_id: "rotated".into(),
+            ..s3.clone()
+        });
+        assert!(target.same_vault(&rotated));
+        for different_identity in [
+            rotated,
+            Target::S3(S3Target {
+                endpoint: "https://other.example".into(),
+                ..s3.clone()
+            }),
+            Target::default(),
+        ] {
+            let auth = stored.auth_for(&different_identity, None);
+            assert!(auth.secret.is_empty() && auth.session_token.is_none());
+        }
+        let prefix = Target::S3(S3Target {
+            prefix: "other".into(),
+            ..s3.clone()
+        });
+        assert!(!target.same_vault(&prefix));
+        assert_eq!(
+            stored.auth_for(&prefix, None).session_token.as_deref(),
+            Some("token")
+        );
+        let other_bucket = Target::S3(S3Target {
+            bucket: "two".into(),
+            ..s3.clone()
+        });
+        assert!(!target.same_vault(&other_bucket));
+        let replacement = ProviderAuth {
+            secret: "new local secret".into(),
+            session_token: None,
+        };
+        assert!(stored
+            .auth_for(&target, Some(replacement))
+            .session_token
+            .is_none());
+        let rt = Runtime {
+            stored,
+            passphrase: None,
+            plan: None,
+            process_lock: None,
+        };
+        let status = serde_json::to_value(status(&rt)).unwrap();
+        assert_eq!(status["hasSessionToken"], true);
+        assert_eq!(status["options"]["target"]["kind"], "s3");
+        assert!(!status.to_string().contains("local-secret"));
+        assert!(status.get("sessionToken").is_none());
+    }
     #[test]
     fn separate_process_handles_cannot_share_sync_state() {
         let dir = tempfile::tempdir().unwrap();
@@ -712,7 +935,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("state.enc");
         let stored = Stored {
-            server_password: "webdav-secret".into(),
+            provider_secret: "webdav-secret".into(),
             passphrase: Some("vault-secret".into()),
             ..Default::default()
         };

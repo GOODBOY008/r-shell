@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isTauri } from '@tauri-apps/api/core';
 import { Cloud, LockKeyhole, RefreshCw } from 'lucide-react';
@@ -7,38 +7,55 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Checkbox } from '../ui/checkbox';
 import { configureSync, getSyncView, subscribeSync, testSyncConnection } from '@/lib/config-sync/controller';
-import { DEFAULT_SYNC_OPTIONS, type SyncOptions } from '@/lib/config-sync/types';
+import { DEFAULT_S3_TARGET, DEFAULT_SYNC_OPTIONS, sameCredentialScope, type SyncOptions, type SyncTarget } from '@/lib/config-sync/types';
+import { CloudSyncTargetFields } from './cloud-sync-target-fields';
 import { settingMatchesQuery } from './shared';
 
 export function CloudSyncSection({ query, onSync }: { query: string; onSync: () => void }) {
   const { t, i18n } = useTranslation();
   const state = useSyncExternalStore(subscribeSync, getSyncView, getSyncView);
   const [draft, setOptions] = useState<SyncOptions | null>(null);
-  const options = draft ?? (state.status?.options.url ? state.status.options : DEFAULT_SYNC_OPTIONS);
+  const saved = state.status?.options;
+  const options = draft ?? saved ?? DEFAULT_SYNC_OPTIONS;
+  const target = options.target;
+  const form = useRef<HTMLFormElement>(null);
+  const [token, setToken] = useState('');
   const [password, setPassword] = useState('');
   const [passphrase, setPassphrase] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
-  const [urlInvalid, setUrlInvalid] = useState(false);
+  const hasSavedAuth = !!saved && sameCredentialScope(saved.target, target);
+  const changeTarget = (next: SyncTarget) => {
+    if (!sameCredentialScope(target, next)) { setPassword(''); setToken(''); }
+    setPassphrase(''); setError(null); setMessage(''); setOptions({ ...options, target: next });
+  };
   const translate = t as unknown as (key: string) => string;
   const errorMessage = (code: string) => {
     const key = `cloudSync.errors.${code.split(':')[0]}`;
     return translate(i18n.exists(key) ? key : 'cloudSync.errors.SYNC_UNKNOWN');
   };
-  if (!settingMatchesQuery(query, [t('cloudSync.title'), t('cloudSync.description'), 'cloud webdav sync synchronization'])) return null;
-  const perform = async (test: boolean) => {
+  if (!settingMatchesQuery(query, [t('cloudSync.title'), t('cloudSync.description'), 'cloud webdav s3 minio r2 sync synchronization'])) return null;
+  const perform = async (action: 'save' | 'test' | 'sync') => {
+    if (!form.current?.reportValidity()) return;
     setWorking(true); setMessage(''); setError(null);
+    const auth = password || token ? { secret: password, sessionToken: token || undefined } : undefined;
     try {
-      if (test) { await testSyncConnection(options.url, options.username, password); setMessage(t('cloudSync.tested')); }
-      else {
-        await configureSync(options, password || undefined, passphrase || undefined);
-        setPassword(''); setPassphrase(''); setOptions(null); setMessage(t('cloudSync.saved'));
+      if (action === 'test') {
+        await testSyncConnection(target, auth);
+        setMessage(t('cloudSync.tested'));
+      } else {
+        if (action === 'save' || draft || auth || passphrase) {
+          await configureSync(options, auth, passphrase || undefined);
+          setPassword(''); setToken(''); setPassphrase(''); setOptions(null);
+          setMessage(t('cloudSync.saved'));
+        }
+        if (action === 'sync') onSync();
       }
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { setWorking(false); }
   };
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void perform(false); };
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void perform('save'); };
   const disabled = working || state.busy || !isTauri();
   const visibleError = error ?? state.error;
   return (
@@ -54,27 +71,26 @@ export function CloudSyncSection({ query, onSync }: { query: string; onSync: () 
         <p className="text-muted-foreground">{t('cloudSync.scope')}</p>
         <p className="text-muted-foreground">{t('cloudSync.localOnly')}</p>
       </div>
-      <form onSubmit={submit} aria-labelledby="cloud-sync-heading" className="space-y-4">
+      <form ref={form} onSubmit={submit} aria-labelledby="cloud-sync-heading" className="space-y-4">
         <fieldset disabled={disabled} className="space-y-4 min-w-0">
         <legend className="sr-only">{t('cloudSync.title')}</legend>
         <div className="flex gap-3 items-center"><Checkbox id="cloud-sync-enabled" checked={options.enabled}
           onCheckedChange={checked => setOptions({ ...options, enabled: checked === true })} />
           <Label htmlFor="cloud-sync-enabled">{t('cloudSync.enable')}</Label></div>
-        <div className="space-y-1.5"><Label htmlFor="cloud-sync-url">{t('cloudSync.webdavUrl')}</Label>
-          <p id="cloud-sync-url-hint" className="text-xs text-muted-foreground">{t('cloudSync.urlHint')}</p>
-          <Input id="cloud-sync-url" name="webdav-url" type="url" required={options.enabled} pattern="https://.+"
-            value={options.url} onChange={event => { setOptions({ ...options, url: event.target.value }); if (event.target.validity.valid) setUrlInvalid(false); }}
-            onBlur={event => setUrlInvalid(!event.target.validity.valid)} onInvalid={() => setUrlInvalid(true)} aria-invalid={urlInvalid}
-            autoCapitalize="none" autoCorrect="off" spellCheck={false} aria-describedby={`cloud-sync-url-hint${urlInvalid ? ' cloud-sync-url-error' : ''}`} />
-          {urlInvalid && <p id="cloud-sync-url-error" className="text-sm text-destructive">{t('cloudSync.errors.SYNC_URL')}</p>}</div>
-        <div className="space-y-1.5"><Label htmlFor="cloud-sync-username">{t('cloudSync.username')}</Label>
-          <Input id="cloud-sync-username" name="webdav-username" autoComplete="section-webdav username"
-            value={options.username} onChange={event => setOptions({ ...options, username: event.target.value })}
-            autoCapitalize="none" autoCorrect="off" spellCheck={false} /></div>
-        <div className="space-y-1.5"><Label htmlFor="cloud-sync-password">{t('cloudSync.serverPassword')}</Label>
-          <Input id="cloud-sync-password" name="webdav-password" type="password" autoComplete="section-webdav current-password"
-            value={password} onChange={event => setPassword(event.target.value)} aria-describedby="cloud-sync-password-hint" />
-          <p id="cloud-sync-password-hint" className="text-xs text-muted-foreground">{t('cloudSync.keepPassword')}</p></div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cloud-sync-provider">{t('cloudSync.provider')}</Label>
+          <select id="cloud-sync-provider" className="w-full min-w-0 rounded-md border border-input bg-input-background px-2 py-1.5 text-sm focus-visible:outline-ring"
+            value={target.kind} onChange={event => {
+              const kind = event.target.value;
+              changeTarget(saved?.target.kind === kind ? saved.target : kind === 's3' ? DEFAULT_S3_TARGET : DEFAULT_SYNC_OPTIONS.target);
+            }}>
+            <option value="webdav">WebDAV</option>
+            <option value="s3">{t('cloudSync.s3.name')}</option>
+          </select>
+        </div>
+        <CloudSyncTargetFields key={target.kind} target={target} changeTarget={changeTarget} enabled={options.enabled}
+          secret={password} setSecret={setPassword} token={token} setToken={setToken}
+          savedSecret={hasSavedAuth && !!state.status?.hasSecret} savedToken={hasSavedAuth && !!state.status?.hasSessionToken} />
         <div className="space-y-1.5"><Label htmlFor="cloud-sync-passphrase">{t('cloudSync.syncPassphrase')}</Label>
           <p id="cloud-sync-passphrase-hint" className="text-xs text-muted-foreground">{t('cloudSync.phraseHint')}</p>
           <Input id="cloud-sync-passphrase" name="sync-passphrase" type="password"
@@ -94,7 +110,7 @@ export function CloudSyncSection({ query, onSync }: { query: string; onSync: () 
         </div>
         <div className="flex flex-wrap gap-2">
           <Button type="submit" disabled={disabled}>{t('cloudSync.save')}</Button>
-          <Button type="button" variant="outline" disabled={disabled} onClick={() => { void perform(true); }}>{t('cloudSync.test')}</Button>
+          <Button type="button" variant="outline" disabled={disabled} onClick={() => { void perform('test'); }}>{t('cloudSync.test')}</Button>
         </div>
         <p className="text-xs text-muted-foreground">{t('cloudSync.saveHint')}</p>
         </fieldset>
@@ -104,7 +120,7 @@ export function CloudSyncSection({ query, onSync }: { query: string; onSync: () 
       <div className="rounded-lg border p-4 space-y-3">
         <p className="text-sm font-medium">{translate(`cloudSync.status.${state.phase}`)}</p>
         <p className="text-xs text-muted-foreground">{t('cloudSync.lastSuccess', { time: state.lastSuccess ? new Date(state.lastSuccess).toLocaleString() : t('cloudSync.never') })}</p>
-        <Button type="button" variant="outline" disabled={disabled || !state.status?.options.enabled} onClick={onSync}>
+        <Button type="button" variant="outline" disabled={disabled || !options.enabled} onClick={() => { void perform('sync'); }}>
           <RefreshCw className="size-4 mr-2" aria-hidden="true" />{state.preview ? t('cloudSync.review') : t('cloudSync.syncNow')}
         </Button>
       </div>

@@ -1,11 +1,16 @@
 # Cloud configuration synchronization
 
 Open **Settings → Cloud sync** to synchronize configuration between macOS,
-Windows and Linux through a WebDAV directory you control.
+Windows and Linux. Choose one storage provider per device and point each
+device at the same directory or bucket and object prefix.
 
-1. Supply an existing HTTPS directory, username and WebDAV application password.
-   **Test connection** creates and deletes a randomly named temporary object and
-   verifies that the server really rejects stale conditional writes.
+1. For **WebDAV**, enter an existing HTTPS directory, username and application
+   password. For **S3-compatible storage**, enter the HTTPS service endpoint,
+   signing region, existing bucket, optional object prefix and access keys.
+   Temporary credentials also require their session token. **Test connection**
+   uses a random temporary object at the selected location. It checks that
+   conditional creation and updates work and that stale writes are rejected,
+   then deletes the probe.
 2. Set a separate encryption passphrase for a new space, or enter the existing
    passphrase when joining another device. Use a strong passphrase and keep a
    recovery copy yourself: the storage provider cannot recover it.
@@ -18,12 +23,40 @@ Windows and Linux through a WebDAV directory you control.
    definitions, rather than leaving dangling connections or monitor targets.
 
 Cloud settings have their own explicit Save button. The sync/review action
-saves the ordinary Settings draft before closing it, so an older settings form
-cannot later overwrite incoming preferences. Other open configuration dialogs
+saves the active storage draft and ordinary settings before opening the preview.
+Other open configuration dialogs
 defer synchronization. Automatic sync runs only while the application is open:
 after local edits settle for 10 seconds, every five minutes, and after returning
 to the app or regaining network access. Pausing automatic sync keeps manual sync
 available. Changes made while offline remain local until the next successful run.
+
+## S3 setup
+
+Use an HTTPS endpoint with a hostname and optional port. Path addressing puts
+the bucket in the request path. Virtual hosted addressing prepends the bucket
+to the hostname and requires matching DNS and TLS certificates. A prefix of
+`r-shell` stores the vault at `r-shell/r-shell-sync-v1.enc`. An empty prefix
+stores it at the bucket root.
+
+| Service | Endpoint and region | Verification |
+| --- | --- | --- |
+| MinIO | Your service endpoint and configured region, typically `us-east-1`. Use path addressing with a single service hostname. | Two-device integration test using a pinned server build. |
+| Amazon S3 general purpose bucket | Regional S3 endpoint, e.g. `https://s3.us-east-1.amazonaws.com` and `us-east-1`. | Opt-in test against your disposable bucket. [Conditional writes](https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-writes.html) |
+| Cloudflare R2 | Account S3 endpoint, e.g. `https://<account-id>.r2.cloudflarestorage.com`, region `auto` and path addressing. | Opt-in test against your disposable bucket. [R2 S3 API](https://developers.cloudflare.com/r2/api/s3/api/) |
+
+The access key needs object read/write access to the vault and read/write/delete
+access to `.rshell-probe-*` under its prefix. On Amazon S3, reading a missing
+object can return `403` without `s3:ListBucket`. If the first sync reports an
+access error, check the bucket permissions. Only an explicit `NoSuchKey`
+response identifies an empty location. [AWS GetObject permissions](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
+
+Each device stores its service credentials encrypted with its own machine key.
+To rotate S3 credentials, enter the new access key ID and secret, plus the new
+session token if applicable. Entering a new secret with an empty token clears
+the previous token. Rotation on the same target preserves the sync baseline.
+Existing WebDAV installations retain their settings, passphrase and sync
+history on upgrade. Switching providers, buckets or prefixes starts a new
+first-merge review after recovering any interrupted local apply.
 
 ## Included configuration
 
@@ -51,8 +84,8 @@ The remote `r-shell-sync-v1.enc` file contains a versioned full snapshot encrypt
 and authenticated using Argon2id (64 MiB, three passes, one lane) and AES-256-GCM
 with fresh salt/nonce and a sync-specific authentication context. Host addresses,
 commands and notes are encrypted too. Every device re-seals downloaded secrets
-under its own existing R-Shell machine key. Neither that key nor the WebDAV
-credentials are synchronized.
+under its own existing R-Shell machine key. Storage credentials stay on the
+device alongside the machine-key-encrypted sync state.
 
 Stable record IDs, a last-applied baseline, and deletion tombstones support
 three-way merges without depending on device clocks. Tombstones are retained in
@@ -63,6 +96,10 @@ return weak ETags immediately after a write; the client retries briefly and stil
 requires a real strong validator, never converts a weak one. See the
 [HTTP conditional request specification](https://www.rfc-editor.org/rfc/rfc9110.html#section-13.1.1)
 and [Apache's validator implementation](https://github.com/apache/httpd/blob/2.4.x/modules/http/http_etag.c).
+
+S3 requests use AWS Signature Version 4. A conflicting conditional write
+invalidates the preview. If the upload response is lost, the next sync reads
+the remote revision again before applying changes or advancing local history.
 
 The application-data directory's `config-sync/` contains machine-key-encrypted
 state, the latest pre-apply backup, and an interrupted-apply journal when needed.
@@ -99,3 +136,21 @@ cargo test --lib config_sync::provider::tests::real_webdav_server -- --ignored
 Only test builds allow plain HTTP to `127.0.0.1` for an isolated local fixture;
 production requires HTTPS and verifies certificates. Backend commands are
 restricted to the main-window capability, never file-viewer popups.
+
+Run `bash scripts/test-s3-minio.sh` from the repository root for the same
+MinIO test as Linux CI. It builds a checksum-pinned MinIO release with Go,
+starts it on loopback, creates a temporary bucket and cleans up on exit.
+Set `RSHELL_TEST_MINIO_BINARY` to use an existing copy of the pinned binary.
+
+To run the same test on **AWS S3 or Cloudflare R2**, configure
+`RSHELL_TEST_S3_ENDPOINT`, `RSHELL_TEST_S3_REGION`, `RSHELL_TEST_S3_BUCKET`,
+`RSHELL_TEST_S3_ACCESS_KEY_ID` and `RSHELL_TEST_S3_SECRET_ACCESS_KEY` in the
+environment. Optional variables are `RSHELL_TEST_S3_PREFIX`,
+`RSHELL_TEST_S3_SESSION_TOKEN` and `RSHELL_TEST_S3_ADDRESSING` (`path` or
+`virtualHosted`). Use a dedicated test bucket with delete permission for the
+test prefix. Each run creates its own randomly named subdirectory.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --locked --lib \
+  config_sync::s3_integration::two_devices_sync_through_real_s3 -- --ignored --exact
+```

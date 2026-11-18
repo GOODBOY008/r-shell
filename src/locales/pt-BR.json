@@ -2506,7 +2506,7 @@
   },
   "cloudSync": {
     "title": "Sincronização na nuvem",
-    "description": "Sincronize sua configuração entre macOS, Windows e Linux usando seu armazenamento WebDAV.",
+    "description": "Sincronize sua configuração entre macOS, Windows e Linux usando seu próprio armazenamento.",
     "scope": "Inclui conexões, pastas, perfis, trechos de comandos, preferências, atalhos, definições de monitoramento e painéis.",
     "localOnly": "Chaves privadas, caminhos locais, hosts confiáveis, sessões ativas e histórico de coleta ficam neste dispositivo. Os comandos de monitoramento recebidos precisam ser ativados aqui.",
     "webdavUrl": "URL do diretório WebDAV",
@@ -2524,7 +2524,7 @@
     "save": "Salvar configurações de sincronização",
     "saveHint": "Estas configurações são salvas separadamente. A sincronização automática funciona enquanto o R-Shell está aberto; a primeira mesclagem sempre exige revisão.",
     "test": "Testar conexão",
-    "tested": "O diretório oferece suporte à sincronização simultânea segura.",
+    "tested": "O serviço permite gravações simultâneas seguras.",
     "saved": "Configurações de sincronização salvas.",
     "syncNow": "Salvar configurações e sincronizar agora",
     "review": "Salvar configurações e revisar sincronização",
@@ -2591,7 +2591,7 @@
       "SYNC_LOCAL_STORAGE": "Não foi possível ler ou salvar parte da configuração local. A sincronização foi interrompida para preservar seus dados.",
       "SYNC_LOCAL_SECRET": "Não foi possível abrir uma credencial local salva. Desbloqueie o cofre de chaves do sistema ou salve a credencial novamente.",
       "SYNC_REFERENCES": "Uma referência de pasta, perfil ou monitoramento está ausente ou inconsistente. Corrija a referência antes de sincronizar.",
-      "SYNC_REMOTE_MISSING": "O arquivo anteriormente vinculado na nuvem está ausente. Restaure-o ou selecione outro diretório; ele não será recriado automaticamente.",
+      "SYNC_REMOTE_MISSING": "O arquivo da nuvem vinculado anteriormente está ausente. Restaure-o ou escolha outro destino para sincronização.",
       "SYNC_REMOTE_CHANGED": "O espaço na nuvem foi substituído ou revertido. Restaure o espaço esperado ou vincule-o novamente de forma explícita.",
       "SYNC_STALE": "A configuração mudou durante a sincronização. Atualize a prévia e revise as alterações mais recentes.",
       "SYNC_CONFLICT": "Escolha uma versão para cada conflito antes de aplicar as alterações.",
@@ -2603,7 +2603,16 @@
       "SYNC_BUSY": "Aguarde a conclusão da sincronização atual.",
       "SYNC_DISABLED": "Ative a sincronização na nuvem primeiro.",
       "SYNC_UNKNOWN": "Não foi possível concluir a sincronização. Sua configuração local foi mantida.",
-      "SYNC_KEY_BINDING": "Esta conexão sincronizada exige uma chave privada local. Edite a conexão e selecione as chaves do destino e dos hosts de salto antes de conectar."
+      "SYNC_KEY_BINDING": "Esta conexão sincronizada exige uma chave privada local. Edite a conexão e selecione as chaves do destino e dos hosts de salto antes de conectar.",
+      "SYNC_S3_ENDPOINT": "Informe um endereço HTTPS com apenas o nome do host e, se necessário, a porta.",
+      "SYNC_S3_REGION": "Verifique a região e o endpoint regional. O Cloudflare R2 usa auto.",
+      "SYNC_S3_BUCKET_NAME": "Use um nome de bucket de 3 a 63 caracteres com letras minúsculas, números, pontos ou hífens.",
+      "SYNC_S3_BUCKET_MISSING": "Este bucket não existe no endpoint configurado.",
+      "SYNC_S3_PREFIX": "Use um prefixo mais curto, sem caracteres de controle nem segmentos de caminho com um ou dois pontos.",
+      "SYNC_S3_CREDENTIALS": "Informe o ID e a chave de acesso secreta. Credenciais temporárias também exigem o token de sessão.",
+      "SYNC_S3_ACCESS": "Verifique as credenciais S3 e as permissões do bucket. Na AWS, pode ser necessário ter s3:ListBucket para identificar um objeto ausente.",
+      "SYNC_S3_RESPONSE": "O serviço de armazenamento rejeitou a solicitação. Verifique o endpoint, a política do bucket e a compatibilidade com S3.",
+      "SYNC_WRITE_UNCERTAIN": "Não foi possível confirmar o envio. Atualize a prévia para comparar com a cópia na nuvem."
     },
     "fields": {
       "defaultProtocol": "Protocolo padrão",
@@ -2636,6 +2645,23 @@
       "preference": "Preferência de idioma"
     },
     "openReview": "Revisar alterações",
-    "reviewTitle": "Revisar sincronização"
+    "reviewTitle": "Revisar sincronização",
+    "provider": "Serviço de armazenamento",
+    "s3": {
+      "name": "Armazenamento compatível com S3",
+      "endpoint": "Endpoint HTTPS",
+      "endpointHint": "Use o endereço do serviço, por exemplo https://s3.us-east-1.amazonaws.com. Informe o bucket separadamente.",
+      "region": "Região",
+      "bucket": "Bucket",
+      "prefix": "Prefixo dos objetos (opcional)",
+      "addressing": "Endereçamento do bucket",
+      "path": "Por caminho",
+      "virtualHosted": "Por host virtual",
+      "accessKey": "ID da chave de acesso",
+      "secretKey": "Chave de acesso secreta",
+      "sessionToken": "Token de sessão (opcional)",
+      "keepSecret": "Deixe a chave secreta em branco para manter as credenciais salvas. Para substituí-las, informe a nova chave e o token de sessão, se necessário.",
+      "savedToken": "As credenciais salvas incluem um token de sessão. Ao informar uma nova chave secreta, informe também o token correspondente."
+    }
   }
 }

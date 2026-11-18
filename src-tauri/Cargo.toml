@@ -55,6 +55,10 @@ aes-gcm = "0.11"
 argon2 = "0.6"
 # Honor the OS trust store for managed WebDAV/NAS certificates.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+aws-credential-types = "1"
+aws-sigv4 = { version = "1", default-features = false, features = ["sign-http", "http1"] }
+percent-encoding = "2"
+quick-xml = { version = "0.42", features = ["serialize"] }
 tempfile = "3"
 rand = "0.10"
 socket2 = "0.6"

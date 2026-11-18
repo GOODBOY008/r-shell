@@ -2540,7 +2540,7 @@
   },
   "cloudSync": {
     "title": "Synchronizacja w chmurze",
-    "description": "Synchronizuj konfigurację między macOS, Windows i Linux za pomocą własnej usługi WebDAV.",
+    "description": "Synchronizuj konfigurację między macOS, Windows i Linuksem przy użyciu własnej usługi przechowywania danych.",
     "scope": "Obejmuje połączenia, foldery, profile, fragmenty poleceń, preferencje, skróty, definicje monitorów i pulpity.",
     "localOnly": "Klucze prywatne, ścieżki lokalne, zaufane hosty, aktywne sesje i historia pomiarów pozostają na urządzeniu. Otrzymane polecenia monitorowania wymagają lokalnego włączenia.",
     "webdavUrl": "Adres katalogu WebDAV",
@@ -2558,7 +2558,7 @@
     "save": "Zapisz ustawienia synchronizacji",
     "saveHint": "Te ustawienia są zapisywane oddzielnie. Automatyczna synchronizacja działa, gdy R-Shell jest otwarty. Pierwsze scalenie wymaga zatwierdzenia.",
     "test": "Testuj połączenie",
-    "tested": "Katalog obsługuje bezpieczną synchronizację równoległą.",
+    "tested": "Usługa obsługuje bezpieczny zapis równoczesny.",
     "saved": "Zapisano ustawienia synchronizacji.",
     "syncNow": "Zapisz ustawienia i synchronizuj",
     "review": "Zapisz ustawienia i przejrzyj zmiany",
@@ -2626,7 +2626,7 @@
       "SYNC_LOCAL_STORAGE": "Nie można odczytać lub zapisać części konfiguracji lokalnej. Synchronizację zatrzymano, aby zachować dane.",
       "SYNC_LOCAL_SECRET": "Nie można odszyfrować lokalnych danych uwierzytelniających. Odblokuj systemowy magazyn kluczy lub zapisz dane ponownie.",
       "SYNC_REFERENCES": "Brakujące lub niespójne odwołanie do folderu, profilu lub monitora. Napraw je przed synchronizacją.",
-      "SYNC_REMOTE_MISSING": "Powiązany plik w chmurze zniknął. Przywróć go lub wybierz nowy katalog; nie zostanie odtworzony automatycznie.",
+      "SYNC_REMOTE_MISSING": "Brakuje wcześniej powiązanego pliku w chmurze. Przywróć go lub wybierz inne miejsce synchronizacji.",
       "SYNC_REMOTE_CHANGED": "Przestrzeń w chmurze została zastąpiona lub cofnięta. Przywróć właściwą przestrzeń lub ponownie ją połącz.",
       "SYNC_STALE": "Konfiguracja zmieniła się podczas synchronizacji. Odśwież podgląd i przejrzyj nowe zmiany.",
       "SYNC_CONFLICT": "Wybierz wersję dla każdego konfliktu przed zastosowaniem zmian.",
@@ -2638,7 +2638,16 @@
       "SYNC_BUSY": "Poczekaj na zakończenie bieżącej synchronizacji.",
       "SYNC_DISABLED": "Najpierw włącz synchronizację w chmurze.",
       "SYNC_UNKNOWN": "Nie udało się zakończyć synchronizacji. Lokalna konfiguracja została zachowana.",
-      "SYNC_KEY_BINDING": "To zsynchronizowane połączenie wymaga lokalnego klucza prywatnego. Edytuj połączenie i wybierz klucze celu oraz hostów pośrednich przed połączeniem."
+      "SYNC_KEY_BINDING": "To zsynchronizowane połączenie wymaga lokalnego klucza prywatnego. Edytuj połączenie i wybierz klucze celu oraz hostów pośrednich przed połączeniem.",
+      "SYNC_S3_ENDPOINT": "Podaj adres HTTPS usługi zawierający tylko nazwę hosta i opcjonalny port.",
+      "SYNC_S3_REGION": "Sprawdź region i jego adres usługi. W Cloudflare R2 region to auto.",
+      "SYNC_S3_BUCKET_NAME": "Nazwa zasobnika musi zawierać od 3 do 63 małych liter, cyfr, kropek lub łączników.",
+      "SYNC_S3_BUCKET_MISSING": "Pod wskazanym adresem nie ma takiego zasobnika.",
+      "SYNC_S3_PREFIX": "Skróć prefiks i usuń znaki sterujące oraz segmenty ścieżki złożone z jednej lub dwóch kropek.",
+      "SYNC_S3_CREDENTIALS": "Podaj identyfikator klucza i tajny klucz dostępu. Tymczasowe dane wymagają również tokena sesji.",
+      "SYNC_S3_ACCESS": "Sprawdź dane dostępowe S3 i uprawnienia do zasobnika. W AWS do wykrycia braku obiektu może być potrzebne uprawnienie s3:ListBucket.",
+      "SYNC_S3_RESPONSE": "Magazyn obiektów odrzucił żądanie. Sprawdź adres usługi, zasady zasobnika i zgodność z S3.",
+      "SYNC_WRITE_UNCERTAIN": "Nie można ustalić wyniku zapisu. Odśwież podgląd, aby porównać dane z kopią w chmurze."
     },
     "fields": {
       "defaultProtocol": "Domyślny protokół",
@@ -2671,6 +2680,23 @@
       "preference": "Preferowany język"
     },
     "openReview": "Przejrzyj zmiany",
-    "reviewTitle": "Przejrzyj synchronizację"
+    "reviewTitle": "Przejrzyj synchronizację",
+    "provider": "Usługa przechowywania danych",
+    "s3": {
+      "name": "Magazyn zgodny z S3",
+      "endpoint": "Adres HTTPS usługi",
+      "endpointHint": "Podaj adres usługi, np. https://s3.us-east-1.amazonaws.com. Nazwę zasobnika wpisz osobno.",
+      "region": "Region",
+      "bucket": "Zasobnik",
+      "prefix": "Prefiks obiektów (opcjonalnie)",
+      "addressing": "Adresowanie zasobnika",
+      "path": "W ścieżce",
+      "virtualHosted": "W nazwie hosta",
+      "accessKey": "Identyfikator klucza dostępu",
+      "secretKey": "Tajny klucz dostępu",
+      "sessionToken": "Token sesji (opcjonalnie)",
+      "keepSecret": "Pozostaw pole tajnego klucza puste, aby zachować zapisane dane. Aby je zmienić, podaj nowy klucz i ewentualny token sesji.",
+      "savedToken": "Zapisane dane zawierają token sesji. Wprowadzając nowy tajny klucz, podaj odpowiedni nowy token."
+    }
   }
 }

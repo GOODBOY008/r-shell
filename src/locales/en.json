@@ -2460,7 +2460,7 @@
   },
   "cloudSync": {
     "title": "Cloud sync",
-    "description": "Keep your configuration in sync across macOS, Windows and Linux using your WebDAV storage.",
+    "description": "Sync your configuration across macOS, Windows and Linux using your own storage.",
     "scope": "Connections, folders, profiles, snippets, preferences, shortcuts, monitor definitions and dashboards are included.",
     "localOnly": "Private keys, local paths, trusted hosts, active sessions and collected history stay on this device. Incoming monitor commands need to be enabled here.",
     "webdavUrl": "WebDAV directory URL",
@@ -2478,7 +2478,7 @@
     "save": "Save sync settings",
     "saveHint": "These settings are saved separately. Automatic sync runs while R-Shell is open; the first merge always requires review.",
     "test": "Test connection",
-    "tested": "The directory supports safe concurrent synchronization.",
+    "tested": "The storage service supports safe concurrent writes.",
     "saved": "Sync settings saved.",
     "syncNow": "Save settings and sync now",
     "review": "Save settings and review sync",
@@ -2544,7 +2544,7 @@
       "SYNC_LOCAL_STORAGE": "Some local configuration cannot be read or saved. Synchronization stopped to preserve your data.",
       "SYNC_LOCAL_SECRET": "A local saved credential could not be opened. Unlock the system keychain or save that credential again.",
       "SYNC_REFERENCES": "A folder, profile or monitoring reference is missing or inconsistent. Repair the reference before synchronizing.",
-      "SYNC_REMOTE_MISSING": "The previously linked cloud file is missing. Restore it or select a new directory; it will not be recreated automatically.",
+      "SYNC_REMOTE_MISSING": "The previously linked cloud file is missing. Restore it or choose another sync target.",
       "SYNC_REMOTE_CHANGED": "The cloud space was replaced or rolled back. Restore the expected space or reconnect explicitly.",
       "SYNC_STALE": "Configuration changed while synchronizing. Refresh the preview and review the latest changes.",
       "SYNC_CONFLICT": "Choose a version for every conflict before applying the changes.",
@@ -2556,7 +2556,16 @@
       "SYNC_BUSY": "Wait for the current synchronization to finish.",
       "SYNC_DISABLED": "Enable cloud synchronization first.",
       "SYNC_UNKNOWN": "Synchronization could not finish. Your local configuration has been retained.",
-      "SYNC_KEY_BINDING": "This synchronized connection requires a local private key. Edit the connection and select keys for the target and any jump hosts before connecting."
+      "SYNC_KEY_BINDING": "This synchronized connection requires a local private key. Edit the connection and select keys for the target and any jump hosts before connecting.",
+      "SYNC_S3_ENDPOINT": "Enter an HTTPS service URL with just the hostname and optional port.",
+      "SYNC_S3_REGION": "Check the region and regional endpoint. Cloudflare R2 uses auto.",
+      "SYNC_S3_BUCKET_NAME": "Enter a valid bucket name using 3–63 lowercase letters, digits, dots or hyphens.",
+      "SYNC_S3_BUCKET_MISSING": "This bucket does not exist at the configured endpoint.",
+      "SYNC_S3_PREFIX": "Use a shorter object prefix without control characters or dot path segments.",
+      "SYNC_S3_CREDENTIALS": "Enter an access key ID and its secret access key, including the session token for temporary credentials.",
+      "SYNC_S3_ACCESS": "Check the S3 credentials and bucket permissions. On AWS, detecting a missing object can require s3:ListBucket.",
+      "SYNC_S3_RESPONSE": "The object storage service rejected the request. Check its endpoint, bucket policy and S3 compatibility.",
+      "SYNC_WRITE_UNCERTAIN": "The upload outcome is unknown. Refresh the preview to compare with the cloud copy."
     },
     "fields": {
       "defaultProtocol": "Default protocol",
@@ -2589,6 +2598,23 @@
       "preference": "Language preference"
     },
     "openReview": "Review changes",
-    "reviewTitle": "Review synchronization"
+    "reviewTitle": "Review synchronization",
+    "provider": "Storage provider",
+    "s3": {
+      "name": "S3-compatible storage",
+      "endpoint": "HTTPS endpoint",
+      "endpointHint": "Use the service URL, for example https://s3.us-east-1.amazonaws.com. Enter the bucket separately.",
+      "region": "Region",
+      "bucket": "Bucket",
+      "prefix": "Object prefix (optional)",
+      "addressing": "Bucket addressing",
+      "path": "Path style",
+      "virtualHosted": "Virtual hosted style",
+      "accessKey": "Access key ID",
+      "secretKey": "Secret access key",
+      "sessionToken": "Session token (optional)",
+      "keepSecret": "Leave the secret key blank to keep the saved credentials. To rotate them, enter the new key and its session token if required.",
+      "savedToken": "The saved credentials include a session token. Supply its replacement when entering a new secret key."
+    }
   }
 }
