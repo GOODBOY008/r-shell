@@ -30,7 +30,7 @@ pub(super) async fn available(
     };
     let probe = async {
         let tools = if upload {
-            "command -v tar >/dev/null && command -v gzip >/dev/null && command -v mktemp >/dev/null"
+            "command -v tar >/dev/null && command -v gzip >/dev/null && command -v mktemp >/dev/null && (stat -c %a . >/dev/null 2>&1 || stat -f %Lp . >/dev/null 2>&1)"
         } else {
             "command -v tar >/dev/null && command -v gzip >/dev/null"
         };
@@ -64,7 +64,7 @@ pub(super) async fn available(
     available
 }
 
-// Extract only the locally generated archive into a private sibling, then merge.
+// Extract the locally generated archive into a private directory on the target filesystem.
 // A successful transfer replaces matching files and leaves unrelated files alone.
 // Positional parameters keep recursion and names with whitespace/newlines intact.
 const INSTALL: &str = r#"
@@ -75,7 +75,12 @@ case "$name" in ""|"."|"..") exit 2 ;; esac
 parent=${dest%/*}
 CDPATH= cd -- "${parent:-/}"
 dest=./$name
-stage=$(mktemp -d ./.r-shell-transfer.XXXXXXXX)
+stage=
+if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+    # A shared parent may be read-only even though the selected folder is writable.
+    stage=$(mktemp -d "$dest/.r-shell-transfer.XXXXXXXX" 2>/dev/null) || stage=
+fi
+if [ -z "$stage" ]; then stage=$(mktemp -d ./.r-shell-transfer.XXXXXXXX); fi
 cleanup() {
     rm -rf "$stage" 2>/dev/null || { chmod -R u+rwX "$stage" && rm -rf "$stage"; }
 }
@@ -83,7 +88,13 @@ trap cleanup 0
 trap 'exit 1' HUP INT TERM
 mkdir "$stage/tree" "$stage/modes"
 tar -xzof - -C "$stage"
+if stat -c %a . >/dev/null 2>&1; then
+    stat_option=-c; stat_format=%a
+else
+    stat_option=-f; stat_format=%Lp
+fi
 merge() {
+    if [ "$2" = "$stage" ]; then printf 'Destination name collides with staging: %s\n' "$2" >&2; return 1; fi
     if [ -L "$2" ]; then printf 'Destination is a symbolic link: %s\n' "$2" >&2; return 1; fi
     if [ ! -e "$2" ]; then
         if [ "$3" = install ]; then
@@ -100,7 +111,11 @@ merge() {
             merge "$child" "$2/${child##*/}" "$3" || return 1
         done
     elif [ -f "$1" ] && [ -f "$2" ]; then
-        if [ "$3" = install ]; then mv -f "$1" "$2"; fi
+        if [ "$3" = install ]; then
+            mode=$(stat "$stat_option" "$stat_format" "$2") || return 1
+            case "$mode" in ""|*[!0-7]*) printf 'Invalid file mode for %s\n' "$2" >&2; return 1 ;; esac
+            chmod "$(printf '%03o' "$((0$mode & 0777))")" "$1" && mv -f "$1" "$2"
+        fi
     else
         printf 'Destination has a different file type: %s\n' "$2" >&2
         return 1
@@ -245,6 +260,7 @@ mod tests {
             let dir = source.path().join(name);
             fs::create_dir(&dir)?;
             fs::write(dir.join("item"), "uploaded")?;
+            fs::set_permissions(dir.join("item"), fs::Permissions::from_mode(0o644))?;
             fs::set_permissions(&dir, fs::Permissions::from_mode(0o555))?;
         }
         let cancel = CancellationToken::new();
@@ -299,6 +315,61 @@ mod tests {
         let result = install_readonly_tree(&dest)?;
         assert!(!result.status.success());
         assert_eq!(fs::read(&dest)?, b"keep");
+        assert_eq!(fs::read_dir(parent.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn upload_replacements_keep_existing_access_and_execute_bits() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let dest = parent.path().join("site");
+        let files = [("existing", 0o600), ("new", 0o755)];
+        for (folder, mode) in files {
+            fs::create_dir_all(dest.join(folder))?;
+            let path = dest.join(folder).join("item");
+            fs::write(&path, "old")?;
+            fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        }
+        let result = install_readonly_tree(&dest)?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        for (folder, mode) in files {
+            let path = dest.join(folder).join("item");
+            assert_eq!(fs::read(&path)?, b"uploaded");
+            assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, mode);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn writable_destination_under_readonly_parent_accepts_uploads_and_cleans_conflicts(
+    ) -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let dest = parent.path().join("writable site");
+        fs::create_dir(&dest)?;
+        fs::write(dest.join("existing"), "conflict")?;
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o555))?;
+        let failed = install_readonly_tree(&dest)?;
+        assert!(!failed.status.success());
+        assert_eq!(fs::read(dest.join("existing"))?, b"conflict");
+        assert_eq!(fs::read_dir(&dest)?.count(), 1);
+        fs::remove_file(dest.join("existing"))?;
+        let result = install_readonly_tree(&dest);
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o755))?;
+        let result = result?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        for name in ["existing", "new"] {
+            fs::set_permissions(dest.join(name), fs::Permissions::from_mode(0o755))?;
+            assert_eq!(fs::read(dest.join(name).join("item"))?, b"uploaded");
+        }
+        assert_eq!(fs::read_dir(&dest)?.count(), 2);
         assert_eq!(fs::read_dir(parent.path())?.count(), 1);
         Ok(())
     }
