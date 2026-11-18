@@ -916,7 +916,7 @@
       },
       "refreshFailed": "The file was saved, but the list could not refresh. Refresh to update its details."
     },
-    "directorySelectionHint": "Transfer one folder at a time, or select only files for a batch transfer.",
+    "directorySelectionHint": "Select regular files or folders to transfer.",
     "uploadDestination": "Upload to {{path}}",
     "downloadDestination": "Download to {{path}}",
     "workspace": {
@@ -1247,6 +1247,16 @@
     "offlineListing": "Last listing · offline"
   },
   "directoryTransferDialog": {
+    "method": {
+      "tarGzip": "Compressed archive · tar.gz",
+      "ftpZlib": "FTP compression · MODE Z",
+      "plain": "Server compression unavailable · transferring individual files"
+    },
+    "phase": {
+      "packing": "Packing folder…",
+      "transferring": "Transferring folder…",
+      "unpacking": "Unpacking folder…"
+    },
     "title": {
       "upload": "Upload Directory",
       "download": "Download Directory"

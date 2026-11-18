@@ -88,6 +88,15 @@ function applyAction(action: TransferAction): void {
   }
   items = next;
 
+  if (action.type === "CLEAR_ALL") {
+    for (const removed of prev) {
+      if (removed.status !== "queued") continue;
+      waiters.get(removed.id)?.("cancelled");
+      waiters.delete(removed.id);
+      rawProgressHooks.delete(removed.id);
+    }
+  }
+
   const justSettled: TransferItem[] = [];
   for (const item of next) {
     if (!isTerminalStatus(item.status)) {
@@ -141,7 +150,18 @@ async function runTransfer(item: TransferItem): Promise<void> {
   let result: { success: boolean; error?: string } | undefined;
   let invokeError: string | null = null;
   try {
-    if (item.direction === "upload") {
+    if (item.directory) {
+      const upload = item.direction === "upload";
+      result = await invoke("transfer_directory", {
+        connectionId: item.connectionId,
+        upload,
+        localPath: item.directory.localPath,
+        remotePath: upload ? item.destinationPath : item.sourcePath,
+        directoryName: item.directory.directoryName,
+        transferId: item.id,
+        onProgress: channel,
+      });
+    } else if (item.direction === "upload") {
       result = await invoke<{
         success: boolean;
         error?: string;

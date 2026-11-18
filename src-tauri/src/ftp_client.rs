@@ -1,5 +1,4 @@
 use anyhow::Result;
-use futures_lite::io::{AsyncReadExt, AsyncWriteExt as FtpStreamWriteExt};
 use serde::Deserialize;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt as TokioReadExt, AsyncWriteExt as TokioWriteExt};
@@ -51,10 +50,7 @@ enum FtpStreamKind {
 /// Dispatch a method call to whichever stream variant is active.
 macro_rules! ftp_stream {
     ($self:expr, $s:ident => $body:expr) => {{
-        let kind = $self
-            .stream
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("FTP session not connected"))?;
+        let kind = $self.connected_stream().await?;
         match kind {
             FtpStreamKind::Plain($s) => $body,
             FtpStreamKind::Secure($s) => $body,
@@ -65,11 +61,17 @@ macro_rules! ftp_stream {
 /// FTP/FTPS client using `suppaftp` with async support.
 pub struct FtpClient {
     stream: Option<FtpStreamKind>,
+    // Kept only for the lifetime of this login. An interrupted FTP command
+    // can leave replies on the control socket, requiring a fresh transport.
+    config: Option<FtpConfig>,
 }
 
 impl FtpClient {
     pub fn new() -> Self {
-        Self { stream: None }
+        Self {
+            stream: None,
+            config: None,
+        }
     }
 
     /// Connect to an FTP server, authenticate, and switch to binary transfer mode.
@@ -181,7 +183,25 @@ impl FtpClient {
 
         Ok(Self {
             stream: Some(stream_kind),
+            config: Some(config.clone()),
         })
+    }
+
+    async fn connected_stream(&mut self) -> Result<&mut FtpStreamKind> {
+        if self.stream.is_none() {
+            let config = self
+                .config
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("FTP session not connected"))?;
+            self.stream = Self::connect(config).await?.stream;
+        }
+        self.stream
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("FTP session not connected"))
+    }
+
+    pub(crate) fn discard_interrupted_transport(&mut self) {
+        self.stream.take();
     }
 
     pub fn is_connected(&self) -> bool {
@@ -189,6 +209,7 @@ impl FtpClient {
     }
 
     pub async fn disconnect(&mut self) -> Result<()> {
+        self.config = None;
         if let Some(kind) = self.stream.take() {
             match kind {
                 FtpStreamKind::Plain(mut s) => {
@@ -203,6 +224,145 @@ impl FtpClient {
     }
 
     // ===== File Operations =====
+
+    /// MODE changes apply to the control session, including subsequent LISTs.
+    /// The directory runner owns the connection lock until MODE S is restored.
+    pub(crate) async fn enable_mode_z(&mut self) -> Result<bool> {
+        use suppaftp::{FtpError, Status};
+        let negotiate = async {
+            match ftp_stream!(self, s => s.custom_command("MODE Z", &[Status::CommandOk]).await) {
+                Ok(_) => Ok(true),
+                Err(FtpError::UnexpectedResponse(reply))
+                    if reply.status == Status::CommandNotImplemented
+                        || (reply.body.starts_with(b"5")
+                            && !matches!(
+                                reply.status,
+                                Status::NotLoggedIn | Status::StoringNeedAccount
+                            )) =>
+                {
+                    Ok(false)
+                }
+                Err(error) => Err(error.into()),
+            }
+        };
+        match tokio::time::timeout(Duration::from_secs(10), negotiate).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.discard_interrupted_transport();
+                anyhow::bail!("FTP compression negotiation timed out")
+            }
+        }
+    }
+
+    pub(crate) fn rejected_compressed_transfer(error: &anyhow::Error) -> bool {
+        use suppaftp::{FtpError, Status};
+        matches!(error.downcast_ref::<FtpError>(), Some(FtpError::UnexpectedResponse(response))
+            if matches!(response.status, Status::ActionAborted | Status::NotImplemented | Status::NotImplementedParameter))
+    }
+
+    /// Prefer MLSD for recursion. LIST is a presentation format and can hide
+    /// dotfiles or lose leading spaces in filenames.
+    pub(crate) async fn folder_entries(&mut self, path: &str) -> Result<Vec<FileEntry>> {
+        use suppaftp::{FtpError, Status};
+        let lines = match ftp_stream!(self, s => s.mlsd(Some(path)).await) {
+            Ok(lines) => lines,
+            Err(FtpError::UnexpectedResponse(reply))
+                if matches!(
+                    reply.status,
+                    Status::BadCommand
+                        | Status::BadArguments
+                        | Status::NotImplemented
+                        | Status::NotImplementedParameter
+                ) =>
+            {
+                return self.list_dir(path).await;
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let mut entries = Vec::new();
+        for line in lines {
+            let facts = line.split_once(' ').map_or("", |(facts, _)| facts);
+            if facts
+                .split(';')
+                .any(|s| s.eq_ignore_ascii_case("type=cdir") || s.eq_ignore_ascii_case("type=pdir"))
+            {
+                continue;
+            }
+            let file = suppaftp::list::ListParser::parse_mlsd(&line)
+                .map_err(|e| anyhow::anyhow!("Invalid FTP directory entry: {e}"))?;
+            if matches!(file.name(), "." | "..") {
+                continue;
+            }
+            entries.push(FileEntry {
+                name: file.name().to_owned(),
+                size: file.size() as u64,
+                file_type: if file.is_symlink() {
+                    FileEntryType::Symlink
+                } else if file.is_directory() {
+                    FileEntryType::Directory
+                } else {
+                    FileEntryType::File
+                },
+                permissions: None,
+                modified: None,
+                owner: None,
+                group: None,
+            });
+        }
+        Ok(entries)
+    }
+
+    pub(crate) async fn restore_stream_mode(&mut self) -> Result<()> {
+        let outcome = tokio::time::timeout(Duration::from_secs(10), async {
+            ftp_stream!(self, s => s.custom_command("MODE S", &[suppaftp::Status::CommandOk]).await)?;
+            Ok::<_, anyhow::Error>(())
+        }).await;
+        if matches!(outcome, Ok(Ok(()))) {
+            return Ok(());
+        }
+        // A later ordinary file or directory listing must never receive zlib bytes.
+        self.discard_interrupted_transport();
+        self.connected_stream().await.map(|_| ())
+    }
+
+    /// MODE Z uses a separate zlib stream per data connection, inside TLS for FTPS.
+    pub(crate) async fn transfer_zlib_file(
+        &mut self,
+        upload: bool,
+        remote: &str,
+        local: &std::path::Path,
+        progress: &(dyn Fn(u64) + Send + Sync),
+    ) -> Result<u64> {
+        use async_compression::tokio::bufread::{ZlibDecoder, ZlibEncoder};
+        use tokio::io::{copy, BufReader};
+        use tokio_util::io::{InspectReader, InspectWriter};
+        let mut bytes = 0;
+        let mut count = |data: &[u8]| {
+            bytes += data.len() as u64;
+            progress(bytes);
+        };
+        if upload {
+            let file = tokio::fs::File::open(local).await?;
+            let reader = InspectReader::new(file, &mut count);
+            let mut encoded = ZlibEncoder::new(BufReader::new(reader));
+            ftp_stream!(self, s => {
+                let mut stream = s.put_with_stream(remote).await?;
+                copy(&mut encoded, &mut stream).await?;
+                stream.finish().await?;
+            });
+        } else {
+            let file = tokio::fs::File::create(local).await?;
+            let mut writer = InspectWriter::new(file, &mut count);
+            ftp_stream!(self, s => {
+                let mut stream = s.retr_as_stream(remote).await?;
+                let mut decoded = ZlibDecoder::new(BufReader::new(&mut stream));
+                copy(&mut decoded, &mut writer).await?;
+                stream.finish().await?;
+            });
+            writer.flush().await?;
+        }
+        Ok(bytes)
+    }
 
     pub async fn read_editor_file(&mut self, path: &str, limit: usize) -> Result<Vec<u8>> {
         ftp_stream!(self, s => {
@@ -739,6 +899,24 @@ mod tests {
     }
 
     // ---- 2. Connect with wrong credentials --------------------------------
+
+    #[tokio::test]
+    async fn folder_transport_recovers_after_interruption_but_an_explicit_disconnect_stays_closed(
+    ) -> Result<()> {
+        let Some(cfg) = test_config() else {
+            return Ok(());
+        };
+        let mut client = FtpClient::connect(&cfg).await?;
+        if client.enable_mode_z().await? {
+            client.restore_stream_mode().await?;
+        }
+        client.folder_entries("/").await?;
+        client.discard_interrupted_transport();
+        client.list_dir("/").await?;
+        client.disconnect().await?;
+        assert!(client.list_dir("/").await.is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_ftp_connect_bad_credentials() {

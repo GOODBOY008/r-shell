@@ -22,8 +22,9 @@ vi.mock('@tauri-apps/api/event', () => ({
   listen: vi.fn(async (name: string, handler: (event: {payload: unknown}) => void) => { mocks.events.set(name,handler); return () => mocks.events.delete(name); }),
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({
+vi.mock('@tauri-apps/api/core', async () => ({
   invoke: mocks.invoke,
+  Channel: (await import('./helpers/tauri-channel-stub')).ChannelStub,
 }));
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
@@ -311,6 +312,32 @@ describe('IntegratedFileBrowser directory download', () => {
     expect((await screen.findByTestId('directory-transfer')).textContent).toBe(
       '/home/release files → C:/Downloads/release files',
     );
+  });
+});
+
+describe('IntegratedFileBrowser folder upload', () => {
+  it('refreshes the visible destination after a queued folder finishes', async () => {
+    const parent = '/home/work';
+    let uploaded = false;
+    mocks.invoke.mockImplementation(async (cmd, args) => {
+      if (cmd === 'transfer_directory') {
+        uploaded = true;
+        return { success: true };
+      }
+      if (cmd === 'list_files' && args.path === parent && uploaded) {
+        return [{ name: '发布', file_type: 'Directory', size: 0 }];
+      }
+      return [];
+    });
+    mocks.open.mockResolvedValue(['/local/发布']);
+    render(<IntegratedFileBrowser connectionId="ssh-upload" isConnected onClose={vi.fn()}
+      terminalWorkingDirectory={{ path: parent, sequence: 1 }} />);
+    await screen.findByTitle(parent);
+    fireEvent.click(screen.getByTitle('Upload folder'));
+    expect(await within(screen.getByRole('region', { name: 'Remote files' })).findByText('发布')).toBeTruthy();
+    expect(mocks.invoke).toHaveBeenCalledWith('transfer_directory', expect.objectContaining({
+      connectionId: 'ssh-upload', upload: true, localPath: '/local/发布', remotePath: '/home/work/发布',
+    }));
   });
 });
 

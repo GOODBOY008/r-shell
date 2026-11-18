@@ -101,6 +101,7 @@ fn main() {
             "stat_local_path",
             "stop_socks_proxy",
             "tail_log",
+            "transfer_directory",
             "update_menu_language",
             "updater_check",
             "updater_download_and_install",

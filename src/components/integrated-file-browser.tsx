@@ -13,16 +13,8 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { useTransferQueue, onItemSettled } from '@/lib/transfer-queue-service';
 import { confinedFileDownload } from '@/lib/confined-download';
-import { parentPath, pathJoin } from '@/lib/file-entry-types';
-import {
-  buildDirectoryUploadPlan,
-  buildFileUploadItems,
-  buildMixedDropUploadPlan,
-  type DroppedPathStat,
-  type LocalPathStat,
-  type LocalRecursiveUploadEntry,
-  type UploadQueueInput,
-} from '@/lib/upload-paths';
+import { localParentPath, parentPath, pathJoin } from '@/lib/file-entry-types';
+import { buildFileUploadItems, directoryUploadItem, planDroppedUploads } from '@/lib/upload-paths';
 import { useWebviewFileDrop } from '@/lib/use-webview-file-drop';
 import { TransferQueue } from './transfer-queue';
 import { DirectoryTransferDialog } from './directory-transfer-dialog';
@@ -550,14 +542,16 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       if (item.status === 'completed') {
         if (item.direction === 'upload') {
           notify.success(t('fileBrowser.toast.uploaded', { name: item.fileName }));
-          void loadFiles();
+          const parent = parentPath(item.destinationPath);
+          if (item.directory && connectionId) setTreeRefresh({ connectionId, paths: [parent] });
+          if (isConnected && parent === committedPathRef.current) void loadFiles(parent);
         } else {
           const destPath = item.destinationPath;
-          const destDir = destPath.substring(0, destPath.lastIndexOf('/')) || '/';
+          const destDir = localParentPath(destPath);
           notify.success(t('fileBrowser.toast.downloaded', { name: item.fileName }), {
             duration: 5000,
             action: {
-              label: t('fileBrowser.transfer.openFile'),
+              label: t(item.directory ? 'fileBrowser.contextMenu.openFolder' : 'fileBrowser.transfer.openFile'),
               onClick: () => { void invoke('open_in_os', { path: destPath }).catch(() => {}); },
             },
             cancel: {
@@ -575,8 +569,8 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
         });
       }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- loadFiles is a stable inline fn; adding it would cause infinite re-renders
-  }, [connectionId, t]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh with the current directory's loader
+  }, [connectionId, currentPath, isConnected, t]);
 
   const handleResizeStart = (columnName: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -1049,64 +1043,11 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
       const directoryPaths = Array.isArray(selected) ? selected : [selected];
       if (directoryPaths.length === 0) return;
 
-      const queuedItems: UploadQueueInput[] = [];
-      let createdDirectoryCount = 0;
-      const dirErrors: string[] = [];
-
-      for (const directoryPath of directoryPaths) {
-        const entries = await invoke<LocalRecursiveUploadEntry[]>(
-          "list_local_files_recursive",
-          {
-            path: directoryPath,
-            excludePatterns: [],
-          },
-        );
-        const plan = buildDirectoryUploadPlan(
-          directoryPath,
-          currentPath,
-          entries,
-        );
-
-        // Create remote directories before enqueuing file transfers.
-        // Shell-quote escaping is handled on the Rust side.
-        for (const remoteDirectory of plan.directories) {
-          try {
-            await invoke<boolean>("create_directory", {
-              connectionId,
-              path: remoteDirectory,
-            });
-            createdDirectoryCount += 1;
-          } catch (err) {
-            dirErrors.push(
-              `${remoteDirectory}: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        }
-        queuedItems.push(...plan.items);
-      }
-
-      if (dirErrors.length > 0) {
-        notify.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
-          description: dirErrors.slice(0, 3).join("\n"),
-        });
-      }
-
-      if (queuedItems.length > 0) {
-        dispatchTransfer({
-          type: "ENQUEUE",
-          items: queuedItems.map((item: UploadQueueInput) => ({
-            ...item,
-            connectionId,
-          })),
-        });
-        notify.info(
-          t('fileBrowser.toast.queuedFolderUpload', { count: queuedItems.length, folderCount: directoryPaths.length, createdCount: createdDirectoryCount }),
-        );
-      } else if (dirErrors.length === 0) {
-        // Folder(s) were empty — just refresh
-        void loadFiles();
-        notify.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
-      }
+      dispatchTransfer({
+        type: "ENQUEUE",
+        items: directoryPaths.map(path => ({ ...directoryUploadItem(path, currentPath), connectionId })),
+      });
+      notify.info(t('transferQueue.queuedCount', { count: directoryPaths.length }));
     } catch (error) {
       console.error('Upload folder dialog error:', error);
       notify.error(t('fileBrowser.toast.uploadFolderFailed'), {
@@ -1138,36 +1079,18 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
   };
 
   const handleDownloadMultiple = async (selectedFileItems: FileItem[]) => {
-    // Batch download is scoped to files. If the selection contains folders,
-    // tell the user they are skipped instead of silently dropping them.
-    const filesToDownload = selectedFileItems.filter(f => f.type === 'file');
-    const skippedDirs = selectedFileItems.filter(f => f.type === 'directory').length;
-    if (filesToDownload.length === 0) {
-      if (skippedDirs > 0) {
-        notify.info(t('fileBrowser.toast.downloadFoldersNotSupported'));
-      }
-      return;
-    }
+    if (!selectedFileItems.length) return;
     try {
       const destDir = await tauriOpen({ directory: true });
-      if (!destDir) return;
-
+      if (!destDir || Array.isArray(destDir)) return;
       dispatchTransfer({
         type: "ENQUEUE",
-        items: filesToDownload.map((f) =>
-          confinedFileDownload(connectionId, parentPath(f.path), destDir, f.name, f.size),
-        ),
+        items: selectedFileItems.map(file => ({
+          ...confinedFileDownload(connectionId, parentPath(file.path), destDir, file.name, file.size),
+          ...(file.type === 'directory' ? { directory: { localPath: destDir, directoryName: file.name } } : {}),
+        })),
       });
-      if (skippedDirs > 0) {
-        notify.info(
-          t('fileBrowser.toast.downloadedFilesSkippedFolders', {
-            count: filesToDownload.length,
-            folders: skippedDirs,
-          }),
-        );
-      } else {
-        notify.info(t('fileBrowser.toast.queuedDownload', { count: filesToDownload.length }));
-      }
+      notify.info(t('transferQueue.queuedCount', { count: selectedFileItems.length }));
     } catch (error) {
       console.error('Download dialog error:', error);
     }
@@ -1502,87 +1425,15 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
     if (!isConnected || paths.length === 0) return;
     try {
       // Stat each path in parallel so we know which are files vs directories.
-      const stats = await Promise.all(
-        paths.map((p) =>
-          invoke<LocalPathStat>("stat_local_path", { path: p }),
-        ),
-      );
-
-      // Recurse each dropped directory in parallel to gather entries.
-      const directoryEntries = await Promise.all(
-        stats.map(async (s, idx) => {
-          if (!s.is_directory) return undefined;
-          try {
-            return await invoke<LocalRecursiveUploadEntry[]>(
-              "list_local_files_recursive",
-              { path: paths[idx], excludePatterns: [] },
-            );
-          } catch (err) {
-            console.error(
-              `list_local_files_recursive(${paths[idx]}) failed:`,
-              err,
-            );
-            return [];
-          }
-        }),
-      );
-
-      const dropped: DroppedPathStat[] = paths.map((p, i) => ({
-        path: p,
-        stat: stats[i],
-        entries: directoryEntries[i] ?? undefined,
-      }));
-
-      const plan = buildMixedDropUploadPlan(dropped, currentPath);
-
-      // Create remote directories in order (depth-first). Shell quoting is
-      // handled on the Rust side; failures are accumulated and reported.
-      let createdDirectoryCount = 0;
-      const dirErrors: string[] = [];
-      for (const remoteDirectory of plan.directories) {
-        try {
-          await invoke<boolean>("create_directory", {
-            connectionId,
-            path: remoteDirectory,
-          });
-          createdDirectoryCount += 1;
-        } catch (err) {
-          dirErrors.push(
-            `${remoteDirectory}: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
+      const { items, skipped } = await planDroppedUploads(paths, currentPath);
+      if (items.length) {
+        dispatchTransfer({ type: "ENQUEUE", items: items.map(item => ({ ...item, connectionId })) });
+        notify.info(t('transferQueue.queuedCount', { count: items.length }));
       }
-
-      if (dirErrors.length > 0) {
-        notify.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
-          description: dirErrors.slice(0, 3).join("\n"),
+      if (skipped.length) {
+        notify.warning(t('fileBrowser.toast.droppedPathsSkipped', { count: skipped.length }), {
+          description: skipped.slice(0, 3).join("\n"),
         });
-      }
-
-      if (plan.items.length > 0) {
-        dispatchTransfer({
-          type: "ENQUEUE",
-          items: plan.items.map((item) => ({ ...item, connectionId })),
-        });
-        notify.info(
-          t('fileBrowser.toast.queuedUploadToPath', { count: plan.items.length, path: currentPath }) +
-            (createdDirectoryCount > 0
-              ? "; " + t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount })
-              : ""),
-        );
-      } else if (dirErrors.length === 0 && plan.skipped.length === 0) {
-        // Nothing to upload — refresh the listing in case folders were created.
-        void loadFiles();
-        if (createdDirectoryCount > 0) {
-          notify.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
-        }
-      }
-
-      if (plan.skipped.length > 0) {
-        notify.warning(
-          t('fileBrowser.toast.droppedPathsSkipped', { count: plan.skipped.length }),
-          { description: plan.skipped.slice(0, 3).map((s) => s.path).join("\n") },
-        );
       }
     } catch (error) {
       console.error("OS drop handler error:", error);
@@ -1591,7 +1442,7 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
           error instanceof Error ? error.message : t('fileBrowser.toast.dropUploadFailedDesc'),
       });
     }
-  }, [connectionId, currentPath, isConnected, loadFiles]);
+  }, [connectionId, currentPath, isConnected, dispatchTransfer, t]);
 
   const { isDragOver: isDraggingOver, clearDragOver } = useWebviewFileDrop({
     enabled: isConnected,
@@ -2170,7 +2021,9 @@ export function IntegratedFileBrowser({ connectionId, host: _host, isConnected, 
                       </ContextMenuItem>
                       {pasteMenuItem(file.path, t('fileBrowser.contextMenu.pasteIntoFolder'))}
                       {!isParent && (
-                        <ContextMenuItem onClick={() => handleDownloadDirectory(file)}>
+                        <ContextMenuItem onClick={() => selectedFiles.size > 1 && selectedFiles.has(file.name)
+                          ? handleDownloadMultiple(files.filter(f => selectedFiles.has(f.name) && f.name !== '..'))
+                          : handleDownloadDirectory(file)}>
                           <FolderDown className="mr-2 h-4 w-4" />
                           {t('fileBrowser.contextMenu.downloadDirectory')}
                         </ContextMenuItem>
