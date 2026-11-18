@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.0] - 2026-11-18
+
+### 🔖 R-Shell 3.3.0 — Encrypted Configuration Sync
+
+Sync connections, snippets, preferences, and dashboards across macOS, Windows, and Linux using your own WebDAV server or S3-compatible bucket. R-Shell encrypts the configuration before upload and lets you review conflicting edits. Saved credentials are opt-in. The redesigned FTP, FTPS, and SFTP workspace shows which files will move and where they will land, even in a narrow window.
+
+### New Features 🎉
+
+- feat(sync): add encrypted cross-platform configuration sync with WebDAV and conflict review by @GOODBOY008 in #324
+- feat(sync): support S3-compatible buckets for encrypted configuration storage by @GOODBOY008 in #327
+- feat(files): redesign the dual-pane transfer workspace with independent navigation and explicit transfer destinations by @GOODBOY008 in #326
+- feat(rdp): remember the last scaling mode for each saved connection by @GOODBOY008 in #320
+- feat(monitor): improve charts and keep enabled monitors collecting session history across tab switches by @GOODBOY008 in #311
+- feat(i18n): add Brazilian Portuguese localization by @GOODBOY008 in #319
+
+### Bug Fixes 🐛
+
+- fix(appimage): bundle the FreeType library used by WebKitGTK on Linux by @GOODBOY008 in #323
+- fix(input): finish IME composition before handling Enter and use in-app dialogs to create remote files and folders by @GOODBOY008 in #321
+- fix(files): repair copy and paste in the SSH file browser by @GOODBOY008 in #315
+- fix(ssh): honor strict host key settings when importing OpenSSH connections by @GOODBOY008 in #310
+
+### Documentation 📚
+
+- docs: showcase the SSH workspace and multi-host dashboards in the README by @GOODBOY008 in #312
+- docs: add GitHub forms for bug reports, feature requests, questions, and ideas by @GOODBOY008 in #313
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) for contributing to this release!
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.2.0...v3.3.0
+
 ## [3.2.0] - 2026-11-11
 
 ### 🔖 R-Shell 3.2.0 — Multi-Host Dashboards
