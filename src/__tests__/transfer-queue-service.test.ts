@@ -20,6 +20,7 @@ vi.mock('@tauri-apps/api/core', async () => {
 
 import {
   enqueue,
+  dispatchAction,
   submit,
   cancelTransfer,
   onItemSettled,
@@ -216,6 +217,18 @@ describe('transfer-queue-service', () => {
     rejectTransfer(new Error('request timeout after cancel'));
     await flush();
     expect(getTransferById(request.id)?.status).toBe('cancelled');
+  });
+
+  it('settles a waiting folder dialog when its queued job is cleared', async () => {
+    let finish!: (value: unknown) => void;
+    mocks.invoke.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const first = submit(uploadItem());
+    const folder = submit({ ...uploadItem('docs'), directory: { localPath: '/local/docs' } });
+    dispatchAction({ type: 'CLEAR_ALL' });
+    expect(await folder.done).toBe('cancelled');
+    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    finish({ success: true });
+    expect(await first.done).toBe('completed');
   });
 
   it('notifies onItemSettled listeners with the settled item', async () => {

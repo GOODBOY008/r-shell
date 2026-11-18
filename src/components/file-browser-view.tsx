@@ -31,12 +31,7 @@ import {
   enqueue,
   onItemSettled,
 } from "@/lib/transfer-queue-service";
-import {
-  buildMixedDropUploadPlan,
-  type DroppedPathStat,
-  type LocalPathStat,
-  type LocalRecursiveUploadEntry,
-} from "@/lib/upload-paths";
+import { directoryUploadItem, planDroppedUploads } from "@/lib/upload-paths";
 
 // ---------- Types ----------
 
@@ -212,7 +207,7 @@ export function FileBrowserView({
         notify.success(t('fileBrowser.toast.downloaded', { name: item.fileName }), {
           duration: 5000,
           action: {
-            label: t('fileBrowser.transfer.openFile'),
+            label: t(item.directory ? 'fileBrowser.contextMenu.openFolder' : 'fileBrowser.transfer.openFile'),
             onClick: () => { void invoke("open_in_os", { path: destPath }).catch(() => {}); },
           },
           cancel: {
@@ -238,115 +233,40 @@ export function FileBrowserView({
       });
       return;
     }
-    if (files.some(file => file.file_type !== "File")) {
+    if (files.some(file => file.file_type === "Symlink")) {
       notify.info(t('fileBrowser.directorySelectionHint'));
       return;
     }
 
-    enqueue(files.map(file => direction === "upload" ? {
-      connectionId, connectionName, fileName: file.name, direction,
-      sourcePath: pathJoin(source, file.name), destinationPath: pathJoin(target, file.name), totalBytes: file.size,
-    } : { ...confinedFileDownload(connectionId, source, target, file.name, file.size), connectionName }));
-    notify.info(t(direction === "upload" ? 'fileBrowser.toast.queuedUpload' : 'fileBrowser.toast.queuedDownload', { count: files.length }));
+    enqueue(files.map(file => {
+      if (direction === "upload") {
+        const path = pathJoin(source, file.name);
+        return file.file_type === "Directory"
+          ? { ...directoryUploadItem(path, target), connectionId, connectionName }
+          : { connectionId, connectionName, fileName: file.name, direction, sourcePath: path,
+              destinationPath: pathJoin(target, file.name), totalBytes: file.size };
+      }
+      const download = confinedFileDownload(connectionId, source, target, file.name, file.size);
+      return { ...download, connectionName,
+        ...(file.file_type === "Directory" ? { directory: { localPath: target, directoryName: file.name } } : {}) };
+    }));
+    notify.info(t('transferQueue.queuedCount', { count: files.length }));
   };
 
   // ------ OS-native file drop onto the remote panel ------
-  // Stat each path in parallel, recurse each dropped directory, build a single
-  // upload plan, create remote directories depth-first, then enqueue files.
   const handleOsFilesDropped = useCallback(
     async (paths: string[]) => {
       if (!isConnected || remotePath === undefined || paths.length === 0) return;
       try {
-        const stats = await Promise.all(
-          paths.map((p) =>
-            invoke<LocalPathStat>("stat_local_path", { path: p }),
-          ),
-        );
-        const directoryEntries = await Promise.all(
-          stats.map(async (s, idx) => {
-            if (!s.is_directory) return undefined;
-            try {
-              return await invoke<LocalRecursiveUploadEntry[]>(
-                "list_local_files_recursive",
-                { path: paths[idx], excludePatterns: [] },
-              );
-            } catch (err) {
-              console.error(
-                `list_local_files_recursive(${paths[idx]}) failed:`,
-                err,
-              );
-              return [];
-            }
-          }),
-        );
-
-        const dropped: DroppedPathStat[] = paths.map((p, i) => ({
-          path: p,
-          stat: stats[i],
-          entries: directoryEntries[i] ?? undefined,
-        }));
-        const plan = buildMixedDropUploadPlan(dropped, remotePath);
-
-        // Create remote directories depth-first. `create_remote_directory`
-        // returns { success, error? } rather than throwing, so we accumulate
-        // failures into a single warning toast.
-        let createdDirectoryCount = 0;
-        const dirErrors: string[] = [];
-        for (const remoteDirectory of plan.directories) {
-          try {
-            const result = await invoke<{
-              success: boolean;
-              error?: string;
-            }>("create_remote_directory", {
-              connectionId,
-              path: remoteDirectory,
-            });
-            if (result.success) {
-              createdDirectoryCount += 1;
-            } else {
-              dirErrors.push(
-                `${remoteDirectory}: ${result.error ?? "create failed"}`,
-              );
-            }
-          } catch (err) {
-            dirErrors.push(
-              `${remoteDirectory}: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
+        const { items, skipped } = await planDroppedUploads(paths, remotePath);
+        if (items.length) {
+          enqueue(items.map(item => ({ ...item, connectionId, connectionName })));
+          notify.info(t('transferQueue.queuedCount', { count: items.length }));
         }
-
-        if (dirErrors.length > 0) {
-          notify.warning(t('fileBrowser.toast.dirCreationFailed', { count: dirErrors.length }), {
-            description: dirErrors.slice(0, 3).join("\n"),
+        if (skipped.length) {
+          notify.warning(t('fileBrowser.toast.droppedPathsSkipped', { count: skipped.length }), {
+            description: skipped.slice(0, 3).join("\n"),
           });
-        }
-
-        if (plan.items.length > 0) {
-          enqueue(plan.items.map(item => ({ ...item, connectionId, connectionName })));
-          notify.info(
-            t('fileBrowser.toast.queuedUploadToPath', { count: plan.items.length, path: remotePath }) +
-              (createdDirectoryCount > 0
-                ? "; " + t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount })
-                : ""),
-          );
-        } else if (dirErrors.length === 0 && plan.skipped.length === 0) {
-          // Folder(s) were empty — refresh listing.
-          remotePanelRef.current?.refresh();
-          if (createdDirectoryCount > 0) {
-            notify.info(t('fileBrowser.toast.createdRemoteFolders', { count: createdDirectoryCount }));
-          }
-        }
-
-        if (plan.skipped.length > 0) {
-          notify.warning(
-            t('fileBrowser.toast.droppedPathsSkipped', { count: plan.skipped.length }),
-            {
-              description: plan.skipped
-                .slice(0, 3)
-                .map((s) => s.path)
-                .join("\n"),
-            },
-          );
         }
       } catch (err) {
         console.error("OS drop handler error:", err);
@@ -517,6 +437,7 @@ export function FileBrowserView({
           }}
           direction={dirTransfer.direction}
           connectionId={connectionId}
+          connectionName={connectionName}
           sourcePath={dirTransfer.sourcePath}
           destPath={dirTransfer.destPath}
           destinationDirectoryName={dirTransfer.destinationDirectoryName}

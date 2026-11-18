@@ -534,8 +534,7 @@ export const FilePanel = forwardRef<FilePanelRef, FilePanelProps>(
     const segments = getSegments(currentPath);
     const selectedSize = selectedEntries.reduce((total, entry) => total + (entry.file_type === 'File' ? entry.size : 0), 0);
     const permissionsShown = showPermissions && permissionsVisible;
-    const singleDirectory = selectedEntries.length === 1 && selectedEntries[0].file_type === 'Directory';
-    const selectionUnsupported = !singleDirectory && selectedEntries.some(entry => entry.file_type !== 'File');
+    const selectionUnsupported = selectedEntries.some(entry => entry.file_type === 'Symlink');
     const showDropOverlay = !disabled && !loading && (dragCount !== null || isOsDragOver);
     const dropCount = isOsDragOver ? osPathCount : dragCount;
     const closeFilter = () => { setFilter(''); setFilterOpen(false); containerRef.current?.focus(); };

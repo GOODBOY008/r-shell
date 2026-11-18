@@ -7,6 +7,7 @@ mod connection_manager;
 mod cpu_stats;
 mod desktop_protocol;
 mod desktop_tcp;
+mod folder_transfer;
 mod ftp_client;
 mod ls_parser;
 mod os_detect;
@@ -580,6 +581,7 @@ pub fn run() {
             commands::download_remote_file,
             commands::download_remote_file_confined,
             commands::upload_remote_file,
+            commands::transfer_directory,
             commands::cancel_transfer,
             commands::delete_remote_item,
             commands::create_remote_directory,

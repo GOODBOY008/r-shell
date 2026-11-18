@@ -5,12 +5,13 @@
 
 import { Channel } from "@tauri-apps/api/core";
 
-import type { TransferAction } from "@/lib/transfer-queue-reducer";
+import type { DirectoryProgress, TransferAction } from "@/lib/transfer-queue-reducer";
 
-export interface TransferProgressEvent {
+interface ByteProgress {
   transferred: number;
   total: number;
 }
+export type TransferProgressEvent = ByteProgress | (ByteProgress & DirectoryProgress);
 
 /**
  * Smoothed byte-rate estimator. Raw per-event rates are noisy (disk flushes,
@@ -71,6 +72,7 @@ export function makeTransferProgressChannel(
       bytesTransferred: event.transferred,
       speed,
       totalBytes: total > 0 ? total : undefined,
+      ...("method" in event ? { directoryProgress: event } : {}),
     });
     onRawProgress?.(event);
   };

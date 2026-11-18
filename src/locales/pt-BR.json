@@ -928,7 +928,7 @@
       },
       "refreshFailed": "O arquivo foi salvo, mas a lista não pôde ser atualizada. Atualize a lista para ver os detalhes."
     },
-    "directorySelectionHint": "Transfira uma pasta por vez ou selecione apenas arquivos para transferir em lote.",
+    "directorySelectionHint": "Selecione arquivos comuns ou pastas para transferir.",
     "uploadDestination": "Enviar para {{path}}",
     "downloadDestination": "Baixar em {{path}}",
     "workspace": {
@@ -1272,6 +1272,16 @@
     "offlineListing": "Última listagem · desconectado"
   },
   "directoryTransferDialog": {
+    "method": {
+      "tarGzip": "Arquivo compactado · tar.gz",
+      "ftpZlib": "Compactação FTP · MODE Z",
+      "plain": "Servidor sem suporte à compactação · transferindo arquivo por arquivo"
+    },
+    "phase": {
+      "packing": "Compactando pasta…",
+      "transferring": "Transferindo pasta…",
+      "unpacking": "Descompactando pasta…"
+    },
     "title": {
       "upload": "Enviar diretório",
       "download": "Baixar diretório"

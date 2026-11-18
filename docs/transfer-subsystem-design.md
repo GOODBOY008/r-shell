@@ -161,7 +161,7 @@ result" cycle:
 | --- | --- | --- |
 | `file-browser-view.tsx` | local `useReducer` + `useEffect` transfer loop | `useTransferQueue()` + settle listener (panel refresh, download toast) |
 | `integrated-file-browser.tsx` | local `useReducer` + `useEffect` transfer loop (fifth copy, SSH tabs) | same migration |
-| `directory-transfer-dialog.tsx` | direct per-file `invoke`, `cancelRef` flag only stopped the loop *between* files | per-file `submit()`; cancel button also cancels the in-flight item for real; `done` outcome drives the existing error/cancel phases |
+| `directory-transfer-dialog.tsx` | per-file submission and frontend recursion | one `transfer_directory` queue item for the whole folder, with a shared cancellation token and progress channel |
 | `sync-dialog.tsx` | direct `invoke` for upload/download, `cancelRef` between entries | per-entry `submit()` for transfers (mkdir/delete stay direct — they are not transfers); cancel button cancels the in-flight transfer |
 | `file-editor-view.tsx` | direct `download_remote_file` with a noop channel | routed through `submit()` so the download serializes with the queue and is cancellable |
 
@@ -169,6 +169,8 @@ The transfer-queue strip's cancel button now calls `cancelTransfer(id)`
 (backend cancel + reducer CANCEL) instead of dispatching only.
 
 ### Partial files
+
+Both file browsers transfer SSH folders as gzip-compressed tar archives when remote command execution and the archive tools are available. FTP and FTPS negotiate MODE Z and restore MODE S before releasing the connection. Servers without compression use recursive file transfers. For downloads, the client creates a private staging directory inside an existing writable destination when possible. It uses the destination's parent for new folders and as a fallback. It merges the staged files after the transfer succeeds.
 
 A cancelled download keeps the partial file on disk (the engine flushes before
 returning). Resume/upload continuation is explicitly out of scope.

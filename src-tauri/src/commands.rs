@@ -3347,6 +3347,46 @@ pub async fn cancel_transfer(
 }
 
 #[tauri::command]
+pub async fn transfer_directory(
+    connection_id: String,
+    upload: bool,
+    local_path: std::path::PathBuf,
+    remote_path: String,
+    directory_name: Option<String>,
+    transfer_id: String,
+    on_progress: tauri::ipc::Channel<crate::folder_transfer::FolderProgress>,
+    state: State<'_, Arc<ConnectionManager>>,
+) -> Result<FileTransferResponse, String> {
+    let manager = state.inner();
+    run_registered_transfer(
+        manager,
+        &connection_id,
+        &transfer_id,
+        if upload {
+            "folder upload"
+        } else {
+            "folder download"
+        },
+        &remote_path,
+        |cancel| {
+            crate::folder_transfer::run(
+                manager,
+                &connection_id,
+                upload,
+                &local_path,
+                &remote_path,
+                directory_name.as_deref(),
+                move |event| {
+                    let _ = on_progress.send(event);
+                },
+                cancel,
+            )
+        },
+    )
+    .await
+}
+
+#[tauri::command]
 pub async fn download_remote_file(
     connection_id: String,
     remote_path: String,
@@ -3875,7 +3915,7 @@ pub async fn rename_local_item(old_path: String, new_path: String) -> Result<(),
         .map_err(|e| format!("Failed to rename '{}' to '{}': {}", old_path, new_path, e))
 }
 
-fn validate_remote_relative_path(remote_relative_path: &str) -> Result<(), String> {
+pub(crate) fn validate_remote_relative_path(remote_relative_path: &str) -> Result<(), String> {
     if remote_relative_path.is_empty()
         || remote_relative_path.starts_with('/')
         || remote_relative_path.starts_with('\\')

@@ -176,18 +176,16 @@ export function TransferQueue({
                     title={item.fileName}
                   >
                     {item.fileName}
+                    {item.directoryProgress && <span className="block truncate text-muted-foreground">{t(`directoryTransferDialog.method.${item.directoryProgress.method}`)}</span>}
                   </span>
 
                   {item.status === "transferring" && (
                     <>
-                      <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary rounded-full transition-all duration-300"
-                          style={{ width: `${item.progress}%` }}
-                        />
-                      </div>
+                      <progress className="w-20 h-1.5 accent-primary"
+                        aria-label={t('transferQueue.fileProgress', { name: item.fileName })}
+                        max={100} value={item.totalBytes && (!item.directoryProgress || item.directoryProgress.phase === 'transferring') ? item.progress : undefined} />
                       <span className="text-muted-foreground w-10 text-right">
-                        {item.progress}%
+                        {item.totalBytes ? `${item.progress}%` : '—'}
                       </span>
                       <span className="text-muted-foreground w-16 text-right">
                         {formatSpeed(item.speed)}
@@ -237,7 +235,7 @@ function TransferActions({ item, dispatch, compact = false, retryDisabled = fals
     if (item.direction !== 'download') return null;
     return <>
       <Button variant="ghost" size="icon" className={iconClass}
-        title={t('transferQueue.openFile')} aria-label={t('transferQueue.openFile')}
+        title={t(item.directory ? 'fileBrowser.contextMenu.openFolder' : 'transferQueue.openFile')} aria-label={t(item.directory ? 'fileBrowser.contextMenu.openFolder' : 'transferQueue.openFile')}
         onClick={() => openPath(item.destinationPath)}><FileUp className="size-3.5" /></Button>
       <Button variant="ghost" size="icon" className={iconClass}
         title={t('transferQueue.showInFolder')} aria-label={t('transferQueue.showInFolder')}
@@ -281,7 +279,9 @@ function WorkspaceQueueRow({ item, owner, dispatch, retryDisabled }: {
       <p className="mt-1 text-muted-foreground break-all font-mono">{item.destinationPath}</p>
     </div>
     <div className="file-transfer-state min-w-0 space-y-1">
-      <span>{t(`fileBrowser.transfer.${status}`)}</span>
+      <span>{item.status === 'transferring' && item.directoryProgress
+        ? t(`directoryTransferDialog.phase.${item.directoryProgress.phase}`) : t(`fileBrowser.transfer.${status}`)}</span>
+      {item.directoryProgress && <p className="text-muted-foreground">{t(`directoryTransferDialog.method.${item.directoryProgress.method}`)}</p>}
       {item.status === 'transferring' && <>
         <progress className="file-transfer-progress" max={100} value={item.totalBytes ? item.progress : undefined}
           aria-label={t('transferQueue.fileProgress', { name: item.fileName })} />

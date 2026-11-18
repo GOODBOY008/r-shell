@@ -96,6 +96,7 @@
     "allow-update-menu-language",
     "allow-updater-check",
     "allow-updater-download-and-install",
+    "allow-transfer-directory",
     "allow-upload-remote-file",
     "core:default",
     "core:window:allow-start-dragging",

@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest';
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,193 +32,50 @@ vi.mock('../components/ui/dialog', () => ({
   DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-describe('DirectoryTransferDialog download', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
+describe('DirectoryTransferDialog', () => {
+  beforeEach(() => vi.clearAllMocks());
   afterEach(cleanup);
 
-  it('preserves nested directories, spaces, and Unicode', async () => {
-    mocks.invoke.mockImplementation(async (command: string) => {
-      if (command === 'list_remote_files_recursive') {
-        return [
-          {
-            relative_path: '子目录',
-            name: '子目录',
-            size: 0,
-            modified: null,
-            file_type: 'Directory',
-          },
-          {
-            relative_path: '子目录/report 1.txt',
-            name: 'report 1.txt',
-            size: 12,
-            modified: null,
-            file_type: 'File',
-          },
-          {
-            relative_path: 'README.md',
-            name: 'README.md',
-            size: 5,
-            modified: null,
-            file_type: 'File',
-          },
-        ];
-      }
-      if (command === 'download_remote_file_confined') {
-        return { success: true, bytes_transferred: 1 };
-      }
-      return undefined;
-    });
-    const onComplete = vi.fn();
+  const props = {
+    open: true, onOpenChange: vi.fn(), direction: 'download' as const, connectionId: 'conn-1',
+    sourcePath: '/srv/发布 files', destPath: 'C:/Downloads', destinationDirectoryName: '发布 files',
+    onComplete: vi.fn(),
+  };
 
-    render(
-      <DirectoryTransferDialog
-        open
-        onOpenChange={() => {}}
-        direction="download"
-        connectionId="conn-1"
-        sourcePath="/srv/release files"
-        destPath="C:/Downloads"
-        destinationDirectoryName="release files"
-        onComplete={onComplete}
-      />,
-    );
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
-
-    expect(mocks.invoke).toHaveBeenCalledWith('create_local_directory_confined', {
-      destinationRoot: 'C:/Downloads',
-      relativePath: 'release files',
-    });
-    expect(mocks.invoke).toHaveBeenCalledWith('create_local_directory_confined', {
-      destinationRoot: 'C:/Downloads',
-      relativePath: 'release files/子目录',
-    });
-    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file_confined', {
-      connectionId: 'conn-1',
-      remoteRoot: '/srv/release files',
-      destinationRoot: 'C:/Downloads',
-      remoteRelativePath: '子目录/report 1.txt',
-      destinationRelativePath: 'release files/子目录/report 1.txt',
-      transferId: expect.anything(),
-      onProgress: expect.anything(),
-    });
-    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file_confined', {
-      connectionId: 'conn-1',
-      remoteRoot: '/srv/release files',
-      destinationRoot: 'C:/Downloads',
-      remoteRelativePath: 'README.md',
-      destinationRelativePath: 'release files/README.md',
-      transferId: expect.anything(),
-      onProgress: expect.anything(),
-    });
-    expect(mocks.success).toHaveBeenCalledOnce();
+  it('submits a single job and keeps the server name separate from the selected parent', async () => {
+    mocks.invoke.mockResolvedValue({ success: true });
+    render(<React.StrictMode><DirectoryTransferDialog {...props} /></React.StrictMode>);
+    await waitFor(() => expect(props.onComplete).toHaveBeenCalledOnce());
+    expect(mocks.invoke.mock.calls).toEqual([['transfer_directory', {
+      upload: false, connectionId: 'conn-1', remotePath: '/srv/发布 files', localPath: 'C:/Downloads',
+      directoryName: '发布 files', transferId: expect.any(String), onProgress: expect.anything(),
+    }]]);
   });
 
-  it('keeps remote relative paths separate from the local destination root', async () => {
-    mocks.invoke.mockImplementation(async (command: string) => {
-      if (command === 'list_remote_files_recursive') {
-        return [{
-          relative_path: 'nested\\..\\outside.txt',
-          name: 'nested\\..\\outside.txt',
-          size: 1,
-          modified: null,
-          file_type: 'File',
-        }];
-      }
-      if (command === 'download_remote_file_confined') {
-        throw new Error('Unsafe remote relative path');
-      }
-      return undefined;
+  it('shows the selected compression method and the server error without declaring completion', async () => {
+    mocks.invoke.mockImplementation(async (_cmd, args) => {
+      args.onProgress.onmessage({ method: 'ftpZlib', phase: 'transferring', transferred: 12, total: 20, files: 3, dirs: 1 });
+      return { success: false, error: 'Transfer interrupted' };
     });
-
-    render(
-      <DirectoryTransferDialog
-        open
-        onOpenChange={() => {}}
-        direction="download"
-        connectionId="conn-1"
-        sourcePath="/srv/release"
-        destPath="C:/Downloads"
-        destinationDirectoryName="release"
-        onComplete={() => {}}
-      />,
-    );
-
-    await waitFor(() => expect(mocks.warning).toHaveBeenCalledOnce());
-    expect(mocks.invoke).toHaveBeenCalledWith('download_remote_file_confined', {
-      connectionId: 'conn-1',
-      remoteRoot: '/srv/release',
-      destinationRoot: 'C:/Downloads',
-      remoteRelativePath: 'nested\\..\\outside.txt',
-      destinationRelativePath: 'release/nested\\..\\outside.txt',
-      transferId: expect.anything(),
-      onProgress: expect.anything(),
-    });
-    expect(mocks.invoke.mock.calls.some(([command]) => command === 'download_remote_file')).toBe(false);
-    expect(mocks.success).not.toHaveBeenCalled();
+    render(<DirectoryTransferDialog {...props} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Transfer interrupted');
+    expect(screen.getByText(/MODE Z/)).toBeVisible();
+    expect(props.onComplete).not.toHaveBeenCalled();
   });
 
-  it('stops before creating or downloading when enumeration fails', async () => {
-    mocks.invoke.mockRejectedValueOnce(new Error('permission denied'));
-
-    render(
-      <DirectoryTransferDialog
-        open
-        onOpenChange={() => {}}
-        direction="download"
-        connectionId="conn-1"
-        sourcePath="/root/private"
-        destPath="C:/Downloads/private"
-        onComplete={() => {}}
-      />,
-    );
-
-    await waitFor(() => expect(mocks.error).toHaveBeenCalledOnce());
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
-    expect(mocks.invoke).toHaveBeenCalledWith('list_remote_files_recursive', {
-      connectionId: 'conn-1',
-      path: '/root/private',
-      excludePatterns: [],
-    });
-  });
-
-  it('cancels before transferring files while enumeration is pending', async () => {
-    let resolveEntries: ((entries: unknown[]) => void) | undefined;
-    mocks.invoke.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        resolveEntries = resolve;
-      }),
-    );
-    const onComplete = vi.fn();
-
-    render(
-      <DirectoryTransferDialog
-        open
-        onOpenChange={() => {}}
-        direction="download"
-        connectionId="conn-1"
-        sourcePath="/srv/release"
-        destPath="C:/Downloads/release"
-        onComplete={onComplete}
-      />,
-    );
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
-    await act(async () => {
-      resolveEntries?.([{
-        relative_path: 'late.txt',
-        name: 'late.txt',
-        size: 1,
-        modified: null,
-        file_type: 'File',
-      }]);
-    });
-
-    expect(await screen.findByText('Cancelled')).toBeTruthy();
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
-    expect(onComplete).not.toHaveBeenCalled();
+  it('uses the upload source directly and cancels the same backend job', async () => {
+    let finish!: (value: unknown) => void;
+    mocks.invoke.mockImplementation((cmd) => cmd === 'transfer_directory'
+      ? new Promise(resolve => { finish = resolve; }) : Promise.resolve({ success: true }));
+    render(<DirectoryTransferDialog {...props} direction="upload" sourcePath="C:/work/release" destPath="/srv/release" destinationDirectoryName={undefined} />);
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('transfer_directory', expect.objectContaining({
+      upload: true, localPath: 'C:/work/release', remotePath: '/srv/release',
+    })));
+    const id = mocks.invoke.mock.calls[0][1].transferId;
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(mocks.invoke).toHaveBeenCalledWith('cancel_transfer', { transferId: id });
+    await act(async () => finish({ success: true }));
+    expect(screen.getByRole('status')).toHaveTextContent('Cancelled');
+    expect(props.onComplete).not.toHaveBeenCalled();
   });
 });

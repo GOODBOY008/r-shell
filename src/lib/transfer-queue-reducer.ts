@@ -10,6 +10,19 @@ export type TransferStatus =
 
 export type TransferDirection = "upload" | "download";
 
+export interface DirectoryTransferPaths {
+  /** Selected local source folder for upload, or trusted destination parent for download. */
+  localPath: string;
+  directoryName?: string;
+}
+
+export interface DirectoryProgress {
+  method: "tarGzip" | "ftpZlib" | "plain";
+  phase: "packing" | "transferring" | "unpacking";
+  files: number;
+  dirs: number;
+}
+
 /**
  * Parameters for the confined download command
  * (`download_remote_file_confined`) — the path-validated variant the dialogs
@@ -42,6 +55,8 @@ export interface TransferItem {
   completedAt?: number;
   /** Confined-download variant parameters (see ConfinedDownloadPaths). */
   confined?: ConfinedDownloadPaths;
+  directory?: DirectoryTransferPaths;
+  directoryProgress?: DirectoryProgress;
 }
 
 export type EnqueueTransferInput = {
@@ -55,6 +70,7 @@ export type EnqueueTransferInput = {
   destinationPath: string;
   totalBytes: number;
   confined?: ConfinedDownloadPaths;
+  directory?: DirectoryTransferPaths;
 };
 
 export type TransferAction =
@@ -68,6 +84,7 @@ export type TransferAction =
       speed: number;
       /** Authoritative total from the backend (overrides the enqueued size). */
       totalBytes?: number;
+      directoryProgress?: DirectoryProgress;
     }
   | { type: "COMPLETE"; id: string }
   | { type: "FAIL"; id: string; error: string }
@@ -109,6 +126,7 @@ export function transferQueueReducer(
         totalBytes: item.totalBytes,
         speed: 0,
         ...(item.confined ? { confined: item.confined } : {}),
+        ...(item.directory ? { directory: item.directory } : {}),
       }));
       return [...state, ...newItems];
     }
@@ -132,6 +150,7 @@ export function transferQueueReducer(
               progress: action.progress,
               bytesTransferred: action.bytesTransferred,
               speed: action.speed,
+              ...(action.directoryProgress ? { directoryProgress: action.directoryProgress } : {}),
               ...(action.totalBytes !== undefined
                 ? { totalBytes: action.totalBytes }
                 : {}),
@@ -194,6 +213,7 @@ export function transferQueueReducer(
               progress: 0,
               bytesTransferred: 0,
               speed: 0,
+              ...(item.directory ? { directoryProgress: undefined, totalBytes: 0 } : {}),
               error: undefined,
               startedAt: undefined,
               completedAt: undefined,

@@ -914,7 +914,7 @@
       },
       "refreshFailed": "文件已保存，但列表刷新失败。请刷新列表以更新文件信息。"
     },
-    "directorySelectionHint": "请每次传输一个文件夹，或仅选择文件进行批量传输。",
+    "directorySelectionHint": "请选择普通文件或文件夹进行传输。",
     "uploadDestination": "上传到 {{path}}",
     "downloadDestination": "下载到 {{path}}",
     "workspace": {
@@ -1245,6 +1245,16 @@
     "offlineListing": "上次读取的目录 · 已断开"
   },
   "directoryTransferDialog": {
+    "method": {
+      "tarGzip": "压缩归档 · tar.gz",
+      "ftpZlib": "FTP 压缩 · MODE Z",
+      "plain": "服务器不支持压缩，按原目录逐文件传输"
+    },
+    "phase": {
+      "packing": "正在打包文件夹…",
+      "transferring": "正在传输文件夹…",
+      "unpacking": "正在解包文件夹…"
+    },
     "title": {
       "upload": "上传目录",
       "download": "下载目录"

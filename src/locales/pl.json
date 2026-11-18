@@ -940,7 +940,7 @@
       },
       "refreshFailed": "Plik został zapisany, ale nie udało się odświeżyć listy. Odśwież ją, aby zaktualizować dane."
     },
-    "directorySelectionHint": "Przesyłaj po jednym folderze lub wybierz wyłącznie pliki do transferu zbiorczego.",
+    "directorySelectionHint": "Wybierz zwykłe pliki lub foldery do przesłania.",
     "uploadDestination": "Wyślij do {{path}}",
     "downloadDestination": "Pobierz do {{path}}",
     "workspace": {
@@ -1295,6 +1295,16 @@
     "offlineListing": "Ostatnio wczytana lista · rozłączono"
   },
   "directoryTransferDialog": {
+    "method": {
+      "tarGzip": "Skompresowane archiwum · tar.gz",
+      "ftpZlib": "Kompresja FTP · MODE Z",
+      "plain": "Serwer nie obsługuje kompresji · przesyłanie pojedynczych plików"
+    },
+    "phase": {
+      "packing": "Pakowanie folderu…",
+      "transferring": "Przesyłanie folderu…",
+      "unpacking": "Rozpakowywanie folderu…"
+    },
     "title": {
       "upload": "Wyślij katalog",
       "download": "Pobierz katalog"
