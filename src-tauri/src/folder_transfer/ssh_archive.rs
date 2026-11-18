@@ -76,15 +76,29 @@ parent=${dest%/*}
 CDPATH= cd -- "${parent:-/}"
 dest=./$name
 stage=$(mktemp -d ./.r-shell-transfer.XXXXXXXX)
-trap 'rm -rf "$stage"' 0
+cleanup() {
+    rm -rf "$stage" 2>/dev/null || { chmod -R u+rwX "$stage" && rm -rf "$stage"; }
+}
+trap cleanup 0
 trap 'exit 1' HUP INT TERM
 mkdir "$stage/tree"
 tar -xzof - -C "$stage/tree"
 merge() {
     if [ -L "$2" ]; then printf 'Destination is a symbolic link: %s\n' "$2" >&2; return 1; fi
     if [ ! -e "$2" ]; then
-        if [ "$3" = install ]; then mv "$1" "$2"; fi
+        if [ "$3" = install ]; then
+            # Reparenting a directory may require write access to update "..".
+            if [ -d "$1" ] && [ ! -w "$1" ]; then
+                chmod u+w "$1" && mv "$1" "$2" && chmod u-w "$2"
+            else
+                mv "$1" "$2"
+            fi
+        fi
     elif [ -d "$1" ] && [ -d "$2" ]; then
+        # Only this private directory is discarded after its children are merged.
+        if [ ! -r "$1" ] || [ ! -w "$1" ] || [ ! -x "$1" ]; then
+            chmod u+rwx "$1" || return 1
+        fi
         for child in "$1"/* "$1"/.[!.]* "$1"/..?*; do
             [ -e "$child" ] || continue
             merge "$child" "$2/${child##*/}" "$3" || return 1
@@ -206,4 +220,79 @@ pub(super) async fn transfer(
     };
     bounded_channel_close(&channel).await;
     result
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::folder_transfer::local;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::process::{Command, Output, Stdio};
+
+    fn install_readonly_tree(dest: &Path) -> Result<Output> {
+        let source = tempfile::tempdir()?;
+        let folders = ["existing", "new"];
+        for name in folders {
+            let dir = source.path().join(name);
+            fs::create_dir(&dir)?;
+            fs::write(dir.join("item"), "uploaded")?;
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o555))?;
+        }
+        let cancel = CancellationToken::new();
+        let tree = local::scan(source.path(), &cancel)?;
+        let archive = local::pack(source.path(), &tree, &cancel)?;
+        for name in folders {
+            fs::set_permissions(source.path().join(name), fs::Permissions::from_mode(0o755))?;
+        }
+        Ok(Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "umask 022; {}",
+                command(INSTALL, dest.to_str().unwrap())
+            ))
+            .stdin(Stdio::from(archive))
+            .output()?)
+    }
+
+    #[test]
+    fn upload_merges_readonly_staged_directories_and_preserves_published_modes() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let dest = parent.path().join("published");
+        fs::create_dir_all(dest.join("existing"))?;
+        fs::write(dest.join("existing/item"), "old")?;
+        fs::write(dest.join("existing/keep"), "keep")?;
+        fs::set_permissions(dest.join("existing"), fs::Permissions::from_mode(0o750))?;
+        let result = install_readonly_tree(&dest)?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let new_mode = fs::metadata(dest.join("new"))?.permissions().mode() & 0o777;
+        fs::set_permissions(dest.join("new"), fs::Permissions::from_mode(0o755))?;
+        assert_eq!(new_mode, 0o555);
+        assert_eq!(
+            fs::metadata(dest.join("existing"))?.permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(fs::read(dest.join("existing/item"))?, b"uploaded");
+        assert_eq!(fs::read(dest.join("existing/keep"))?, b"keep");
+        assert_eq!(fs::read(dest.join("new/item"))?, b"uploaded");
+        assert_eq!(fs::read_dir(parent.path())?.count(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn failed_upload_removes_readonly_staging() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let dest = parent.path().join("conflict");
+        fs::write(&dest, "keep")?;
+        let result = install_readonly_tree(&dest)?;
+        assert!(!result.status.success());
+        assert_eq!(fs::read(&dest)?, b"keep");
+        assert_eq!(fs::read_dir(parent.path())?.count(), 1);
+        Ok(())
+    }
 }

@@ -1,5 +1,8 @@
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Read, Seek};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, ensure, Context, Result};
@@ -151,48 +154,92 @@ fn transfer_header(metadata: &fs::Metadata) -> Result<tar::Header> {
     Ok(header)
 }
 
+fn archive_name(raw: &str) -> Result<&str> {
+    let name = raw.strip_prefix("./").unwrap_or(raw).trim_end_matches('/');
+    ensure!(!name.is_empty(), "Empty archive path");
+    for part in name.split('/') {
+        component(part)?;
+    }
+    Ok(name)
+}
+
+fn write_archive_file(
+    staging: &Path,
+    name: &str,
+    reader: impl Read,
+    expected: u64,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let target = staging.join(name);
+    fs::create_dir_all(target.parent().context("Missing parent")?)?;
+    let mut output = File::create_new(target)?;
+    let bytes = io::copy(&mut CancellableReader(reader, cancel), &mut output)?;
+    ensure!(bytes == expected, "Incomplete archive entry: {name}");
+    Ok(())
+}
+
 pub(super) fn unpack(file: File, staging: &Path, cancel: &CancellationToken) -> Result<Tree> {
     let decoder = GzDecoder::new(CancellableReader(file, cancel));
     let mut archive = tar::Archive::new(decoder);
     let mut tree = Tree::default();
+    let mut links: HashMap<String, Vec<String>> = HashMap::new();
     for entry in archive.entries()? {
         check_cancel(cancel)?;
         let mut entry = entry?;
         let path = entry.path()?;
         let raw = path.to_str().context("Archive filename is not UTF-8")?;
-        let name = raw.strip_prefix("./").unwrap_or(raw).trim_end_matches('/');
         let kind = entry.header().entry_type();
         if raw == "." || raw == "./" {
             ensure!(kind.is_dir(), "Invalid archive root");
             continue;
         }
-        ensure!(!name.is_empty(), "Empty archive path");
-        for part in name.split('/') {
-            component(part)?;
-        }
-        let name = name.to_owned();
-        let target = staging.join(&name);
+        let name = archive_name(raw)?.to_owned();
         if kind.is_dir() {
-            fs::create_dir_all(target)?;
+            fs::create_dir_all(staging.join(&name))?;
             tree.dirs.push(name);
         } else if kind.is_file() {
-            fs::create_dir_all(target.parent().context("Missing parent")?)?;
-            let mut output = File::create_new(&target)?;
             let expected = entry.size();
-            let bytes = io::copy(&mut CancellableReader(&mut entry, cancel), &mut output)?;
-            ensure!(bytes == expected, "Incomplete archive entry: {name}");
-            tree.files.push((name, bytes));
+            write_archive_file(staging, &name, &mut entry, expected, cancel)?;
+            tree.files.push((name, expected));
+        } else if kind.is_hard_link() {
+            let original = entry
+                .link_name()?
+                .context("Archive hard link has no target")?;
+            let original =
+                archive_name(original.to_str().context("Hard link target is not UTF-8")?)?;
+            links.entry(original.to_owned()).or_default().push(name);
         } else {
-            bail!("Unsupported archive entry (link or special file): {name}");
+            bail!("Unsupported archive entry (symbolic link or special file): {name}");
         }
     }
     // tar stops at the end marker. Read through the gzip trailer to verify its CRC.
     io::copy(&mut archive.into_inner(), &mut io::sink())?;
+    // Only files supplied by this archive can be copy sources. Appending each
+    // resolved alias also handles chains and forward references in one pass.
+    let mut index = 0;
+    while !links.is_empty() && index < tree.files.len() {
+        check_cancel(cancel)?;
+        let (name, size) = &tree.files[index];
+        if let Some(aliases) = links.remove(name) {
+            let original = staging.join(name);
+            let size = *size;
+            for alias in aliases {
+                check_cancel(cancel)?;
+                write_archive_file(staging, &alias, File::open(&original)?, size, cancel)?;
+                tree.files.push((alias, size));
+            }
+        }
+        index += 1;
+    }
+    if let Some(target) = links.keys().next() {
+        bail!("Archive hard link does not resolve to a regular file: {target}");
+    }
     Ok(tree)
 }
 
 pub(super) struct Destination {
-    stage: TempDir,
+    _container: TempDir,
+    tree: PathBuf,
     pub target: PathBuf,
 }
 impl Destination {
@@ -202,14 +249,24 @@ impl Destination {
             "The download destination must be absolute"
         );
         let target = parent.join(component(name)?);
-        let stage = tempfile::Builder::new()
-            .prefix(".r-shell-transfer-")
-            .tempdir_in(parent)?;
-        Ok(Self { stage, target })
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(".r-shell-transfer-");
+        #[cfg(unix)]
+        builder.permissions(fs::Permissions::from_mode(0o700));
+        let container = builder.tempdir_in(parent)?;
+        // The private parent shields partial files. The child retains normal
+        // directory permissions when renamed into a new download destination.
+        let tree = container.path().join("tree");
+        fs::create_dir(&tree)?;
+        Ok(Self {
+            _container: container,
+            tree,
+            target,
+        })
     }
 
     pub fn path(&self) -> &Path {
-        self.stage.path()
+        &self.tree
     }
 
     pub fn publish(self, cancel: &CancellationToken) -> Result<()> {
@@ -245,6 +302,13 @@ fn merge(src: &Path, dest: &Path, preflight: bool, cancel: &CancellationToken) -
         }
     } else if from.is_file() && existing.is_file() {
         if !preflight {
+            #[cfg(unix)]
+            {
+                // Preserve access and execute bits. Downloaded contents must
+                // not inherit set-user-ID or set-group-ID privileges.
+                let mode = existing.permissions().mode() & 0o777;
+                fs::set_permissions(src, fs::Permissions::from_mode(mode))?;
+            }
             fs::rename(src, dest)?;
         }
     } else {
@@ -257,6 +321,110 @@ fn merge(src: &Path, dest: &Path, preflight: bool, cancel: &CancellationToken) -
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn append_hard_link(
+        archive: &mut tar::Builder<GzEncoder<File>>,
+        name: &str,
+        original: &str,
+    ) -> Result<()> {
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Link);
+        header.set_size(0);
+        archive.append_link(&mut header, name, original)?;
+        Ok(())
+    }
+
+    #[test]
+    fn archive_hard_links_download_as_independent_files() -> Result<()> {
+        let mut archive =
+            tar::Builder::new(GzEncoder::new(tempfile::tempfile()?, Compression::fast()));
+        append_hard_link(&mut archive, "nested/first", "./original")?;
+        let mut header = tar::Header::new_gnu();
+        header.set_size(7);
+        archive.append_data(&mut header, "original", &b"content"[..])?;
+        append_hard_link(&mut archive, "second", "nested/first")?;
+        let mut file = archive.into_inner()?.finish()?;
+        file.rewind()?;
+        let parent = tempfile::tempdir()?;
+        let dest = Destination::new(parent.path(), "download")?;
+        let cancel = CancellationToken::new();
+        let tree = unpack(file, dest.path(), &cancel)?;
+        assert_eq!((tree.files.len(), tree.bytes()), (3, 21));
+        let target = dest.target.clone();
+        dest.publish(&cancel)?;
+        for name in ["original", "nested/first", "second"] {
+            assert_eq!(fs::read(target.join(name))?, b"content");
+        }
+        fs::write(target.join("nested/first"), "changed")?;
+        assert_eq!(fs::read(target.join("original"))?, b"content");
+        assert_eq!(fs::read(target.join("second"))?, b"content");
+        Ok(())
+    }
+
+    #[test]
+    fn hard_links_must_resolve_to_regular_files_in_the_archive() -> Result<()> {
+        for original in ["missing", "alias", "ambient", "../outside"] {
+            let mut archive =
+                tar::Builder::new(GzEncoder::new(tempfile::tempfile()?, Compression::fast()));
+            append_hard_link(&mut archive, "alias", original)?;
+            let mut file = archive.into_inner()?.finish()?;
+            file.rewind()?;
+            let parent = tempfile::tempdir()?;
+            let dest = Destination::new(parent.path(), "download")?;
+            fs::write(dest.path().join("ambient"), "not in the archive")?;
+            assert!(unpack(file, dest.path(), &CancellationToken::new()).is_err());
+            assert!(!dest.target.exists());
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replacing_downloaded_files_preserves_private_and_executable_modes() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let dest = Destination::new(parent.path(), "download")?;
+        let target = dest.target.clone();
+        fs::create_dir(&target)?;
+        let files = [
+            ("credentials", 0o600),
+            ("run.sh", 0o755),
+            ("privileged", 0o6755),
+        ];
+        for (name, mode) in files {
+            fs::write(target.join(name), "old")?;
+            fs::set_permissions(target.join(name), fs::Permissions::from_mode(mode))?;
+            fs::write(dest.path().join(name), "new")?;
+            fs::set_permissions(dest.path().join(name), fs::Permissions::from_mode(0o644))?;
+        }
+        dest.publish(&CancellationToken::new())?;
+        for (name, mode) in files {
+            assert_eq!(fs::read(target.join(name))?, b"new");
+            assert_eq!(
+                fs::metadata(target.join(name))?.permissions().mode() & 0o7777,
+                mode & 0o777
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_is_private_while_new_folders_use_normal_directory_permissions() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let reference = parent.path().join("ordinary-directory");
+        fs::create_dir(&reference)?;
+        let dest = Destination::new(parent.path(), "download")?;
+        let container = dest.path().parent().unwrap().to_owned();
+        assert_eq!(fs::metadata(&container)?.permissions().mode() & 0o077, 0);
+        let target = dest.target.clone();
+        dest.publish(&CancellationToken::new())?;
+        assert!(!container.exists());
+        assert_eq!(
+            fs::metadata(&target)?.permissions().mode() & 0o777,
+            fs::metadata(&reference)?.permissions().mode() & 0o777
+        );
+        Ok(())
+    }
 
     #[test]
     fn gzip_round_trip_preserves_contents_and_merges_empty_directories() -> Result<()> {
