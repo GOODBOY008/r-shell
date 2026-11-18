@@ -119,14 +119,31 @@ impl<R: Read> Read for CancellableReader<'_, R> {
     }
 }
 
+// The upload archive has a private envelope. User files live under tree/.
+// An optional modes/ record contains a symbolic chmod operand, one space,
+// and the exact UTF-8 directory path (including any trailing newlines).
 pub(super) fn pack(root: &Path, tree: &Tree, cancel: &CancellationToken) -> Result<File> {
     let encoder = GzEncoder::new(tempfile::tempfile()?, Compression::fast());
     let mut archive = tar::Builder::new(encoder);
+    let contents = Path::new("tree");
+    let mut restore_modes = Vec::new();
     for dir in &tree.dirs {
         check_cancel(cancel)?;
         let metadata = no_link(&root.join(dir))?;
         ensure!(metadata.is_dir(), "Source changed: {dir}");
-        archive.append_data(&mut transfer_header(&metadata)?, dir, io::empty())?;
+        let mut header = transfer_header(&metadata)?;
+        let mode = header.mode()?;
+        if mode & 0o700 != 0o700 {
+            // BusyBox applies the directory mode before extracting children.
+            // Restore only the owner bits added here so the remote umask still applies.
+            header.set_mode(mode | 0o700);
+            let remove: String = [(0o400, 'r'), (0o200, 'w'), (0o100, 'x')]
+                .into_iter()
+                .filter_map(|(bit, letter)| (mode & bit == 0).then_some(letter))
+                .collect();
+            restore_modes.push(format!("u-{remove} {dir}"));
+        }
+        archive.append_data(&mut header, contents.join(dir), io::empty())?;
     }
     for (name, _) in &tree.files {
         check_cancel(cancel)?;
@@ -136,9 +153,18 @@ pub(super) fn pack(root: &Path, tree: &Tree, cancel: &CancellationToken) -> Resu
         let metadata = file.metadata()?;
         archive.append_data(
             &mut transfer_header(&metadata)?,
-            name,
+            contents.join(name),
             CancellableReader(file.take(metadata.len()), cancel),
         )?;
+    }
+    // scan() visits parents before descendants. Restore children first so a
+    // restricted parent cannot prevent updates to its descendants.
+    for (index, record) in restore_modes.iter().rev().enumerate() {
+        check_cancel(cancel)?;
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o600);
+        header.set_size(record.len() as u64);
+        archive.append_data(&mut header, format!("modes/{index}"), record.as_bytes())?;
     }
     let mut file = archive.into_inner()?.finish()?;
     file.rewind()?;
@@ -426,6 +452,49 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn upload_directory_headers_allow_eager_extractors_to_create_children() -> Result<()> {
+        let source = tempfile::tempdir()?;
+        let names = ["modes", "modes/odd name\n"];
+        let nested = source.path().join(names[1]);
+        fs::create_dir_all(&nested)?;
+        fs::write(nested.join("item"), "contents")?;
+        for name in names.iter().rev() {
+            fs::set_permissions(source.path().join(name), fs::Permissions::from_mode(0o555))?;
+        }
+        let cancel = CancellationToken::new();
+        let tree = scan(source.path(), &cancel)?;
+        let file = pack(source.path(), &tree, &cancel)?;
+        for name in names {
+            fs::set_permissions(source.path().join(name), fs::Permissions::from_mode(0o755))?;
+        }
+        let mut archive = tar::Archive::new(GzDecoder::new(file));
+        let mut directories = Vec::new();
+        let mut modes = Vec::new();
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let path = entry.path()?.into_owned();
+            if entry.header().entry_type().is_dir() {
+                assert_eq!(entry.header().mode()? & 0o700, 0o700);
+                directories.push(path);
+            } else if path.starts_with("modes") {
+                let mut record = String::new();
+                entry.read_to_string(&mut record)?;
+                modes.push((path, record));
+            }
+        }
+        assert_eq!(directories, names.map(|name| Path::new("tree").join(name)));
+        assert_eq!(
+            modes,
+            [
+                (PathBuf::from("modes/0"), format!("u-w {}", names[1])),
+                (PathBuf::from("modes/1"), format!("u-w {}", names[0]))
+            ]
+        );
+        Ok(())
+    }
+
     #[test]
     fn gzip_round_trip_preserves_contents_and_merges_empty_directories() -> Result<()> {
         let parent = tempfile::tempdir()?;
@@ -434,8 +503,12 @@ mod tests {
         fs::write(source.join("sub/.file with spaces"), vec![b'a'; 500_000])?;
         fs::write(source.join("zero"), [])?;
         let cancel = CancellationToken::new();
-        let tree = scan(&source, &cancel)?;
-        let archive = pack(&source, &tree, &cancel)?;
+        // Model the ordinary tar stream produced by the remote export command.
+        let mut server =
+            tar::Builder::new(GzEncoder::new(tempfile::tempfile()?, Compression::fast()));
+        server.append_dir_all(".", &source)?;
+        let mut archive = server.into_inner()?.finish()?;
+        archive.rewind()?;
         assert!(archive.metadata()?.len() < 10_000);
         let dest = Destination::new(parent.path(), "target")?;
         fs::create_dir(&dest.target)?;

@@ -81,8 +81,8 @@ cleanup() {
 }
 trap cleanup 0
 trap 'exit 1' HUP INT TERM
-mkdir "$stage/tree"
-tar -xzof - -C "$stage/tree"
+mkdir "$stage/tree" "$stage/modes"
+tar -xzof - -C "$stage"
 merge() {
     if [ -L "$2" ]; then printf 'Destination is a symbolic link: %s\n' "$2" >&2; return 1; fi
     if [ ! -e "$2" ]; then
@@ -95,10 +95,6 @@ merge() {
             fi
         fi
     elif [ -d "$1" ] && [ -d "$2" ]; then
-        # Only this private directory is discarded after its children are merged.
-        if [ ! -r "$1" ] || [ ! -w "$1" ] || [ ! -x "$1" ]; then
-            chmod u+rwx "$1" || return 1
-        fi
         for child in "$1"/* "$1"/.[!.]* "$1"/..?*; do
             [ -e "$child" ] || continue
             merge "$child" "$2/${child##*/}" "$3" || return 1
@@ -111,6 +107,17 @@ merge() {
     fi
 }
 merge "$stage/tree" "$dest" check
+# Existing directories keep their own modes and their staged counterparts
+# stay writable until cleanup. Restore new subtrees in private, children first.
+i=0
+while [ -f "$stage/modes/$i" ]; do
+    # The sentinel preserves trailing newlines in a filename.
+    record=$(cat "$stage/modes/$i" && printf .)
+    record=${record%.}
+    rel=${record#* }
+    if [ ! -d "$dest/$rel" ]; then chmod "${record%% *}" "$stage/tree/$rel"; fi
+    i=$((i + 1))
+done
 merge "$stage/tree" "$dest" install
 "#;
 
