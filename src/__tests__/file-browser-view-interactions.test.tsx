@@ -7,7 +7,7 @@ import { EDITOR_FILE_SAVED_EVENT } from '../lib/editor-windows-store';
 import { dispatchShortcutCommand, useCommandShortcuts } from '../lib/keyboard-shortcuts';
 
 const mocks = vi.hoisted(() => ({
-  invoke: vi.fn(), dispatch: vi.fn(),
+  invoke: vi.fn(), enqueue: vi.fn(),
   listeners: new Map<string, Set<(event: { payload: unknown }) => void>>(),
 }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
@@ -21,8 +21,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 vi.mock('../lib/use-webview-file-drop', () => ({ useWebviewFileDrop: () => ({ isDragOver: false }) }));
 vi.mock('../lib/notifications', () => ({ notify: { info: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
-vi.mock('../lib/transfer-queue-service', () => ({ useTransferQueue: () => ({ transfers: [], dispatch: mocks.dispatch }), onItemSettled: () => () => {} }));
-vi.mock('../components/transfer-queue', () => ({ TransferQueue: () => null }));
+vi.mock('../lib/transfer-queue-service', () => ({ enqueue: mocks.enqueue, onItemSettled: () => () => {} }));
+vi.mock('../components/transfer-queue', () => ({ FileWorkspaceQueue: () => null }));
 vi.mock('../components/sync-dialog', () => ({ SyncDialog: () => null }));
 vi.mock('../components/directory-transfer-dialog', () => ({
   DirectoryTransferDialog: (props: Record<string, unknown>) => <output data-testid="directory-transfer">{JSON.stringify(props)}</output>,
@@ -104,38 +104,88 @@ describe('SFTP and FTP workspace interactions', () => {
     expect(screen.getByRole('button', { name: /^Upload\s*1$/ })).toBeEnabled();
   });
 
-  it.each(['SFTP', 'FTP'])('shows current selections and enqueues %s files with the displayed destinations', async protocol => {
+  it.each(['SFTP', 'FTP', 'FTPS'])('shows current selections and enqueues %s files with the displayed destinations', async protocol => {
     const open = vi.fn();
     render(<FileBrowserView {...props} protocol={protocol} onOpenInEditor={open} />);
     const local = within(screen.getByLabelText('Local'));
     const remote = within(screen.getByLabelText('one.example'));
     fireEvent.click(await local.findByText('app.conf'));
     fireEvent.click(screen.getByRole('button', { name: /^Upload\s*1$/ }));
-    expect(mocks.dispatch).toHaveBeenLastCalledWith({ type: 'ENQUEUE', items: [expect.objectContaining({
+    expect(mocks.enqueue).toHaveBeenLastCalledWith([expect.objectContaining({
       connectionId: 'one', sourcePath: '/home/local/app.conf', destinationPath: '/app.conf', direction: 'upload',
-    })] });
+    })]);
     fireEvent.click(await remote.findByText('app.conf'));
     fireEvent.click(screen.getByRole('button', { name: /^Download\s*1$/ }));
-    expect(mocks.dispatch).toHaveBeenLastCalledWith({ type: 'ENQUEUE', items: [expect.objectContaining({
+    expect(mocks.enqueue).toHaveBeenLastCalledWith([expect.objectContaining({
       connectionId: 'one', sourcePath: '/app.conf', destinationPath: '/home/local/app.conf', direction: 'download',
-    })] });
+      confined: expect.objectContaining({ destinationRoot: '/home/local' }),
+    })]);
     fireEvent.doubleClick(remote.getByText('app.conf'));
     expect(open).toHaveBeenCalledWith('/app.conf', 'app.conf');
+    fireEvent.click(local.getByRole('button', { name: 'Filter…' }));
     const filter = local.getByRole('textbox', { name: 'Filter…' });
-    const before = mocks.dispatch.mock.calls.length;
+    const before = mocks.enqueue.mock.calls.length;
     fireEvent.keyDown(filter, { key: 'F5' });
-    expect(mocks.dispatch).toHaveBeenCalledTimes(before);
+    expect(mocks.enqueue).toHaveBeenCalledTimes(before);
   });
 
-  it('routes a drop only to the connection containing its target panel', async () => {
-    render(<><FileBrowserView {...props} /><FileBrowserView {...props} connectionId="two" host="two.example" /></>);
-    const target = screen.getByLabelText('two.example');
-    await within(target).findByText('app.conf');
-    act(() => { target.dispatchEvent(new CustomEvent('rshell-drop-transfer', { bubbles: true, detail: {
-      targetMode: 'remote', targetPath: '/', sourcePath: '/home/local', files: [files[1]],
-    } })); });
-    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
-    expect(mocks.dispatch).toHaveBeenCalledWith({ type: 'ENQUEUE', items: [expect.objectContaining({ connectionId: 'two' })] });
+  it('accepts a drag only in the opposite pane of its originating workspace', async () => {
+    render(<><div data-testid="first"><FileBrowserView {...props} /></div><FileBrowserView {...props} connectionId="two" host="two.example" /></>);
+    const source = within(screen.getByTestId('first')).getByLabelText('Local');
+    const file = await within(source).findByText('app.conf');
+    const remote = screen.getByLabelText('one.example');
+    await within(remote).findByText('app.conf');
+    const otherRemote = screen.getByLabelText('two.example');
+    await within(otherRemote).findByText('app.conf');
+    const dataTransfer = { types: ['application/x-rshell-files'], setData: vi.fn() };
+    fireEvent.dragStart(file, { dataTransfer });
+    fireEvent.drop(source, { dataTransfer });
+    fireEvent.drop(otherRemote, { dataTransfer });
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    fireEvent.dragOver(remote, { dataTransfer });
+    expect(within(remote).getByText('Drop to upload')).toBeInTheDocument();
+    fireEvent.drop(remote, { dataTransfer });
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
+    expect(mocks.enqueue).toHaveBeenCalledWith([expect.objectContaining({ connectionId: 'one', destinationPath: '/app.conf' })]);
+  });
+
+  it('switches pane focus with F6 without losing either selection', async () => {
+    render(<FileBrowserView {...props} />);
+    const local = screen.getByLabelText('Local');
+    const remote = screen.getByLabelText('one.example');
+    fireEvent.click(await within(local).findByText('app.conf'));
+    fireEvent.keyDown(local, { key: 'F6' });
+    expect(remote).toHaveFocus();
+    fireEvent.click(await within(remote).findByText('config'));
+    fireEvent.keyDown(remote, { key: 'F6' });
+    expect(local).toHaveFocus();
+    expect(within(local).getByRole('checkbox', { name: 'Select app.conf' })).toBeChecked();
+    expect(within(remote).getByRole('checkbox', { name: 'Select config' })).toBeChecked();
+  });
+
+  it('waits for a listed destination and uses that directory even after browsing elsewhere', async () => {
+    let allowRemote = false;
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_remote_files' && !allowRemote) throw Error('Permission denied');
+      return command === 'get_home_directory' ? '/home/local' : files;
+    });
+    render(<FileBrowserView {...props} />);
+    const local = within(screen.getByLabelText('Local'));
+    const remote = within(screen.getByLabelText('one.example'));
+    fireEvent.click(await local.findByText('app.conf'));
+    const upload = local.getByRole('button', { name: /^Upload\s*1$/ });
+    expect(upload).toBeDisabled();
+    allowRemote = true;
+    await act(async () => { fireEvent.click(within(remote.getByRole('alert')).getByRole('button', { name: 'Retry' })); });
+    const directory = await remote.findByText('config');
+    await act(async () => { fireEvent.doubleClick(directory); });
+    expect(local.getByText('/config')).toBeVisible();
+    fireEvent.click(upload);
+    await act(async () => { fireEvent.click(remote.getByRole('button', { name: 'Back' })); });
+    expect(mocks.enqueue).toHaveBeenCalledWith([expect.objectContaining({
+      connectionId: 'one', connectionName: 'One', destinationPath: '/config/app.conf',
+    })]);
+    expect(local.queryByText('/config')).toBeNull();
   });
 
   it('opens the directory transfer flow and disables transfers while leaving local browsing available offline', async () => {
@@ -146,7 +196,7 @@ describe('SFTP and FTP workspace interactions', () => {
     expect(JSON.parse(screen.getByTestId('directory-transfer').textContent!)).toMatchObject({
       connectionId: 'one', direction: 'upload', sourcePath: '/home/local/config', destPath: '/config',
     });
-    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
     view.rerender(<FileBrowserView {...props} isConnected={false} />);
     expect(screen.getByRole('button', { name: /^Upload\s*1$/ })).toBeDisabled();
     expect(local.getByRole('button', { name: 'Refresh' })).toBeEnabled();

@@ -556,7 +556,8 @@
         "focusGroup6": "Focar no grupo 6",
         "focusGroup7": "Focar no grupo 7",
         "focusGroup8": "Focar no grupo 8",
-        "focusGroup9": "Focar no grupo 9"
+        "focusGroup9": "Focar no grupo 9",
+        "switchFilePane": "Alternar painel de arquivos"
       },
       "resetAll": "Restaurar todos",
       "routingDescription": "Os atalhos dependem da área em foco. Busque por ação, tecla ou contexto.",
@@ -929,7 +930,12 @@
     },
     "directorySelectionHint": "Transfira uma pasta por vez ou selecione apenas arquivos para transferir em lote.",
     "uploadDestination": "Enviar para {{path}}",
-    "downloadDestination": "Baixar em {{path}}"
+    "downloadDestination": "Baixar em {{path}}",
+    "workspace": {
+      "connected": "Conectado",
+      "compareSync": "Comparar / sincronizar",
+      "switchPane": "Selecionar painel de arquivos"
+    }
   },
   "contextMenu": {
     "copy": "Copiar",
@@ -1255,7 +1261,15 @@
       "deleteTitle": "Excluir este item?",
       "deleteDescription": "Quer excluir “{{name}}”? Esta ação é irreversível.",
       "closeEditorFirst": "Feche a aba deste arquivo no editor antes de renomeá-lo ou excluí-lo."
-    }
+    },
+    "navigation": "Navegação de {{name}}",
+    "viewOptions": "Opções de visualização",
+    "compactRows": "Linhas compactas",
+    "filterCurrentDirectory": "Filtrar este diretório",
+    "destination": "Destino",
+    "selectAll": "Selecionar todos os arquivos",
+    "selectItem": "Selecionar {{name}}",
+    "offlineListing": "Última listagem · desconectado"
   },
   "directoryTransferDialog": {
     "title": {
@@ -1344,7 +1358,19 @@
     "noTransfers": "Nenhuma transferência",
     "clear": "Limpar",
     "openFile": "Abrir arquivo",
-    "showInFolder": "Mostrar na pasta"
+    "showInFolder": "Mostrar na pasta",
+    "show": "Mostrar",
+    "allConnections": "Todas as conexões",
+    "currentConnection": "Conexão atual",
+    "fileProgress": "Progresso da transferência de {{name}}",
+    "cancelFile": "Cancelar {{name}}",
+    "retryFile": "Tentar novamente {{name}}",
+    "failedCount_one": "{{count}} falha",
+    "failedCount_many": "{{count}} falhas",
+    "failedCount_other": "{{count}} falhas",
+    "queuedCount_one": "{{count}} na fila",
+    "queuedCount_many": "{{count}} na fila",
+    "queuedCount_other": "{{count}} na fila"
   },
   "transferControls": {
     "upload": "Enviar",

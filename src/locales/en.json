@@ -553,7 +553,8 @@
         "focusGroup6": "Focus Group 6",
         "focusGroup7": "Focus Group 7",
         "focusGroup8": "Focus Group 8",
-        "focusGroup9": "Focus Group 9"
+        "focusGroup9": "Focus Group 9",
+        "switchFilePane": "Switch File Pane"
       },
       "resetAll": "Reset all",
       "routingDescription": "Shortcuts follow the focused area. Search by action, key or context.",
@@ -917,7 +918,12 @@
     },
     "directorySelectionHint": "Transfer one folder at a time, or select only files for a batch transfer.",
     "uploadDestination": "Upload to {{path}}",
-    "downloadDestination": "Download to {{path}}"
+    "downloadDestination": "Download to {{path}}",
+    "workspace": {
+      "connected": "Connected",
+      "compareSync": "Compare / sync",
+      "switchPane": "Choose file pane"
+    }
   },
   "contextMenu": {
     "copy": "Copy",
@@ -1230,7 +1236,15 @@
       "deleteTitle": "Delete this item?",
       "deleteDescription": "Delete “{{name}}”? This action cannot be undone.",
       "closeEditorFirst": "Close the editor tab for this file before renaming or deleting it."
-    }
+    },
+    "navigation": "{{name}} navigation",
+    "viewOptions": "View options",
+    "compactRows": "Compact rows",
+    "filterCurrentDirectory": "Filter this directory",
+    "destination": "Destination",
+    "selectAll": "Select all files",
+    "selectItem": "Select {{name}}",
+    "offlineListing": "Last listing · offline"
   },
   "directoryTransferDialog": {
     "title": {
@@ -1315,7 +1329,17 @@
     "noTransfers": "No transfers",
     "clear": "Clear",
     "openFile": "Open file",
-    "showInFolder": "Show in folder"
+    "showInFolder": "Show in folder",
+    "show": "Show",
+    "allConnections": "All connections",
+    "currentConnection": "Current connection",
+    "fileProgress": "Transfer progress for {{name}}",
+    "cancelFile": "Cancel {{name}}",
+    "retryFile": "Retry {{name}}",
+    "failedCount_one": "{{count}} failed",
+    "failedCount_other": "{{count}} failed",
+    "queuedCount_one": "{{count}} queued",
+    "queuedCount_other": "{{count}} queued"
   },
   "transferControls": {
     "upload": "Upload",

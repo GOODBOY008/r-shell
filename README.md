@@ -91,20 +91,16 @@ Save an SSH connection, then open **Dashboards → Browse templates** to create 
 - **Drop zone overlay** — Drag tabs onto 5 drop zones (up/down/left/right/center)
 - **Keyboard shortcuts** — Remappable split, group-focus, and tab commands with [terminal alternatives that preserve shell input](docs/keyboard-shortcuts.md)
 
-### 📁 Dual-Panel File Manager (FileZilla-style)
+### 📁 Dual-Pane File Browser
 
-![R-Shell with an SSH terminal and a remote configuration file open side by side above the SFTP browser](screenshots/app-screenshot.png)
+![Local website build files selected for upload to the remote site, with two connections in the transfer queue](screenshots/file-transfer-workspace.png)
 
-- **Local + Remote panels** — Side-by-side browsing with upload/download buttons
-- **Multi-protocol** — Works over SSH, SFTP, FTP, and FTPS
-- **File operations** — Create, rename, delete, copy files and directories
+- **FTP, FTPS and SFTP** — Browse local and remote directories side by side. Each pane shows where its selected files will go. In a [narrow workspace](screenshots/file-transfer-workspace-narrow.png), switch panes with the Local and Remote buttons or `F6`.
+- **Directory navigation** — Go back or forward independently in each pane, click a breadcrumb, or enter a full path with `Ctrl/Cmd+L`. Filter the current directory and sort files by name, size or modification time.
+- **File operations** — Select individual files with checkboxes or use Shift to select a range. Create folders, rename or delete items, and copy their paths.
 - **Built-in code editor** — Open files in reusable workspace tabs, switch without losing edits, and save/discard safely on close. Automatic syntax highlighting for scripts, JSON/YAML/TOML, Nginx and systemd configs, with searchable language selection, find/replace, go-to-line, undo/redo, and quick appearance settings
 - **Safer remote editing** — Clear save status, confirmation before reloading unsaved changes, and retained edits when saving or reloading fails
-- **File workflow** — Open with Enter or a double-click, see unsaved editor changes in the file list, and keep directory selections through refresh and reconnect. Upload/download controls show the selected count and destination; rename and delete use inline validation and confirmation
-- **Breadcrumb navigation** — Editable address bar with click-to-navigate
-- **Sort & filter** — By name, size, date, permissions, owner (ascending/descending)
-- **Multi-select** — Select multiple files for batch operations and batch delete
-- **Transfer queue** — Queued transfers with progress, speed, ETA, cancel, and retry
+- **Transfer queue** — New transfers update the status strip while you browse. Expand it to inspect progress, destinations or errors across all connections, filter to the current connection, cancel a transfer or retry it.
 - **Recursive directory transfer** — Upload/download entire directory trees
 
 ### 🔄 Directory Synchronization

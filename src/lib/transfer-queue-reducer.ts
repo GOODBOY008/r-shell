@@ -27,6 +27,7 @@ export interface TransferItem {
   id: string;
   /** Owning connection — the global queue interleaves connections. */
   connectionId: string;
+  connectionName?: string;
   fileName: string;
   direction: TransferDirection;
   sourcePath: string;
@@ -47,6 +48,7 @@ export type EnqueueTransferInput = {
   /** Pre-allocated id (used by submit()); generated when omitted. */
   id?: string;
   connectionId: string;
+  connectionName?: string;
   fileName: string;
   direction: TransferDirection;
   sourcePath: string;
@@ -72,6 +74,7 @@ export type TransferAction =
   | { type: "CANCEL"; id: string }
   | { type: "RETRY"; id: string }
   | { type: "CLEAR_COMPLETED" }
+  | { type: "CLEAR_SUCCEEDED"; connectionId?: string }
   | { type: "CLEAR_ALL" };
 
 let nextId = 1;
@@ -95,6 +98,7 @@ export function transferQueueReducer(
       const newItems: TransferItem[] = action.items.map((item) => ({
         id: item.id ?? generateTransferId(),
         connectionId: item.connectionId,
+        ...(item.connectionName ? { connectionName: item.connectionName } : {}),
         fileName: item.fileName,
         direction: item.direction,
         sourcePath: item.sourcePath,
@@ -196,6 +200,10 @@ export function transferQueueReducer(
             }
           : item,
       );
+    }
+
+    case "CLEAR_SUCCEEDED": {
+      return state.filter(item => item.status !== 'completed' || (action.connectionId !== undefined && item.connectionId !== action.connectionId));
     }
 
     case "CLEAR_COMPLETED": {

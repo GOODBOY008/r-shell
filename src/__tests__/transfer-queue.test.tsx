@@ -1,7 +1,9 @@
 import React from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { TransferQueue } from '../components/transfer-queue';
+import { FileWorkspaceQueue, TransferQueue } from '../components/transfer-queue';
+import * as queue from '../lib/transfer-queue-service';
 import type { TransferItem } from '../lib/transfer-queue-reducer';
 
 const mocks = vi.hoisted(() => ({
@@ -79,5 +81,38 @@ describe('TransferQueue', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('open_in_os', { path: '/local' });
     fireEvent.click(screen.getByText('Clear'));
     expect(dispatch).toHaveBeenCalledWith({ type: 'CLEAR_COMPLETED' });
+  });
+});
+
+describe('file workspace queue', () => {
+  afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+
+  it('keeps incoming transfers folded and scopes feedback, retries and clearing to the chosen session', () => {
+    const dispatch = vi.fn();
+    const state = vi.spyOn(queue, 'useTransferQueue').mockReturnValue({ transfers: [], dispatch });
+    const props = { connectionId: 'conn-1', connectionName: 'Release', isConnected: true };
+    const view = render(<FileWorkspaceQueue {...props} />);
+    const toggle = screen.getByRole('button', { name: 'Transfer Queue' });
+    const failed = { ...makeTransfer('mine'), status: 'failed' as const, error: 'Write denied' };
+    state.mockReturnValue({ transfers: [
+      failed, makeTransfer('completed'),
+      { ...makeTransfer('other'), connectionId: 'conn-2', connectionName: 'Archive', status: 'queued' },
+    ], dispatch });
+    view.rerender(<FileWorkspaceQueue {...props} />);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByRole('status')).toHaveTextContent('1 failed');
+    expect(screen.queryByText('Write denied')).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByText(/Archive/)).toBeVisible();
+    fireEvent.change(screen.getByRole('combobox', { name: 'Show' }), { target: { value: 'current' } });
+    expect(screen.queryByText(/Archive/)).toBeNull();
+    const row = within(screen.getByText('Write denied').closest('li')!);
+    expect(row.getByText(failed.destinationPath)).toBeVisible();
+    fireEvent.click(row.getByRole('button', { name: 'Retry rule-view.svg' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'RETRY', id: 'mine' });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Completed' }));
+    expect(dispatch).toHaveBeenCalledWith({ type: 'CLEAR_SUCCEEDED', connectionId: 'conn-1' });
+    view.rerender(<FileWorkspaceQueue {...props} isConnected={false} />);
+    expect(row.getByRole('button', { name: 'Retry rule-view.svg' })).toBeDisabled();
   });
 });

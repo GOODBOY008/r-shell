@@ -552,7 +552,8 @@
         "focusGroup6": "切换到第 6 组",
         "focusGroup7": "切换到第 7 组",
         "focusGroup8": "切换到第 8 组",
-        "focusGroup9": "切换到第 9 组"
+        "focusGroup9": "切换到第 9 组",
+        "switchFilePane": "切换文件面板"
       },
       "resetAll": "全部恢复默认",
       "routingDescription": "快捷键随焦点所在区域生效，可按操作、按键或场景搜索。",
@@ -915,7 +916,12 @@
     },
     "directorySelectionHint": "请每次传输一个文件夹，或仅选择文件进行批量传输。",
     "uploadDestination": "上传到 {{path}}",
-    "downloadDestination": "下载到 {{path}}"
+    "downloadDestination": "下载到 {{path}}",
+    "workspace": {
+      "connected": "已连接",
+      "compareSync": "比较 / 同步",
+      "switchPane": "选择文件面板"
+    }
   },
   "contextMenu": {
     "copy": "复制",
@@ -1228,7 +1234,15 @@
       "deleteTitle": "删除此项目？",
       "deleteDescription": "删除“{{name}}”？此操作无法撤销。",
       "closeEditorFirst": "请先关闭此文件的编辑标签，再重命名或删除。"
-    }
+    },
+    "navigation": "{{name}}导航",
+    "viewOptions": "显示选项",
+    "compactRows": "紧凑行高",
+    "filterCurrentDirectory": "筛选当前目录",
+    "destination": "目标",
+    "selectAll": "选择所有文件",
+    "selectItem": "选择 {{name}}",
+    "offlineListing": "上次读取的目录 · 已断开"
   },
   "directoryTransferDialog": {
     "title": {
@@ -1311,7 +1325,15 @@
     "noTransfers": "暂无传输",
     "clear": "清除",
     "openFile": "打开文件",
-    "showInFolder": "在文件夹中显示"
+    "showInFolder": "在文件夹中显示",
+    "show": "显示",
+    "allConnections": "所有连接",
+    "currentConnection": "当前连接",
+    "fileProgress": "{{name}} 的传输进度",
+    "cancelFile": "取消 {{name}}",
+    "retryFile": "重试 {{name}}",
+    "failedCount_other": "{{count}} 项失败",
+    "queuedCount_other": "{{count}} 项等待中"
   },
   "transferControls": {
     "upload": "上传",
