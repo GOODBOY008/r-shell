@@ -114,7 +114,18 @@ merge() {
         if [ "$3" = install ]; then
             mode=$(stat "$stat_option" "$stat_format" "$2") || return 1
             case "$mode" in ""|*[!0-7]*) printf 'Invalid file mode for %s\n' "$2" >&2; return 1 ;; esac
-            chmod "$(printf '%03o' "$((0$mode & 0777))")" "$1" && mv -f "$1" "$2"
+            access=$(printf '%03o' "$((0$mode & 0777))")
+            chmod "$access" "$1" || return 1
+            if mv -f "$1" "$2" 2>/dev/null; then return 0; fi
+            # A protected directory can deny renames while its file still
+            # permits ordinary writes. Open the complete input before truncation.
+            if [ -L "$2" ] || [ ! -f "$2" ] || [ ! -w "$2" ]; then
+                printf 'Cannot replace destination file: %s\n' "$2" >&2
+                return 1
+            fi
+            chmod u+r "$1" || return 1
+            if [ "$((0$mode & 06000))" -ne 0 ]; then chmod "$access" "$2" || return 1; fi
+            cat < "$1" > "$2"
         fi
     else
         printf 'Destination has a different file type: %s\n' "$2" >&2
@@ -341,6 +352,32 @@ mod tests {
             assert_eq!(fs::read(&path)?, b"uploaded");
             assert_eq!(fs::metadata(path)?.permissions().mode() & 0o7777, mode);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn upload_overwrites_writable_files_in_readonly_directories() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let dest = parent.path().join("site");
+        let existing = dest.join("existing");
+        fs::create_dir_all(&existing)?;
+        fs::create_dir(dest.join("new"))?;
+        let item = existing.join("item");
+        fs::write(&item, "previous longer content")?;
+        fs::set_permissions(&item, fs::Permissions::from_mode(0o222))?;
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o555))?;
+        let result = install_readonly_tree(&dest);
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o755))?;
+        let result = result?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(fs::metadata(&item)?.permissions().mode() & 0o777, 0o222);
+        fs::set_permissions(&item, fs::Permissions::from_mode(0o600))?;
+        assert_eq!(fs::read(item)?, b"uploaded");
+        assert_eq!(fs::read_dir(&dest)?.count(), 2);
         Ok(())
     }
 

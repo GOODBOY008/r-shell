@@ -381,17 +381,50 @@ fn merge(src: &Path, dest: &Path, preflight: bool, cancel: &CancellationToken) -
     } else if from.is_file() && existing.is_file() {
         if !preflight {
             #[cfg(unix)]
-            {
-                // Preserve access and execute bits. Downloaded contents must
-                // not inherit set-user-ID or set-group-ID privileges.
-                let mode = existing.permissions().mode() & 0o777;
-                fs::set_permissions(src, fs::Permissions::from_mode(mode))?;
-            }
+            replace_unix_file(src, dest, existing.permissions())?;
+            #[cfg(not(unix))]
             fs::rename(src, dest)?;
         }
     } else {
         bail!("Destination has a different file type: {}", dest.display());
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn replace_unix_file(src: &Path, dest: &Path, permissions: fs::Permissions) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // Preserve access and execute bits without granting special privileges to new contents.
+    let mode = permissions.mode() & 0o777;
+    fs::set_permissions(src, fs::Permissions::from_mode(mode))?;
+    match fs::rename(src, dest) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+        Err(e) => return Err(e.into()),
+    }
+
+    // Only directory entries are protected here. Open the existing regular
+    // file without creating or following a link, just as for an ordinary download.
+    fs::set_permissions(src, fs::Permissions::from_mode(0o600))?;
+    let mut input = File::open(src)?;
+    let mut output = File::options()
+        .write(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(dest)?;
+    let metadata = output.metadata()?;
+    ensure!(
+        metadata.is_file(),
+        "Expected a regular file: {}",
+        dest.display()
+    );
+    if metadata.permissions().mode() & 0o6000 != 0 {
+        output.set_permissions(fs::Permissions::from_mode(
+            metadata.permissions().mode() & 0o777,
+        ))?;
+    }
+    let size = io::copy(&mut input, &mut output)?;
+    output.set_len(size)?;
     Ok(())
 }
 
@@ -482,6 +515,30 @@ mod tests {
                 mode & 0o777
             );
         }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn download_overwrites_writable_files_in_readonly_directories() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let target = parent.path().join("download");
+        let existing = target.join("protected");
+        fs::create_dir_all(&existing)?;
+        let item = existing.join("item");
+        fs::write(&item, "previous longer content")?;
+        fs::set_permissions(&item, fs::Permissions::from_mode(0o222))?;
+        let dest = Destination::new(parent.path(), "download")?;
+        fs::create_dir(dest.path().join("protected"))?;
+        fs::write(dest.path().join("protected/item"), "updated")?;
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o555))?;
+        let result = dest.publish(&CancellationToken::new());
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o755))?;
+        result?;
+        assert_eq!(fs::metadata(&item)?.permissions().mode() & 0o777, 0o222);
+        fs::set_permissions(&item, fs::Permissions::from_mode(0o600))?;
+        assert_eq!(fs::read(item)?, b"updated");
+        assert_eq!(fs::read_dir(target)?.count(), 1);
         Ok(())
     }
 
