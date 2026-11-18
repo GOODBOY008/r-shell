@@ -54,22 +54,27 @@ pub(super) fn component(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-fn no_link(path: &Path) -> Result<fs::Metadata> {
+fn no_link(path: &Path) -> io::Result<fs::Metadata> {
     let metadata = fs::symlink_metadata(path)?;
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        ensure!(
-            metadata.file_attributes() & 0x400 == 0,
-            "Unsupported reparse point: {}",
-            path.display()
-        );
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Unsupported reparse point: {}", path.display()),
+            ));
+        }
     }
-    ensure!(
-        !metadata.is_symlink(),
-        "Symbolic links cannot be transferred as folder contents: {}",
-        path.display()
-    );
+    if metadata.is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "Symbolic links cannot be transferred as folder contents: {}",
+                path.display()
+            ),
+        ));
+    }
     Ok(metadata)
 }
 
@@ -264,10 +269,19 @@ pub(super) fn unpack(file: File, staging: &Path, cancel: &CancellationToken) -> 
 }
 
 pub(super) struct Destination {
-    _container: TempDir,
+    container: TempDir,
     tree: PathBuf,
     pub target: PathBuf,
 }
+
+fn private_container(parent: &Path) -> io::Result<TempDir> {
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".r-shell-transfer-");
+    #[cfg(unix)]
+    builder.permissions(fs::Permissions::from_mode(0o700));
+    builder.tempdir_in(parent)
+}
+
 impl Destination {
     pub fn new(parent: &Path, name: &str) -> Result<Self> {
         ensure!(
@@ -275,17 +289,26 @@ impl Destination {
             "The download destination must be absolute"
         );
         let target = parent.join(component(name)?);
-        let mut builder = tempfile::Builder::new();
-        builder.prefix(".r-shell-transfer-");
-        #[cfg(unix)]
-        builder.permissions(fs::Permissions::from_mode(0o700));
-        let container = builder.tempdir_in(parent)?;
+        let container = match no_link(&target) {
+            Ok(metadata) => {
+                ensure!(
+                    metadata.is_dir(),
+                    "Destination has a different file type: {}",
+                    target.display()
+                );
+                // Stage on the destination filesystem. A sibling is still useful
+                // if only subdirectories of an existing target are writable.
+                private_container(&target).or_else(|_| private_container(parent))?
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => private_container(parent)?,
+            Err(e) => return Err(e.into()),
+        };
         // The private parent shields partial files. The child retains normal
         // directory permissions when renamed into a new download destination.
         let tree = container.path().join("tree");
         fs::create_dir(&tree)?;
         Ok(Self {
-            _container: container,
+            container,
             tree,
             target,
         })
@@ -295,7 +318,36 @@ impl Destination {
         &self.tree
     }
 
-    pub fn publish(self, cancel: &CancellationToken) -> Result<()> {
+    fn staging_name_conflicts(&self) -> Result<bool> {
+        let stage = self.container.path();
+        if stage == self.target {
+            return Ok(true);
+        }
+        if stage.parent() != Some(self.target.as_path()) {
+            return Ok(false);
+        }
+        let name = stage
+            .file_name()
+            .context("Missing staging directory name")?;
+        Ok(self.tree.join(name).try_exists()?)
+    }
+
+    pub fn publish(mut self, cancel: &CancellationToken) -> Result<()> {
+        // If the incoming tree contains the same top-level name as our private
+        // container, relocate staging before publishing any user files.
+        while self.staging_name_conflicts()? {
+            check_cancel(cancel)?;
+            let parent = self
+                .container
+                .path()
+                .parent()
+                .context("Missing staging parent")?;
+            let next = private_container(parent)?;
+            let tree = next.path().join("tree");
+            fs::rename(&self.tree, &tree)?;
+            self.tree = tree;
+            self.container = next;
+        }
         // Check the complete merge before replacing any file. A pre-existing
         // link (including a dangling one) never becomes a destination ancestor.
         merge(self.path(), &self.target, true, cancel)?;
@@ -305,8 +357,8 @@ impl Destination {
 
 fn merge(src: &Path, dest: &Path, preflight: bool, cancel: &CancellationToken) -> Result<()> {
     check_cancel(cancel)?;
-    let existing = match fs::symlink_metadata(dest) {
-        Ok(_) => no_link(dest)?,
+    let existing = match no_link(dest) {
+        Ok(metadata) => metadata,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             if !preflight {
                 fs::rename(src, dest)?;
@@ -449,6 +501,65 @@ mod tests {
             fs::metadata(&target)?.permissions().mode() & 0o777,
             fs::metadata(&reference)?.permissions().mode() & 0o777
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_writable_download_under_readonly_parent_can_be_cancelled_or_published() -> Result<()>
+    {
+        let parent = tempfile::tempdir()?;
+        let target = parent.path().join("download");
+        fs::create_dir(&target)?;
+        fs::write(target.join("keep"), "original")?;
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o555))?;
+        let attempt = (|| -> Result<()> {
+            let dest = Destination::new(parent.path(), "download")?;
+            let container = dest.path().parent().unwrap().to_owned();
+            assert_eq!(container.parent(), Some(target.as_path()));
+            assert_eq!(fs::metadata(&container)?.permissions().mode() & 0o077, 0);
+            fs::write(dest.path().join("keep"), "cancelled")?;
+            let token = CancellationToken::new();
+            token.cancel();
+            assert!(dest.publish(&token).is_err());
+            assert!(!container.exists());
+            assert_eq!(fs::read(target.join("keep"))?, b"original");
+            let dest = Destination::new(parent.path(), "download")?;
+            fs::write(dest.path().join("item"), "downloaded")?;
+            dest.publish(&CancellationToken::new())
+        })();
+        fs::set_permissions(parent.path(), fs::Permissions::from_mode(0o755))?;
+        attempt?;
+        assert_eq!(fs::read(target.join("item"))?, b"downloaded");
+        assert_eq!(fs::read_dir(&target)?.count(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn downloaded_entry_can_share_the_temporary_container_name() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let target = parent.path().join("download");
+        fs::create_dir(&target)?;
+        let dest = Destination::new(parent.path(), "download")?;
+        let container = dest.path().parent().unwrap();
+        assert_eq!(container.parent(), Some(target.as_path()));
+        let name = container.file_name().unwrap().to_owned();
+        fs::create_dir(dest.path().join(&name))?;
+        fs::write(dest.path().join(&name).join("item"), "user data")?;
+        dest.publish(&CancellationToken::new())?;
+        assert_eq!(fs::read(target.join(name).join("item"))?, b"user data");
+        assert_eq!(fs::read_dir(target)?.count(), 1);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn staging_refuses_a_destination_directory_symlink() -> Result<()> {
+        let parent = tempfile::tempdir()?;
+        let other = tempfile::tempdir()?;
+        std::os::unix::fs::symlink(other.path(), parent.path().join("link"))?;
+        assert!(Destination::new(parent.path(), "link").is_err());
+        assert!(other.path().read_dir()?.next().is_none());
         Ok(())
     }
 

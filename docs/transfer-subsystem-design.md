@@ -170,7 +170,7 @@ The transfer-queue strip's cancel button now calls `cancelTransfer(id)`
 
 ### Partial files
 
-Both file browsers transfer SSH folders as gzip-compressed tar archives when remote command execution and the archive tools are available. FTP and FTPS negotiate MODE Z and restore MODE S before releasing the connection. Servers without compression use recursive file transfers. Directory downloads stage their contents beside the selected destination and merge after the transfer succeeds.
+Both file browsers transfer SSH folders as gzip-compressed tar archives when remote command execution and the archive tools are available. FTP and FTPS negotiate MODE Z and restore MODE S before releasing the connection. Servers without compression use recursive file transfers. For downloads, the client creates a private staging directory inside an existing writable destination when possible. It uses the destination's parent for new folders and as a fallback. It merges the staged files after the transfer succeeds.
 
 A cancelled download keeps the partial file on disk (the engine flushes before
 returning). Resume/upload continuation is explicitly out of scope.
