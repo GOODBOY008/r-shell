@@ -37,6 +37,16 @@ describe("transfer-queue-reducer", () => {
     resetTransferIdCounter();
   });
 
+  it('clears only successful transfers in the requested workspace scope', () => {
+    const first = makeItem({ id: 'done-1', status: 'completed' });
+    const other = makeItem({ id: 'done-2', connectionId: 'conn-2', status: 'completed' });
+    const failed = makeItem({ id: 'failed', status: 'failed' });
+    const queued = makeItem({ id: 'queued' });
+    const state = [first, other, failed, queued];
+    expect(transferQueueReducer(state, { type: 'CLEAR_SUCCEEDED', connectionId: 'conn-1' })).toEqual([other, failed, queued]);
+    expect(transferQueueReducer(state, { type: 'CLEAR_SUCCEEDED' })).toEqual([failed, queued]);
+  });
+
   // ── ENQUEUE ──
   describe("ENQUEUE", () => {
     it("adds items to empty state", () => {

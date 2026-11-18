@@ -63,6 +63,43 @@ describe('file panel interactions', () => {
     expect(screen.queryByText('stale')).toBeNull();
   });
 
+  it('keeps forward history after a failed Back, retry and background refresh', async () => {
+    const ref = createRef<FilePanelRef>();
+    const load = vi.fn(async (_path: string) => entries);
+    render(<FilePanel {...base} ref={ref} onLoadDirectory={load} />);
+    await screen.findByText('a.conf');
+    await act(async () => { ref.current!.navigateTo('/one'); });
+    await act(async () => { ref.current!.navigateTo('/two'); });
+    load.mockRejectedValueOnce(new Error('temporarily unavailable'));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Back' })); });
+    expect(ref.current!.getCurrentPath()).toBe('/two');
+    let finish!: (entries: FileEntry[]) => void;
+    load.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    fireEvent.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Retry' }));
+    act(() => { ref.current!.refresh(); });
+    await act(async () => { finish(entries); });
+    expect(ref.current!.getCurrentPath()).toBe('/one');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Forward' })); });
+    expect(ref.current!.getCurrentPath()).toBe('/two');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Back' })); });
+    await act(async () => { ref.current!.navigateTo('/branch'); });
+    expect(screen.getByRole('button', { name: 'Forward' })).toBeDisabled();
+  });
+
+  it('extends and shrinks a keyboard range after sorting the selected file', async () => {
+    const ref = createRef<FilePanelRef>();
+    render(<FilePanel {...base} ref={ref} />);
+    await screen.findByText('b.conf');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select b.conf' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Name' }));
+    expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveAttribute('aria-sort', 'descending');
+    fireEvent.keyDown(screen.getByLabelText('Server'), { key: 'ArrowDown', shiftKey: true });
+    expect(ref.current!.getSelectedEntries()).toEqual([entries[1], entries[2]]);
+    expect(screen.getByText('a.conf').closest('tr')).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowUp', shiftKey: true });
+    expect(ref.current!.getSelectedEntries()).toEqual([entries[2]]);
+  });
+
   it('keeps the current directory and selection through disconnect/reconnect', async () => {
     const ref = createRef<FilePanelRef>();
     const view = render(<FilePanel {...base} ref={ref} />);
@@ -115,11 +152,21 @@ describe('file panel interactions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Enter path (Ctrl/Cmd+L)' }));
     const input = screen.getByRole('textbox', { name: 'Enter path (Ctrl/Cmd+L)' });
     fireEvent.change(input, { target: { value: '/etc/nginx' } });
+    await act(async () => { ref.current?.refresh(); });
+    expect(input).toHaveValue('/etc/nginx');
     await act(async () => { fireEvent.submit(input.closest('form')!); });
     expect(ref.current?.getCurrentPath()).toBe('/etc/nginx');
-    fireEvent.change(screen.getByRole('textbox', { name: 'Filter…' }), { target: { value: 'b.conf' } });
+    expect(screen.queryByRole('textbox', { name: 'Filter…' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Filter…' }));
+    const filter = screen.getByRole('textbox', { name: 'Filter…' });
+    expect(filter).toHaveFocus();
+    fireEvent.change(filter, { target: { value: 'b.conf' } });
     act(() => { ref.current?.selectAll(); });
     expect(ref.current?.getSelectedEntries()).toEqual([entries[2]]);
+    fireEvent.keyDown(filter, { key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Filter…' })).toBeNull();
+    expect(screen.getByText('a.conf')).toBeVisible();
+    expect(screen.getByLabelText('Server')).toHaveFocus();
   });
 
   it('protects an open file and its parent directory from rename or deletion', async () => {

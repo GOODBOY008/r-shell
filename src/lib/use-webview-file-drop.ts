@@ -21,6 +21,8 @@ export interface UseWebviewFileDropOptions {
 export interface UseWebviewFileDropResult {
   /** True while the OS drag is hovering over this subscriber's zone. */
   isDragOver: boolean;
+  /** Number of native paths, when the platform sent an enter event. */
+  pathCount: number | null;
   /**
    * Programmatically clear this subscriber's `isDragOver` state. Useful as a
    * defensive call at the top of an `onDrop` handler in case the OS never
@@ -53,7 +55,7 @@ interface Subscriber {
   targetRef: React.RefObject<HTMLElement | null>;
   onDrop: (paths: string[]) => void | Promise<void>;
   priority: number;
-  setDragOver: (v: boolean) => void;
+  setHoverCount: (count: number | null) => void;
 }
 
 let subscribers: Subscriber[] = [];
@@ -73,6 +75,7 @@ function hitTest(cssX: number, cssY: number): Subscriber | null {
     if (!el) continue;
     const rect = el.getBoundingClientRect();
     if (
+      rect.width === 0 || rect.height === 0 ||
       cssX < rect.left ||
       cssX > rect.right ||
       cssY < rect.top ||
@@ -115,8 +118,8 @@ function pickWinner(event: DragDropEvent): Subscriber | null {
   return hitTest(rawX, rawY);
 }
 
-function setAllDragOver(value: boolean) {
-  for (const sub of subscribers) sub.setDragOver(value);
+function clearAllHover() {
+  for (const sub of subscribers) sub.setHoverCount(null);
 }
 
 async function ensureSubscribed(): Promise<void> {
@@ -124,10 +127,13 @@ async function ensureSubscribed(): Promise<void> {
   try {
     const wv = getCurrentWebview();
     if (!wv) return;
+    let pathCount = 0;
     unlistenPromise = wv.onDragDropEvent((event) => {
       const payload = event.payload;
+      if (payload.type === "enter") pathCount = payload.paths.length;
       if (payload.type === "leave") {
-        setAllDragOver(false);
+        pathCount = 0;
+        clearAllHover();
         return;
       }
       const winner = pickWinner(payload);
@@ -136,7 +142,8 @@ async function ensureSubscribed(): Promise<void> {
         // overlay before invoking the winner's callback. This ordering is the
         // primary defense against the overlay getting "stuck" when the OS
         // delivers the drop but not a subsequent leave event.
-        setAllDragOver(false);
+        pathCount = 0;
+        clearAllHover();
         if (winner && payload.paths.length > 0) {
           try {
             void Promise.resolve(winner.onDrop(payload.paths));
@@ -147,7 +154,7 @@ async function ensureSubscribed(): Promise<void> {
       } else {
         // enter / over — update hover state only.
         for (const sub of subscribers) {
-          sub.setDragOver(sub === winner);
+          sub.setHoverCount(sub === winner ? pathCount : null);
         }
       }
     });
@@ -203,7 +210,8 @@ export async function __resetWebviewFileDropSingletonForTest(): Promise<void> {
 export function useWebviewFileDrop(
   options: UseWebviewFileDropOptions,
 ): UseWebviewFileDropResult {
-  const [isDragOver, setDragOver] = useState(false);
+  const [hoverCount, setHoverCount] = useState<number | null>(null);
+  const isDragOver = hoverCount !== null;
   const subIdRef = useRef<number>(0);
 
   // Stable refs for the latest options (avoid re-subscribing on every render).
@@ -217,7 +225,7 @@ export function useWebviewFileDrop(
 
   // Stable identity for `clearDragOver` — always clears this subscriber's own
   // overlay, regardless of which render cycle it's captured in.
-  const clearDragOver = useCallback(() => setDragOver(false), []);
+  const clearDragOver = useCallback(() => setHoverCount(null), []);
 
   // Safety net: if `isDragOver` has been true for more than 10 s without any
   // follow-up event (observed on macOS when the user drops outside the window
@@ -226,7 +234,7 @@ export function useWebviewFileDrop(
   useEffect(() => {
     if (!isDragOver) return;
     const timer = setTimeout(() => {
-      setDragOver(false);
+      setHoverCount(null);
     }, 10_000);
     return () => clearTimeout(timer);
   }, [isDragOver]);
@@ -239,7 +247,7 @@ export function useWebviewFileDrop(
       targetRef: options.targetRef,
       onDrop: stableOnDrop,
       priority: options.priority ?? 0,
-      setDragOver,
+      setHoverCount,
     };
     subscribers.push(sub);
     refCount++;
@@ -251,7 +259,7 @@ export function useWebviewFileDrop(
       // On leave we must not leave a stale overlay visible in the surviving
       // subscribers, but this unmount is isolated to `sub` — other subscribers
       // keep their current state.
-      sub.setDragOver(false);
+      sub.setHoverCount(null);
       if (refCount <= 0) {
         refCount = 0;
         void ensureUnsubscribed();
@@ -273,5 +281,5 @@ export function useWebviewFileDrop(
     }
   });
 
-  return { isDragOver, clearDragOver };
+  return { isDragOver, clearDragOver, pathCount: hoverCount || null };
 }

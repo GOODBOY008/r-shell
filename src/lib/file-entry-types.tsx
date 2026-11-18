@@ -119,21 +119,8 @@ export function breadcrumbSegments(
  */
 export function localParentPath(p: string): string {
   if (!p || p === "/" || p === "\\") return p;
-  // Normalize to forward slashes
-  const normalized = p.replace(/\\/g, "/");
-  const parts = normalized.split("/").filter(Boolean);
-
-  if (parts[0]?.match(/^[A-Za-z]:$/)) {
-    if (parts.length <= 1) return `${parts[0]}\\`;
-    parts.pop();
-    return parts.length === 1
-      ? `${parts[0]}\\`
-      : `${parts[0]}\\${parts.slice(1).join("\\")}`;
-  }
-
-  parts.pop();
-  if (parts.length === 0) return "/";
-  return `/${parts.join("/")}`;
+  const segments = localBreadcrumbSegments(p);
+  return segments[Math.max(0, segments.length - 2)].path;
 }
 
 export function localBreadcrumbSegments(
@@ -141,24 +128,21 @@ export function localBreadcrumbSegments(
 ): { label: string; path: string }[] {
   const normalized = p.replace(/\\/g, "/");
   const parts = normalized.split("/").filter(Boolean);
-  const segs: { label: string; path: string }[] = [];
-
-  // Check for drive letter (Windows)
-  if (parts.length > 0 && parts[0].match(/^[A-Za-z]:$/)) {
-    segs.push({ label: `${parts[0]}\\`, path: `${parts[0]}\\` });
-    let acc = parts[0];
-    for (let i = 1; i < parts.length; i++) {
-      acc += `\\${parts[i]}`;
-      segs.push({ label: parts[i], path: acc });
-    }
+  let root: string;
+  if (normalized.startsWith("//") && parts.length >= 2) {
+    // A UNC share is one navigable root, including for mixed-separator downloads.
+    root = `\\\\${parts.splice(0, 2).join("\\")}\\`;
+  } else if (parts[0]?.match(/^[A-Za-z]:$/)) {
+    root = `${parts.shift()}\\`;
   } else {
-    segs.push({ label: "/", path: "/" });
-    let acc = "";
-    for (const part of parts) {
-      acc += `/${part}`;
-      segs.push({ label: part, path: acc });
-    }
+    return breadcrumbSegments(p);
   }
 
-  return segs;
+  const segments = [{ label: root, path: root }];
+  let path = root;
+  for (const label of parts) {
+    path = path.endsWith("\\") ? path + label : `${path}\\${label}`;
+    segments.push({ label, path });
+  }
+  return segments;
 }

@@ -126,6 +126,17 @@ describe("file-entry-types helpers", () => {
 
   // ── localBreadcrumbSegments ──
   describe("localBreadcrumbSegments", () => {
+    it("keeps UNC downloads and navigation anchored to the share", () => {
+      const share = "\\\\server\\share\\";
+      expect(localBreadcrumbSegments(share + "jobs/build")).toEqual([
+        { label: share, path: share },
+        { label: "jobs", path: share + "jobs" },
+        { label: "build", path: share + "jobs\\build" },
+      ]);
+      expect(localParentPath(share + "result.txt")).toBe(share);
+      expect(localParentPath(share)).toBe(share);
+      expect(localParentPath("/jobs/a\\b/result.txt")).toBe("/jobs/a\\b");
+    });
     it("Unix root", () =>
       expect(localBreadcrumbSegments("/")).toEqual([
         { label: "/", path: "/" },

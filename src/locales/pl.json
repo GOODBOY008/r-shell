@@ -559,7 +559,8 @@
         "focusGroup6": "Przejdź do grupy 6",
         "focusGroup7": "Przejdź do grupy 7",
         "focusGroup8": "Przejdź do grupy 8",
-        "focusGroup9": "Przejdź do grupy 9"
+        "focusGroup9": "Przejdź do grupy 9",
+        "switchFilePane": "Przełącz panel plików"
       },
       "resetAll": "Przywróć wszystkie",
       "routingDescription": "Skróty działają w obszarze z fokusem. Szukaj według czynności, klawiszy lub kontekstu.",
@@ -941,7 +942,12 @@
     },
     "directorySelectionHint": "Przesyłaj po jednym folderze lub wybierz wyłącznie pliki do transferu zbiorczego.",
     "uploadDestination": "Wyślij do {{path}}",
-    "downloadDestination": "Pobierz do {{path}}"
+    "downloadDestination": "Pobierz do {{path}}",
+    "workspace": {
+      "connected": "Połączono",
+      "compareSync": "Porównaj / synchronizuj",
+      "switchPane": "Wybierz panel plików"
+    }
   },
   "contextMenu": {
     "copy": "Kopiuj",
@@ -1278,7 +1284,15 @@
       "deleteTitle": "Usunąć ten element?",
       "deleteDescription": "Usunąć „{{name}}”? Tej czynności nie można cofnąć.",
       "closeEditorFirst": "Zamknij kartę edytora tego pliku przed zmianą nazwy lub usunięciem."
-    }
+    },
+    "navigation": "Nawigacja: {{name}}",
+    "viewOptions": "Opcje widoku",
+    "compactRows": "Zwarte wiersze",
+    "filterCurrentDirectory": "Filtruj bieżący katalog",
+    "destination": "Cel",
+    "selectAll": "Zaznacz wszystkie pliki",
+    "selectItem": "Zaznacz {{name}}",
+    "offlineListing": "Ostatnio wczytana lista · rozłączono"
   },
   "directoryTransferDialog": {
     "title": {
@@ -1367,7 +1381,21 @@
     "noTransfers": "Brak transferów",
     "clear": "Wyczyść",
     "openFile": "Otwórz plik",
-    "showInFolder": "Pokaż w folderze"
+    "showInFolder": "Pokaż w folderze",
+    "show": "Pokaż",
+    "allConnections": "Wszystkie połączenia",
+    "currentConnection": "Bieżące połączenie",
+    "fileProgress": "Postęp przesyłania: {{name}}",
+    "cancelFile": "Anuluj {{name}}",
+    "retryFile": "Ponów {{name}}",
+    "failedCount_one": "{{count}} błąd",
+    "failedCount_few": "{{count}} błędy",
+    "failedCount_many": "{{count}} błędów",
+    "failedCount_other": "{{count}} błędu",
+    "queuedCount_one": "{{count}} w kolejce",
+    "queuedCount_few": "{{count}} w kolejce",
+    "queuedCount_many": "{{count}} w kolejce",
+    "queuedCount_other": "{{count}} w kolejce"
   },
   "transferControls": {
     "upload": "Wyślij",
