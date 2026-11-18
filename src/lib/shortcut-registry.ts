@@ -10,7 +10,7 @@ export type ShortcutCommandId =
   | 'toggleLeftSidebar' | 'toggleBottomPanel' | 'toggleRightSidebar' | 'toggleZenMode'
   | 'splitRight' | 'splitDown' | 'openSettings' | 'duplicateSession' | 'reconnect'
   | 'saveFile' | 'findInEditor' | 'replaceInEditor' | 'goToLine'
-  | 'findInTerminal' | 'clearTerminal' | 'detachSession' | 'filterFiles' | 'refreshFiles' | 'transferFiles' | 'syncFiles'
+  | 'findInTerminal' | 'clearTerminal' | 'detachSession' | 'filterFiles' | 'refreshFiles' | 'transferFiles' | 'syncFiles' | 'switchFilePane'
   | `focusGroup${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 export type ShortcutCategory = 'tabs' | 'layout' | 'split' | 'app' | 'editor' | 'terminal' | 'files';
 
@@ -56,6 +56,7 @@ export const SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] = [
   define('clearTerminal', 'Mod+Shift+K', 'terminal', ['terminal'], { macDefault: 'Mod+K' }),
   define('detachSession', 'Mod+Shift+H', 'terminal', ['terminal']),
   define('filterFiles', 'Mod+F', 'files', ['files', 'input']),
+  define('switchFilePane', 'F6', 'files', ['files', 'input']),
   define('refreshFiles', 'F5', 'files', ['files']),
   define('transferFiles', 'Mod+Enter', 'files', ['files']),
   define('syncFiles', 'Mod+Shift+S', 'files', ['files']),

@@ -92,7 +92,7 @@ function DropZone({
   useEffect(() => {
     if (targetRef.current) patchRect(targetRef.current, rect);
   }, [rect]);
-  const { isDragOver } = useWebviewFileDrop({
+  const { isDragOver, pathCount } = useWebviewFileDrop({
     enabled,
     targetRef,
     onDrop,
@@ -106,6 +106,7 @@ function DropZone({
       ref={targetRef}
       data-testid={label}
       data-drag-over={isDragOver ? "1" : "0"}
+      data-path-count={pathCount ?? undefined}
     />
   );
 }
@@ -139,6 +140,15 @@ describe("useWebviewFileDrop", () => {
 
     expect(getByTestId("zone").getAttribute("data-drag-over")).toBe("0");
     expect(listenCount).toBe(1);
+  });
+
+  it("keeps the native item count when a drag enters outside a pane and moves inside", () => {
+    const view = render(<DropZone enabled onDrop={vi.fn()} rect={makeRect(10, 20, 100, 100)} />);
+    act(() => fire({ type: "enter", position: { x: 0, y: 0 }, paths: ["/a", "/b"] }));
+    act(() => fire({ type: "over", position: { x: 30, y: 40 } }));
+    expect(view.getByTestId("zone").dataset.pathCount).toBe("2");
+    act(() => fire({ type: "leave" }));
+    expect(view.getByTestId("zone").dataset.pathCount).toBeUndefined();
   });
 
   it("suppresses overlay and callback when enabled=false", async () => {
