@@ -1,4 +1,4 @@
-use reqwest::{header, Client, StatusCode, Url};
+use reqwest::{header, Client, ClientBuilder, StatusCode, Url};
 use std::time::Duration;
 
 pub const MAX_WIRE: usize = 24 * 1024 * 1024;
@@ -8,13 +8,11 @@ pub struct RemoteFile {
     pub etag: String,
 }
 
-pub(super) fn http_client() -> Result<Client, String> {
+pub(super) fn http_client_builder() -> ClientBuilder {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|_| "SYNC_NETWORK".into())
 }
 
 pub(super) async fn read_file(mut response: reqwest::Response) -> Result<RemoteFile, String> {
@@ -130,7 +128,7 @@ impl WebDav {
         if !directory.path().ends_with('/') {
             directory.set_path(&format!("{}/", directory.path()));
         }
-        let client = http_client()?;
+        let client = http_client_builder().build().map_err(|_| "SYNC_NETWORK")?;
         Ok(Self {
             client,
             directory,

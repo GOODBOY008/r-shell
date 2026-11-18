@@ -1,4 +1,4 @@
-use super::provider::{http_client, read_file, ObjectStore, RemoteFile, MAX_WIRE};
+use super::provider::{http_client_builder, read_file, ObjectStore, RemoteFile, MAX_WIRE};
 use super::settings::{Addressing, S3Target};
 use aws_credential_types::Credentials;
 use aws_sigv4::{
@@ -94,7 +94,12 @@ impl S3 {
             }
         }
         Ok(Self {
-            client: http_client()?,
+            // MinIO can reset an HTTP/1.1 connection just after a rejected conditional PUT.
+            // A new request must not race that reset on the previous request's socket.
+            client: http_client_builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .map_err(|_| "SYNC_NETWORK")?,
             bucket_url: url,
             prefix: prefix.to_owned(),
             region: target.region.clone(),
@@ -469,5 +474,42 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[tokio::test]
+    async fn rejected_upload_connection_is_not_reused() {
+        use tokio::io::{AsyncBufReadExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let store = S3::new(
+            &S3Target {
+                endpoint: format!("http://{}", listener.local_addr().unwrap()),
+                ..target()
+            },
+            "secret",
+            None,
+        )
+        .unwrap();
+        let server = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut headers = BufReader::new(&mut socket).lines();
+            while !headers.next_line().await.unwrap().unwrap().is_empty() {}
+            let body = "<Error><Code>PreconditionFailed</Code></Error>";
+            let response = format!(
+                "HTTP/1.1 412 Precondition Failed\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            // Keep the server end open after the 412 to expose any pooled client connection.
+            let mut byte = [0];
+            let count =
+                tokio::time::timeout(std::time::Duration::from_secs(5), socket.read(&mut byte))
+                    .await
+                    .expect("the client must release the rejected connection")
+                    .unwrap();
+            assert_eq!(count, 0);
+        };
+        let ((), result) = tokio::join!(server, store.write("vault", String::new(), None));
+        assert_eq!(result, Err("SYNC_STALE".into()));
     }
 }
