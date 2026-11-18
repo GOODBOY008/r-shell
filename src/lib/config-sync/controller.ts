@@ -3,7 +3,7 @@ import { isPasswordSavingAllowed } from '../credential-crypto';
 import { applyLanguageFromPreference } from '../i18n';
 import { applyTheme, getSavedTheme } from '../utils';
 import { buildStorageImage, captureConfig, readStorageImage, stable, validateShortcutRecords, writeStorageImage, type StorageImage } from './storage';
-import type { SyncBatch, SyncChoices, SyncOptions, SyncPreview, SyncRecords, SyncStatus } from './types';
+import type { ProviderAuth, SyncTarget, SyncBatch, SyncChoices, SyncOptions, SyncPreview, SyncRecords, SyncStatus } from './types';
 
 export type SyncPhase = 'disabled' | 'locked' | 'paused' | 'pending' | 'syncing' | 'synced' | 'review' | 'conflict' | 'error';
 export interface SyncView {
@@ -41,7 +41,7 @@ function errorCode(error: unknown): string {
   return message.startsWith('SYNC_') ? message : 'SYNC_UNKNOWN';
 }
 function isTransientError(code: string): boolean {
-  return ['SYNC_NETWORK', 'SYNC_STALE', 'SYNC_RATE_LIMIT'].some(c => code.startsWith(c));
+  return ['SYNC_NETWORK', 'SYNC_STALE', 'SYNC_WRITE_UNCERTAIN', 'SYNC_RATE_LIMIT'].some(c => code.startsWith(c));
 }
 function fail(error: unknown): void {
   const code = errorCode(error);
@@ -84,24 +84,35 @@ export async function recoverConfigSync(): Promise<boolean> {
 export async function refreshSyncStatus(): Promise<void> {
   if (!isTauri()) return;
   const status = await invoke<SyncStatus>('config_sync_status');
-  update({ status, phase: idlePhase(status) });
+  update({ status, phase: idlePhase(status), ...(!status.initialized ? { lastSuccess: null } : {}) });
 }
 
-export async function configureSync(options: SyncOptions, serverPassword?: string, passphrase?: string): Promise<void> {
+export async function configureSync(options: SyncOptions, auth?: ProviderAuth, passphrase?: string): Promise<void> {
   if (view.busy) throw new Error('SYNC_BUSY');
   if (options.credentials && !isPasswordSavingAllowed()) throw new Error('SYNC_PASSWORD_POLICY');
-  update({ busy: true, error: null });
+  update({ busy: true });
   try {
-    const previousTarget = view.status?.options.url;
-    const status = await invoke<SyncStatus>('config_sync_configure', { options, serverPassword: serverPassword ?? null, passphrase: passphrase ?? null });
-    update({ status, phase: idlePhase(status), busy: false, preview: null, reviewOpen: false,
-      ...(previousTarget !== status.options.url ? { lastSuccess: null } : {}) });
+    if (await recoverConfigSync()) notifyStores();
+  } catch {
+    fail('SYNC_RECOVERY_REQUIRED');
+    throw new Error('SYNC_RECOVERY_REQUIRED');
+  }
+  try {
+    const status = await invoke<SyncStatus>('config_sync_configure', { options, auth: auth ?? null, passphrase: passphrase ?? null });
+    if (!status.initialized) {
+      try { localStorage.removeItem(LAST_SUCCESS); } catch { /* Optional display metadata. */ }
+    }
+    update({ status, phase: idlePhase(status), busy: false, error: null, preview: null, reviewOpen: false,
+      ...(!status.initialized ? { lastSuccess: null } : {}) });
     previewRecords = null; observedImage = null; observedRecords = ''; due = Date.now() + 1500; retryAt = 0; failures = 0;
-  } catch (error) { fail(error); throw error; }
+  } catch (error) {
+    // A rejected draft leaves the active provider and its retry schedule intact.
+    update({ busy: false }); throw error;
+  }
 }
 
-export async function testSyncConnection(url: string, username: string, password: string): Promise<void> {
-  await invoke('config_sync_test', { url, username, password: password || null });
+export async function testSyncConnection(target: SyncTarget, auth?: ProviderAuth): Promise<void> {
+  await invoke('config_sync_test', { target, auth: auth ?? null });
 }
 
 export function openSyncReview(): void { if (view.preview) update({ reviewOpen: true }); }
@@ -205,7 +216,7 @@ export async function commitSync(choices: SyncChoices, automatic = false): Promi
       catch { fail('SYNC_RECOVERY_REQUIRED'); window.location.reload(); return; }
     }
     const code = errorCode(error);
-    if (code === 'SYNC_STALE' || (automatic && isTransientError(code))) {
+    if (code === 'SYNC_STALE' || code === 'SYNC_WRITE_UNCERTAIN' || (automatic && isTransientError(code))) {
       previewRecords = null; update({ preview: null, reviewOpen: false });
     }
     fail(error);

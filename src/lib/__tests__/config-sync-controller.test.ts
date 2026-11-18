@@ -6,14 +6,14 @@ const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke, isTauri: () => true }));
 vi.mock('../i18n', () => ({ default: { t: (key: string) => key }, applyLanguageFromPreference: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../utils', () => ({ applyTheme: vi.fn(), getSavedTheme: () => 'light' }));
-const options = { enabled: true, paused: false, url: 'https://storage.example/dav/', username: 'user', credentials: false, rememberPassphrase: true };
+const options = { enabled: true, paused: false, target: { kind: 'webdav' as const, url: 'https://storage.example/dav/', username: 'user' }, credentials: false, rememberPassphrase: true };
 let status: SyncStatus;
 let preview: SyncPreview;
 let journal: { id: string; before: ReturnType<typeof readStorageImage>; after: ReturnType<typeof readStorageImage> } | null;
 
 beforeEach(() => {
   vi.resetModules(); invoke.mockReset(); localStorage.clear(); document.body.innerHTML = '<div id="root"></div>';
-  status = { options: { ...options }, hasServerPassword: true, unlocked: true, initialized: true, lastAppliedId: null };
+  status = { options: { ...options }, hasSecret: true, hasSessionToken: false, unlocked: true, initialized: true, lastAppliedId: null };
   const records = captureConfig(); records['settings/theme'] = 'dark';
   preview = { planId: 'plan', firstSync: false, snapshot: { version: 1, vaultId: 'v', revision: 2, records, tombstones: [] }, conflicts: [], changes: [{ key: 'settings/theme', action: 'update', target: 'local' }] };
   journal = null;
@@ -33,6 +33,65 @@ async function controller() { const module = await import('../config-sync/contro
 const called = (command: string) => invoke.mock.calls.some(args => args[0] === command);
 
 describe('sync commit coordination', () => {
+  it('recovers the old apply journal before switching storage and clears its displayed sync time', async () => {
+    localStorage.setItem('rshell-config-sync-last-success', 'old time');
+    const before = readStorageImage();
+    const oldAfter = { ...before, sshClientSettings: JSON.stringify({ theme: 'light' }) };
+    journal = { id: 'old', before, after: oldAfter };
+    status.lastAppliedId = 'old';
+    const next = { ...options, target: { kind: 's3' as const, endpoint: 'https://objects.example', region: 'auto',
+      bucket: 'team', prefix: 'sync', addressing: 'path' as const, accessKeyId: 'new-id' } };
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'config_sync_configure') {
+        expect(journal).toBeNull();
+        expect(localStorage.getItem('sshClientSettings')).toBe(oldAfter.sshClientSettings);
+        return { ...status, options: next, initialized: false, lastAppliedId: null };
+      }
+      return original(command, args);
+    });
+    const sync = await controller();
+    await sync.configureSync(next, { secret: 'new secret', sessionToken: 'new token' }, 'new passphrase');
+    expect(sync.getSyncView().status?.options.target).toEqual(next.target);
+    expect(localStorage.getItem('rshell-config-sync-last-success')).toBeNull();
+    expect(called('config_sync_prepare')).toBe(false);
+  });
+
+  it('keeps the working provider and automatic schedule after a rejected settings draft', async () => {
+    vi.useFakeTimers();
+    const original = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'config_sync_configure') throw new Error('SYNC_S3_ACCESS');
+      return original(command, args);
+    });
+    const sync = await controller();
+    const stop = sync.startConfigSync();
+    try {
+      await expect(sync.configureSync({ ...options, target: { ...options.target, url: 'https://other.example/' } })).rejects.toThrow('SYNC_S3_ACCESS');
+      expect(sync.getSyncView().status?.options.target).toEqual(options.target);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(called('config_sync_ack')).toBe(true);
+    } finally { stop(); }
+  });
+
+  it('discards a manual preview with an ambiguous upload and reads the remote revision on retry', async () => {
+    const original = invoke.getMockImplementation()!;
+    let uploaded = false;
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'config_sync_commit' && !uploaded) {
+        uploaded = true;
+        preview.planId = 'after-read'; preview.snapshot.revision++;
+        throw new Error('SYNC_WRITE_UNCERTAIN');
+      }
+      return original(command, args);
+    });
+    const sync = await controller(); await sync.prepareSync(true); await sync.commitSync({});
+    expect(sync.getSyncView().preview).toBeNull();
+    expect(called('config_sync_ack')).toBe(false);
+    await sync.prepareSync(true); await sync.commitSync({});
+    expect(invoke).toHaveBeenCalledWith('config_sync_commit', expect.objectContaining({ planId: 'after-read' }));
+    expect(sync.getSyncView().phase).toBe('synced');
+  });
   it('journals before applying and acknowledges only after all stores are written', async () => {
     const sync = await controller(); await sync.prepareSync(true); await sync.commitSync({});
     expect(JSON.parse(localStorage.getItem('sshClientSettings')!).theme).toBe('dark');

@@ -2,9 +2,108 @@ use reqwest::{header, Client, StatusCode, Url};
 use std::time::Duration;
 
 pub const MAX_WIRE: usize = 24 * 1024 * 1024;
+#[derive(Debug)]
 pub struct RemoteFile {
     pub body: String,
     pub etag: String,
+}
+
+pub(super) fn http_client() -> Result<Client, String> {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| "SYNC_NETWORK".into())
+}
+
+pub(super) async fn read_file(mut response: reqwest::Response) -> Result<RemoteFile, String> {
+    let etag = response
+        .headers()
+        .get(header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
+    if etag.starts_with("W/") {
+        return Err("SYNC_WEAK_ETAG".into());
+    }
+    let opaque = etag
+        .strip_prefix('"')
+        .and_then(|tag| tag.strip_suffix('"'))
+        .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
+    if etag.len() > 1024
+        || !opaque
+            .bytes()
+            .all(|b| (0x21..=0x7e).contains(&b) && b != b'"')
+    {
+        return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
+    }
+    let etag = etag.to_owned();
+    if response
+        .content_length()
+        .is_some_and(|n| n > MAX_WIRE as u64)
+    {
+        return Err("SYNC_TOO_LARGE".into());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "SYNC_NETWORK")? {
+        if body.len() + chunk.len() > MAX_WIRE {
+            return Err("SYNC_TOO_LARGE".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(RemoteFile {
+        body: String::from_utf8(body).map_err(|_| "SYNC_INVALID_DATA")?,
+        etag,
+    })
+}
+
+#[async_trait::async_trait]
+pub(super) trait ObjectStore: Send + Sync {
+    async fn read(&self, name: &str) -> Result<Option<RemoteFile>, String>;
+    async fn write(&self, name: &str, body: String, etag: Option<&str>) -> Result<(), String>;
+    async fn delete(&self, name: &str) -> Result<(), String>;
+
+    async fn probe(&self) -> Result<(), String> {
+        let name = format!(".rshell-probe-{}", super::model::random_id());
+        self.write(&name, "one".into(), None).await?;
+        let result = async {
+            let first = self
+                .read(&name)
+                .await?
+                .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
+            if first.body != "one" {
+                return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
+            }
+            self.write(&name, "two".into(), Some(&first.etag)).await?;
+            let latest = self
+                .read(&name)
+                .await?
+                .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
+            if latest.body != "two" || latest.etag == first.etag {
+                return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
+            }
+            // A previously valid ETag also works with servers that validate token syntax.
+            for condition in [Some(first.etag.as_str()), None] {
+                match self.write(&name, "wrong".into(), condition).await {
+                    Err(code) if code == "SYNC_STALE" => (),
+                    Err(code) => return Err(code),
+                    Ok(()) => return Err("SYNC_CONDITIONAL_UNSUPPORTED".into()),
+                }
+            }
+            let after = self
+                .read(&name)
+                .await?
+                .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
+            if after.etag != latest.etag || after.body != latest.body {
+                return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
+            }
+            Ok(())
+        }
+        .await;
+        // Delete only the randomly named probe we created, including on failure.
+        self.delete(&name).await?;
+        result
+    }
 }
 
 pub struct WebDav {
@@ -31,12 +130,7 @@ impl WebDav {
         if !directory.path().ends_with('/') {
             directory.set_path(&format!("{}/", directory.path()));
         }
-        let client = Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|_| "SYNC_NETWORK")?;
+        let client = http_client()?;
         Ok(Self {
             client,
             directory,
@@ -59,7 +153,23 @@ impl WebDav {
             .header(header::CACHE_CONTROL, "no-cache"))
     }
 
-    pub async fn read(&self, name: &str) -> Result<Option<RemoteFile>, String> {
+    async fn read_once(&self, name: &str) -> Result<Option<RemoteFile>, String> {
+        let response = self
+            .request(reqwest::Method::GET, name)?
+            .send()
+            .await
+            .map_err(|_| "SYNC_NETWORK")?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        check(&response)?;
+        read_file(response).await.map(Some)
+    }
+}
+
+#[async_trait::async_trait]
+impl ObjectStore for WebDav {
+    async fn read(&self, name: &str) -> Result<Option<RemoteFile>, String> {
         // Apache briefly marks newly written files weak. Wait for an actual
         // strong validator; stripping W/ would make If-Match unsafe.
         for attempt in 0..3 {
@@ -76,51 +186,7 @@ impl WebDav {
         Err("SYNC_CONDITIONAL_UNSUPPORTED".into())
     }
 
-    async fn read_once(&self, name: &str) -> Result<Option<RemoteFile>, String> {
-        let mut response = self
-            .request(reqwest::Method::GET, name)?
-            .send()
-            .await
-            .map_err(|_| "SYNC_NETWORK")?;
-        if response.status() == StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        check(&response)?;
-        if response
-            .headers()
-            .get(header::ETAG)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|s| s.starts_with("W/"))
-        {
-            return Err("SYNC_WEAK_ETAG".into());
-        }
-        let etag = response
-            .headers()
-            .get(header::ETAG)
-            .and_then(|v| v.to_str().ok())
-            .filter(|s| s.starts_with('"') && s.ends_with('"') && s.len() <= 1024)
-            .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?
-            .to_string();
-        if response
-            .content_length()
-            .is_some_and(|n| n > MAX_WIRE as u64)
-        {
-            return Err("SYNC_TOO_LARGE".into());
-        }
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|_| "SYNC_NETWORK")? {
-            if body.len() + chunk.len() > MAX_WIRE {
-                return Err("SYNC_TOO_LARGE".into());
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(Some(RemoteFile {
-            body: String::from_utf8(body).map_err(|_| "SYNC_INVALID_DATA")?,
-            etag,
-        }))
-    }
-
-    pub async fn write(&self, name: &str, body: String, etag: Option<&str>) -> Result<(), String> {
+    async fn write(&self, name: &str, body: String, etag: Option<&str>) -> Result<(), String> {
         if body.len() > MAX_WIRE {
             return Err("SYNC_TOO_LARGE".into());
         }
@@ -141,53 +207,13 @@ impl WebDav {
         )
     }
 
-    /// Tests actual conditional writes, not merely OPTIONS/DAV advertising.
-    /// All mutations are restricted to a new, randomly named probe object.
-    pub async fn probe(&self) -> Result<(), String> {
-        let name = format!(".rshell-probe-{}", super::model::random_id());
-        self.write(&name, "one".into(), None).await?;
-        let result = async {
-            let first = self
-                .read(&name)
-                .await?
-                .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
-            if first.body != "one" {
-                return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
-            }
-            if self
-                .write(&name, "wrong".into(), Some("\"rshell-impossible-etag\""))
-                .await
-                != Err("SYNC_STALE".into())
-                || self.write(&name, "wrong".into(), None).await != Err("SYNC_STALE".into())
-            {
-                return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
-            }
-            let same = self
-                .read(&name)
-                .await?
-                .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
-            if same.body != first.body || same.etag != first.etag {
-                return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
-            }
-            self.write(&name, "two".into(), Some(&first.etag)).await?;
-            let last = self
-                .read(&name)
-                .await?
-                .ok_or("SYNC_CONDITIONAL_UNSUPPORTED")?;
-            if last.body != "two" || last.etag == first.etag {
-                return Err("SYNC_CONDITIONAL_UNSUPPORTED".into());
-            }
-            Ok(())
-        }
-        .await;
-        // The name is ours even on a broken server. Never delete the real vault.
-        let cleanup = self
-            .request(reqwest::Method::DELETE, &name)?
+    async fn delete(&self, name: &str) -> Result<(), String> {
+        let response = self
+            .request(reqwest::Method::DELETE, name)?
             .send()
             .await
             .map_err(|_| "SYNC_NETWORK")?;
-        check(&cleanup)?;
-        result
+        check(&response)
     }
 }
 

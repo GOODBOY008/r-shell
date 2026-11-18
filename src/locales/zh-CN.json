@@ -2421,7 +2421,7 @@
   },
   "cloudSync": {
     "title": "云同步",
-    "description": "通过自己的 WebDAV 存储，在 macOS、Windows 和 Linux 之间同步配置。",
+    "description": "使用自己的存储服务，在 macOS、Windows 和 Linux 之间同步配置。",
     "scope": "包含连接、分组、模板、命令片段、个人偏好、快捷键、监控定义和仪表盘。",
     "localOnly": "私钥、本地路径、主机信任、运行会话和采集历史保留在本机。新收到的监控命令需要在本机主动启用。",
     "webdavUrl": "WebDAV 目录地址",
@@ -2439,7 +2439,7 @@
     "save": "保存同步设置",
     "saveHint": "同步设置独立保存。自动同步仅在 R-Shell 运行时进行；首次合并始终需要预览确认。",
     "test": "测试连接",
-    "tested": "此目录支持安全的并发同步。",
+    "tested": "此存储服务支持安全的并发写入。",
     "saved": "同步设置已保存。",
     "syncNow": "保存设置并立即同步",
     "review": "保存设置并查看同步",
@@ -2504,7 +2504,7 @@
       "SYNC_LOCAL_STORAGE": "部分本地配置无法读取或保存，已停止同步以保留数据。",
       "SYNC_LOCAL_SECRET": "无法解密本机已保存的凭据，请解锁系统钥匙串或重新保存相应凭据。",
       "SYNC_REFERENCES": "分组、模板或监控引用缺失或不一致，请修复引用后再同步。",
-      "SYNC_REMOTE_MISSING": "此前关联的云端文件已消失。请恢复文件或选择新目录；应用不会自动重建。",
+      "SYNC_REMOTE_MISSING": "此前关联的云端文件已消失。请恢复文件或选择其他同步目标。",
       "SYNC_REMOTE_CHANGED": "云端空间已被替换或回退，请恢复原空间或明确重新关联。",
       "SYNC_STALE": "同步期间配置发生了变化，请刷新预览后查看最新变更。",
       "SYNC_CONFLICT": "请为所有冲突选择版本后再应用。",
@@ -2516,7 +2516,16 @@
       "SYNC_BUSY": "请等待当前同步操作完成。",
       "SYNC_DISABLED": "请先启用云同步。",
       "SYNC_UNKNOWN": "同步未能完成，本地配置已保留。",
-      "SYNC_KEY_BINDING": "此同步连接需要绑定本机私钥。请编辑连接，为目标和相关跳板机选择私钥后再连接。"
+      "SYNC_KEY_BINDING": "此同步连接需要绑定本机私钥。请编辑连接，为目标和相关跳板机选择私钥后再连接。",
+      "SYNC_S3_ENDPOINT": "请输入仅含主机名和可选端口的 HTTPS 服务地址。",
+      "SYNC_S3_REGION": "请检查区域及对应的服务地址。Cloudflare R2 使用 auto。",
+      "SYNC_S3_BUCKET_NAME": "存储桶名称须为 3 至 63 个小写字母、数字、点或连字符。",
+      "SYNC_S3_BUCKET_MISSING": "指定的服务地址中没有这个存储桶。",
+      "SYNC_S3_PREFIX": "请缩短对象前缀，移除控制字符及单独的点路径段。",
+      "SYNC_S3_CREDENTIALS": "请填写访问密钥 ID 和配套的访问密钥。临时凭据还需会话令牌。",
+      "SYNC_S3_ACCESS": "请检查 S3 凭据和存储桶权限。AWS 判断对象是否存在时可能需要 s3:ListBucket 权限。",
+      "SYNC_S3_RESPONSE": "对象存储服务拒绝了请求。请检查服务地址、存储桶策略以及 S3 兼容性。",
+      "SYNC_WRITE_UNCERTAIN": "上传结果暂时无法确认。请刷新预览以重新比较云端配置。"
     },
     "fields": {
       "defaultProtocol": "默认协议",
@@ -2549,6 +2558,23 @@
       "preference": "语言偏好"
     },
     "openReview": "查看变更",
-    "reviewTitle": "查看同步变更"
+    "reviewTitle": "查看同步变更",
+    "provider": "存储服务",
+    "s3": {
+      "name": "S3 兼容对象存储",
+      "endpoint": "HTTPS 服务地址",
+      "endpointHint": "填写服务地址，例如 https://s3.us-east-1.amazonaws.com。存储桶名称单独填写。",
+      "region": "区域（Region）",
+      "bucket": "存储桶",
+      "prefix": "对象前缀（可选）",
+      "addressing": "存储桶寻址方式",
+      "path": "路径式",
+      "virtualHosted": "虚拟主机式",
+      "accessKey": "访问密钥 ID",
+      "secretKey": "访问密钥（Secret Access Key）",
+      "sessionToken": "会话令牌（可选）",
+      "keepSecret": "访问密钥留空即可沿用已保存的凭据。轮换时请填写新密钥，临时凭据还需填写配套的会话令牌。",
+      "savedToken": "已保存的凭据包含会话令牌。填写新密钥时请同时填写相应的新令牌。"
+    }
   }
 }

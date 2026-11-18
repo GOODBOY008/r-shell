@@ -159,7 +159,7 @@ Save an SSH connection, then open **Dashboards → Browse templates** to create 
 - **Background images** — Custom image with opacity, blur, and position controls
 - **Terminal transparency** — Configurable opacity
 - **Config backup** — Export and import your full configuration
-- **Encrypted cloud sync** — Synchronize connections, preferences, snippets and monitor/dashboard definitions across macOS, Windows and Linux through your own WebDAV storage, with conflict review and optional credential sync. [Setup and recovery](docs/cloud-sync.md)
+- **Encrypted cloud sync** — Synchronize connections, preferences, snippets and monitor/dashboard definitions across macOS, Windows and Linux using WebDAV or S3-compatible storage, with conflict review and optional credential sync. [Setup and recovery](docs/cloud-sync.md)
 
 ### ⌨️ Keyboard Shortcuts
 

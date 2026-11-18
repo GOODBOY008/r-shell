@@ -34,6 +34,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          cache-directories: ${{ runner.os == 'Linux' && format('{0}/rshell-test-minio', runner.temp) || '' }}
+          key: ${{ runner.os == 'Linux' && hashFiles('scripts/test-s3-minio.sh') || '' }}
 
       - name: Install dependencies (macOS)
         if: matrix.platform == 'macos-latest'
@@ -75,6 +77,12 @@ jobs:
       - name: Run Rust tests
         working-directory: src-tauri
         run: cargo test
+
+      - name: Verify two-device S3 sync with MinIO
+        if: matrix.platform == 'ubuntu-latest'
+        env:
+          RSHELL_TEST_MINIO_CACHE_DIR: ${{ runner.temp }}/rshell-test-minio
+        run: bash scripts/test-s3-minio.sh
 
       - name: Build and verify macOS app bundle
         if: matrix.platform == 'macos-latest'
