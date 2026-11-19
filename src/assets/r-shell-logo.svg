@@ -1,24 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="r-shell-logo-title r-shell-logo-description">
-  <title id="r-shell-logo-title">R-Shell</title>
-  <desc id="r-shell-logo-description">A prominent white terminal prompt with a small Rust-orange R at the upper-right of a dark tile, framed by jade, teal, and cyan diagonal fields.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none" role="img" aria-labelledby="r-shell-v2-title r-shell-v2-desc">
+  <title id="r-shell-v2-title">R-Shell</title>
   <defs>
-    <linearGradient id="rs-logo-cyan" x1="464" y1="48" x2="120" y2="464" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#43C6DE"/>
-      <stop offset="1" stop-color="#217F9E"/>
+    <linearGradient id="v2-bg-grad" x1="48" y1="48" x2="464" y2="464" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2DD4BF"/>
+      <stop offset="48%" stop-color="#0F766E"/>
+      <stop offset="100%" stop-color="#0C4A6E"/>
     </linearGradient>
-    <linearGradient id="rs-logo-jade" x1="48" y1="48" x2="256" y2="384" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#91D8A0"/>
-      <stop offset="1" stop-color="#22A885"/>
-    </linearGradient>
-    <clipPath id="rs-logo-bounds"><rect x="48" y="48" width="416" height="416" rx="96"/></clipPath>
+
+    <radialGradient id="v2-bg-light" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(130 110) scale(320)">
+      <stop offset="0%" stop-color="#A7F3D0" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#0F766E" stop-opacity="0"/>
+    </radialGradient>
+
+    <filter id="v2-fg-shadow" x="60" y="110" width="392" height="280" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#042F2E" flood-opacity="0.38"/>
+    </filter>
+
+    <clipPath id="v2-outer-clip">
+      <rect x="48" y="48" width="416" height="416" rx="96"/>
+    </clipPath>
   </defs>
-  <g clip-path="url(#rs-logo-bounds)">
-    <rect x="48" y="48" width="416" height="416" fill="url(#rs-logo-cyan)"/>
-    <path d="M48 48H344L128 368H48Z" fill="url(#rs-logo-jade)"/>
-    <path d="M240 464L464 288V464Z" fill="#167967"/>
+
+  <g clip-path="url(#v2-outer-clip)">
+    <rect x="48" y="48" width="416" height="416" fill="url(#v2-bg-grad)"/>
+    <rect x="48" y="48" width="416" height="416" fill="url(#v2-bg-light)"/>
+    <rect x="49" y="49" width="414" height="414" rx="95" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="2"/>
   </g>
-  <rect x="104" y="104" width="304" height="304" rx="32" fill="#121820"/>
-  <path d="M140 340V164H212C251 164 272 184 272 216C272 239 260 256 240 265L280 340H232L196 272H180V340ZM180 204V232H210C224 232 232 227 232 218C232 209 224 204 210 204Z" transform="translate(214 36) scale(.55)" fill="#D34516" fill-rule="evenodd"/>
-  <path d="M152 256L208 308L152 360" stroke="#F4F7FA" stroke-width="32" stroke-linejoin="miter"/>
-  <path d="M248 340H368V372H248Z" fill="#F4F7FA"/>
+
+  <g filter="url(#v2-fg-shadow)">
+    <path d="M102 218L162 278L102 338" stroke="#FFFFFF" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M212 336V148H274C312 148 330 168 330 197C330 226 312 246 274 246H212M272 246L330 336" stroke="#FFFFFF" stroke-width="38" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="364" y="323" width="60" height="32" rx="16" fill="#FF7A3D"/>
+  </g>
 </svg>
