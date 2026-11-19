@@ -96,7 +96,6 @@ fn main() {
             "preview_ssh_config_import",
             "ssh_disconnect",
             "ssh_execute_command",
-            "ssh_tab_complete",
             "start_socks_proxy",
             "stat_local_path",
             "stop_socks_proxy",

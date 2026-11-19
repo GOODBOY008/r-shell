@@ -984,17 +984,6 @@ fn canonicalize_for_scope(path: &std::path::Path) -> std::path::PathBuf {
     path.to_path_buf()
 }
 
-/// Escape a path for use inside a POSIX single-quoted shell argument.
-/// Single quotes cannot appear inside a single-quoted string, so we end the
-/// quote, emit the escaped quote, and reopen the quote: `'` → `'\''`.
-///
-/// Only correct when the login shell is POSIX: fish reads `\'` inside single
-/// quotes as a literal quote. Remote paths and names therefore go through
-/// `remote_shell::sh_with_args`; this is left for the user's own typed input.
-fn shell_escape_single_quoted(path: &str) -> String {
-    path.replace('\'', "'\\''")
-}
-
 /// Deadline for user-initiated reads that legitimately take minutes: a grep
 /// over a large log tree, a `du` across log sources, opening a big text file
 /// in the editor. Monitoring polls keep the shorter default via
@@ -2239,126 +2228,6 @@ pub async fn get_disk_usage(
             disks: Vec::new(),
             error: Some(e.to_string()),
         }),
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TabCompletionRequest {
-    pub connection_id: String,
-    pub input: String,
-    pub cursor_position: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TabCompletionResponse {
-    pub success: bool,
-    pub completions: Vec<String>,
-    pub common_prefix: Option<String>,
-    pub error: Option<String>,
-}
-
-#[tauri::command]
-pub async fn ssh_tab_complete(
-    connection_id: String,
-    input: String,
-    cursor_position: usize,
-    state: State<'_, Arc<ConnectionManager>>,
-) -> Result<TabCompletionResponse, String> {
-    let connection = state
-        .get_connection(&connection_id)
-        .await
-        .ok_or("Connection not found")?;
-
-    let client = connection.read().await;
-
-    // Extract the word to complete (last word before cursor)
-    let text_before_cursor = &input[..cursor_position.min(input.len())];
-    let words: Vec<&str> = text_before_cursor.split_whitespace().collect();
-    let word_to_complete = words.last().copied().unwrap_or("");
-
-    // Determine completion type
-    let is_first_word = words.len() <= 1;
-
-    // Build completion command based on context. The word comes from the
-    // user's own shell input, but it still crosses into a shell command, so
-    // it is quoted for a POSIX login shell (compgen needs the login bash).
-    let escaped_word = shell_escape_single_quoted(word_to_complete);
-    let completion_cmd = if is_first_word {
-        // Command completion: use compgen -c for commands
-        format!("compgen -c '{}' 2>/dev/null || echo", escaped_word)
-    } else {
-        // File/directory completion: use compgen -f for files
-        let escaped_prefix = if word_to_complete.is_empty() {
-            ".".to_string()
-        } else {
-            escaped_word.clone()
-        };
-        // grep -F: the word is a fixed-string prefix, not a regex — `[`, `*`,
-        // `\` or `^` in the typed word would otherwise break the fallback or
-        // over-match. The client-side starts_with filter narrows to a prefix
-        // anyway, so a fixed match is exactly the intent.
-        format!(
-            "compgen -f '{}' 2>/dev/null || ls -1ap '{}' 2>/dev/null | grep -F -- '{}' || echo",
-            escaped_word, escaped_prefix, escaped_word
-        )
-    };
-
-    match client.execute_command(&completion_cmd).await {
-        Ok(output) => {
-            let completions: Vec<String> = output
-                .lines()
-                .filter(|s| !s.is_empty() && s.starts_with(word_to_complete))
-                .map(|s| s.trim().to_string())
-                .take(50) // Limit to 50 completions
-                .collect();
-
-            // Find common prefix
-            let common_prefix = if completions.len() > 1 {
-                find_common_prefix(&completions)
-            } else {
-                None
-            };
-
-            Ok(TabCompletionResponse {
-                success: true,
-                completions,
-                common_prefix,
-                error: None,
-            })
-        }
-        Err(e) => Ok(TabCompletionResponse {
-            success: false,
-            completions: Vec::new(),
-            common_prefix: None,
-            error: Some(e.to_string()),
-        }),
-    }
-}
-
-// Helper function to find common prefix among strings
-fn find_common_prefix(strings: &[String]) -> Option<String> {
-    if strings.is_empty() {
-        return None;
-    }
-    if strings.len() == 1 {
-        return Some(strings[0].clone());
-    }
-
-    let first = &strings[0];
-    let mut prefix = String::new();
-
-    for (i, ch) in first.chars().enumerate() {
-        if strings.iter().all(|s| s.chars().nth(i) == Some(ch)) {
-            prefix.push(ch);
-        } else {
-            break;
-        }
-    }
-
-    if prefix.is_empty() || prefix == strings[0] {
-        None
-    } else {
-        Some(prefix)
     }
 }
 
@@ -6117,23 +5986,10 @@ mod deadline_tests {
 
 #[cfg(test)]
 mod shell_escape_tests {
-    use super::{
-        copy_remote_path, exact_remote_file_command, shell_escape_single_quoted, validate_kill_args,
-    };
+    use super::{copy_remote_path, exact_remote_file_command, validate_kill_args};
     use crate::ls_parser::parse_ls_long_line;
     use crate::ssh::remote_shell::sh_with_args;
     use crate::ssh::{AuthMethod, HostKeyPolicy, SshClient, SshConfig};
-
-    #[test]
-    fn single_quotes_are_escaped_for_posix_shell() {
-        assert_eq!(shell_escape_single_quoted("plain"), "plain");
-        // The quote is closed, escaped, and reopened: ' -> '\''
-        assert_eq!(shell_escape_single_quoted("it's.txt"), "it'\\''s.txt");
-        assert_eq!(
-            shell_escape_single_quoted("x'; touch /tmp/pwned; #"),
-            "x'\\''; touch /tmp/pwned; #"
-        );
-    }
 
     /// sshd passes an exec request to the account's login shell as
     /// `$SHELL -c <command>`, so running the built commands the same way shows
