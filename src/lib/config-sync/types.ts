@@ -51,6 +51,18 @@ export const DEFAULT_S3_TARGET: S3Target = {
   kind: 's3', endpoint: '', region: 'us-east-1', bucket: '', prefix: 'r-shell', addressing: 'path', accessKeyId: '',
 };
 
+// Mirror the Rust vault identity: the saved passphrase belongs to this location only.
+export function sameVault(left: SyncTarget, right: SyncTarget): boolean {
+  const trimEnd = (value: string) => value.replace(/\/+$/, '');
+  const trim = (value: string) => value.replace(/^\/+|\/+$/g, '');
+  if (left.kind === 'webdav' && right.kind === 'webdav') {
+    return left.url === right.url && left.username === right.username;
+  }
+  return left.kind === 's3' && right.kind === 's3' && trimEnd(left.endpoint) === trimEnd(right.endpoint)
+    && left.region === right.region && left.bucket === right.bucket && trim(left.prefix) === trim(right.prefix)
+    && left.addressing === right.addressing;
+}
+
 // Mirror the Rust credential scope when showing whether a saved secret is available.
 export function sameCredentialScope(left: SyncTarget, right: SyncTarget): boolean {
   const trimSlash = (value: string) => value.replace(/\/+$/, '');

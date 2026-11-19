@@ -2558,6 +2558,7 @@
     "username": "Użytkownik WebDAV",
     "serverPassword": "Hasło aplikacji WebDAV",
     "keepPassword": "Pozostaw puste, aby zachować hasło zapisane dla tego katalogu.",
+    "keepPassphrase": "Hasło jest już ustawione. Pozostaw puste, aby je zachować.",
     "syncPassphrase": "Hasło szyfrowania synchronizacji",
     "phraseHint": "Użyj osobnego, silnego hasła. Utwórz je dla nowej przestrzeni lub podaj istniejące hasło, aby ją odblokować. Dostawca pamięci nie może go odzyskać.",
     "remember": "Bezpiecznie zapamiętaj hasło na tym urządzeniu",
