@@ -539,6 +539,122 @@ async fn configure(
     Ok(())
 }
 
+/// Storage settings as they travel in a config export. The sync passphrase,
+/// the baseline and the sync history are left out: they stay on this device.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportedStorage {
+    target: Target,
+    secret: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_token: Option<String>,
+}
+
+/// The exported block did not open: wrong passphrase or damaged data.
+const EXPORT_UNREADABLE: &str = "SYNC_EXPORT_UNREADABLE";
+/// Sets the storage block apart from the credentials block of the same
+/// export, which is sealed under the same passphrase without a context.
+const EXPORT_AAD: &[u8] = b"r-shell-config-sync-storage-export-v1";
+
+impl Stored {
+    /// None when no storage was ever saved on this device.
+    fn exported_storage(&self) -> Option<ExportedStorage> {
+        if self.options.target.is_blank() && self.provider_secret.is_empty() {
+            return None;
+        }
+        Some(ExportedStorage {
+            target: self.options.target.clone(),
+            secret: self.provider_secret.clone(),
+            session_token: self.session_token.clone(),
+        })
+    }
+}
+
+/// The storage target and its service credentials for a config export, sealed
+/// under the export passphrase here so they never reach the webview in the
+/// clear. `None` when no storage is configured.
+#[tauri::command]
+pub async fn config_sync_export_storage(
+    app: tauri::AppHandle,
+    service: tauri::State<'_, SyncService>,
+    passphrase: String,
+) -> Result<Option<String>, String> {
+    let exported = {
+        let mut lock = service.inner.lock().await;
+        load(&mut lock, &app)?.stored.exported_storage()
+    };
+    let Some(exported) = exported else {
+        return Ok(None);
+    };
+    let text = serde_json::to_string(&exported).map_err(|_| "SYNC_LOCAL_STORAGE")?;
+    // Argon2id is deliberately slow, so the work stays off the async runtime.
+    tokio::task::spawn_blocking(move || {
+        crate::commands::seal_for_backup(&passphrase, &text, EXPORT_AAD)
+    })
+    .await
+    .map_err(|_| "SYNC_LOCAL_SECRET")?
+    .map(Some)
+    .map_err(|_| "SYNC_LOCAL_SECRET".into())
+}
+
+/// Restore storage settings from a config export. Returns whether this device
+/// took them; see `restore_storage`.
+#[tauri::command]
+pub async fn config_sync_import_storage(
+    app: tauri::AppHandle,
+    service: tauri::State<'_, SyncService>,
+    passphrase: String,
+    sealed: String,
+) -> Result<bool, String> {
+    let text = tokio::task::spawn_blocking(move || {
+        crate::commands::open_from_backup(&passphrase, &sealed, EXPORT_AAD)
+    })
+    .await
+    .map_err(|_| EXPORT_UNREADABLE)?
+    .map_err(|_| EXPORT_UNREADABLE)?;
+    let exported: ExportedStorage = serde_json::from_str(&text).map_err(|_| EXPORT_UNREADABLE)?;
+    let mut lock = service.inner.lock().await;
+    let runtime = load(&mut lock, &app)?;
+    ensure_process_lock(runtime, &app)?;
+    let restored =
+        restore_storage(runtime, &state_path(&app)?, &machine_key(&app)?, exported).await?;
+    if restored {
+        let _ = app.emit("config-sync-state", status(runtime));
+    }
+    Ok(restored)
+}
+
+/// An imported file must not redirect, reset or replace a sync setup that
+/// exists here, so only a device without any storage settings takes them. They
+/// stay off and carry no passphrase: the user still has to enable sync.
+async fn restore_storage(
+    runtime: &mut Runtime,
+    path: &Path,
+    key: &[u8],
+    exported: ExportedStorage,
+) -> Result<bool, String> {
+    let stored = &runtime.stored;
+    if stored.options.enabled
+        || stored.base.is_some()
+        || stored.pending.is_some()
+        || stored.exported_storage().is_some()
+    {
+        return Ok(false);
+    }
+    let options = Options {
+        enabled: false,
+        paused: false,
+        target: exported.target,
+        ..stored.options.clone()
+    };
+    let auth = ProviderAuth {
+        secret: exported.secret,
+        session_token: exported.session_token,
+    };
+    configure(runtime, path, key, options, Some(auth), None).await?;
+    Ok(true)
+}
+
 #[tauri::command]
 pub async fn config_sync_prepare(
     app: tauri::AppHandle,
@@ -847,6 +963,143 @@ mod tests {
         let mut unsupported = legacy;
         unsupported["options"]["target"] = json!({"kind":"unknown"});
         assert!(serde_json::from_value::<Stored>(unsupported).is_err());
+    }
+
+    #[tokio::test]
+    async fn exported_storage_carries_no_passphrase_and_restores_only_a_device_without_storage() {
+        use settings::{Addressing, S3Target};
+        let dir = tempfile::tempdir().unwrap();
+        let key = [5; 32];
+        let runtime = |stored: Stored| Runtime {
+            passphrase: None,
+            stored,
+            plan: None,
+            process_lock: None,
+        };
+        let target = Target::WebDav {
+            url: "https://dav.example/team/".into(),
+            username: "owner".into(),
+        };
+        let source = Stored {
+            options: Options {
+                enabled: true,
+                credentials: true,
+                target: target.clone(),
+                ..Default::default()
+            },
+            provider_secret: "dav-password".into(),
+            passphrase: Some("vault phrase".into()),
+            base: Some(Snapshot::default()),
+            ..Default::default()
+        };
+        assert!(Stored::default().exported_storage().is_none());
+        let text = serde_json::to_string(&source.exported_storage().unwrap()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&text).unwrap(),
+            json!({"target":{"kind":"webdav","url":"https://dav.example/team/","username":"owner"},
+                   "secret":"dav-password"})
+        );
+        // Temporary S3 credentials travel too; a field from a later version is ignored.
+        let s3: ExportedStorage = serde_json::from_value(json!({
+            "target":{"kind":"s3","endpoint":"https://objects.example","region":"test","bucket":"one",
+                      "prefix":"config","addressing":"path","accessKeyId":"key-id"},
+            "secret":"s3-secret","sessionToken":"token","later":"field"
+        }))
+        .unwrap();
+        assert!(matches!(
+            &s3.target,
+            Target::S3(S3Target { bucket, addressing: Addressing::Path, .. }) if bucket == "one"
+        ));
+        assert_eq!(s3.session_token.as_deref(), Some("token"));
+
+        // The block opens only as a storage block, not as the credentials block.
+        let sealed = crate::commands::seal_for_backup("export phrase", &text, EXPORT_AAD).unwrap();
+        assert_eq!(
+            crate::commands::open_from_backup("export phrase", &sealed, EXPORT_AAD).unwrap(),
+            text
+        );
+        assert!(crate::commands::open_from_backup("export phrase", &sealed, b"").is_err());
+
+        let path = dir.path().join("fresh/state.enc");
+        let mut fresh = runtime(Stored::default());
+        let exported = serde_json::from_str(&text).unwrap();
+        assert!(restore_storage(&mut fresh, &path, &key, exported)
+            .await
+            .unwrap());
+        let loaded = read_state(&path, &key).unwrap();
+        assert!(loaded.options.target == target);
+        assert!(!loaded.options.enabled && !loaded.options.credentials);
+        assert_eq!(loaded.provider_secret, "dav-password");
+        assert!(loaded.passphrase.is_none() && loaded.base.is_none());
+        assert!(fresh.passphrase.is_none());
+
+        // Every kind of existing setup keeps its own storage: in use, linked
+        // before, mid-apply, or only saved.
+        let existing = [
+            (
+                "enabled",
+                Stored {
+                    options: Options {
+                        enabled: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+            (
+                "linked",
+                Stored {
+                    base: Some(Snapshot::default()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "pending",
+                Stored {
+                    pending: Some(Pending {
+                        id: "next".into(),
+                        snapshot: Snapshot::default(),
+                    }),
+                    ..Default::default()
+                },
+            ),
+            (
+                "saved",
+                Stored {
+                    options: Options {
+                        target: target.clone(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ),
+            (
+                "secret",
+                Stored {
+                    provider_secret: "kept".into(),
+                    ..Default::default()
+                },
+            ),
+        ];
+        for (name, stored) in existing {
+            let path = dir.path().join(name).join("state.enc");
+            let mut device = runtime(stored);
+            let other = ExportedStorage {
+                target: Target::WebDav {
+                    url: "https://elsewhere.example/".into(),
+                    username: "intruder".into(),
+                },
+                secret: "other".into(),
+                session_token: None,
+            };
+            assert!(
+                !restore_storage(&mut device, &path, &key, other)
+                    .await
+                    .unwrap(),
+                "{name}"
+            );
+            assert!(!path.exists(), "{name}");
+        }
     }
 
     #[test]

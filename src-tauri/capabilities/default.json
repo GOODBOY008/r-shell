@@ -122,6 +122,8 @@
     "allow-config-sync-status",
     "allow-config-sync-test",
     "allow-config-sync-configure",
+    "allow-config-sync-export-storage",
+    "allow-config-sync-import-storage",
     "allow-config-sync-prepare",
     "allow-config-sync-commit",
     "allow-config-sync-ack",

@@ -57,6 +57,14 @@ pub struct S3Target {
 }
 
 impl Target {
+    /// No storage location was entered yet.
+    pub fn is_blank(&self) -> bool {
+        match self {
+            Self::WebDav { url, .. } => url.is_empty(),
+            Self::S3(target) => target.endpoint.is_empty(),
+        }
+    }
+
     // WebDAV servers can give each user their own directory at the same URL.
     // An S3 key rotation, however, can still address the very same object.
     pub fn same_vault(&self, other: &Self) -> bool {

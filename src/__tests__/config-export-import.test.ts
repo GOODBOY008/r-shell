@@ -1053,6 +1053,116 @@ describe('credentials block', () => {
     },
   );
 
+  describe('cloud sync storage settings', () => {
+    const STORAGE = 'b1:salt:nonce:storage';
+
+    /** Backend double: hands out one sealed storage block and answers restores. */
+    function installSyncBackend({ exported = (): unknown => STORAGE, restore = (): unknown => true } = {}) {
+      const crypto = mockInvoke.getMockImplementation()!;
+      mockInvoke.mockImplementation(async (command: unknown, args: unknown) => {
+        if (command === 'config_sync_export_storage') return exported();
+        if (command === 'config_sync_import_storage') return restore();
+        return crypto(command, args);
+      });
+    }
+    const calls = (name: string) => mockInvoke.mock.calls.filter(([command]) => command === name);
+
+    async function importBundle(json: string, options: { credentialsPassphrase?: string; skipCredentials?: boolean }) {
+      const { applyConfigBundle } = await import('../lib/config-export-import');
+      return applyConfigBundle(JSON.parse(json), options);
+    }
+
+    it('are sealed by the backend and exported next to the credentials block', async () => {
+      installSyncBackend();
+      const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+      expect(calls('config_sync_export_storage')).toEqual([
+        ['config_sync_export_storage', { passphrase: 'correct horse' }],
+      ]);
+      expect(bundle.data.credentials.syncStorage).toBe(STORAGE);
+    });
+
+    it('are exported even when no connection has a secret', async () => {
+      localStorage.clear();
+      installSyncBackend();
+      const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+      expect(bundle.data.credentials).toMatchObject({ format: 'r-shell-credentials-v2', syncStorage: STORAGE });
+      expect(bundle.data.credentials.sealed).toMatch(/^b1:/);
+    });
+
+    it('are not requested without a passphrase', async () => {
+      installSyncBackend();
+      const bundle = JSON.parse(await exportWithPassphrase());
+      expect(calls('config_sync_export_storage')).toHaveLength(0);
+      expect(bundle.data.credentials).toBeUndefined();
+    });
+
+    it('are left out, without failing the export, when the sync state cannot be read', async () => {
+      // Tauri rejects an invoke with the command's error string, not an Error.
+      installSyncBackend({ exported: () => Promise.reject('SYNC_BUSY') });
+      const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+      expect(bundle.data.credentials.sealed).toMatch(/^b1:/);
+      expect(bundle.data.credentials).not.toHaveProperty('syncStorage');
+    });
+
+    it('are restored last, with the passphrase, and reported in the result', async () => {
+      let connectionsAtRestore: string | null = null;
+      installSyncBackend({
+        restore: () => {
+          connectionsAtRestore = localStorage.getItem('r-shell-connections');
+          return true;
+        },
+      });
+      const json = await exportWithPassphrase('correct horse');
+      localStorage.clear();
+      const result = await importBundle(json, { credentialsPassphrase: 'correct horse' });
+      expect(calls('config_sync_import_storage')).toEqual([
+        ['config_sync_import_storage', { passphrase: 'correct horse', sealed: STORAGE }],
+      ]);
+      expect(connectionsAtRestore).not.toBeNull();
+      expect(result).toMatchObject({ syncStorage: 'restored', connections: 3, credentials: 1 });
+    });
+
+    it('are reported as kept when this device has its own sync setup', async () => {
+      installSyncBackend({ restore: () => false });
+      const json = await exportWithPassphrase('correct horse');
+      localStorage.clear();
+      const result = await importBundle(json, { credentialsPassphrase: 'correct horse' });
+      expect(result).toMatchObject({ syncStorage: 'kept', connections: 3, credentials: 1 });
+    });
+
+    it('are left alone when the credentials are skipped or the passphrase is wrong', async () => {
+      installSyncBackend();
+      const json = await exportWithPassphrase('correct horse');
+      localStorage.clear();
+      const { WrongPassphraseError } = await import('../lib/config-export-import');
+      await expect(importBundle(json, { credentialsPassphrase: 'wrong' })).rejects.toBeInstanceOf(WrongPassphraseError);
+      const result = await importBundle(json, { skipCredentials: true });
+      expect(result.syncStorage).toBeNull();
+      expect(calls('config_sync_import_storage')).toHaveLength(0);
+    });
+
+    it.each(['SYNC_EXPORT_UNREADABLE', 'SYNC_BUSY'])(
+      'do not fail the import when the backend answers %s',
+      async (code) => {
+        installSyncBackend({ restore: () => Promise.reject(code) });
+        const json = await exportWithPassphrase('correct horse');
+        localStorage.clear();
+        const result = await importBundle(json, { credentialsPassphrase: 'correct horse' });
+        expect(result).toMatchObject({ syncStorage: null, connections: 3, credentials: 1 });
+      },
+    );
+
+    it('ignore a storage value that is not a sealed block', async () => {
+      installSyncBackend();
+      const bundle = JSON.parse(await exportWithPassphrase('correct horse'));
+      bundle.data.credentials.syncStorage = 'plain';
+      localStorage.clear();
+      const result = await importBundle(JSON.stringify(bundle), { credentialsPassphrase: 'correct horse' });
+      expect(calls('config_sync_import_storage')).toHaveLength(0);
+      expect(result).toMatchObject({ syncStorage: null, connections: 3 });
+    });
+  });
+
   it('rejects a wrong passphrase before writing anything', async () => {
     const text = await exportWithPassphrase('correct horse');
     const before = localStorage.getItem('r-shell-connections');

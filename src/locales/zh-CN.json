@@ -448,7 +448,10 @@
       "importPassphraseDesc": "此文件包含使用导出口令加密的密码和其他凭据。输入口令以恢复它们，或跳过以导入其余内容。",
       "importPassphraseWrong": "口令错误或凭据数据已损坏。请重试或跳过凭据。",
       "importWithoutCredentials": "跳过凭据",
-      "importCredentialsRestored_other": "已为 {{count}} 个连接恢复凭据。"
+      "importCredentialsRestored_other": "已为 {{count}} 个连接恢复凭据。",
+      "exportSyncStorageNote": "如果已设置云同步，还会包含其存储设置和访问凭据。同步加密口令绝不会导出。",
+      "importSyncStorageRestored": "已恢复云同步的存储设置。在“设置 → 云同步”中启用同步并输入同步加密口令之前，同步保持关闭。",
+      "importSyncStorageKept": "文件中的云同步存储设置未应用：此设备已有自己的设置。"
     },
     "language": {
       "label": "语言",

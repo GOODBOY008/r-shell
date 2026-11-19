@@ -23,7 +23,7 @@ vi.mock('../lib/notifications', () => ({
 }));
 
 const imported: ImportResult = {
-  connections: 2, profiles: 0, credentials: 0,
+  connections: 2, profiles: 0, credentials: 0, syncStorage: null,
   terminalAppearance: false, editorConfig: false, appSettings: false, language: false,
 };
 
@@ -106,6 +106,20 @@ describe('encrypted credential import prompt', () => {
     [2, 'Credentials restored for 2 connections.'],
   ])('pluralizes the summary for %i restored connections', async (count, summary) => {
     vi.mocked(applyConfigBundle).mockResolvedValue({ ...imported, credentials: count });
+    renderImport();
+    const dialog = await screen.findByRole('dialog', { name: 'Encrypted credentials' });
+    fireEvent.change(within(dialog).getByLabelText('Export passphrase'), { target: { value: 'passphrase' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import Config' }));
+    await waitFor(() => expect(notify.success).toHaveBeenCalledWith(
+      'Configuration imported successfully', { description: expect.stringContaining(summary) },
+    ));
+  });
+
+  it.each([
+    ['restored', 'Cloud sync storage settings restored.'],
+    ['kept', 'were not applied: this device already has its own.'],
+  ] as const)('says what happened to the cloud sync storage settings: %s', async (syncStorage, summary) => {
+    vi.mocked(applyConfigBundle).mockResolvedValue({ ...imported, syncStorage });
     renderImport();
     const dialog = await screen.findByRole('dialog', { name: 'Encrypted credentials' });
     fireEvent.change(within(dialog).getByLabelText('Export passphrase'), { target: { value: 'passphrase' } });

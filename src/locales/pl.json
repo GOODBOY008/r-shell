@@ -453,7 +453,10 @@
       "importCredentialsRestored_one": "Przywrócono poświadczenia: {{count}} połączenie.",
       "importCredentialsRestored_few": "Przywrócono poświadczenia: {{count}} połączenia.",
       "importCredentialsRestored_many": "Przywrócono poświadczenia: {{count}} połączeń.",
-      "importCredentialsRestored_other": "Przywrócono poświadczenia: {{count}} połączenia."
+      "importCredentialsRestored_other": "Przywrócono poświadczenia: {{count}} połączenia.",
+      "exportSyncStorageNote": "Jeśli synchronizacja w chmurze jest skonfigurowana, dołączane są też ustawienia jej usługi przechowywania danych wraz z danymi dostępowymi. Hasło szyfrowania synchronizacji nigdy nie jest eksportowane.",
+      "importSyncStorageRestored": "Przywrócono ustawienia usługi przechowywania danych dla synchronizacji w chmurze. Synchronizacja pozostaje wyłączona, dopóki jej nie włączysz i nie podasz hasła szyfrowania synchronizacji w sekcji Ustawienia → Synchronizacja w chmurze.",
+      "importSyncStorageKept": "Ustawienia usługi przechowywania danych z pliku nie zostały zastosowane: to urządzenie ma już własne ustawienia synchronizacji w chmurze."
     },
     "language": {
       "label": "Język",
