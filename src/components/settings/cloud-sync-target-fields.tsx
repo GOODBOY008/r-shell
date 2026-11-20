@@ -2,11 +2,12 @@ import { useRef, useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
+import { MASK } from '../stored-secret-input';
 import type { SyncTarget } from '@/lib/config-sync/types';
 
 const selectClass = 'w-full min-w-0 rounded-md border border-input bg-input-background px-2 py-1.5 text-sm focus-visible:outline-ring';
 
-type FieldProps = Pick<ComponentProps<typeof Input>, 'type' | 'autoComplete' | 'required' | 'pattern' | 'minLength' | 'maxLength'> & {
+type FieldProps = Pick<ComponentProps<typeof Input>, 'type' | 'autoComplete' | 'required' | 'pattern' | 'minLength' | 'maxLength' | 'placeholder'> & {
   id: string; label: string; value: string; onValue: (value: string) => void; hint?: string; error?: string;
 };
 
@@ -54,7 +55,7 @@ export function CloudSyncTargetFields({ target, changeTarget, enabled, secret, s
         autoComplete="section-webdav username" onValue={username => changeTarget({ ...target, username })} />
       <Field id="cloud-sync-password" label={t('cloudSync.serverPassword')} type="password"
         autoComplete="section-webdav current-password" value={secret} onValue={setSecret}
-        hint={savedSecret ? t('cloudSync.keepPassword') : undefined} />
+        hint={savedSecret ? t('cloudSync.keepPassword') : undefined} placeholder={savedSecret ? MASK : undefined} />
     </>;
   }
   return <>
@@ -80,8 +81,9 @@ export function CloudSyncTargetFields({ target, changeTarget, enabled, secret, s
       error={t('cloudSync.errors.SYNC_S3_CREDENTIALS')} onValue={accessKeyId => changeTarget({ ...target, accessKeyId })} />
     <Field id="cloud-s3-secret" label={t('cloudSync.s3.secretKey')} type="password" value={secret}
       required={(enabled && !savedSecret) || !!token} onValue={setSecret} error={t('cloudSync.errors.SYNC_S3_CREDENTIALS')}
-      hint={savedSecret ? t('cloudSync.s3.keepSecret') : undefined} />
+      hint={savedSecret ? t('cloudSync.s3.keepSecret') : undefined} placeholder={savedSecret && !token ? MASK : undefined} />
+    {/* The key and its token are replaced as a pair: a new one drops the saved other. */}
     <Field id="cloud-s3-token" label={t('cloudSync.s3.sessionToken')} type="password" value={token} onValue={setToken}
-      hint={savedToken ? t('cloudSync.s3.savedToken') : undefined} />
+      hint={savedToken ? t('cloudSync.s3.savedToken') : undefined} placeholder={savedToken && !secret ? MASK : undefined} />
   </>;
 }

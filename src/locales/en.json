@@ -2478,6 +2478,7 @@
     "username": "WebDAV username",
     "serverPassword": "WebDAV application password",
     "keepPassword": "Leave blank to keep the saved password for this directory.",
+    "keepPassphrase": "The passphrase is already set. Leave blank to keep it.",
     "syncPassphrase": "Sync encryption passphrase",
     "phraseHint": "Use a separate, strong passphrase. Create one for a new sync space, or enter the existing passphrase to unlock it. It cannot be recovered by the storage provider.",
     "remember": "Remember the passphrase securely on this device",

@@ -2524,6 +2524,7 @@
     "username": "Usuário do WebDAV",
     "serverPassword": "Senha de aplicativo do WebDAV",
     "keepPassword": "Deixe em branco para manter a senha salva para este diretório.",
+    "keepPassphrase": "A frase secreta já está definida. Deixe em branco para mantê-la.",
     "syncPassphrase": "Frase secreta da sincronização",
     "phraseHint": "Use uma frase secreta forte e independente. Crie uma para um novo espaço ou digite a frase existente para desbloqueá-lo. O provedor de armazenamento não pode recuperá-la.",
     "remember": "Lembrar a frase secreta com segurança neste dispositivo",

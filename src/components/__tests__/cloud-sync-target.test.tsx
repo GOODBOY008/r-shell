@@ -68,3 +68,45 @@ describe('S3 settings', () => {
     expect(ipc.mock.calls.filter(([cmd]) => cmd === 'config_sync_test')).toHaveLength(1);
   });
 });
+
+describe('saved secrets', () => {
+  const MASK = '••••••••';
+  const field = (label: string) => screen.getByLabelText(label) as HTMLInputElement;
+
+  it('shows a mask for the saved WebDAV password and passphrase until the directory changes', () => {
+    render(<CloudSyncSection query="" onSync={vi.fn()} />);
+    expect(field('WebDAV application password').placeholder).toBe(MASK);
+    expect(field('Sync encryption passphrase').placeholder).toBe(MASK);
+    expect(screen.getByText('The passphrase is already set. Leave blank to keep it.')).toBeTruthy();
+    change('WebDAV directory URL', 'https://other.example/');
+    expect(field('WebDAV application password').placeholder).toBe('');
+    expect(field('Sync encryption passphrase').placeholder).toBe('');
+    expect(screen.queryByText('The passphrase is already set. Leave blank to keep it.')).toBeNull();
+  });
+
+  it('shows no mask when nothing is saved or the passphrase is locked', async () => {
+    status.hasSecret = false; status.unlocked = false;
+    await act(refreshSyncStatus);
+    render(<CloudSyncSection query="" onSync={vi.fn()} />);
+    expect(field('WebDAV application password').placeholder).toBe('');
+    expect(field('Sync encryption passphrase').placeholder).toBe('');
+  });
+
+  it('masks the saved S3 key and token only while neither is being replaced', async () => {
+    status.options.target = { kind: 's3', endpoint: 'https://objects.example', region: 'auto',
+      bucket: 'team', prefix: '', addressing: 'path', accessKeyId: 'saved' };
+    status.hasSessionToken = true;
+    await act(refreshSyncStatus);
+    render(<CloudSyncSection query="" onSync={vi.fn()} />);
+    expect(field('Secret access key').placeholder).toBe(MASK);
+    expect(field('Session token (optional)').placeholder).toBe(MASK);
+    change('Secret access key', 'new-key');
+    expect(field('Session token (optional)').placeholder).toBe('');
+    change('Secret access key', ''); change('Session token (optional)', 'new-token');
+    expect(field('Secret access key').placeholder).toBe('');
+    // Another bucket is another vault: the key stays, the passphrase does not.
+    change('Session token (optional)', ''); change('Bucket', 'other');
+    expect(field('Secret access key').placeholder).toBe(MASK);
+    expect(field('Sync encryption passphrase').placeholder).toBe('');
+  });
+});

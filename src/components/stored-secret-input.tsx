@@ -8,7 +8,7 @@ import { cn } from './ui/utils';
 
 // Same mask for every stored secret: the form never decrypts the value, and
 // its length is not something to give away.
-const MASK = '••••••••';
+export const MASK = '••••••••';
 
 interface StoredSecretInputProps {
   id: string;

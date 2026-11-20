@@ -7,7 +7,8 @@ import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Checkbox } from '../ui/checkbox';
 import { configureSync, getSyncView, subscribeSync, testSyncConnection } from '@/lib/config-sync/controller';
-import { DEFAULT_S3_TARGET, DEFAULT_SYNC_OPTIONS, sameCredentialScope, type SyncOptions, type SyncTarget } from '@/lib/config-sync/types';
+import { DEFAULT_S3_TARGET, DEFAULT_SYNC_OPTIONS, sameCredentialScope, sameVault, type SyncOptions, type SyncTarget } from '@/lib/config-sync/types';
+import { MASK } from '../stored-secret-input';
 import { CloudSyncTargetFields } from './cloud-sync-target-fields';
 import { settingMatchesQuery } from './shared';
 
@@ -26,6 +27,8 @@ export function CloudSyncSection({ query, onSync }: { query: string; onSync: () 
   const [error, setError] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
   const hasSavedAuth = !!saved && sameCredentialScope(saved.target, target);
+  // The backend keeps the passphrase only while the vault location stays the same.
+  const hasPassphrase = !!saved && !!state.status?.unlocked && sameVault(saved.target, target);
   const changeTarget = (next: SyncTarget) => {
     if (!sameCredentialScope(target, next)) { setPassword(''); setToken(''); }
     setPassphrase(''); setError(null); setMessage(''); setOptions({ ...options, target: next });
@@ -92,8 +95,8 @@ export function CloudSyncSection({ query, onSync }: { query: string; onSync: () 
           secret={password} setSecret={setPassword} token={token} setToken={setToken}
           savedSecret={hasSavedAuth && !!state.status?.hasSecret} savedToken={hasSavedAuth && !!state.status?.hasSessionToken} />
         <div className="space-y-1.5"><Label htmlFor="cloud-sync-passphrase">{t('cloudSync.syncPassphrase')}</Label>
-          <p id="cloud-sync-passphrase-hint" className="text-xs text-muted-foreground">{t('cloudSync.phraseHint')}</p>
-          <Input id="cloud-sync-passphrase" name="sync-passphrase" type="password"
+          <p id="cloud-sync-passphrase-hint" className="text-xs text-muted-foreground">{t(hasPassphrase ? 'cloudSync.keepPassphrase' : 'cloudSync.phraseHint')}</p>
+          <Input id="cloud-sync-passphrase" name="sync-passphrase" type="password" placeholder={hasPassphrase ? MASK : undefined}
             autoComplete={state.status?.initialized ? 'section-sync current-password' : 'section-sync new-password'}
             value={passphrase} onChange={event => setPassphrase(event.target.value)} aria-describedby="cloud-sync-passphrase-hint" /></div>
         <div className="space-y-3">

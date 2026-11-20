@@ -2461,6 +2461,7 @@
     "username": "WebDAV 用户名",
     "serverPassword": "WebDAV 应用密码",
     "keepPassword": "留空以保留此目录已保存的密码。",
+    "keepPassphrase": "口令已设置。留空即可保留。",
     "syncPassphrase": "同步加密口令",
     "phraseHint": "请设置独立的高强度口令。新空间使用新口令；已有空间需输入原口令解锁。存储服务商无法找回此口令。",
     "remember": "在此设备安全保存同步口令",
