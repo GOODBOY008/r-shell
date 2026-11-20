@@ -61,6 +61,8 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev
+          # Login shells the remote command quoting test runs against.
+          sudo apt-get install -y -o Acquire::Retries=3 fish tcsh
 
       - name: Install frontend dependencies
         run: pnpm install
@@ -76,6 +78,9 @@ jobs:
 
       - name: Run Rust tests
         working-directory: src-tauri
+        env:
+          # The remote command quoting test (Linux only) must not skip fish and tcsh.
+          RSHELL_TEST_REQUIRE_LOGIN_SHELLS: '1'
         run: cargo test
 
       - name: Verify two-device S3 sync with MinIO
