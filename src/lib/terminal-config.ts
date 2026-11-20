@@ -348,7 +348,8 @@ export const defaultTerminalOptions: ITerminalOptions = {
   letterSpacing: 0,
   theme: defaultTerminalTheme,
   allowProposedApi: true,
-  convertEol: true,
+  // A PTY controls CR/LF itself (including applications using raw mode).
+  convertEol: false,
   scrollback: DEFAULT_TERMINAL_SCROLLBACK,
   tabStopWidth: 8,
   allowTransparency: false,
@@ -364,6 +365,8 @@ export function getTerminalOptions(appearance: TerminalAppearanceSettings): ITer
   
   return {
     ...defaultTerminalOptions,
+    // The command-output view receives plain LF-delimited text.
+    convertEol: true,
     fontSize: appearance.fontSize,
     fontFamily: appearance.fontFamily,
     lineHeight: appearance.lineHeight,
