@@ -987,6 +987,10 @@ fn canonicalize_for_scope(path: &std::path::Path) -> std::path::PathBuf {
 /// Escape a path for use inside a POSIX single-quoted shell argument.
 /// Single quotes cannot appear inside a single-quoted string, so we end the
 /// quote, emit the escaped quote, and reopen the quote: `'` → `'\''`.
+///
+/// Only correct when the login shell is POSIX: fish reads `\'` inside single
+/// quotes as a literal quote. Remote paths and names therefore go through
+/// `remote_shell::sh_with_args`; this is left for the user's own typed input.
 fn shell_escape_single_quoted(path: &str) -> String {
     path.replace('\'', "'\\''")
 }
@@ -1044,7 +1048,7 @@ pub async fn create_directory(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("mkdir -p '{}'", shell_escape_single_quoted(&path));
+    let command = exact_remote_path_command("mkdir -p", &path);
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -1065,11 +1069,8 @@ pub async fn delete_file(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = if is_directory {
-        format!("rm -rf '{}'", shell_escape_single_quoted(&path))
-    } else {
-        format!("rm -f '{}'", shell_escape_single_quoted(&path))
-    };
+    let operation = if is_directory { "rm -rf" } else { "rm -f" };
+    let command = exact_remote_path_command(operation, &path);
 
     match client.execute_command(&command).await {
         Ok(_) => Ok(true),
@@ -1142,7 +1143,7 @@ pub async fn read_file_content(
         .ok_or("Connection not found")?;
 
     let client = connection.read().await;
-    let command = format!("cat '{}'", shell_escape_single_quoted(&path));
+    let command = exact_remote_path_command("cat", &path);
 
     // The editor opens arbitrary text files; a large one streams for a while
     // and must not die at the 60 s monitoring deadline.
@@ -1187,11 +1188,7 @@ pub async fn read_remote_file_base64(
     let client = connection.read().await;
 
     // Refuse very large files to avoid memory / performance issues
-    let size_cmd = format!(
-        "stat -c '%s' '{}' 2>/dev/null || stat -f '%z' '{}'",
-        shell_escape_single_quoted(&path),
-        shell_escape_single_quoted(&path)
-    );
+    let size_cmd = remote_file_size_command(&path);
     let size_str = client
         .execute_command(&size_cmd)
         .await
@@ -1207,13 +1204,7 @@ pub async fn read_remote_file_base64(
     }
 
     // Read raw bytes via `cat` then base64-encode on the remote side.
-    // `base64 -w0` (GNU) disables line wrapping; on macOS `base64` wraps by default,
-    // so we pipe through `tr -d '\n'` as a portable fallback.
-    let b64_cmd = format!(
-        "base64 -w0 '{}' 2>/dev/null || base64 '{}' | tr -d '\\n'",
-        shell_escape_single_quoted(&path),
-        shell_escape_single_quoted(&path)
-    );
+    let b64_cmd = remote_base64_command(&path);
     let b64_data = client
         .execute_command_with_timeout(&b64_cmd, base64_transfer_deadline(file_size))
         .await
@@ -1279,6 +1270,64 @@ fn exact_remote_file_command(operation: &str, source_path: &str, dest_path: &str
         ),
         &[source_path, dest_path],
     )
+}
+
+/// `<operation> -- <path>` run by sh, so the login shell never parses the path.
+/// Fish reads `\'` inside single quotes as a literal quote, which let a file
+/// name containing `\'` end the old `'\''` quoting early and run the rest.
+fn exact_remote_path_command(operation: &str, path: &str) -> String {
+    crate::ssh::remote_shell::sh_with_args(&format!(r#"{operation} -- "$1""#), &[path])
+}
+
+fn remote_file_size_command(path: &str) -> String {
+    crate::ssh::remote_shell::sh_with_args(
+        r#"stat -c %s -- "$1" 2>/dev/null || stat -f %z -- "$1""#,
+        &[path],
+    )
+}
+
+/// `base64 -w0` (GNU) disables line wrapping; on macOS `base64` wraps by
+/// default, so we pipe through `tr -d "\n"` as a portable fallback.
+fn remote_base64_command(path: &str) -> String {
+    crate::ssh::remote_shell::sh_with_args(
+        r#"base64 -w0 -- "$1" 2>/dev/null || base64 -- "$1" | tr -d "\n""#,
+        &[path],
+    )
+}
+
+fn log_sizes_command(paths: &[&str]) -> String {
+    crate::ssh::remote_shell::sh_with_args(r#"du -h -- "$@" 2>/dev/null"#, paths)
+}
+
+fn read_log_command(source_type: &str, path: &str, lines: u32) -> String {
+    let script = match source_type {
+        "journal" => format!(r#"journalctl -u "$1" -n {lines} --no-pager 2>/dev/null"#),
+        "docker" => format!(r#"docker logs --tail {lines} "$1" 2>&1"#),
+        _ => format!(r#"tail -n {lines} -- "$1" 2>/dev/null"#),
+    };
+    crate::ssh::remote_shell::sh_with_args(&script, &[path])
+}
+
+fn search_log_command(
+    source_type: &str,
+    path: &str,
+    pattern: &str,
+    is_regex: bool,
+    limit: u32,
+) -> String {
+    let grep = if is_regex {
+        "grep -nE -i"
+    } else {
+        "grep -nF -i"
+    };
+    let script = match source_type {
+        "journal" => format!(
+            r#"journalctl -u "$1" --no-pager 2>/dev/null | {grep} -- "$2" | tail -n {limit}"#
+        ),
+        "docker" => format!(r#"docker logs "$1" 2>&1 | {grep} -- "$2" | tail -n {limit}"#),
+        _ => format!(r#"{grep} -- "$2" "$1" 2>/dev/null | tail -n {limit}"#),
+    };
+    crate::ssh::remote_shell::sh_with_args(&script, &[path, pattern])
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1469,11 +1518,7 @@ pub async fn tail_log(
     let client = connection.read().await;
 
     let line_count = lines.unwrap_or(50);
-    let command = format!(
-        "tail -n {} '{}'",
-        line_count,
-        shell_escape_single_quoted(&log_path)
-    );
+    let command = exact_remote_path_command(&format!("tail -n {line_count}"), &log_path);
 
     match client.execute_command(&command).await {
         Ok(output) => Ok(CommandResponse {
@@ -1611,14 +1656,14 @@ pub async fn discover_log_sources(
 
     // Get file sizes using du -h
     if !sources.is_empty() {
-        let file_paths: Vec<String> = sources
+        let file_paths: Vec<&str> = sources
             .iter()
             .filter(|s| s.source_type == "file")
-            .map(|s| format!("'{}'", shell_escape_single_quoted(&s.path)))
+            .map(|s| s.path.as_str())
             .collect();
 
         if !file_paths.is_empty() {
-            let size_cmd = format!("du -h {} 2>/dev/null", file_paths.join(" "));
+            let size_cmd = log_sizes_command(&file_paths);
             if let Ok(output) = client.execute_command(&size_cmd).await {
                 for line in output.lines() {
                     let parts: Vec<&str> = line.trim().split('\t').collect();
@@ -1714,23 +1759,7 @@ pub async fn read_log(
 
     let line_count = lines.unwrap_or(200);
 
-    let cmd = match source_type.as_str() {
-        "journal" => format!(
-            "journalctl -u '{}' -n {} --no-pager 2>/dev/null",
-            shell_escape_single_quoted(&path),
-            line_count
-        ),
-        "docker" => format!(
-            "docker logs --tail {} '{}' 2>&1",
-            line_count,
-            shell_escape_single_quoted(&path)
-        ),
-        _ => format!(
-            "tail -n {} '{}' 2>/dev/null",
-            line_count,
-            shell_escape_single_quoted(&path)
-        ),
-    };
+    let cmd = read_log_command(&source_type, &path, line_count);
 
     match client
         .execute_command_with_timeout(&cmd, LONG_COMMAND_TIMEOUT)
@@ -1766,28 +1795,13 @@ pub async fn search_log(
     let client = connection.read().await;
 
     let limit = max_results.unwrap_or(500);
-    let escaped = shell_escape_single_quoted(&pattern);
-    let escaped_path = shell_escape_single_quoted(&path);
-    let grep_flag = if is_regex.unwrap_or(false) {
-        "-nE"
-    } else {
-        "-nF"
-    };
-
-    let cmd = match source_type.as_str() {
-        "journal" => format!(
-            "journalctl -u '{}' --no-pager 2>/dev/null | grep {} -i '{}' | tail -n {}",
-            escaped_path, grep_flag, escaped, limit
-        ),
-        "docker" => format!(
-            "docker logs '{}' 2>&1 | grep {} -i '{}' | tail -n {}",
-            escaped_path, grep_flag, escaped, limit
-        ),
-        _ => format!(
-            "grep {} -i '{}' '{}' 2>/dev/null | tail -n {}",
-            grep_flag, escaped, escaped_path, limit
-        ),
-    };
+    let cmd = search_log_command(
+        &source_type,
+        &path,
+        &pattern,
+        is_regex.unwrap_or(false),
+        limit,
+    );
 
     // A grep over a multi-GB log legitimately runs past the 60 s monitoring
     // deadline — this is the path the review flagged as a regression.
@@ -2267,7 +2281,7 @@ pub async fn ssh_tab_complete(
 
     // Build completion command based on context. The word comes from the
     // user's own shell input, but it still crosses into a shell command, so
-    // it gets the same quoting treatment as remote paths.
+    // it is quoted for a POSIX login shell (compgen needs the login bash).
     let escaped_word = shell_escape_single_quoted(word_to_complete);
     let completion_cmd = if is_first_word {
         // Command completion: use compgen -c for commands
@@ -6119,6 +6133,90 @@ mod shell_escape_tests {
             shell_escape_single_quoted("x'; touch /tmp/pwned; #"),
             "x'\\''; touch /tmp/pwned; #"
         );
+    }
+
+    /// sshd passes an exec request to the account's login shell as
+    /// `$SHELL -c <command>`, so running the built commands the same way shows
+    /// what each shell makes of a hostile name. Shells that are not installed
+    /// are skipped, unless RSHELL_TEST_REQUIRE_LOGIN_SHELLS is set (CI sets it).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hostile_file_names_stay_literal_in_every_installed_login_shell() {
+        use super::{
+            exact_remote_path_command, log_sizes_command, read_log_command, remote_base64_command,
+            remote_file_size_command, search_log_command,
+        };
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use std::path::Path;
+        use std::process::Command;
+
+        // Under fish the old '\'' quoting closed early and ran `touch pwned`.
+        let name = r"x\'; touch pwned; #!";
+        let content = "alpha\nneedle one\nNEEDLE two\n";
+        let mut covered = Vec::new();
+        for shell in ["sh", "bash", "dash", "zsh", "fish", "tcsh"] {
+            if Command::new(shell).args(["-c", "exit 0"]).output().is_err() {
+                continue;
+            }
+            let scratch = tempfile::tempdir().unwrap();
+            let run = |command: String| {
+                let output = Command::new(shell)
+                    .args(["-c", &command])
+                    .current_dir(scratch.path())
+                    .env("HOME", scratch.path())
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{shell}: {command}: {output:?}");
+                String::from_utf8(output.stdout).unwrap()
+            };
+            let directory = format!("{}/{name}", scratch.path().display());
+            let file = format!("{directory}/{name}");
+
+            run(exact_remote_path_command("mkdir -p", &directory));
+            assert!(
+                Path::new(&directory).is_dir(),
+                "{shell} did not take the name literally"
+            );
+            std::fs::write(&file, content).unwrap();
+            assert_eq!(run(exact_remote_path_command("cat", &file)), content);
+            assert_eq!(
+                run(exact_remote_path_command("tail -n 1", &file)),
+                "NEEDLE two\n"
+            );
+            assert_eq!(
+                run(remote_file_size_command(&file)).trim(),
+                content.len().to_string()
+            );
+            assert_eq!(
+                run(remote_base64_command(&file)).trim(),
+                STANDARD.encode(content)
+            );
+            assert!(run(log_sizes_command(&[&file])).ends_with(&format!("\t{file}\n")));
+            assert_eq!(
+                run(read_log_command("file", &file, 2)),
+                "needle one\nNEEDLE two\n"
+            );
+            assert_eq!(
+                run(search_log_command("file", &file, "needle", false, 10)),
+                "2:needle one\n3:NEEDLE two\n"
+            );
+            run(exact_remote_path_command("rm -f", &file));
+            assert!(!Path::new(&file).exists());
+            run(exact_remote_path_command("rm -rf", &directory));
+            assert!(!Path::new(&directory).exists());
+            assert!(
+                !scratch.path().join("pwned").exists(),
+                "{shell} ran part of the file name"
+            );
+            covered.push(shell);
+        }
+        eprintln!("login shells covered: {covered:?}");
+        if std::env::var_os("RSHELL_TEST_REQUIRE_LOGIN_SHELLS").is_some() {
+            assert!(
+                covered.contains(&"fish") && covered.contains(&"tcsh"),
+                "fish and tcsh must be installed, covered only {covered:?}"
+            );
+        }
     }
 
     #[tokio::test]
