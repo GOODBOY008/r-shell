@@ -88,7 +88,6 @@
     "allow-ssh-execute-command",
     "allow-run-monitor-command",
     "allow-cancel-monitor-command",
-    "allow-ssh-tab-complete",
     "allow-start-socks-proxy",
     "allow-stat-local-path",
     "allow-stop-socks-proxy",
