@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-11-21
+
+### 🔖 R-Shell 3.4.0 — Compressed Folder Transfers
+
+Queue a folder upload or download as one cancellable transfer. SSH and SFTP can send the folder as a compressed archive, and FTP and FTPS use compression when the server supports it. Credential exports can now carry WebDAV or S3 storage settings to a new device. In the terminal, tmux redraws preserve the cursor column.
+
+### New Features 🎉
+
+- feat(files): compress folder uploads and downloads by @GOODBOY008 in #329
+- feat(settings): include cloud sync storage settings in credential exports by @twkrol in #339
+- feat(cloud-sync): show a mask for secret fields with a saved value by @twkrol in #341
+
+### Bug Fixes 🐛
+
+- fix(terminal): preserve the cursor column during tmux redraws by @GOODBOY008 in #345
+- fix(ssh): run file and log commands through the POSIX shell by @twkrol in #335
+- fix(deps): update rustls-webpki to 0.103.16 and rustls to 0.23.46 by @twkrol in #337
+
+### Other Changes
+
+- chore(ssh): remove the unused `ssh_tab_complete` command by @twkrol in #343
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) and [@twkrol](https://github.com/twkrol) for contributing to this release.
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.3.0...v3.4.0
+
 ## [3.3.0] - 2026-11-18
 
 ### 🔖 R-Shell 3.3.0 — Encrypted Configuration Sync
