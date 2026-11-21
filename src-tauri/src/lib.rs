@@ -524,6 +524,8 @@ pub fn run() {
             config_sync::config_sync_status,
             config_sync::config_sync_test,
             config_sync::config_sync_configure,
+            config_sync::config_sync_export_storage,
+            config_sync::config_sync_import_storage,
             config_sync::config_sync_prepare,
             config_sync::config_sync_commit,
             config_sync::config_sync_ack,

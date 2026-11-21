@@ -451,7 +451,10 @@
       "importWithoutCredentials": "Pular credenciais",
       "importCredentialsRestored_one": "Credenciais restauradas para {{count}} conexão.",
       "importCredentialsRestored_many": "Credenciais restauradas para {{count, number}} de conexões.",
-      "importCredentialsRestored_other": "Credenciais restauradas para {{count}} conexões."
+      "importCredentialsRestored_other": "Credenciais restauradas para {{count}} conexões.",
+      "exportSyncStorageNote": "Se a sincronização na nuvem estiver configurada, as configurações de armazenamento e as credenciais de acesso também são incluídas. A frase secreta da sincronização nunca é exportada.",
+      "importSyncStorageRestored": "Configurações de armazenamento da sincronização na nuvem restauradas. A sincronização permanece desativada até você ativá-la e informar a frase secreta da sincronização em Configurações → Sincronização na nuvem.",
+      "importSyncStorageKept": "As configurações de armazenamento da sincronização na nuvem contidas no arquivo não foram aplicadas: este dispositivo já tem as suas."
     },
     "language": {
       "label": "Idioma",

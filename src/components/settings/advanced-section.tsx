@@ -34,6 +34,7 @@ import {
   isCurrentChannelEligible,
   type UpdateContext,
 } from '@/lib/update-channel';
+import { refreshSyncStatus } from '@/lib/config-sync/controller';
 import { englishText, settingMatchesQuery } from './shared';
 
 /** Shortest export passphrase accepted; it is the only thing protecting the block. */
@@ -169,6 +170,13 @@ export function AdvancedSection({
       ];
       if (result.credentials > 0) {
         summary.push(t('settings.advanced.importCredentialsRestored', { count: result.credentials }));
+      }
+      if (result.syncStorage === 'restored') {
+        summary.push(t('settings.advanced.importSyncStorageRestored'));
+        // Show the restored storage in the Cloud sync section right away.
+        void refreshSyncStatus().catch((error: unknown) => console.warn('[config-sync] status refresh failed:', error));
+      } else if (result.syncStorage === 'kept') {
+        summary.push(t('settings.advanced.importSyncStorageKept'));
       }
       notify.success(t('settings.advanced.importSuccess'), { description: summary.join(' ') });
       onConfigImported();
@@ -403,6 +411,9 @@ export function AdvancedSection({
                         {passphraseMismatch && exportPassphraseRepeat
                           ? t('settings.advanced.exportPassphraseMismatch')
                           : t('settings.advanced.exportPassphraseHint', { min: MIN_PASSPHRASE_LENGTH })}
+                      </p>
+                      <p className="sm:col-span-2 text-xs text-muted-foreground">
+                        {t('settings.advanced.exportSyncStorageNote')}
                       </p>
                     </div>
                   )}

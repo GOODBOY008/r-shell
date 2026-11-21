@@ -5,9 +5,11 @@ import { withoutSecrets } from './credential-crypto';
  * Bundles every piece of user-configurable state (connections, folders,
  * profiles, terminal appearance, editor config, app settings, language)
  * into a single JSON file so the user can move their setup to another
- * machine with one click.
+ * machine with one click. Opt-in, a passphrase-encrypted credentials block
+ * that also carries the cloud sync storage settings.
  */
 
+import { invoke } from '@tauri-apps/api/core';
 import { save, open as tauriOpen } from '@tauri-apps/plugin-dialog';
 import { version as packageVersion } from '../../package.json';
 import { readLocalTextFile, writeLocalTextFile } from './local-file-access';
@@ -71,8 +73,11 @@ export interface ConfigBundle {
     /**
      * Opt-in: every stored secret, keyed by connection id, encrypted under a
      * passphrase the user chose at export time (`b1:` block).
+     * `syncStorage` is the cloud sync storage target with its access keys,
+     * sealed by the backend under the same passphrase. The sync encryption
+     * passphrase is never exported.
      */
-    credentials?: { format: string; sealed: string };
+    credentials?: { format: string; sealed: string; syncStorage?: string };
   };
 }
 
@@ -93,6 +98,12 @@ export interface ImportResult {
   profiles: number;
   /** Connections whose secrets were restored from the credentials block. */
   credentials: number;
+  /**
+   * Cloud sync storage settings from the file: `restored` (left off, without
+   * a passphrase), `kept` when this device has its own, `null` when the file
+   * had none or they could not be read.
+   */
+  syncStorage: 'restored' | 'kept' | null;
   terminalAppearance: boolean;
   editorConfig: boolean;
   appSettings: boolean;
@@ -224,11 +235,24 @@ export async function exportAllConfig(options: ExportOptions = {}): Promise<bool
         }
         if (Object.keys(own).length > 0) secrets[connection.id] = own;
       }
-      if (Object.keys(secrets).length > 0) {
+      // Cloud sync storage settings ride along when sync is set up. The
+      // backend seals them itself, so the access keys never pass through the
+      // webview in the clear. A sync state that cannot be read must not stop
+      // the backup of everything else.
+      let syncStorage: string | null = null;
+      try {
+        syncStorage = await invoke<string | null>('config_sync_export_storage', {
+          passphrase: options.credentialsPassphrase,
+        });
+      } catch (error) {
+        console.error('[config-export] Sync storage settings were left out:', error);
+      }
+      if (Object.keys(secrets).length > 0 || syncStorage) {
         const block: CredentialsBlock = { metadata: credentialMetadata(bundle), connections: secrets };
         bundle.data.credentials = {
           format: CREDENTIALS_FORMAT,
           sealed: await sealForBackup(options.credentialsPassphrase, JSON.stringify(block)),
+          ...(syncStorage ? { syncStorage } : {}),
         };
       }
     }
@@ -344,7 +368,8 @@ function hasSecret(secrets: SecretValues): boolean {
 
 /**
  * Write every category of a parsed bundle into localStorage, optionally
- * merging connections. Returns a summary of what was imported. Throws
+ * merging connections, then hand the cloud sync storage settings to the
+ * backend. Returns a summary of what was imported. Throws
  * `WrongPassphraseError` before touching storage when the credentials block
  * does not open with the given passphrase.
  */
@@ -357,6 +382,7 @@ export async function applyConfigBundle(
       connections: 0,
       profiles: 0,
       credentials: 0,
+      syncStorage: null,
       terminalAppearance: false,
       editorConfig: false,
       appSettings: false,
@@ -467,6 +493,22 @@ export async function applyConfigBundle(
     if (data.language) {
       localStorage.setItem(LANGUAGE_STORAGE_KEY, data.language);
       result.language = true;
+    }
+
+    // 3g. Cloud sync storage settings -------------------------------------------
+    // Last and never fatal: everything else is already imported. The backend
+    // takes them only on a device that has no sync storage of its own.
+    const syncStorage = block?.syncStorage;
+    if (credentialsPassphrase && !skipCredentials && isBackupSealed(syncStorage)) {
+      try {
+        const restored = await invoke<boolean>('config_sync_import_storage', {
+          passphrase: credentialsPassphrase,
+          sealed: syncStorage,
+        });
+        result.syncStorage = restored ? 'restored' : 'kept';
+      } catch (error) {
+        console.error('[config-import] Sync storage settings were not restored:', error);
+      }
     }
 
     // The shell, welcome screen and terminals re-read appearance/app settings

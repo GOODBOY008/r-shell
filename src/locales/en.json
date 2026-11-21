@@ -449,7 +449,10 @@
       "importPassphraseWrong": "Wrong passphrase or damaged credentials. Try again or skip the credentials.",
       "importWithoutCredentials": "Skip credentials",
       "importCredentialsRestored_one": "Credentials restored for {{count}} connection.",
-      "importCredentialsRestored_other": "Credentials restored for {{count}} connections."
+      "importCredentialsRestored_other": "Credentials restored for {{count}} connections.",
+      "exportSyncStorageNote": "If cloud sync is set up, its storage settings and access credentials are included too. The sync encryption passphrase is never exported.",
+      "importSyncStorageRestored": "Cloud sync storage settings restored. Sync stays off until you enable it and enter the sync encryption passphrase in Settings → Cloud sync.",
+      "importSyncStorageKept": "The cloud sync storage settings in the file were not applied: this device already has its own."
     },
     "language": {
       "label": "Language",

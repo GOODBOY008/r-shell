@@ -85,7 +85,8 @@ and authenticated using Argon2id (64 MiB, three passes, one lane) and AES-256-GC
 with fresh salt/nonce and a sync-specific authentication context. Host addresses,
 commands and notes are encrypted too. Every device re-seals downloaded secrets
 under its own existing R-Shell machine key. Storage credentials stay on the
-device alongside the machine-key-encrypted sync state.
+device alongside the machine-key-encrypted sync state. The one exception is a
+manual config export with the credentials option: see below.
 
 Stable record IDs, a last-applied baseline, and deletion tombstones support
 three-way merges without depending on device clocks. Tombstones are retained in
@@ -114,10 +115,23 @@ previously linked cloud file or unexpected rollback stops synchronization. It
 does not replace local data with defaults or silently recreate the remote file.
 The existing manual import/export feature continues to work independently.
 
+A manual export made with **Include passwords and other credentials** also
+carries the storage settings (the WebDAV URL and username, or the S3 endpoint,
+region, bucket, prefix and addressing style) together with their access
+credentials (the WebDAV password, or the S3 access key ID, secret key and any
+session token), encrypted with the export passphrase. The sync encryption
+passphrase, the sync history and the other sync options are never exported.
+Importing such a file with its export passphrase restores the storage settings
+only on a device that has no sync storage settings of its own. A device that
+already has them keeps them. Sync stays off until you enable it and enter the
+sync encryption passphrase. If the local sync state cannot be read, the export
+and the import still complete, without the storage settings.
+
 ## Verification
 
 ```sh
-pnpm exec vitest run src/lib/__tests__/config-sync-storage.test.ts src/lib/__tests__/config-sync-controller.test.ts
+pnpm exec vitest run src/lib/__tests__/config-sync-storage.test.ts src/lib/__tests__/config-sync-controller.test.ts \
+  src/__tests__/config-export-import.test.ts src/__tests__/advanced-section-import.test.tsx
 cd src-tauri
 cargo test --lib config_sync
 cargo test --lib acl_tests
