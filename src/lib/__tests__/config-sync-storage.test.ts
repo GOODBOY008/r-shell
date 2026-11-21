@@ -3,7 +3,7 @@ import { buildStorageImage, captureConfig, readStorageImage, stable, writeStorag
 import type { SyncRecords, SyncSnapshot } from '../config-sync/types';
 import { newDashboard, newDashboardSource, newDashboardWidget, newDashboardNote } from '../dashboard-config';
 import { defaultMonitorConfig, newCommandMonitor } from '../monitor-config';
-import { assertLocalKeyBindings } from '../config-sync/key-bindings';
+import { assertLocalKeyBindings, editedKeyRequirements } from '../config-sync/key-bindings';
 import type { LocalKeyRequirements } from '../config-sync/key-bindings';
 import { ConnectionStorageManager } from '../connection-storage';
 
@@ -77,6 +77,56 @@ describe('portable configuration projection', () => {
     expect(() => assertLocalKeyBindings(restored)).toThrow();
     expect(() => assertLocalKeyBindings({ ...restored, privateKeyPath: 'C:\\Users\\a\\key' })).not.toThrow();
     expect(stable(records)).not.toContain('/Users/a/key');
+  });
+
+  it('ends a key requirement on every device once the editor removes that key', () => {
+    const required = { target: true, tunnel: false, hops: [] };
+    const ended = { target: false, tunnel: false, hops: [], ended: { target: true, tunnel: false, hops: [] } };
+    const bound = { ...conn(), authMethod: 'publickey', privateKeyPath: '/Users/a/key', syncKeyRequirements: required };
+    // A device that has not selected its key yet must not end the requirement by synchronizing.
+    localStorage.setItem('r-shell-connections', JSON.stringify([{ ...bound, privateKeyPath: '' }]));
+    expect(captureConfig()['connections/a']).toHaveProperty('localKeyRequirements', required);
+    for (const edited of [{ ...bound, privateKeyPath: '' }, { ...bound, authMethod: 'auto', privateKeyPath: '', identityFiles: [''] }]) {
+      localStorage.setItem('r-shell-connections', JSON.stringify([{ ...edited, syncKeyRequirements: editedKeyRequirements(edited, bound) }]));
+      expect(captureConfig()['connections/a']).toHaveProperty('localKeyRequirements', ended);
+    }
+    const edited = { ...bound, privateKeyPath: '' };
+    localStorage.setItem('r-shell-connections', JSON.stringify([{ ...edited, syncKeyRequirements: editedKeyRequirements(edited, bound) }]));
+    const records = captureConfig();
+    // Another device gives up its own key file, so that it does not raise the requirement again.
+    localStorage.setItem('r-shell-connections', JSON.stringify([{ ...bound, privateKeyPath: 'C:\\Users\\a\\key', identityFiles: ['C:\\Users\\a\\other'], identityAgent: 'agent' }]));
+    const applied = JSON.parse(buildStorageImage(snapshot(records), readStorageImage(), false)['r-shell-connections']!)[0] as Record<string, unknown>;
+    expect(applied).toMatchObject({ authMethod: 'publickey', identityAgent: 'agent', syncKeyRequirements: ended });
+    for (const field of ['privateKeyPath', 'identityFiles']) expect(applied).not.toHaveProperty(field);
+    expect(() => assertLocalKeyBindings(applied)).not.toThrow();
+    localStorage.setItem('r-shell-connections', JSON.stringify([applied]));
+    expect(captureConfig()['connections/a']).toEqual(records['connections/a']);
+    // Selecting a key again asks every device for its own key, as before.
+    localStorage.setItem('r-shell-connections', JSON.stringify([{ ...applied, privateKeyPath: '/Users/a/new' }]));
+    expect(captureConfig()['connections/a']).toHaveProperty('localKeyRequirements', required);
+  });
+
+  it('removes only the key files an editor marked as removed', () => {
+    const hop = (authMethod: string, identityFiles?: string[]) => ({ host: 'jump', port: 22, username: 'user', authMethod, privateKeyPath: '/local/hop', ...(identityFiles ? { identityFiles } : {}) });
+    const local = { ...conn(), authMethod: 'auto', privateKeyPath: '/local/key', identityFiles: [] as string[],
+      tunnelEnabled: true, tunnelHost: 'tunnel', tunnelPort: 22, tunnelUsername: 'user', tunnelAuthMethod: 'publickey', tunnelKeyPath: '/local/tunnel',
+      jumpHosts: [hop('publickey'), hop('publickey'), hop('auto', [])] };
+    localStorage.setItem('r-shell-connections', JSON.stringify([local]));
+    const records = captureConfig();
+    const record = records['connections/a'] as { localKeyRequirements?: LocalKeyRequirements };
+    expect(record.localKeyRequirements).toEqual({ target: true, tunnel: true, hops: [true, true, true] });
+    const apply = () => JSON.parse(buildStorageImage(snapshot(records), readStorageImage(), false)['r-shell-connections']!)[0] as typeof local;
+    // A record that merely lacks the flags, such as a stale one that won a conflict, removes nothing.
+    delete record.localKeyRequirements;
+    expect(apply()).toMatchObject({ privateKeyPath: '/local/key', identityFiles: [], tunnelKeyPath: '/local/tunnel',
+      jumpHosts: [{ privateKeyPath: '/local/hop' }, { privateKeyPath: '/local/hop' }, { privateKeyPath: '/local/hop', identityFiles: [] }] });
+    record.localKeyRequirements = { target: false, tunnel: false, hops: [true, false, false], ended: { target: true, tunnel: true, hops: [false, true, true] } };
+    const applied = apply();
+    expect(applied.privateKeyPath).toBeUndefined();
+    expect(applied.identityFiles).toEqual([]); // "No identity files" is a setting, not a key.
+    expect(applied.tunnelKeyPath).toBeUndefined();
+    expect(applied.jumpHosts.map(h => h.privateKeyPath)).toEqual(['/local/hop', undefined, undefined]);
+    expect(applied.jumpHosts[2].identityFiles).toEqual([]);
   });
 
   it.each(['r-shell-connections', 'r-shell-connection-folders', 'r-shell-connection-profiles', 'r-shell-command-snippets',

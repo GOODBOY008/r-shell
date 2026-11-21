@@ -75,7 +75,9 @@ Private keys and their paths, SSH Agent paths, SSH config provenance, host trust
 OS autostart, update settings, security switches, active sessions and runtime
 statistics stay local. Explicit key-file requirements travel without the paths;
 select a local key in the connection editor before using that connection on a new
-device. `Mod` shortcuts retain their platform meaning (Command on macOS,
+device. The last edit decides for every device: selecting a key file on one device
+asks the others to select theirs, and removing it in the connection editor removes
+the selection everywhere, so the connection uses the default keys. `Mod` shortcuts retain their platform meaning (Command on macOS,
 Control on Windows/Linux). Reserved or conflicting bindings require review.
 
 ## Storage and recovery

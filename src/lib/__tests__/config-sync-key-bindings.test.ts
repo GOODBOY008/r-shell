@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildSftpConnectRequest, buildSshConnectRequest, type SshConnectRequestSource } from '../ssh-connect-request';
+import { editedKeyRequirements } from '../config-sync/key-bindings';
 
 vi.mock('../i18n', () => ({ default: { t: (key: string) => key } }));
 
@@ -38,5 +39,45 @@ describe.each([['SSH', buildSshConnectRequest], ['SFTP', buildSftpConnectRequest
     expect(() => build('session', { ...edited, jumpHosts: [hop] })).toThrow('SYNC_KEY_BINDING');
     expect(() => build('session', { ...edited, jumpHosts: [{ ...hop, privateKeyPath: '/local/hop' }] })).not.toThrow();
     expect(() => build('session', { ...edited, jumpHosts: [{ ...hop, authMethod: 'auto', identityFiles: ['/local/hop'] }] })).not.toThrow();
+  });
+});
+
+describe('key requirements after an edit in the connection editor', () => {
+  const required = { target: true, tunnel: true, hops: [true, true] };
+  const hop = { host: 'jump', port: 22, username: 'user' };
+  const opened = { privateKeyPath: '/local/key', tunnelKeyPath: '/local/tunnel',
+    jumpHosts: [{ ...hop, identityFiles: ['/local/hop'] }, { ...hop, host: 'second' }], syncKeyRequirements: required };
+
+  it('ends and marks the requirement of every key the edit removes', () => {
+    const edited = { ...opened, privateKeyPath: '', tunnelKeyPath: '', jumpHosts: [{ ...hop, identityFiles: [''] }, opened.jumpHosts[1]] };
+    // The second hop never had a key on this device: it is still waiting for one.
+    expect(editedKeyRequirements(edited, opened)).toEqual({ target: false, tunnel: false, hops: [false, true],
+      ended: { target: true, tunnel: true, hops: [true, false] } });
+    expect(required).toEqual({ target: true, tunnel: true, hops: [true, true] });
+  });
+
+  it('changes nothing for a key that stays, is replaced, or was never selected here', () => {
+    expect(editedKeyRequirements({ ...opened, privateKeyPath: '/local/other' }, opened)).toBe(required);
+    const waiting = { privateKeyPath: '', jumpHosts: [hop, { ...hop, host: 'second' }], syncKeyRequirements: required };
+    expect(editedKeyRequirements({ ...waiting, authMethod: 'publickey' }, waiting)).toBe(required);
+    expect(editedKeyRequirements(waiting, undefined)).toBe(required);
+  });
+
+  it('keeps the marks of keys removed earlier', () => {
+    const marked = { ...opened, syncKeyRequirements: { ...required, tunnel: false, ended: { target: false, tunnel: true, hops: [] } } };
+    expect(editedKeyRequirements({ ...marked, privateKeyPath: '' }, marked)).toEqual({ target: false, tunnel: false, hops: [true, true],
+      ended: { target: true, tunnel: true, hops: [false, false] } });
+  });
+
+  it('does not read a removed or moved hop as a removed key', () => {
+    // Flags follow the index: the hop that takes the place of a removed one did not lose a key.
+    expect(editedKeyRequirements({ ...opened, jumpHosts: [opened.jumpHosts[1]] }, opened)).toBe(required);
+    expect(editedKeyRequirements({ ...opened, jumpHosts: [] }, opened)).toBe(required);
+  });
+
+  it('never adds a requirement or a mark where no key was required', () => {
+    expect(editedKeyRequirements({ privateKeyPath: '' }, { privateKeyPath: '/local/key' })).toBeUndefined();
+    const none = { target: false, tunnel: false, hops: [false] };
+    expect(editedKeyRequirements({ privateKeyPath: '', syncKeyRequirements: none }, { privateKeyPath: '/local/key' })).toBe(none);
   });
 });
