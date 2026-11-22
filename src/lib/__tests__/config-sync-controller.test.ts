@@ -159,6 +159,35 @@ describe('sync commit coordination', () => {
     await sync.commitSync({}); expect(called('config_sync_commit')).toBe(false);
     input.remove(); await sync.commitSync({}); expect(called('config_sync_ack')).toBe(true);
   });
+  it('keeps session input usable while it replaces the stores', async () => {
+    document.getElementById('root')!.innerHTML = '<aside><button id="row"></button><button id="tip" data-slot="tooltip-trigger"></button></aside>'
+      + '<main><nav></nav><section><form></form><div class="xterm"><textarea></textarea></div></section>'
+      + '<div class="cm-editor"></div><div data-remote-desktop-input tabindex="0"></div></main>';
+    const at = (selector: string) => document.querySelector<HTMLElement>(selector)!;
+    at('form').inert = true;
+    const inert = () => ['#root', 'aside', 'main', 'nav', 'section', '.xterm', '.cm-editor', '[data-remote-desktop-input]'].filter(selector => at(selector).inert);
+    const defaultInvoke = invoke.getMockImplementation()!;
+    let locked: string[] = [];
+    let during = (): void => {};
+    invoke.mockImplementation(async (command, args) => {
+      if (command === 'config_sync_stage_apply') { locked = inert(); during(); }
+      return defaultInvoke(command, args);
+    });
+    const sync = await controller();
+    const commit = async (focus: string) => { await sync.prepareSync(true); at(focus).focus(); await sync.commitSync({}); };
+    await commit('textarea');
+    expect(locked).toEqual(['aside', 'nav']);
+    expect(inert()).toEqual([]); expect(document.activeElement).toBe(at('textarea'));
+    expect(at('form').inert).toBe(true); // Not this lock's to release.
+    // What a browser does to focus inside an inert element: it comes back when the block ends.
+    during = () => (document.activeElement as HTMLElement).blur();
+    await commit('#row'); expect(document.activeElement).toBe(at('#row'));
+    await commit('#tip'); expect(document.activeElement).toBe(document.body);
+    // Focus the user moved into a terminal meanwhile stays there.
+    during = () => at('textarea').focus();
+    await commit('#row'); expect(document.activeElement).toBe(at('textarea'));
+    expect(invoke.mock.calls.filter(args => args[0] === 'config_sync_ack')).toHaveLength(4);
+  });
   it('does not shorten a server rate-limit delay on focus', async () => {
     vi.useFakeTimers(); const defaultInvoke = invoke.getMockImplementation()!; let requests = 0;
     invoke.mockImplementation(async (command, args) => {

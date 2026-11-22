@@ -27,6 +27,8 @@ let pullDue = Infinity;
 let retryAt = 0;
 let failures = 0;
 const LAST_SUCCESS = 'rshell-config-sync-last-success';
+// A terminal, a file editor or a remote desktop takes session input, not configuration.
+const SESSION_INPUT = '.xterm, .cm-editor, [data-remote-desktop-input]';
 
 export const getSyncView = (): SyncView => view;
 export const subscribeSync = (listener: () => void): (() => void) => {
@@ -61,8 +63,29 @@ function editing(): boolean {
   const focused = document.activeElement;
   const inlineEditor = focused instanceof HTMLElement
     && focused.matches('input:not([type="radio"]):not([type="checkbox"]):not([type="button"]):not([type="submit"]), textarea, [contenteditable="true"]')
-    && !focused.closest('.xterm, .cm-editor');
+    && !focused.closest(SESSION_INPUT);
   return inlineEditor || !!document.querySelector('[role="dialog"][data-state="open"]:not([data-config-sync-review]), [role="alertdialog"][data-state="open"]');
+}
+/** Blocks what is on screen while the stores are replaced. Session input stays usable and keeps its focus. */
+function lockInterface(): () => void {
+  const locked: HTMLElement[] = [];
+  const focused = document.activeElement;
+  const lock = (parent: Element): void => {
+    for (const child of parent.children) {
+      if (!(child instanceof HTMLElement) || child.inert || child.matches(SESSION_INPUT)) continue;
+      if (child.querySelector(SESSION_INPUT)) lock(child);
+      else { child.inert = true; locked.push(child); }
+    }
+  };
+  const root = document.getElementById('root');
+  if (root) lock(root);
+  return () => {
+    for (const element of locked) element.inert = false;
+    // An inert element loses focus and the browser does not give it back.
+    // A tooltip trigger stays without it: focus would open the tooltip.
+    if (focused instanceof HTMLElement && focused.isConnected && document.activeElement === document.body
+      && !focused.matches('[data-slot="tooltip-trigger"]')) focused.focus({ preventScroll: true });
+  };
 }
 function notifyStores(): void {
   for (const event of ['rshell-connections-changed', 'storage', 'sshClientSettingsChanged', 'rshell-editor-config-changed',
@@ -183,8 +206,7 @@ export async function commitSync(choices: SyncChoices, automatic = false): Promi
   }
   update({ busy: true, error: null, phase: 'syncing' });
   let journalId: string | null = null;
-  const root = document.getElementById('root');
-  const previousInert = root?.inert ?? false;
+  let unlock = (): void => {};
   try {
     const records = recordsNow();
     if (stable(records) !== stable(previewRecords)) throw new Error('SYNC_STALE');
@@ -194,7 +216,7 @@ export async function commitSync(choices: SyncChoices, automatic = false): Promi
     // Network I/O never holds a UI editing lock. If edits raced it, retain the
     // old baseline and merge again; never treat un-applied records as deletions.
     if (stable(recordsNow()) !== stable(records) || editing()) throw new Error('SYNC_STALE');
-    if (root) root.inert = true;
+    unlock = lockInterface();
     const before = readStorageImage();
     const after = buildStorageImage(batch.snapshot, before, view.status.options.credentials);
     journalId = batch.id;
@@ -220,7 +242,7 @@ export async function commitSync(choices: SyncChoices, automatic = false): Promi
       previewRecords = null; update({ preview: null, reviewOpen: false });
     }
     fail(error);
-  } finally { if (root) root.inert = previousInert; }
+  } finally { unlock(); }
 }
 
 function tick(): void {
