@@ -20,6 +20,7 @@ import { ConnectionProfileManager, type ConnectionProfile } from '../lib/connect
 import { ConnectionStorageManager, type X11Config } from '../lib/connection-storage';
 import { SECRET_FIELDS, CONNECT_SECRET_FIELDS, isSealed, sealSecret, openSecret, openConnectionSecrets, sealJumpHosts, isPasswordSavingAllowed, type SecretField } from '../lib/credential-crypto';
 import { buildSshConnectRequest } from '../lib/ssh-connect-request';
+import { editedKeyRequirements } from '../lib/config-sync/key-bindings';
 import { folderPathFromArg } from '../lib/connection-folder';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import { sshConnect } from '@/lib/ssh-connect';
@@ -277,7 +278,10 @@ export function ConnectionDialog({
     serverAliveCountMax: 3
   };
 
-  const [config, setConfig] = useState<ConnectionConfig>(defaultConfig);
+  const [formConfig, setConfig] = useState<ConnectionConfig>(defaultConfig);
+  // Every save and connect below reads this, so removing a key here also ends
+  // the synchronized requirement for that key (#344).
+  const config: ConnectionConfig = { ...formConfig, syncKeyRequirements: editedKeyRequirements(formConfig, editingConnection) };
   // Sealed secrets of the connection being edited (empty for a new one). A
   // blank form field on save resolves back to these — plaintext is never
   // echoed into the form.

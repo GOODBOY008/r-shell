@@ -70,6 +70,16 @@ export function stable(value: unknown): string {
   return JSON.stringify(sort(value));
 }
 
+type KeyFlags = { target: boolean; tunnel: boolean; hops: boolean[] };
+const keyAuth = (v: Row) => ['publickey', 'key', 'auto'].includes(v.authMethod as string);
+/** Blank entries and an empty list ("no identity files") are settings, not keys. */
+const keyFiles = (v: unknown) => Array.isArray(v) && v.some(Boolean);
+function keyFlags(value: unknown): KeyFlags {
+  const flags = object(value ?? { target: false, tunnel: false, hops: [] });
+  if (typeof flags.target !== 'boolean' || typeof flags.tunnel !== 'boolean' || !Array.isArray(flags.hops) || !flags.hops.every(v => typeof v === 'boolean')) throw new Error('SYNC_INVALID_DATA');
+  return flags as KeyFlags;
+}
+const anyFlag = (flags: KeyFlags) => flags.target || flags.tunnel || flags.hops.some(Boolean);
 function connection(row: Row, hop = false): Row {
   const result = pick(row, hop ? HOP_FIELDS : CONNECTION_FIELDS);
   for (const [key, value] of Object.entries(result)) {
@@ -86,14 +96,19 @@ function connection(row: Row, hop = false): Row {
   if (!hop) text(result.name);
   if (row.jumpHosts !== undefined) result.jumpHosts = array(row.jumpHosts).map(h => connection(h, true));
   if (!hop) {
-    const existing = object(row.syncKeyRequirements ?? row.localKeyRequirements ?? { target: false, tunnel: false, hops: [] });
-    if (typeof existing.target !== 'boolean' || typeof existing.tunnel !== 'boolean' || !Array.isArray(existing.hops) || !existing.hops.every(v => typeof v === 'boolean')) throw new Error('SYNC_INVALID_DATA');
-    const keyAuth = (v: Row) => ['publickey', 'key', 'auto'].includes(v.authMethod as string);
-    const needsKey = (v: Row) => !!v.privateKeyPath || !!v.privateKey || (Array.isArray(v.identityFiles) && v.identityFiles.length > 0);
-    const requirements = { target: keyAuth(row) && (needsKey(row) || existing.target),
-      tunnel: row.tunnelEnabled === true && row.tunnelAuthMethod === 'publickey' && (!!row.tunnelKeyPath || existing.tunnel),
-      hops: array(row.jumpHosts ?? []).map((h, index) => keyAuth(h) && (needsKey(h) || (existing.hops as boolean[])[index] === true)) };
-    if (requirements.target || requirements.tunnel || requirements.hops.some(Boolean)) result.localKeyRequirements = requirements;
+    const existing = keyFlags(row.syncKeyRequirements ?? row.localKeyRequirements);
+    const ended = keyFlags((existing as Row).ended);
+    const needsKey = (v: Row) => !!v.privateKeyPath || !!v.privateKey || keyFiles(v.identityFiles);
+    const hops = array(row.jumpHosts ?? []);
+    const tunnelKey = row.tunnelEnabled === true && row.tunnelAuthMethod === 'publickey';
+    const requirements: KeyFlags = { target: keyAuth(row) && (needsKey(row) || existing.target),
+      tunnel: tunnelKey && (!!row.tunnelKeyPath || existing.tunnel),
+      hops: hops.map((h, index) => keyAuth(h) && (needsKey(h) || existing.hops[index] === true)) };
+    // A key that an editor removed stays marked until that slot gets a key again.
+    const over: KeyFlags = { target: keyAuth(row) && !requirements.target && ended.target,
+      tunnel: tunnelKey && !requirements.tunnel && ended.tunnel,
+      hops: hops.map((h, index) => keyAuth(h) && !requirements.hops[index] && ended.hops[index] === true) };
+    if (anyFlag(requirements) || anyFlag(over)) result.localKeyRequirements = anyFlag(over) ? { ...requirements, ended: over } : requirements;
   }
   return result;
 }
@@ -284,13 +299,20 @@ export function buildStorageImage(snapshot: SyncSnapshot, before: StorageImage, 
     const keyRequirements = shared.localKeyRequirements;
     delete shared.localKeyRequirements;
     if (row.jumpHosts !== undefined) for (const hop of array(row.jumpHosts)) allowed(hop, HOP_FIELDS);
+    // The last edit decides for every device: a key that an editor removed takes
+    // this device's key file with it. Kept, the file would raise the requirement
+    // again at the next capture. A record that merely lacks the flag removes nothing.
+    const ended = keyFlags(object(keyRequirements ?? {}).ended);
+    const device = (source: Row, withoutKey: boolean): Row => Object.fromEntries(Object.entries(pick(source, DEVICE_FIELDS)).filter(([field, v]) =>
+      !withoutKey || !(field === 'privateKey' || field === 'privateKeyPath' || (field === 'identityFiles' && keyFiles(v)))));
     const identity = key.slice(prefix.length + 1); const previous = old.find(c => c.id === identity);
     const same = previous && authBinding(previous, oldProfiles) === authBinding(row, newProfiles);
     const merged: Row = { ...shared, ...(keyRequirements ? { syncKeyRequirements: keyRequirements } : {}), id: identity, createdAt: previous?.createdAt ?? new Date().toISOString(),
       ...(prefix === 'connections' ? { folder: folderPath(records, text(row.folderId)) } : { updatedAt: previous?.updatedAt ?? new Date().toISOString() }),
-      ...(previous ? pick(previous, ['lastConnected', 'rdpLastScalingMode']) : {}), ...(same ? pick(previous, DEVICE_FIELDS) : {}) };
+      ...(previous ? pick(previous, ['lastConnected', 'rdpLastScalingMode']) : {}), ...(same ? device(previous, ended.target) : {}) };
+    if (ended.tunnel) delete merged.tunnelKeyPath;
     if (row.jumpHosts !== undefined) merged.jumpHosts = array(row.jumpHosts).map((hop, index) => ({ ...hop,
-      ...(same ? pick(array(previous.jumpHosts ?? [])[index] ?? {}, DEVICE_FIELDS) : {}) }));
+      ...(same ? device(array(previous.jumpHosts ?? [])[index] ?? {}, ended.hops[index] === true) : {}) }));
     if (!includeCredentials && same) {
       Object.assign(merged, pick(previous, SECRET_FIELDS));
       if (merged.jumpHosts) merged.jumpHosts = array(merged.jumpHosts).map((hop, index) => ({ ...hop,

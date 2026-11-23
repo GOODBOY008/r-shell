@@ -88,6 +88,35 @@ it('saves the default RDP scaling and shows it when the connection is reopened',
   expect(screen.getByRole('combobox', { name: 'Default Scaling' }).textContent).toBe('1:1');
 });
 
+it('ends a synchronized key requirement only when the edit removes the key (#344)', async () => {
+  const required = { target: true, tunnel: false, hops: [] };
+  const stored = () => ConnectionStorageManager.getConnection('synced-key')!;
+  const edit = async (keyPath?: string) => {
+    const onSave = vi.fn();
+    const dialog = render(<ConnectionDialog open onOpenChange={vi.fn()} onConnect={vi.fn()} onSave={onSave} editingConnection={toConnectionConfig(stored())} />);
+    if (keyPath !== undefined) {
+      fireEvent.mouseDown(screen.getByRole('tab', { name: 'Auth' }), { button: 0 });
+      fireEvent.change(await screen.findByLabelText('Private Key File'), { target: { value: keyPath } });
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    dialog.unmount();
+    // The save can reconnect an open tab, which must see the same decision.
+    expect(onSave.mock.calls[0][0].syncKeyRequirements).toEqual(stored().syncKeyRequirements);
+  };
+  ConnectionStorageManager.saveConnectionWithId('synced-key', {
+    name: 'Synced', host: 'example.com', port: 22, protocol: 'SSH', username: 'ops',
+    authMethod: 'publickey', privateKeyPath: '', syncKeyRequirements: required,
+  });
+  await edit(); // Still waiting for its key on this device.
+  expect(stored().syncKeyRequirements).toEqual(required);
+  await edit('/local/key');
+  expect(stored()).toMatchObject({ privateKeyPath: '/local/key', syncKeyRequirements: required });
+  await edit('');
+  expect(stored()).toMatchObject({ privateKeyPath: '',
+    syncKeyRequirements: { target: false, tunnel: false, hops: [], ended: { target: true, tunnel: false, hops: [] } } });
+});
+
 describe('edit advanced options round-trip (real storage)', () => {
   it.each([false, true])('removes a target secret while retaining jump credentials (saving enabled: %s)', async (savePassword) => {
     localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify({ allowPasswordSaving: savePassword }));
