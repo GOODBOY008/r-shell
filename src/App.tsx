@@ -482,10 +482,12 @@ function AppContent() {
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
     const groupIds = Object.keys(state.groups);
-    // Ctrl+Shift+PageUp/PageDown — move the active tab one slot in its group.
-    const moveActiveTab = (delta: -1 | 1) => {
-      if (!activeGroup?.activeTabId) return;
-      const fromIndex = activeGroup.tabs.findIndex((t) => t.id === activeGroup.activeTabId);
+    const moveTab = (delta: -1 | 1) => {
+      if (!activeGroup) return;
+      // A keyboard-focused tab header can differ from the tab displayed in the pane.
+      const header = document.activeElement?.closest<HTMLElement>('[data-tab-bar-group] [data-tab-id]');
+      const tabId = header?.dataset.tabId ?? activeGroup.activeTabId;
+      const fromIndex = activeGroup.tabs.findIndex(tab => tab.id === tabId);
       const toIndex = fromIndex + delta;
       if (fromIndex === -1 || toIndex < 0 || toIndex >= activeGroup.tabs.length) return;
       dispatch({ type: 'REORDER_TAB', groupId: activeGroup.id, fromIndex, toIndex });
@@ -528,8 +530,8 @@ function AppContent() {
             dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
           }
         },
-        moveTabLeft: () => moveActiveTab(-1),
-        moveTabRight: () => moveActiveTab(1),
+        moveTabLeft: () => moveTab(-1),
+        moveTabRight: () => moveTab(1),
       },
       shortcutBindings,
     );
@@ -1134,7 +1136,7 @@ function AppContent() {
 
   const openLocalTerminal = useCallback((groupId = stateRef.current.activeGroupId) => {
     const tab: TerminalTab = {
-      id: `local:${crypto.randomUUID()}`,
+      id: nextDuplicateId('local:session'),
       name: '',
       tabType: 'local-terminal',
       connectionStatus: 'pending',

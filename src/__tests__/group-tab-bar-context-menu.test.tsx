@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { GroupTabBar } from '../components/terminal/group-tab-bar';
 import type { TerminalTab } from '../lib/terminal-group-types';
 
@@ -140,6 +140,60 @@ describe('GroupTabBar context menu', () => {
     fireEvent.contextMenu(screen.getByText('b'));
     fireEvent.click(await screen.findByText('Move Tab Right'));
     expect(dispatch).toHaveBeenCalledWith({ type: 'REORDER_TAB', groupId: '1', fromIndex: 1, toIndex: 2 });
+  });
+
+  it('reveals the active header across either strip edge without moving keyboard focus out of the terminal', () => {
+    const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
+    const view = (ordered: TerminalTab[]) => (
+      <section data-group-id="1">
+        <GroupTabBar groupId="1" tabs={ordered} activeTabId="a" />
+        <div data-terminal-tab-host="a" aria-hidden="false" className="xterm">
+          <textarea aria-label="Terminal input" />
+        </div>
+      </section>
+    );
+    const { container, rerender } = render(view(tabs));
+    const bar = container.querySelector<HTMLElement>('[data-tab-bar-group]')!;
+    const header = screen.getByRole('button', { name: 'a' });
+    const input = screen.getByRole('textbox');
+    input.focus();
+    Object.defineProperty(bar, 'clientWidth', { value: 100 });
+    for (const tab of bar.querySelectorAll<HTMLElement>('[data-tab-id]')) {
+      Object.defineProperties(tab, {
+        offsetLeft: { get: () => Array.from(bar.querySelectorAll('[data-tab-id]')).indexOf(tab) * 100 },
+        offsetWidth: { value: 100 },
+      });
+    }
+
+    rerender(view([tabs[1], tabs[2], tabs[0]]));
+    expect(bar.scrollLeft).toBe(200);
+    expect(document.activeElement).toBe(input);
+    rerender(view(tabs));
+    expect(bar.scrollLeft).toBe(0);
+    expect(screen.getByRole('button', { name: 'a' })).toBe(header);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it.each([false, true])('restores the correct focus after moving an inactive tab (terminal previously focused: %s)', async (typing) => {
+    const tabs = [makeTab('a'), makeTab('b'), makeTab('c')];
+    const view = (ordered: TerminalTab[]) => (
+      <section data-group-id="1">
+        <GroupTabBar groupId="1" tabs={ordered} activeTabId="a" />
+        <div data-terminal-tab-host="a" aria-hidden="false" className="xterm">
+          <textarea aria-label="Terminal input" />
+        </div>
+      </section>
+    );
+    const { rerender } = render(view(tabs));
+    const header = screen.getByRole('button', { name: 'b' });
+    const input = screen.getByRole('textbox');
+    if (typing) input.focus();
+    fireEvent.contextMenu(header);
+    dispatch.mockImplementationOnce(() => rerender(view([tabs[0], tabs[2], tabs[1]])));
+    fireEvent.click(await screen.findByText('Move Tab Right'));
+    await waitFor(() => expect(document.activeElement).toBe(typing ? input : header));
+    expect(screen.getByRole('button', { name: 'a' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'b' })).toBe(header);
   });
 
   it('disables Move Tab Left on the first tab and Move Tab Right on the last', async () => {
