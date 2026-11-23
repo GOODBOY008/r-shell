@@ -1,6 +1,73 @@
 use super::*;
 use tokio::time::timeout;
 
+/// The headless test clients stand in for xterm. portable-pty requests
+/// PSEUDOCONSOLE_INHERIT_CURSOR, so ConPTY sends DSR before accepting input.
+#[derive(Default)]
+pub(crate) struct CursorQuery {
+    pub(crate) tail: Vec<u8>,
+}
+
+impl CursorQuery {
+    #[cfg(windows)]
+    pub(crate) const REPORT: &[u8] = b"\x1b[1;1R";
+
+    pub(crate) fn observe(&mut self, bytes: &[u8]) -> bool {
+        const QUERY: &[u8] = b"\x1b[6n";
+        // Include up to three preceding bytes when a PTY frame splits the query.
+        let start = self.tail.len().saturating_sub(QUERY.len() - 1);
+        self.tail.extend_from_slice(bytes);
+        let requested = self.tail[start..].windows(QUERY.len()).any(|w| w == QUERY);
+        let discard = self.tail.len().saturating_sub(96);
+        self.tail.drain(..discard);
+        requested
+    }
+}
+
+pub(crate) fn output_tail(bytes: &[u8]) -> std::borrow::Cow<'_, str> {
+    String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(96)..])
+}
+
+#[test]
+fn headless_cursor_query_survives_output_chunk_boundaries() {
+    for split in 0..=4 {
+        let mut query = CursorQuery::default();
+        assert!(!query.observe(b"unrelated status: \x1b[5n"));
+        let request = b"\x1b[6n";
+        assert_eq!(query.observe(&request[..split]), split == 4);
+        assert_eq!(query.observe(&request[split..]), split != 4);
+    }
+}
+
+#[cfg(windows)]
+async fn answer_initial_cursor_query(shell: &LocalPty, events: &mut mpsc::Receiver<LocalPtyEvent>) {
+    let mut query = CursorQuery::default();
+    timeout(Duration::from_secs(10), async {
+        loop {
+            match events.recv().await {
+                Some(LocalPtyEvent::Output(bytes)) => {
+                    if query.observe(&bytes) {
+                        shell.write(CursorQuery::REPORT.to_vec()).await.unwrap();
+                        return;
+                    }
+                }
+                Some(LocalPtyEvent::Error(e)) => panic!("ConPTY startup: {e}"),
+                Some(LocalPtyEvent::Exited(code)) => {
+                    panic!("ConPTY exited during startup: {code:?}")
+                }
+                None => panic!("ConPTY output closed during startup"),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "Missing initial ConPTY cursor query; output: {:?}",
+            output_tail(&query.tail)
+        )
+    });
+}
+
 fn shell_path() -> String {
     #[cfg(unix)]
     {
@@ -15,24 +82,26 @@ fn shell_path() -> String {
 #[tokio::test]
 async fn native_pty_transfers_input_resizes_and_drains_before_exit() {
     let (shell, mut events) = LocalPty::spawn(80, 24, Some(shell_path())).await.unwrap();
+    #[cfg(windows)]
+    answer_initial_cursor_query(&shell, &mut events).await;
     shell.resize(92, 31).await.unwrap();
     #[cfg(unix)]
     let command = b"stty size; printf 'last-frame-%d\\n' 771; exit 23\r";
     #[cfg(windows)]
     let command = b"@echo off\rset NUMBER=771\recho last-frame-%NUMBER%\rexit 23\r";
     shell.write(command.to_vec()).await.unwrap();
-    let (bytes, code) = timeout(Duration::from_secs(10), async {
-        let mut bytes = Vec::new();
+    let mut bytes = Vec::new();
+    let code = timeout(Duration::from_secs(10), async {
         loop {
             match events.recv().await.unwrap() {
                 LocalPtyEvent::Output(data) => bytes.extend(data),
-                LocalPtyEvent::Exited(code) => break (bytes, code),
+                LocalPtyEvent::Exited(code) => break code,
                 LocalPtyEvent::Error(error) => panic!("{error}"),
             }
         }
     })
     .await
-    .unwrap();
+    .unwrap_or_else(|_| panic!("Missing shell exit; output: {:?}", output_tail(&bytes)));
     assert_eq!(code, Some(23));
     let text = String::from_utf8_lossy(&bytes);
     assert!(text.contains("last-frame-771"), "{text}");
@@ -121,7 +190,8 @@ fn default_command_starts_at_home_with_terminal_environment() {
 #[cfg(windows)]
 #[tokio::test]
 async fn close_while_conpty_output_is_backpressured() {
-    let (shell, _unread_output) = LocalPty::spawn(80, 24, Some(shell_path())).await.unwrap();
+    let (shell, mut events) = LocalPty::spawn(80, 24, Some(shell_path())).await.unwrap();
+    answer_initial_cursor_query(&shell, &mut events).await;
     shell
         .write(b"for /l %i in (1,1,999999) do @echo frame-%i\r".to_vec())
         .await

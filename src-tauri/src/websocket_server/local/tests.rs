@@ -53,6 +53,60 @@ fn control(msg: WsMessage) -> Message {
     Message::Text(serde_json::to_string(&msg).unwrap().into())
 }
 
+async fn expect_input_ack(socket: &mut Socket, id: &str, generation: u64) {
+    let ack = tokio::time::timeout(Duration::from_secs(10), socket.next())
+        .await
+        .expect("missing local input acknowledgement")
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(serde_json::from_str(ack.to_text().unwrap()).unwrap(),
+        WsMessage::LocalPtyInputAck { connection_id, generation: received }
+            if connection_id == id && received == generation)
+    );
+}
+
+fn output_payload<'a>(frame: &'a [u8], id: &str) -> &'a [u8] {
+    assert_eq!(frame[0], BINARY_OUTPUT_CMD);
+    assert_eq!(u16::from_be_bytes([frame[1], frame[2]]) as usize, id.len());
+    assert_eq!(&frame[3..3 + id.len()], id.as_bytes());
+    &frame[3 + id.len()..]
+}
+
+#[cfg(windows)]
+async fn answer_initial_cursor_query(socket: &mut Socket, id: &str) {
+    use crate::local_pty::tests::CursorQuery;
+    let mut cursor = CursorQuery::default();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            // Grant exactly one output frame so the cursor response's ACK cannot
+            // be interleaved with shell output or mistaken for the command ACK.
+            socket
+                .send(control(WsMessage::Resume {
+                    connection_id: id.into(),
+                }))
+                .await
+                .unwrap();
+            let frame = socket.next().await.unwrap().unwrap();
+            let Message::Binary(frame) = frame else {
+                panic!("unexpected ConPTY startup frame: {frame:?}")
+            };
+            if cursor.observe(output_payload(&frame, id)) {
+                socket.send(input(id, CursorQuery::REPORT)).await.unwrap();
+                expect_input_ack(socket, id, 1).await;
+                return;
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "Incomplete ConPTY cursor handshake; output: {:?}",
+            crate::local_pty::tests::output_tail(&cursor.tail)
+        )
+    });
+}
+
 #[tokio::test]
 async fn local_shell_roundtrip_over_authenticated_websocket() {
     let manager = Arc::new(LocalShells::default());
@@ -68,6 +122,8 @@ async fn local_shell_roundtrip_over_authenticated_websocket() {
     let id = manager.start(80, 24, shell).await.unwrap().run_id;
     let (url, server) = serve(manager.clone(), 2).await;
     let mut first = connect(&url, &id, 1).await;
+    #[cfg(windows)]
+    answer_initial_cursor_query(&mut first, &id).await;
     #[cfg(unix)]
     let (set_variable, finish) = (
         b"RSHELL_ROUNDTRIP=37\r".as_slice(),
@@ -79,15 +135,7 @@ async fn local_shell_roundtrip_over_authenticated_websocket() {
         b"echo local-pty-roundtrip\rexit %RSHELL_ROUNDTRIP%\r".as_slice(),
     );
     first.send(input(&id, set_variable)).await.unwrap();
-    let ack = tokio::time::timeout(Duration::from_secs(10), first.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(
-        matches!(serde_json::from_str(ack.to_text().unwrap()).unwrap(),
-            WsMessage::LocalPtyInputAck { connection_id, generation: 1 } if connection_id == id)
-    );
+    expect_input_ack(&mut first, &id, 1).await;
     first.close(None).await.unwrap();
 
     // Only the original process knows the variable set before the drop.
@@ -102,9 +150,8 @@ async fn local_shell_roundtrip_over_authenticated_websocket() {
         loop {
             match socket.next().await.unwrap().unwrap() {
                 Message::Binary(frame) => {
-                    assert_eq!(frame[0], BINARY_OUTPUT_CMD);
-                    assert_eq!(&frame[3..3 + id.len()], id.as_bytes());
-                    output.extend_from_slice(&frame[3 + id.len()..]);
+                    let payload = output_payload(&frame, &id);
+                    output.extend_from_slice(payload);
                     socket.send(resume.clone()).await.unwrap();
                 }
                 Message::Text(text) => match serde_json::from_str(&text).unwrap() {
@@ -123,7 +170,12 @@ async fn local_shell_roundtrip_over_authenticated_websocket() {
         }
     })
     .await
-    .expect("local shell did not deliver its exit status");
+    .unwrap_or_else(|_| {
+        panic!(
+            "Missing local shell exit; output: {:?}",
+            crate::local_pty::tests::output_tail(&output)
+        )
+    });
     assert!(String::from_utf8_lossy(&output).contains("local-pty-roundtrip"));
     socket.close(None).await.unwrap();
     server.await.unwrap();
