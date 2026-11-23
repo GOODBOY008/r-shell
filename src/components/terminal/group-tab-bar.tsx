@@ -67,6 +67,15 @@ function edgeScrollDirection(bar: HTMLElement, clientX: number): number {
   return 0;
 }
 
+function revealTabHeader(bar: HTMLElement, header: HTMLElement) {
+  if (bar.clientWidth === 0) return;
+  // Layout coordinates are unaffected by the transform used to animate reorders.
+  const start = header.offsetLeft;
+  const end = start + header.offsetWidth;
+  if (start < bar.scrollLeft) bar.scrollLeft = start;
+  else if (end > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = end - bar.clientWidth;
+}
+
 const WINDOWS_SHELL_NAMES = new Map([
   ['pwsh.exe', 'PowerShell'],
   ['powershell.exe', 'Windows PowerShell'],
@@ -137,6 +146,7 @@ export function GroupTabBar({
   const [markerLeft, setMarkerLeft] = useState<number | null>(null);
   const [dragGhost, setDragGhost] = useState<{ tabId: string; x: number; y: number; name: string } | null>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
+  const activeHeaderRef = useRef<HTMLDivElement>(null);
   const movedHeader = useRef<string | null>(null);
   const menuOrigin = useRef<{ tabId: string; terminalInput: HTMLElement | null; moved: boolean } | null>(null);
 
@@ -149,6 +159,22 @@ export function GroupTabBar({
       if (gesture?.owner === bar) gesture.cancel();
     };
   }, [groupId]);
+
+  useLayoutEffect(() => {
+    const bar = tabBarRef.current;
+    if (!bar || typeof ResizeObserver === 'undefined') return;
+
+    // SSH panels can resize the strip after the selection has already committed.
+    let previousWidth = bar.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const width = bar.clientWidth;
+      if (width === previousWidth) return;
+      previousWidth = width;
+      if (activeHeaderRef.current) revealTabHeader(bar, activeHeaderRef.current);
+    });
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     const current = gesture;
@@ -186,14 +212,7 @@ export function GroupTabBar({
         ?? (!selectedChanged && focused && container.contains(focused) ? focused.dataset.tabId : activeTabId);
       movedHeader.current = null;
       const header = headers.find(node => node.dataset.tabId === targetId);
-      if (header && container.clientWidth > 0) {
-        // Use layout coordinates so an in-flight FLIP animation does not
-        // change which part of the strip needs to be revealed.
-        const start = header.offsetLeft;
-        const end = start + header.offsetWidth;
-        if (start < container.scrollLeft) container.scrollLeft = start;
-        else if (end > container.scrollLeft + container.clientWidth) container.scrollLeft = end - container.clientWidth;
-      }
+      if (header) revealTabHeader(container, header);
     }
 
     // First paint, or a re-render that kept the order (status update, drag
@@ -463,6 +482,7 @@ export function GroupTabBar({
                   }}
                 >
                   <div
+                    ref={tab.id === activeTabId ? activeHeaderRef : undefined}
                     data-tab-id={tab.id}
                     className={`relative flex items-center gap-2 px-3 py-2.5 border-r border-border/60 cursor-pointer group min-w-[clamp(3.75rem,48%,7rem)] max-w-[min(16rem,100%)] @max-sm:gap-1 @max-sm:px-1.5 @max-[10rem]:gap-0.5 @max-[10rem]:px-0.5 select-none transition-colors ${
                       tab.id === activeTabId ? 'bg-background text-foreground shadow-[inset_0_2px_0_var(--primary)]' : 'text-muted-foreground hover:bg-background/60'
