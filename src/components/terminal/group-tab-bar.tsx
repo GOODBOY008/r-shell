@@ -447,7 +447,7 @@ export function GroupTabBar({
         <div
           ref={tabBarRef}
           data-tab-bar-group={groupId}
-          className={`flex items-center self-stretch overflow-x-auto relative flex-1 transition-colors ${
+          className={`@container flex items-center self-stretch overflow-x-auto relative flex-1 transition-colors ${
             markerLeft !== null ? 'bg-primary/10 ring-2 ring-primary/40 ring-inset' : ''
           }`}
         >
@@ -464,7 +464,7 @@ export function GroupTabBar({
                 >
                   <div
                     data-tab-id={tab.id}
-                    className={`relative flex items-center gap-2 px-3 py-2.5 border-r border-border/60 cursor-pointer group min-w-0 shrink-0 max-w-[min(16rem,100%)] select-none transition-colors ${
+                    className={`relative flex items-center gap-2 px-3 py-2.5 border-r border-border/60 cursor-pointer group min-w-[clamp(3.75rem,48%,7rem)] max-w-[min(16rem,100%)] @max-sm:gap-1 @max-sm:px-1.5 @max-[10rem]:gap-0.5 @max-[10rem]:px-0.5 select-none transition-colors ${
                       tab.id === activeTabId ? 'bg-background text-foreground shadow-[inset_0_2px_0_var(--primary)]' : 'text-muted-foreground hover:bg-background/60'
                     } ${dragGhost?.tabId === tab.id ? 'opacity-40' : ''}`}
                     onPointerDown={(e) => handlePointerDown(e, tab.id, tabLabels[index])}
@@ -474,7 +474,7 @@ export function GroupTabBar({
                   >
                     <button
                       type="button"
-                      className="flex items-center gap-2 min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      className="flex items-center gap-2 min-w-0 @max-sm:gap-1 @max-[16rem]:[&>svg]:hidden @max-[10rem]:gap-0.5 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={tabLabels[index]}
                       aria-pressed={tab.id === activeTabId}
                       title={tab.tabType === 'editor' ? `${tab.host ?? ''} · ${tab.editorFilePath ?? tab.name}` : tabLabels[index]}
@@ -492,7 +492,7 @@ export function GroupTabBar({
                       )}
                       {tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && <span
                         data-connection-status={tab.connectionStatus}
-                        className={`w-2 h-2 rounded-full shrink-0 ${
+                        className={`w-2 h-2 @max-[16rem]:size-1.5 rounded-full shrink-0 ${
                           tab.connectionStatus === 'connected'
                             ? 'bg-[var(--status-connected)]'
                             : tab.connectionStatus === 'connecting'
