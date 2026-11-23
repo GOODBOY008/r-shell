@@ -56,6 +56,8 @@ function initializeState(): TerminalGroupState {
       ...group,
       tabs: group.tabs.map((tab) => ({
         ...tab,
+        // A restored local tab will use the current device preference on launch.
+        name: tab.tabType === 'local-terminal' ? '' : tab.name,
         connectionStatus: tab.tabType === 'dashboard' ? 'disconnected' as const : 'pending' as const,
       })),
     };
@@ -105,7 +107,7 @@ export function TerminalGroupProvider({ children }: { children: React.ReactNode 
     const editorOwner = editorOwnerId
       ? state.groups[state.tabToGroupMap[editorOwnerId]]?.tabs.find(tab => tab.id === editorOwnerId)
       : undefined;
-    const activeConnection = activeTab && activeTab.tabType !== 'dashboard'
+    const activeConnection = activeTab && activeTab.tabType !== 'dashboard' && activeTab.tabType !== 'local-terminal'
       ? {
           connectionId: activeTab.editorConnectionId ?? activeTab.id,
           savedConnectionId: activeTab.originalConnectionId ?? activeTab.editorConnectionId ?? activeTab.id,

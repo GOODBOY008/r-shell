@@ -5,7 +5,7 @@ import type { PanelImperativeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { folderPathFromArg } from './lib/connection-folder';
 import { useLazyTabs } from './lib/use-lazy-tabs';
-import { reconcileSessionHealth } from './lib/session-health';
+import { isSshTerminalTab, reconcileSessionHealth } from './lib/session-health';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
@@ -60,7 +60,8 @@ import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-c
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
 import { ErrorBoundary } from './components/error-boundary';
-import type { TerminalTab } from './lib/terminal-group-types';
+import { isInteractiveTerminalTab, type TerminalTab } from './lib/terminal-group-types';
+import { closeLocalShell } from './lib/local-shell-runtime';
 import { Toaster } from './components/ui/sonner';
 import {
   AlertDialog,
@@ -182,6 +183,7 @@ function AppContent() {
   // Modal states
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const [connectionInitialFolder, setConnectionInitialFolder] = useState<string | undefined>();
+  const [showLocalShellSettings, setShowLocalShellSettings] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   // Sessions-still-connected quit prompt: the backend quit guard emits
   // `confirm-quit-sessions` with the active session count when quitting
@@ -308,7 +310,7 @@ function AppContent() {
   );
 
   const activeTerminalId = activeTab
-    && (activeTab.tabType === undefined || activeTab.tabType === 'terminal')
+    && isInteractiveTerminalTab(activeTab)
     && activeTab.connectionStatus !== 'pending'
     ? activeTab.id
     : null;
@@ -361,7 +363,7 @@ function AppContent() {
   // Without the cancel the attempt lingers until its own timeout (30 s
   // against a down host) and can settle after the tab is gone.
   const cancelPendingTerminalConnect = useCallback((tab: TerminalTab) => {
-    if (tab.tabType === 'dashboard') return;
+    if (tab.tabType === 'dashboard' || tab.tabType === 'local-terminal') return;
     cancelSshConnect(tab.id);
     if (
       (tab.connectionStatus === 'pending' || tab.connectionStatus === 'connecting') &&
@@ -382,6 +384,10 @@ function AppContent() {
   // connection.
   const disconnectTabBackend = useCallback((tab: TerminalTab, remainingTabs: TerminalTab[], released: Set<string>) => {
     if (tab.tabType === 'dashboard') return;
+    if (tab.tabType === 'local-terminal') {
+      void closeLocalShell(tab.id).catch(error => notify.error(t('localShell.closeFailed'), { description: String(error) }));
+      return;
+    }
     if (tab.tabType === 'desktop') {
       // Desktop sessions are established by desktop_connect and live in their
       // own backend map, not with the PTY/SSH connections.
@@ -403,7 +409,7 @@ function AppContent() {
     const command = tab.protocol === 'SFTP' ? 'sftp_standalone_disconnect'
       : tab.protocol === 'FTP' ? 'ftp_disconnect' : 'ssh_disconnect';
     void invoke(command, { connection_id: connectionId }).catch(() => {});
-  }, [cancelPendingTerminalConnect, detachedSessions]);
+  }, [cancelPendingTerminalConnect, detachedSessions, t]);
 
   const closingTabIds = useRef(new Set<string>());
   const handleCloseTabs = useCallback(async (tabIds: string[]) => {
@@ -526,15 +532,15 @@ function AppContent() {
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
-    // Editor tabs are transient — exclude them from persistence
-    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor' && tab.tabType !== 'dashboard');
+    // Local shells and dashboards restore directly from the workspace layout.
+    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && tab.tabType !== 'local-terminal');
     if (persistableTabs.length > 0) {
       const activeConnections = persistableTabs.map((tab, index) => ({
         tabId: tab.id,
         connectionId: tab.id,
         order: index,
         originalConnectionId: tab.originalConnectionId,
-        tabType: tab.tabType as Exclude<TerminalTab['tabType'], 'dashboard'>,
+        tabType: tab.tabType as Exclude<TerminalTab['tabType'], 'dashboard' | 'local-terminal'>,
         protocol: tab.protocol,
       }));
       ActiveConnectionsManager.saveActiveConnections(activeConnections);
@@ -806,7 +812,7 @@ function AppContent() {
       const lazy = new Set<string>();
       for (const activeConn of [...activeConnections].sort((a, b) => a.order - b.order)) {
         const tab = tabsById.get(activeConn.connectionId);
-        if (!tab || tab.tabType === 'dashboard') {
+        if (!tab || tab.tabType === 'dashboard' || tab.tabType === 'local-terminal') {
           console.warn(`[Restore] No restored tab for ${activeConn.connectionId}; skipping`);
           continue;
         }
@@ -1114,10 +1120,26 @@ function AppContent() {
     setPendingReconnectTabId(null);
   }, []);
 
+  const openLocalTerminal = useCallback((groupId = stateRef.current.activeGroupId) => {
+    const tab: TerminalTab = {
+      id: `local:${crypto.randomUUID()}`,
+      name: '',
+      tabType: 'local-terminal',
+      connectionStatus: 'pending',
+      reconnectCount: 0,
+    };
+    dispatch({ type: 'ACTIVATE_GROUP', groupId });
+    dispatch({ type: 'ADD_TAB', groupId, tab });
+  }, [dispatch]);
+
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
     if (!tabToDuplicate || tabToDuplicate.tabType === 'editor' || tabToDuplicate.tabType === 'dashboard') return;
 
+    if (tabToDuplicate.tabType === 'local-terminal') {
+      openLocalTerminal(stateRef.current.tabToGroupMap[tabId]);
+      return;
+    }
     const originalConnectionId = tabToDuplicate.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
@@ -1214,7 +1236,7 @@ function AppContent() {
         description: error instanceof Error ? error.message : t('app.duplicationErrorDesc'),
       });
     }
-  }, [allTabs, state.activeGroupId, dispatch, t]);
+  }, [allTabs, state.activeGroupId, dispatch, t, openLocalTerminal]);
 
   // Automatic full-reconnect retry
   //
@@ -1241,6 +1263,18 @@ function AppContent() {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
     if (!tabToReconnect || tabToReconnect.tabType === 'dashboard') {
       clearReconnectRetry(tabId);
+      return;
+    }
+
+    if (tabToReconnect.tabType === 'local-terminal') {
+      if (!automatic && tabToReconnect.connectionStatus === 'disconnected') {
+        try {
+          await closeLocalShell(tabId);
+          dispatch({ type: 'RECONNECT_TAB', tabId });
+        } catch (error) {
+          notify.error(t('localShell.closeFailed'), { description: String(error) });
+        }
+      }
       return;
     }
 
@@ -1469,7 +1503,7 @@ function AppContent() {
   // session so the user can re-attach to it later.
   const handleDetachTab = useCallback((tabId: string) => {
     const tab = allTabs.find(t => t.id === tabId);
-    if (!tab) return;
+    if (!tab || !isSshTerminalTab(tab)) return;
 
     // If the tab-bar context menu initiated this, the PtyTerminal itself hasn't
     // sent the Detach WS message yet — ask the mounted terminal to do so.
@@ -1769,6 +1803,7 @@ function AppContent() {
   }, [allTabs, state.groups, state.activeGroupId, dispatch, t]);
 
   const handleOpenSettings = useCallback(() => {
+    setShowLocalShellSettings(false);
     setSettingsModalOpen(true);
   }, []);
 
@@ -1777,6 +1812,7 @@ function AppContent() {
     ...splitViewShortcuts,
     ...createCommandShortcuts({
       newSession: () => handleNewTab(),
+      newLocalTerminal: () => openLocalTerminal(),
       openSettings: handleOpenSettings,
       duplicateSession: () => { if (activeTab) void handleDuplicateTab(activeTab.id); },
       reconnect: () => { if (activeTab && activeTab.tabType !== 'editor' && activeTab.tabType !== 'dashboard') void handleReconnect(activeTab.id); },
@@ -1807,9 +1843,13 @@ function AppContent() {
 
   // Open settings requested from below App-level state (empty terminal group welcome screen)
   useEffect(() => {
-    window.addEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
-    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
-  }, [handleOpenSettings]);
+    const openRequestedSettings = (event: Event) => {
+      setShowLocalShellSettings((event as CustomEvent<unknown>).detail === 'local-shell');
+      setSettingsModalOpen(true);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, openRequestedSettings);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, openRequestedSettings);
+  }, []);
 
   // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
   useEffect(() => {
@@ -2174,7 +2214,7 @@ function AppContent() {
   // Desktop tabs (RDP/VNC) also don't need right sidebar or bottom panel
   const isDesktopTab = activeTab?.tabType === 'desktop';
   // Keep the file list available while editing so users can open the next file.
-  const hideExtraPanels = isFileBrowserTab || isDesktopTab || activeTab?.tabType === 'dashboard'
+  const hideExtraPanels = activeTab?.tabType === 'local-terminal' || isFileBrowserTab || isDesktopTab || activeTab?.tabType === 'dashboard'
     || activeConnection?.protocol === 'SFTP' || activeConnection?.protocol === 'FTP';
   const showRightSidebar = layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels;
 
@@ -2200,7 +2240,9 @@ function AppContent() {
         onNextTab={() => { dispatchShortcutCommand('nextTab'); }}
         onPreviousTab={() => { dispatchShortcutCommand('previousTab'); }}
         onCloneTab={() => { dispatchShortcutCommand('duplicateSession'); }}
-        onReconnect={() => { dispatchShortcutCommand('reconnect'); }}
+        onReconnect={activeTab?.tabType === 'local-terminal' && activeTab.connectionStatus !== 'disconnected'
+          ? undefined : () => { dispatchShortcutCommand('reconnect'); }}
+        hasActiveLocalShell={activeTab?.tabType === 'local-terminal'}
         hasActiveEditor={activeTab?.tabType === 'editor'}
         findCommand={activeTab?.tabType === 'editor' ? 'findInEditor' : activeTab?.tabType === 'file-browser' ? 'filterFiles' : 'findInTerminal'}
         onSaveConnection={() => { dispatchShortcutCommand('saveFile'); }}
@@ -2294,6 +2336,7 @@ function AppContent() {
                 {showWelcomeInMainArea ? (
                   <WelcomeScreen
                     onNewConnection={handleNewTab}
+                    onNewLocalTerminal={() => openLocalTerminal()}
                     onOpenSettings={handleOpenSettings}
                   />
                 ) : (
@@ -2303,6 +2346,7 @@ function AppContent() {
                       <TerminalCallbacksProvider value={{
                         onDuplicateTab: handleDuplicateTab,
                         onNewTab: handleNewTab,
+                        onNewLocalTerminal: openLocalTerminal,
                         onReconnectTab: handleReconnect,
                         closeTabShortcut: shortcutBindings.closeSession,
                         onWorkingDirectoryChange: handleWorkingDirectoryChange,
@@ -2447,6 +2491,7 @@ function AppContent() {
 
       <SettingsModal
         open={settingsModalOpen}
+        showLocalShell={showLocalShellSettings}
         onOpenChange={setSettingsModalOpen}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />

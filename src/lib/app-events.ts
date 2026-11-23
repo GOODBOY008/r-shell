@@ -4,6 +4,10 @@
  */
 export const OPEN_SETTINGS_EVENT = 'rshell-open-settings';
 
+export function openLocalShellSettings(): void {
+  window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: 'local-shell' }));
+}
+
 export function openAppSettings(): void {
   window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT));
 }

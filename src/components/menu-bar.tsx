@@ -88,6 +88,7 @@ interface MenuBarProps {
   onRecentConnectionSelect?: (connection: ConnectionData) => void;
   hasActiveConnection?: boolean;
   hasActiveTerminal?: boolean;
+  hasActiveLocalShell?: boolean;
   canPaste?: boolean;
   // Layout controls (VS Code-style, right-aligned)
   onToggleLeftSidebar?: () => void;
@@ -131,6 +132,7 @@ export function MenuBar({
   onRecentConnectionSelect,
   hasActiveConnection = false,
   hasActiveTerminal,
+  hasActiveLocalShell = false,
   canPaste = true,
   onToggleLeftSidebar,
   onToggleRightSidebar,
@@ -438,7 +440,7 @@ export function MenuBar({
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onReconnect} disabled={!hasActiveConnection || hasActiveEditor || !onReconnect}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            {t('menuBar.reconnect')}
+            {hasActiveLocalShell ? t('localShell.restart') : t('menuBar.reconnect')}
             <DropdownMenuShortcut>{formatShortcut(shortcutBindings.reconnect)}</DropdownMenuShortcut>
           </DropdownMenuItem>
         </DropdownMenuContent>

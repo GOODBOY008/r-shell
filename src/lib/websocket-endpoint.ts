@@ -9,6 +9,14 @@ export interface WebSocketEndpoint {
   token: string;
 }
 
+// Local shells must never disclose their run handle or terminal input to the
+// unauthenticated fallback port used by the browser-only development mode.
+export async function getAuthenticatedWebSocketUrl(): Promise<string> {
+  const { port, token } = await invoke<WebSocketEndpoint>('get_websocket_endpoint');
+  if (!token || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid bridge endpoint');
+  return `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
+}
+
 /**
  * Build the URL for the local PTY/desktop WebSocket bridge.
  *
@@ -23,8 +31,7 @@ export interface WebSocketEndpoint {
  */
 export async function getWebSocketUrl(): Promise<string> {
   try {
-    const { port, token } = await invoke<WebSocketEndpoint>('get_websocket_endpoint');
-    return `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
+    return await getAuthenticatedWebSocketUrl();
   } catch (e) {
     console.warn('[WebSocket] Failed to get bridge endpoint, using default port without token:', e);
     return `ws://127.0.0.1:${DEFAULT_WS_PORT}`;

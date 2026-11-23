@@ -282,9 +282,9 @@ describe('App window close and session quit confirmation', () => {
     render(<App />);
 
     act(() => lifecycle.eventHandlers.get('confirm-quit-sessions')!(count));
-    const title = count === 1 ? '1 session still connected' : '2 sessions still connected';
+    const title = count === 1 ? '1 active session' : '2 active sessions';
     const dialog = screen.getByRole('alertdialog', { name: title });
-    expect(within(dialog).getByText('Quitting will disconnect all active sessions.')).toBeTruthy();
+    expect(within(dialog).getByText('Quitting will end local shells and disconnect remote sessions.')).toBeTruthy();
     expect(lifecycle.invoke).not.toHaveBeenCalledWith('confirm_app_quit');
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));

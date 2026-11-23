@@ -213,6 +213,22 @@ describe('TerminalTabPortalProvider', () => {
     expect(ConnectionStorageManager.getConnection(tabA.id)).toBeUndefined();
   });
 
+  it('starts a pending local tab only when visible and keeps it mounted after switching away', () => {
+    mockState.groups['1'].tabs = [
+      tabA,
+      { ...tabB, tabType: 'local-terminal', connectionStatus: 'pending' },
+    ];
+    const view = render(<PortalHosts split={false} />);
+    expect(lifecycle.mounted).not.toHaveBeenCalledWith(tabB.id);
+    mockState = { ...mockState, groups: { '1': { ...mockState.groups['1'], activeTabId: tabB.id } } };
+    view.rerender(<PortalHosts split={false} />);
+    expect(lifecycle.mounted).toHaveBeenCalledWith(tabB.id);
+
+    mockState = { ...mockState, groups: { '1': { ...mockState.groups['1'], activeTabId: tabA.id } } };
+    view.rerender(<PortalHosts split={false} />);
+    expect(lifecycle.unmounted).not.toHaveBeenCalledWith(tabB.id);
+  });
+
   it('keeps live terminal components mounted when a tab moves to a new group', () => {
     const view = render(<PortalHosts split={false} />);
 

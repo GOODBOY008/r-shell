@@ -1,4 +1,21 @@
 {
+  "localShell": {
+    "open": "Open local terminal",
+    "title": "Local terminal",
+    "tabTitle": "Local · {{shell}}",
+    "setting": "Default local shell",
+    "automatic": "Automatic",
+    "pathHint": "Leave blank to use the platform default, or enter the full path to a shell executable on this device.",
+    "exited": "Shell exited.",
+    "exitedWithCode": "Shell exited with code {{code}}.",
+    "startFailed": "Could not start the local shell.",
+    "attachFailed": "The local shell is unavailable.",
+    "restart": "Restart shell",
+    "openSettings": "Shell settings",
+    "inputOverflow": "Some input was not sent because the local shell input buffer is full.",
+    "inputInterrupted": "The terminal connection was interrupted. Check the last command before typing again.",
+    "closeFailed": "Could not close the local shell."
+  },
   "common": {
     "cancel": "Cancel",
     "save": "Save",
@@ -59,9 +76,9 @@
     "restoreLazyDesc": "{{restoredCount}} connection(s) reconnected; {{lazyCount}} more will reconnect when you open them",
     "restoreLazyOnlyDesc": "Your previous tabs are back — {{lazyCount}} will reconnect when you open them",
     "restoreLazyFailedDesc": "No connection could be restored automatically; {{lazyCount}} tab(s) will retry when you open them",
-    "quitSessionsTitle_one": "{{count}} session still connected",
-    "quitSessionsTitle_other": "{{count}} sessions still connected",
-    "quitSessionsDescription": "Quitting will disconnect all active sessions.",
+    "quitSessionsTitle_one": "{{count}} active session",
+    "quitSessionsTitle_other": "{{count}} active sessions",
+    "quitSessionsDescription": "Quitting will end local shells and disconnect remote sessions.",
     "quitSessionsConfirm": "Quit",
     "cannotDuplicate": "Cannot Duplicate Tab",
     "cannotDuplicateDesc": "Connection data not found. Please create a new connection.",
@@ -522,6 +539,7 @@
       "conflictSummary_other": "Resolve {{count}} shortcut conflicts before saving",
       "conflictSaveBlocked": "Saving is disabled until all conflicts are resolved.",
       "command": {
+        "newLocalTerminal": "Open local terminal",
         "newSession": "New Session",
         "closeSession": "Close Session",
         "nextTab": "Next Tab",

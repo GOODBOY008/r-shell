@@ -115,7 +115,8 @@ fn request_quit_inner(app: &AppHandle, sessions_confirmed: bool) {
         // runtime-typed, so fetching the bare type would panic here.
         let active = app
             .state::<Arc<ConnectionManager>>()
-            .active_session_count();
+            .active_session_count()
+            + app.state::<Arc<crate::local_shell::LocalShells>>().active_count();
         if active > 0 {
             // The main window hosts this prompt, but on macOS it may be hidden
             // while a native RDP window remains open. Reveal it before asking.

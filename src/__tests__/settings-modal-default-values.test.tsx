@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS } from '../components/settings/shared';
 import { APP_SETTINGS_STORAGE_KEY } from '../lib/keyboard-shortcuts';
 import { pickConfigBundle } from '../lib/config-export-import';
 import i18n from '../lib/i18n';
+import { readLocalShellPath } from '../lib/local-shell-settings';
 
 vi.mock('../lib/config-export-import', async importOriginal => ({
   ...await importOriginal<typeof import('../lib/config-export-import')>(),
@@ -43,6 +44,26 @@ function selectValue(name: string, expected: string) {
 }
 
 describe('SettingsModal default values', () => {
+  it('saves the local shell path only on this device and restores automatic selection when cleared', () => {
+    const onOpenChange = vi.fn();
+    const view = render(<SettingsModal open onOpenChange={onOpenChange} />);
+    const shellPath = '/Applications/Shell Tools/bin/fish';
+    const field = () => screen.getByRole('textbox', { name: 'Default local shell' });
+    fireEvent.change(field(), { target: { value: shellPath } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel', exact: true }));
+    expect(readLocalShellPath()).toBeUndefined();
+    view.rerender(<SettingsModal open={false} onOpenChange={onOpenChange} />);
+    view.rerender(<SettingsModal open onOpenChange={onOpenChange} />);
+    expect((field() as HTMLInputElement).value).toBe('');
+    fireEvent.change(field(), { target: { value: shellPath } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    expect(readLocalShellPath()).toBe(shellPath);
+    expect(localStorage.getItem(APP_SETTINGS_STORAGE_KEY)).not.toContain(shellPath);
+    fireEvent.change(field(), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Settings' }));
+    expect(readLocalShellPath()).toBeUndefined();
+  });
+
   it('shows defaults in every settings section with real Select components', () => {
     render(<SettingsModal open onOpenChange={vi.fn()} />);
     selectValue('Font Family', 'Menlo');

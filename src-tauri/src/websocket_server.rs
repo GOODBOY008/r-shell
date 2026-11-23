@@ -1,4 +1,5 @@
 use crate::connection_manager::ConnectionManager;
+use crate::local_shell::{LocalAttachment, LocalShells};
 use crate::{WEBSOCKET_PORT, WEBSOCKET_TOKEN};
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
@@ -15,6 +16,8 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 
+mod local;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum WsMessage {
@@ -24,6 +27,19 @@ pub enum WsMessage {
         cols: u32,
         rows: u32,
     },
+    /// Attach only to a run already created by the main-window command.
+    AttachLocalPty {
+        connection_id: String,
+        cols: u16,
+        rows: u16,
+    },
+    /// The local shell exited after all of its output was delivered.
+    LocalPtyExited {
+        connection_id: String,
+        exit_code: Option<u32>,
+    },
+    /// The previous binary input frame has been written to the native PTY.
+    LocalPtyInputAck { connection_id: String, generation: u64 },
     /// Terminal input (user typing)
     Input {
         connection_id: String,
@@ -150,6 +166,7 @@ pub enum WsMessage {
 /// Handles bidirectional communication between frontend and PTY connections
 pub struct WebSocketServer {
     connection_manager: Arc<ConnectionManager>,
+    local_shells: Arc<LocalShells>,
 }
 
 // ---------------------------------------------------------------------------
@@ -507,8 +524,11 @@ fn should_remove_pty_state(active_gen: Option<u64>, closed_gen: Option<u64>) -> 
 }
 
 impl WebSocketServer {
-    pub fn new(connection_manager: Arc<ConnectionManager>) -> Self {
-        Self { connection_manager }
+    pub(crate) fn new(
+        connection_manager: Arc<ConnectionManager>,
+        local_shells: Arc<LocalShells>,
+    ) -> Self {
+        Self { connection_manager, local_shells }
     }
 
     /// Start the WebSocket server, trying ports 9001-9010 to find an available one
@@ -592,6 +612,7 @@ impl WebSocketServer {
         let output_controls: OutputControls = Arc::new(Mutex::new(HashMap::new()));
         let reader_tokens: ReaderTokens = Arc::new(Mutex::new(HashMap::new()));
         let desktop_streams: DesktopStreams = Arc::new(Mutex::new(HashMap::new()));
+        let mut local_attachments = HashMap::new();
         let mut active_pty_generations: HashMap<String, u64> = HashMap::new();
 
         // Forward messages from the bounded channel to the WebSocket.
@@ -616,11 +637,23 @@ impl WebSocketServer {
                         0x00 => match decode_input_frame(&data) {
                             Some((connection_id, payload)) => {
                                 if let Err(e) = self
-                                    .connection_manager
-                                    .write_to_pty(&connection_id, payload.to_vec())
+                                    .write_terminal_input(
+                                        &local_attachments,
+                                        &tx,
+                                        &connection_id,
+                                        payload.to_vec(),
+                                    )
                                     .await
                                 {
-                                    tracing::error!("Failed to write to PTY: {}", e);
+                                    if local_attachments.contains_key(&connection_id) {
+                                        let error = WsMessage::Error {
+                                            code: Some("local_pty_input_failed".into()),
+                                            message: e.to_string(),
+                                        };
+                                        let _ = send_control(&tx, &error).await;
+                                    } else {
+                                        tracing::error!("Failed to write to PTY: {}", e);
+                                    }
                                 }
                             }
                             None => {
@@ -633,7 +666,7 @@ impl WebSocketServer {
                     }
                 }
                 Ok(Message::Text(text)) => {
-                    tracing::debug!("Received text message: {}", text);
+                    tracing::trace!("Received terminal bridge message ({} bytes)", text.len());
                     let ws_msg: WsMessage = match serde_json::from_str(&text) {
                         Ok(msg) => msg,
                         Err(e) => {
@@ -652,6 +685,7 @@ impl WebSocketServer {
                             output_controls.clone(),
                             reader_tokens.clone(),
                             desktop_streams.clone(),
+                            &mut local_attachments,
                         )
                         .await
                     {
@@ -694,6 +728,10 @@ impl WebSocketServer {
                     break;
                 }
             }
+        }
+
+        for (id, attachment) in local_attachments {
+            self.local_shells.release_attachment(id, attachment.generation);
         }
 
         // A WebSocket drop is usually transient (the frontend reconnects and
@@ -769,6 +807,20 @@ impl WebSocketServer {
         Ok(())
     }
 
+    async fn write_terminal_input(
+        &self,
+        local: &HashMap<String, LocalAttachment>,
+        tx: &WsTx,
+        id: &str,
+        data: Vec<u8>,
+    ) -> Result<()> {
+        if let Some(attachment) = local.get(id) {
+            local::write(attachment, id, data, tx)
+        } else {
+            self.connection_manager.write_to_pty(id, data).await
+        }
+    }
+
     /// Handle a WebSocket message
     async fn handle_message(
         &self,
@@ -777,8 +829,16 @@ impl WebSocketServer {
         output_controls: OutputControls,
         reader_tokens: ReaderTokens,
         desktop_streams: DesktopStreams,
+        local_attachments: &mut HashMap<String, LocalAttachment>,
     ) -> Result<PtyLifecycleEvent, WsError> {
         match msg {
+            WsMessage::AttachLocalPty { connection_id, cols, rows } => {
+                local::attach(
+                    &self.local_shells, connection_id, cols, rows, local_attachments, output_controls, tx,
+                )
+                .await?;
+                Ok(PtyLifecycleEvent::None)
+            }
             WsMessage::StartPty {
                 connection_id,
                 cols,
@@ -969,9 +1029,10 @@ impl WebSocketServer {
                     connection_id,
                     data.len()
                 );
-                self.connection_manager
-                    .write_to_pty(&connection_id, data)
-                    .await?;
+                self.write_terminal_input(local_attachments, &tx, &connection_id, data)
+                    .await.map_err(|e| if local_attachments.contains_key(&connection_id) {
+                        WsError::coded("local_pty_input_failed", e.to_string())
+                    } else { e.into() })?;
                 Ok(PtyLifecycleEvent::None)
             }
             WsMessage::Resize {
@@ -979,6 +1040,10 @@ impl WebSocketServer {
                 cols,
                 rows,
             } => {
+                if let Some(attachment) = local_attachments.get(&connection_id) {
+                    local::resize(attachment, cols, rows).await?;
+                    return Ok(PtyLifecycleEvent::None);
+                }
                 tracing::info!("Resizing terminal {}: {}x{}", connection_id, cols, rows);
                 // Retry while the session is still being (re)started — a resize
                 // racing StartPty's channel setup must not be lost, or the
@@ -1014,6 +1079,9 @@ impl WebSocketServer {
                 connection_id,
                 generation,
             } => {
+                if local_attachments.contains_key(&connection_id) {
+                    return Err(WsError::new("Close local shells through the app command"));
+                }
                 tracing::info!(
                     "Closing PTY connection: {} (gen: {:?})",
                     connection_id,
@@ -1036,6 +1104,9 @@ impl WebSocketServer {
                 connection_id,
                 generation,
             } => {
+                if local_attachments.contains_key(&connection_id) {
+                    return Err(WsError::new("Local shell detach is unavailable"));
+                }
                 tracing::info!(
                     "Detaching PTY connection: {} (gen: {:?})",
                     connection_id,

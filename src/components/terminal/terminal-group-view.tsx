@@ -14,7 +14,7 @@ interface TerminalGroupViewProps {
 export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
   const { t } = useTranslation();
   const { state, dispatch } = useTerminalGroups();
-  const { onDuplicateTab, onNewTab, onReconnectTab, onCloseTab, onCloseAllTabs, onCloseTabs, closeTabShortcut, onDetachTab } = useTerminalCallbacks();
+  const { onDuplicateTab, onNewTab, onNewLocalTerminal, onReconnectTab, onCloseTab, onCloseAllTabs, onCloseTabs, closeTabShortcut, onDetachTab } = useTerminalCallbacks();
   const group = state.groups[groupId];
   const isActive = state.activeGroupId === groupId;
 
@@ -66,6 +66,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         onReconnect={handleReconnect}
         onDuplicateTab={onDuplicateTab}
         onNewTab={onNewTab}
+        onNewLocalTerminal={onNewLocalTerminal}
         onCloseTab={onCloseTab}
         onCloseAllTabs={onCloseAllTabs}
         onCloseTabs={onCloseTabs}
@@ -76,6 +77,7 @@ export function TerminalGroupView({ groupId }: TerminalGroupViewProps) {
         {showWelcome ? (
           <WelcomeScreen
             onNewConnection={() => onNewTab?.()}
+            onNewLocalTerminal={() => onNewLocalTerminal?.(groupId)}
             onOpenSettings={openAppSettings}
           />
         ) : (

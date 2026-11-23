@@ -1,3 +1,4 @@
+import { isInteractiveTerminalTab } from './terminal-group-types';
 import type {
   GridNode,
   SplitDirection,
@@ -569,7 +570,7 @@ export function terminalGroupReducer(
       if (!group) return state;
       const index = group.tabs.findIndex((tab) => tab.id === tabId);
       const tab = group.tabs[index];
-      if (!tab || (tab.tabType !== undefined && tab.tabType !== 'terminal')) return state;
+      if (!tab || !isInteractiveTerminalTab(tab)) return state;
 
       const visible = isTerminalTabVisible(state, tabId);
       const hasUnreadOutput = action.type === 'MARK_TAB_UNREAD_OUTPUT';

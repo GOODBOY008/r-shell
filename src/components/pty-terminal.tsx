@@ -1,4 +1,9 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
+import { Button } from './ui/button';
+import { openLocalShellSettings } from '../lib/app-events';
+import { LocalShellInput } from '../lib/local-shell-input';
+import { startLocalShell } from '../lib/local-shell-runtime';
 import { useCommandShortcuts } from '@/lib/keyboard-shortcuts';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
@@ -8,7 +13,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
-import { getWebSocketUrl } from '@/lib/websocket-endpoint';
+import { getAuthenticatedWebSocketUrl, getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar, type TerminalSearchState } from './terminal/terminal-search-bar';
@@ -24,10 +29,23 @@ import { ConnectionStorageManager } from '../lib/connection-storage';
 import { openSecret } from '../lib/credential-crypto';
 import '@xterm/xterm/css/xterm.css';
 
+function sendBinaryInput(ws: WebSocket, id: Uint8Array, payload: Uint8Array): void {
+  // [0x00][id length: u16 BE][UTF-8 session id][raw input bytes]
+  const frame = new Uint8Array(3 + id.length + payload.length);
+  frame[0] = 0x00;
+  frame[1] = id.length >> 8;
+  frame[2] = id.length & 0xff;
+  frame.set(id, 3);
+  frame.set(payload, 3 + id.length);
+  ws.send(frame);
+}
+
 interface PtyTerminalProps {
   connectionId: string;
   /** Saved connection this tab was opened from; differs from connectionId for duplicated tabs. */
   savedConnectionId?: string;
+  localShell?: boolean;
+  onShellName?: (name: string) => void;
   connectionName: string;
   host?: string;
   username?: string;
@@ -103,6 +121,10 @@ function claimSshDeadEscalation(connectionId: string): boolean {
  * switching free while long-hidden panes still let go of the GPU.
  */
 const HIDDEN_WEBGL_RELEASE_MS = 60_000;
+// The backend parks a local PTY for five minutes after a bridge disconnect.
+const LOCAL_ATTACH_GRACE_MS = 5 * 60_000;
+const LOCAL_INITIAL_RETRY_MS = 250;
+const LOCAL_MAX_RETRY_MS = 5_000;
 
 function isAutoReconnectEnabled(): boolean {
   try {
@@ -118,6 +140,8 @@ function isAutoReconnectEnabled(): boolean {
 export function PtyTerminal({
   connectionId,
   savedConnectionId,
+  localShell = false,
+  onShellName,
   connectionName,
   host = 'localhost', 
   username = 'user',
@@ -128,6 +152,10 @@ export function PtyTerminal({
   onConnectionStatusChange,
   onDetach,
 }: PtyTerminalProps) {
+  const { t } = useTranslation();
+  const [localEnd, setLocalEnd] = React.useState<
+    { kind: 'exited'; code: number | null } | { kind: 'startFailed' | 'attachFailed'; detail?: string } | null
+  >(null);
   const { onReconnectTab, onWorkingDirectoryChange } = useTerminalCallbacks();
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
@@ -218,6 +246,10 @@ export function PtyTerminal({
     [connectionId],
   );
 
+  // Filled only after the native handle is attached to this socket.
+  const localInputRef = React.useRef<LocalShellInput | null>(null);
+  const pasteRejectedRef = React.useRef(false);
+
   // Set once a detach has been requested — the cleanup must skip sending Close
   // so the backend keeps the detached session alive.
   const detachedRef = React.useRef(false);
@@ -234,24 +266,17 @@ export function PtyTerminal({
       return false;
     }
 
-    // Binary fast path — frame format mirrors the backend's decoder:
-    //   [0x00][id_len: u16 BE][connection_id bytes][payload bytes]
-    // One TypedArray per keystroke instead of a boxed number array plus a
-    // JSON string; the backend skips JSON parsing entirely.
-    const payload = inputEncoderRef.current.encode(data);
-    const idBytes = connectionIdBytes;
-    const frame = new Uint8Array(3 + idBytes.length + payload.length);
-    frame[0] = 0x00;
-    frame[1] = idBytes.length >> 8;
-    frame[2] = idBytes.length & 0xff;
-    frame.set(idBytes, 3);
-    frame.set(payload, 3 + idBytes.length);
-    ws.send(frame);
+    if (localShell) {
+      const accepted = localInputRef.current?.enqueue(data) ?? false;
+      if (!accepted) pasteRejectedRef.current = true;
+      return accepted;
+    }
+    sendBinaryInput(ws, connectionIdBytes, inputEncoderRef.current.encode(data));
     return true;
-  }, [connectionIdBytes]);
+  }, [connectionIdBytes, localShell]);
 
   const sendDetach = React.useCallback(() => {
-    if (detachedRef.current) return;
+    if (localShell || detachedRef.current) return;
     detachedRef.current = true;
 
     // Tell the backend to move this PTY session into the detached registry.
@@ -266,18 +291,18 @@ export function PtyTerminal({
       }
       ws.send(JSON.stringify(detachMsg));
     }
-  }, [connectionId]);
+  }, [connectionId, localShell]);
 
   const handleDetach = React.useCallback(() => {
-    if (detachedRef.current) return;
+    if (localShell || detachedRef.current) return;
     sendDetach();
     onDetachRef.current?.(connectionId);
-  }, [connectionId, sendDetach]);
+  }, [connectionId, localShell, sendDetach]);
 
   useCommandShortcuts({
     findInTerminal: () => { setSearchVisible(true); setSearchFocusTrigger(value => value + 1); },
     clearTerminal: () => { xtermRef.current?.clear(); xtermRef.current?.focus(); },
-    detachSession: handleDetach,
+    ...(localShell ? {} : { detachSession: handleDetach }),
   }, { enabled: isActive, element: () => containerRef.current });
 
   // Let tab-bar context menus (outside the terminal tree) trigger a detach
@@ -285,8 +310,8 @@ export function PtyTerminal({
   // Note: only sends the WS handshake — App's handleDetachTab does the
   // tab-removal, so this must NOT call onDetach (would recurse).
   React.useEffect(() => {
-    return registerDetachHandler(connectionId, sendDetach);
-  }, [connectionId, sendDetach]);
+    if (!localShell) return registerDetachHandler(connectionId, sendDetach);
+  }, [connectionId, localShell, sendDetach]);
 
   const pasteClipboardIntoPty = React.useCallback(async () => {
     try {
@@ -329,7 +354,7 @@ export function PtyTerminal({
 
     // Create terminal with user's appearance settings
     const term = new XTerm(termOptions);
-    const workingDirectoryDisposable = registerTerminalWorkingDirectoryHandler(
+    const workingDirectoryDisposable = localShell ? undefined : registerTerminalWorkingDirectoryHandler(
       term.parser,
       (path) => onWorkingDirectoryChange?.(connectionId, path),
     );
@@ -566,17 +591,42 @@ export function PtyTerminal({
       selectionDoc.addEventListener('mousemove', detectStuckSelectionDrag, true);
     }
 
-    // Welcome message
-    term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
-    term.writeln(`\x1b[1;36m  ${connectionName}\x1b[0m`);
-    term.writeln(`\x1b[90m  ${username}@${host}\x1b[0m`);
-    term.writeln(`\x1b[90m  ${i18n.t('ptyTerminal.renderer', { renderer: rendererRef.current.toUpperCase() })}\x1b[0m`);
-    term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
-    term.write('\r\n');
-    term.writeln(`\x1b[33m${i18n.t('ptyTerminal.startingShell')}\x1b[0m`);
-    term.write('\r\n');
+    if (!localShell) {
+      // Welcome message
+      term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
+      term.writeln(`\x1b[1;36m  ${connectionName}\x1b[0m`);
+      term.writeln(`\x1b[90m  ${username}@${host}\x1b[0m`);
+      term.writeln(`\x1b[90m  ${i18n.t('ptyTerminal.renderer', { renderer: rendererRef.current.toUpperCase() })}\x1b[0m`);
+      term.writeln('\x1b[1;32m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\x1b[0m');
+      term.write('\r\n');
+      term.writeln(`\x1b[33m${i18n.t('ptyTerminal.startingShell')}\x1b[0m`);
+      term.write('\r\n');
+    }
 
     let isRunning = true;
+    let transportId = connectionId;
+    let localRunReady = false;
+    let localFinished = false;
+    let localConnectStarted = false;
+    let localAttempt = 0;
+    let localReconnectBy: number | undefined;
+    let localRetryDelay = LOCAL_INITIAL_RETRY_MS;
+    let localRetryTimer: ReturnType<typeof setTimeout> | undefined;
+    const finishLocal = (end: NonNullable<typeof localEnd>) => {
+      if (!isRunning || localFinished) return;
+      localFinished = true;
+      clearTimeout(localRetryTimer);
+      if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
+      term.options.disableStdin = true;
+      if (end.kind === 'attachFailed' && localInputRef.current?.hasPending) {
+        notify.warning(i18n.t('localShell.inputInterrupted'));
+      }
+      localInputRef.current = null;
+      setLocalEnd(end);
+      connectionStatusRef.current = 'disconnected';
+      onConnectionStatusChange?.(connectionId, 'disconnected');
+      wsRef.current?.close();
+    };
     // Last dims known to have been delivered to the PTY. The onResize handler
     // only forwards actual changes, so a resize must always update this —
     // otherwise every subsequent fit would re-send the same size (issue #88).
@@ -602,7 +652,10 @@ export function PtyTerminal({
 
     // RAF write batching state — lifted to effect scope so cleanup can cancel.
     let writeBuffer = '';
-    let bufferedFrameCount = 0;
+    // A single paint may span multiple attachments. Each socket gets credit
+    // only for its own frames, after that paint has been consumed by xterm.
+    let pendingCredits = new Map<(count: number) => void, number>();
+    const localOutputDecoder = localShell ? new TextDecoder('utf-8') : undefined;
     let rafId: number | null = null;
 
     // StartPty handshake watchdog. If the backend never confirms the PTY
@@ -656,7 +709,23 @@ export function PtyTerminal({
       // handshake and re-syncs the PTY (issue #88).
       let startPtyDims: { cols: number; rows: number } | null = null;
       // CRITICAL: Wait for terminal to be properly sized before starting PTY
-      await waitForProperSize();
+      if (localShell) {
+        if (!localRunReady) {
+          fitAddon.fit();
+          try {
+            const run = await startLocalShell(connectionId, term.cols, term.rows);
+            if (!isRunning) return;
+            transportId = run.runId;
+            localRunReady = true;
+            onShellName?.(run.shellName);
+          } catch (error) {
+            finishLocal({ kind: 'startFailed', detail: String(error) });
+            return;
+          }
+        }
+      } else {
+        await waitForProperSize();
+      }
       // waitForProperSize stops polling without resolving once !isRunning, but
       // its resolution can race the cleanup within the same tick.
       if (!isRunning) return;
@@ -668,28 +737,68 @@ export function PtyTerminal({
       }
       
       // Port + per-launch bridge token from the backend (issue #138).
-      const wsUrl = await getWebSocketUrl();
-      // The endpoint IPC has no deadline, so this continuation can resume after
-      // cleanup (unmount or an effect re-run). Creating a socket now would leak
-      // it past cleanup: its onopen would send a phantom StartPty with a live
-      // handshake watchdog, and on an effect re-run it would overwrite the
-      // replacement socket in wsRef — whose output the identity check in
-      // onmessage would then silently drop.
-      if (!isRunning) return;
-      console.log(`[PTY Terminal] [${connectionId}] Connecting to WebSocket...`);
-      const ws = new WebSocket(wsUrl);
+      const attempt = ++localAttempt;
+      const attemptIsCurrent = () => isRunning && !localFinished && attempt === localAttempt;
+      const retryLocalAttach = () => {
+        if (!attemptIsCurrent()) return;
+        // Invalidate the old endpoint lookup and socket handlers before closing.
+        // A delayed close/open must never affect a more recent attachment.
+        ++localAttempt;
+        if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
+        if (localInputRef.current?.hasPending) {
+          notify.warning(i18n.t('localShell.inputInterrupted'));
+        }
+        localInputRef.current = null;
+        const oldSocket = wsRef.current;
+        wsRef.current = null;
+        oldSocket?.close();
+        const now = Date.now();
+        localReconnectBy ??= now + LOCAL_ATTACH_GRACE_MS;
+        const remaining = localReconnectBy - now;
+        if (remaining <= 0) {
+          finishLocal({ kind: 'attachFailed' });
+          return;
+        }
+        if (connectionStatusRef.current !== 'connecting') {
+          connectionStatusRef.current = 'connecting';
+          onConnectionStatusChange?.(connectionId, 'connecting');
+        }
+        localRetryTimer = setTimeout(() => {
+          if (isRunning && !localFinished) void connectWebSocket();
+        }, Math.min(localRetryDelay, remaining));
+        localRetryDelay = Math.min(localRetryDelay * 2, LOCAL_MAX_RETRY_MS);
+      };
+
+      let ws: WebSocket;
+      if (localShell) {
+        // Covers a hung endpoint IPC, socket still CONNECTING or a missing
+        // PtyStarted reply. Late continuations are invalidated by the attempt.
+        localReconnectBy ??= Date.now() + LOCAL_ATTACH_GRACE_MS;
+        startPtyWatchdog = setTimeout(retryLocalAttach,
+          Math.min(START_PTY_WATCHDOG_MS, Math.max(0, localReconnectBy - Date.now())));
+      }
+      try {
+        const wsUrl = await (localShell ? getAuthenticatedWebSocketUrl() : getWebSocketUrl());
+        if (!attemptIsCurrent()) return;
+        ws = new WebSocket(wsUrl);
+      } catch (error) {
+        if (!localShell) throw error;
+        retryLocalAttach();
+        return;
+      }
       // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of
       // encoding Vec<u8> as integer arrays.  The backend sends binary output
       // frames with the format: [0x01][id_len: u16 BE][connection_id][payload]
       ws.binaryType = 'arraybuffer';
       // One streaming TextDecoder per WebSocket connection: preserves UTF-8
       // multi-byte sequences that may be split across successive output frames.
-      const outputDecoder = new TextDecoder('utf-8');
+      const outputDecoder = localOutputDecoder ?? new TextDecoder('utf-8');
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (!attemptIsCurrent()) return;
         console.log(`[PTY Terminal] [${connectionId}] WebSocket connected`);
-        term.writeln(`\x1b[32m${i18n.t('ptyTerminal.webSocketConnected')}\x1b[0m`);
+        if (!localShell) term.writeln(`\x1b[32m${i18n.t('ptyTerminal.webSocketConnected')}\x1b[0m`);
 
         // Start PTY session.
         // Capture the dims the PTY is created with — PtyStarted compares them
@@ -699,8 +808,8 @@ export function PtyTerminal({
         const startRows = term.rows;
         startPtyDims = { cols: startCols, rows: startRows };
         const startMsg = {
-          type: 'StartPty',
-          connection_id: connectionId,
+          type: localShell ? 'AttachLocalPty' : 'StartPty',
+          connection_id: transportId,
           cols: startCols,
           rows: startRows,
         };
@@ -708,32 +817,34 @@ export function PtyTerminal({
         ws.send(JSON.stringify(startMsg));
 
         ptyHandshakeDone = false;
-        if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
-        startPtyWatchdog = setTimeout(() => {
-          startPtyWatchdog = null;
-          if (ptyHandshakeDone) return;
-          console.warn(
-            `[PTY Terminal] [${connectionId}] StartPty handshake watchdog fired (no Success/PtyStarted within ${START_PTY_WATCHDOG_MS}ms) — escalating to full reconnect`,
-          );
-          reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
-          autoReconnectAfterDropRef.current = MAX_AUTO_RECONNECT_AFTER_DROP;
-          if (connectionStatusRef.current !== 'disconnected') {
-            connectionStatusRef.current = 'disconnected';
-            onConnectionStatusChange?.(connectionId, 'disconnected');
-          }
-          if (!sshDeadEscalatedRef.current) {
-            sshDeadEscalatedRef.current = true;
-            if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
-              term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
-              void onReconnectTab(connectionId, true);
-            } else {
-              term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
+        if (!localShell) {
+          if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
+          startPtyWatchdog = setTimeout(() => {
+            startPtyWatchdog = null;
+            if (ptyHandshakeDone) return;
+            console.warn(
+              `[PTY Terminal] [${connectionId}] StartPty handshake watchdog fired (no Success/PtyStarted within ${START_PTY_WATCHDOG_MS}ms) — escalating to full reconnect`,
+            );
+            reconnectAttemptsRef.current = MAX_RECONNECT_ATTEMPTS;
+            autoReconnectAfterDropRef.current = MAX_AUTO_RECONNECT_AFTER_DROP;
+            if (connectionStatusRef.current !== 'disconnected') {
+              connectionStatusRef.current = 'disconnected';
+              onConnectionStatusChange?.(connectionId, 'disconnected');
             }
-          }
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.close();
-          }
-        }, START_PTY_WATCHDOG_MS);
+            if (!sshDeadEscalatedRef.current) {
+              sshDeadEscalatedRef.current = true;
+              if (onReconnectTab && claimSshDeadEscalation(connectionId)) {
+                term.write(`\r\n\x1b[33m${i18n.t('ptyTerminal.sshSessionLost')}\x1b[0m\r\n`);
+                void onReconnectTab(connectionId, true);
+              } else {
+                term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.sshSessionDeadPermanent')}\x1b[0m\r\n`);
+              }
+            }
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.close();
+            }
+          }, START_PTY_WATCHDOG_MS);
+        }
 
         // Flush a resize that was observed while this socket was not OPEN yet
         // (issue #88): dropping it would leave the PTY at a stale size, and
@@ -746,7 +857,7 @@ export function PtyTerminal({
           const { cols, rows } = pendingResize;
           pendingResize = null;
           if (cols !== startCols || rows !== startRows) {
-            ws.send(JSON.stringify({ type: 'Resize', connection_id: connectionId, cols, rows }));
+            ws.send(JSON.stringify({ type: 'Resize', connection_id: transportId, cols, rows }));
           }
           lastSentCols = cols;
           lastSentRows = rows;
@@ -772,9 +883,9 @@ export function PtyTerminal({
       // =========================================================================
 
       const grantCredits = (count: number) => {
-        if (ws.readyState === WebSocket.OPEN) {
+        if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
           // Send a single Resume per credit (backend Semaphore.add_permits(1))
-          const msg = JSON.stringify({ type: 'Resume', connection_id: connectionId });
+          const msg = JSON.stringify({ type: 'Resume', connection_id: transportId });
           for (let i = 0; i < count; i++) {
             ws.send(msg);
           }
@@ -786,14 +897,14 @@ export function PtyTerminal({
         if (!writeBuffer) return;
 
         const data = writeBuffer;
-        const frameCount = bufferedFrameCount;
+        const credits = pendingCredits;
         writeBuffer = '';
-        bufferedFrameCount = 0;
+        pendingCredits = new Map();
 
         // Single write per animation frame — the key optimisation.
         // Reduces term.write() calls from hundreds/s to ~60/s.
         term.write(data, () => {
-          grantCredits(frameCount);
+          for (const [grant, count] of credits) grant(count);
         });
 
         // If more data arrived during the write, schedule another flush
@@ -811,14 +922,14 @@ export function PtyTerminal({
           return;
         }
         writeBuffer += text;
-        bufferedFrameCount += 1;
+        pendingCredits.set(grantCredits, (pendingCredits.get(grantCredits) ?? 0) + 1);
         if (rafId === null) {
           rafId = requestAnimationFrame(flushWriteBuffer);
         }
       };
 
       ws.onmessage = (event) => {
-        if (!isRunning || wsRef.current !== ws) return;
+        if (!isRunning || localFinished || wsRef.current !== ws) return;
         // Binary frames carry raw PTY output.
         // Format: [0x01][id_len: u16 BE][connection_id bytes][payload bytes]
         if (event.data instanceof ArrayBuffer) {
@@ -828,7 +939,7 @@ export function PtyTerminal({
           const payloadOffset = 3 + idLen;
           if (data.length < payloadOffset) return;
           const frameConnectionId = new TextDecoder().decode(data.subarray(3, payloadOffset));
-          if (frameConnectionId !== connectionId) return;
+          if (frameConnectionId !== transportId) return;
           const payload = data.subarray(payloadOffset);
           if (payload.length === 0) return;
           onOutputRef.current?.(connectionId);
@@ -837,10 +948,27 @@ export function PtyTerminal({
         }
 
         try {
-          const msg = JSON.parse(event.data);
-          
+          if (typeof event.data !== 'string') return;
+          const msg = JSON.parse(event.data) as Record<string, unknown>;
+
           switch (msg.type) {
+            case 'LocalPtyInputAck':
+              if (localShell && msg.connection_id === transportId && typeof msg.generation === 'number') {
+                localInputRef.current?.acknowledge(msg.generation);
+              }
+              break;
+            case 'LocalPtyExited':
+              if (localShell && msg.connection_id === transportId) {
+                // The native bridge drains the PTY before reporting exit. Flush
+                // any queued final bytes before disabling input on this run.
+                writeBuffer += outputDecoder.decode();
+                if (rafId !== null) cancelAnimationFrame(rafId);
+                flushWriteBuffer();
+                finishLocal({ kind: 'exited', code: typeof msg.exit_code === 'number' ? msg.exit_code : null });
+              }
+              break;
             case 'Success':
+              if (localShell || typeof msg.message !== 'string') break;
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
               if (msg.message.includes('PTY connection started')) {
                 ptyHandshakeDone = true;
@@ -870,7 +998,7 @@ export function PtyTerminal({
               break;
 
             case 'PtyStarted': {
-              if (msg.connection_id === connectionId && typeof msg.generation === 'number') {
+              if (msg.connection_id === transportId && typeof msg.generation === 'number') {
                 ptyHandshakeDone = true;
                 if (startPtyWatchdog) {
                   clearTimeout(startPtyWatchdog);
@@ -878,7 +1006,21 @@ export function PtyTerminal({
                 }
                 ptyGenerationRef.current = msg.generation;
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
-                signalReady(connectionId);
+                if (localShell) {
+                  if (localInputRef.current?.generation === msg.generation) break;
+                  const id = inputEncoderRef.current.encode(transportId);
+                  localInputRef.current = new LocalShellInput(
+                    msg.generation,
+                    bytes => sendBinaryInput(ws, id, bytes),
+                    () => notify.warning(i18n.t('localShell.inputOverflow')),
+                  );
+                  localReconnectBy = undefined;
+                  localRetryDelay = LOCAL_INITIAL_RETRY_MS;
+                  connectionStatusRef.current = 'connected';
+                  onConnectionStatusChange?.(connectionId, 'connected');
+                } else {
+                  signalReady(connectionId);
+                }
                 // Credit-based flow control: seed the pipeline with initial
                 // credits so the PTY reader can start sending immediately.
                 // Ongoing credits are returned by the flush callback above.
@@ -902,7 +1044,7 @@ export function PtyTerminal({
                   if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                       type: 'Resize',
-                      connection_id: connectionId,
+                      connection_id: transportId,
                       cols: term.cols,
                       rows: term.rows,
                     }));
@@ -911,7 +1053,7 @@ export function PtyTerminal({
                   }
                 }
                 startPtyDims = null;
-                if (msg.reattached) {
+                if (!localShell && msg.reattached) {
                   // The backend re-attached a parked session — the same
                   // remote shell continues (transient WebSocket drop).
                   term.writeln(`\x1b[32m${i18n.t('ptyTerminal.sessionRestored')}\x1b[0m`);
@@ -928,7 +1070,7 @@ export function PtyTerminal({
               const output = msg as { connection_id?: string; data?: number[] };
               // Keep legacy connection-scoped JSON frames without an id working,
               // but never attribute an explicitly foreign session's bytes to this tab.
-              if ((output.connection_id === undefined || output.connection_id === connectionId) &&
+              if ((output.connection_id === undefined || output.connection_id === transportId) &&
                   Array.isArray(output.data) && output.data.length > 0) {
                 onOutputRef.current?.(connectionId);
                 enqueueOutput(new TextDecoder().decode(new Uint8Array(output.data)));
@@ -937,8 +1079,18 @@ export function PtyTerminal({
             }
               
             case 'Error': {
+              if (typeof msg.message !== 'string') break;
               console.error('[PTY Terminal] Error:', msg.message);
-              const errorCode: string | undefined = msg.code;
+              const errorCode = msg.code;
+              if (localShell) {
+                if (msg.connection_id !== undefined && msg.connection_id !== transportId) break;
+                if (errorCode === 'local_pty_input_failed' || errorCode === 'local_pty_unavailable' || (!ptyHandshakeDone && errorCode !== 'local_pty_io')) {
+                  finishLocal({ kind: 'attachFailed', detail: msg.message });
+                } else {
+                  term.writeln(i18n.t('ptyTerminal.error', { message: msg.message }));
+                }
+                break;
+              }
 
               // The backend detected the SSH session itself is dead (stale
               // client already evicted server-side). Retrying the WebSocket
@@ -1002,6 +1154,7 @@ export function PtyTerminal({
       };
 
       ws.onerror = (error) => {
+        if (localShell) return; // Socket close handles local transport recovery.
         console.error('[PTY Terminal] WebSocket error:', error);
         term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.webSocketError')}\x1b[0m\r\n`);
         // Report disconnected status on WebSocket error
@@ -1012,6 +1165,10 @@ export function PtyTerminal({
       };
 
       ws.onclose = () => {
+        if (localShell) {
+          retryLocalAttach();
+          return;
+        }
         console.log('[PTY Terminal] WebSocket closed');
         // Closed as part of a ssh_session_dead escalation — App.tsx owns
         // recovery now. Don't print auto-reconnect banners on top of the
@@ -1102,7 +1259,15 @@ export function PtyTerminal({
       };
     };
 
-    connectWebSocket();
+    const startLocalWhenMeasured = () => {
+      if (!localShell || localConnectStarted) return;
+      const container = containerRef.current;
+      if (!container || container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
+      localConnectStarted = true;
+      void connectWebSocket();
+    };
+    if (localShell) startLocalWhenMeasured();
+    else void connectWebSocket();
 
     // Handle user input
     const inputDisposable = term.onData((data: string) => {
@@ -1118,7 +1283,7 @@ export function PtyTerminal({
       checkScrollability(); // row count changed — re-evaluate scrollability
 
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN && (!localShell || localInputRef.current)) {
         lastSentCols = cols;
         lastSentRows = rows;
         // A direct send supersedes anything stashed for the next open — the
@@ -1126,7 +1291,7 @@ export function PtyTerminal({
         pendingResize = null;
         const resizeMsg = {
           type: 'Resize',
-          connection_id: connectionId,
+          connection_id: transportId,
           cols,
           rows,
         };
@@ -1176,6 +1341,7 @@ export function PtyTerminal({
     // Handle tab visibility changes using ResizeObserver
     // When tab becomes visible again or panel is resized, fit the terminal
     const resizeObserver = new ResizeObserver((entries) => {
+      startLocalWhenMeasured();
       for (const entry of entries) {
         // Only refit if the container has a reasonable size
         if (entry.contentRect.width > 100 && entry.contentRect.height > 100) {
@@ -1210,6 +1376,8 @@ export function PtyTerminal({
     return () => {
       console.log(`[PTY Terminal] [${connectionId}] Cleaning up`);
       isRunning = false;
+      clearTimeout(localRetryTimer);
+      localInputRef.current = null;
 
       // Cancel the pending StartPty handshake watchdog, if any.
       if (startPtyWatchdog) {
@@ -1224,14 +1392,14 @@ export function PtyTerminal({
         rafId = null;
       }
       writeBuffer = '';
-      bufferedFrameCount = 0;
+      pendingCredits.clear();
 
       // Close PTY connection via WebSocket — include generation so the
       // backend can ignore this close if a newer session already exists.
       // If the session was detached, skip the Close message so the
       // backend keeps the PTY + SSH connection alive in the background.
       const ws = wsRef.current;
-      if (ws && ws.readyState === WebSocket.OPEN && !detachedRef.current) {
+      if (ws && ws.readyState === WebSocket.OPEN && !detachedRef.current && !localShell) {
         const closeMsg: Record<string, unknown> = {
           type: 'Close',
           connection_id: connectionId,
@@ -1263,7 +1431,7 @@ export function PtyTerminal({
       inputDisposable.dispose();
       resizeDisposable.dispose();
       lineFeedDisposable.dispose();
-      workingDirectoryDisposable.dispose();
+      workingDirectoryDisposable?.dispose();
       window.removeEventListener('resize', handleWindowResize);
       resizeObserver.disconnect();
       if (selectionDoc) {
@@ -1291,7 +1459,7 @@ export function PtyTerminal({
       term.dispose();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connectionId, host, username, terminalKey, reconnectKey, sendInputToPty, onWorkingDirectoryChange]);
+  }, [connectionId, localShell, host, username, terminalKey, reconnectKey, sendInputToPty, onWorkingDirectoryChange]);
   // NOTE: themeKey, appearanceKey, and connectionName are intentionally NOT
   // in the deps above. Including them would tear down the WebSocket + PTY
   // session on every theme change (e.g. macOS auto Dark/Light switch), killing
@@ -1322,6 +1490,7 @@ export function PtyTerminal({
   // Surface a single actionable toast guiding the user to install XQuartz.
   // The terminal itself keeps working — X11 is best-effort.
   React.useEffect(() => {
+    if (localShell) return;
     let unlisten: UnlistenFn | undefined;
     let active = true;
     listen<string>('x11-local-server-unreachable', (event) => {
@@ -1346,7 +1515,7 @@ export function PtyTerminal({
       active = false;
       unlisten?.();
     };
-  }, [connectionId]);
+  }, [connectionId, localShell]);
 
   React.useEffect(() => {
     if (!isActive) {
@@ -1496,8 +1665,11 @@ export function PtyTerminal({
       notify.error(i18n.t('ptyTerminal.terminalNotConnected'));
       return;
     }
+    // xterm synchronously emits the bracketed paste through onData. If its
+    // local input queue rejected the paste, Enter could execute an older line.
+    pasteRejectedRef.current = false;
     term.paste(text);
-    if (execute) {
+    if (execute && !pasteRejectedRef.current) {
       sendInputToPty('\r');
     }
   }, [sendInputToPty]);
@@ -1505,6 +1677,7 @@ export function PtyTerminal({
   // Right-click → Type sudo password: the stored secret goes straight to the
   // PTY, then Enter — no paste normalization, exactly like typing it blind.
   const handleSendSudoPassword = React.useCallback(async () => {
+    if (localShell) return;
     const sealed = ConnectionStorageManager.getConnection(savedConnectionId ?? connectionId)?.sudoPassword;
     if (!sealed) {
       notify.info(i18n.t('ptyTerminal.noSudoPassword'));
@@ -1521,7 +1694,7 @@ export function PtyTerminal({
     if (!sendInputToPty(`${password}\r`)) {
       notify.error(i18n.t('ptyTerminal.terminalNotConnected'));
     }
-  }, [connectionId, savedConnectionId, sendInputToPty]);
+  }, [connectionId, localShell, savedConnectionId, sendInputToPty]);
 
   React.useEffect(() => {
     const handleTerminalCommand = (event: Event) => {
@@ -1598,7 +1771,7 @@ export function PtyTerminal({
     <TerminalContextMenu
       onCopy={handleCopy}
       onPaste={handlePaste}
-      onSendSudoPassword={handleSendSudoPassword}
+      onSendSudoPassword={localShell ? undefined : handleSendSudoPassword}
       onClear={handleClear}
       onClearScrollback={handleClearScrollback}
       onSearch={handleSearch}
@@ -1606,8 +1779,8 @@ export function PtyTerminal({
       onFindPrevious={handleFindPrevious}
       onSelectAll={handleSelectAll}
       onSaveToFile={handleSaveToFile}
-      onReconnect={handleReconnect}
-      onDetach={handleDetach}
+      onReconnect={localShell ? undefined : handleReconnect}
+      onDetach={localShell ? undefined : handleDetach}
       hasSelection={hasSelection}
       searchActive={searchVisible}
     >
@@ -1618,7 +1791,7 @@ export function PtyTerminal({
       onClick={(e) => {
         // Don't refocus terminal if clicking on search bar or other interactive elements
         const target = e.target as HTMLElement;
-        if (target.closest('[data-search-bar]')) {
+        if (target.closest('[data-search-bar], button')) {
           return;
         }
         xtermRef.current?.focus();
@@ -1665,8 +1838,30 @@ export function PtyTerminal({
       {/* Terminal wrapper — inset-0 fills the entire container so the terminal
            occupies all available space. The container background matches the
            terminal theme so any partial-row gap at the bottom is invisible. */}
-      <div className="absolute inset-0 z-10">
-        <div ref={terminalRef} className="h-full w-full" />
+      <div className="absolute inset-0 z-10 flex flex-col">
+        <div ref={terminalRef} className="min-h-0 w-full flex-1" />
+        {localShell && (
+          <div className={localEnd ? 'flex shrink-0 flex-wrap items-center gap-2 border-t bg-background px-3 py-2 text-sm text-foreground' : 'sr-only'}>
+            <div role="status" className="min-w-0 flex-[1_1_14rem]">
+              {localEnd && (
+                <>
+                  {localEnd.kind === 'exited'
+                    ? localEnd.code === null ? t('localShell.exited') : t('localShell.exitedWithCode', { code: localEnd.code })
+                    : t(`localShell.${localEnd.kind}`)}
+                  {localEnd.kind !== 'exited' && localEnd.detail && <p className="break-words text-muted-foreground">{localEnd.detail}</p>}
+                </>
+              )}
+            </div>
+            {localEnd && (
+              <div className="flex flex-wrap gap-1">
+                <Button size="sm" className="h-auto min-h-8 max-w-full whitespace-normal" onClick={handleReconnect}>{t('localShell.restart')}</Button>
+                {localEnd.kind === 'startFailed' && (
+                  <Button size="sm" variant="secondary" className="h-auto min-h-8 max-w-full whitespace-normal" onClick={openLocalShellSettings}>{t('localShell.openSettings')}</Button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <style>{`
         /* Scrollbar appearance — scoped to this terminal instance */

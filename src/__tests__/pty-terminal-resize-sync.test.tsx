@@ -1,7 +1,12 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { PtyTerminal } from '../components/pty-terminal';
+import { invoke } from '@tauri-apps/api/core';
+import { toast } from 'sonner';
+import { closeLocalShell } from '../lib/local-shell-runtime';
+import { dispatchTerminalText } from '../lib/terminal-commands';
+import { OPEN_SETTINGS_EVENT } from '../lib/app-events';
 
 // Issue #88 regression tests: a terminal resize must never be lost between
 // xterm and the PTY. When a resize is observed while the WebSocket is not
@@ -18,6 +23,7 @@ const mocks = vi.hoisted(() => {
   const resizeHandlers: Array<(dims: { cols: number; rows: number }) => void> = [];
   const terminalCallbacks = {
     onWorkingDirectoryChange: vi.fn(),
+    onReconnectTab: vi.fn(),
   };
 
   class MockTerminal {
@@ -137,7 +143,10 @@ vi.mock('@xterm/addon-clipboard', () => ({
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (command: string) => (command === 'get_websocket_endpoint' ? { port: 9001, token: 'test-token' } : undefined)),
+  invoke: vi.fn(async (command: string) => {
+    if (command === 'get_websocket_endpoint') return { port: 9001, token: 'test-token' };
+    if (command === 'local_shell_start') return { runId: 'native-pty', shellName: 'zsh' };
+  }),
 }));
 
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
@@ -186,6 +195,7 @@ vi.mock('sonner', () => ({
     error: vi.fn(),
     info: vi.fn(),
     success: vi.fn(),
+    warning: vi.fn(),
   },
 }));
 
@@ -259,6 +269,217 @@ describe('PtyTerminal resize synchronization (issue #88)', () => {
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it('reattaches a local shell by native ID and drains its final output without respawning', async () => {
+    const onStatus = vi.fn();
+    const onName = vi.fn();
+    const onOutput = vi.fn();
+    const renderShell = (name: string) => <PtyTerminal connectionId="local-tab" connectionName={name} localShell
+      onShellName={onName} onOutput={onOutput} onConnectionStatusChange={onStatus} />;
+    const view = render(renderShell(''));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const starts = () => vi.mocked(invoke).mock.calls.filter(([name]) => name === 'local_shell_start');
+    expect(starts()).toHaveLength(1);
+    expect(starts()[0][1]).toEqual({ cols: 80, rows: 24, shellPath: null });
+    expect(onName).toHaveBeenCalledWith('zsh');
+    view.rerender(renderShell('zsh'));
+    expect(mocks.terminals).toHaveLength(1);
+    expect(mocks.webSockets).toHaveLength(1);
+    const [first] = mocks.webSockets;
+    act(() => first.onopen());
+    expect(sentJsonMessages(first)[0]).toEqual({
+      type: 'AttachLocalPty', connection_id: 'native-pty', cols: 80, rows: 24,
+    });
+    const started = { data: JSON.stringify({ type: 'PtyStarted', connection_id: 'native-pty', generation: 1 }) };
+    act(() => first.onmessage(started));
+    expect(onStatus).toHaveBeenCalledWith('local-tab', 'connected');
+    expect(sentJsonMessages(first).filter(m => m.type === 'Resume')).toHaveLength(2);
+    const input = mocks.terminals[0].onData.mock.calls[0][0];
+    input('x');
+    const frame = first.send.mock.calls.at(-1)[0];
+    expect(new TextDecoder().decode(frame.slice(3, 3 + frame[2]))).toBe('native-pty');
+
+    // Native queue/resize errors are recoverable and do not end the run.
+    act(() => first.onmessage({ data: JSON.stringify({ type: 'Error', code: 'local_pty_io',
+      message: 'input queue full', connection_id: 'native-pty' }) }));
+    expect(onStatus).toHaveBeenLastCalledWith('local-tab', 'connected');
+    input('queued but not acknowledged');
+    const inputFrames = (socket: typeof first) => socket.send.mock.calls.filter(([value]: [unknown]) => value instanceof Uint8Array);
+    expect(inputFrames(first)).toHaveLength(1);
+    const staleClose = first.onclose;
+    first.close();
+    act(() => first.onclose());
+    await act(async () => { await vi.advanceTimersByTimeAsync(251); });
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    const second = mocks.webSockets[1];
+    act(() => { second.onopen(); second.onmessage(started); });
+    expect(inputFrames(second)).toHaveLength(0);
+    expect(sentJsonMessages(second)[0]).toMatchObject({ type: 'AttachLocalPty', connection_id: 'native-pty' });
+    expect(starts()).toHaveLength(1);
+    act(() => staleClose());
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); });
+    expect(mocks.webSockets).toHaveLength(2);
+    expect(onStatus).toHaveBeenLastCalledWith('local-tab', 'connected');
+
+    const id = new TextEncoder().encode('native-pty');
+    const output = new Uint8Array([1, 0, id.length, ...id, 0x62, 0x79, 0x65]);
+    act(() => {
+      second.onmessage({ data: output.buffer });
+      second.onmessage({ data: JSON.stringify({ type: 'LocalPtyExited', connection_id: 'native-pty', exit_code: 7 }) });
+      second.onclose();
+    });
+    expect(onOutput).toHaveBeenCalledWith('local-tab');
+    expect(mocks.terminals[0].write).toHaveBeenCalledWith('bye', expect.any(Function));
+    expect(onStatus).toHaveBeenLastCalledWith('local-tab', 'disconnected');
+    expect(screen.getByRole('status').textContent).toContain('7');
+    expect(mocks.terminals[0].options.disableStdin).toBe(true);
+    const sentAfterExit = second.send.mock.calls.length;
+    input('y');
+    expect(second.send.mock.calls).toHaveLength(sentAfterExit);
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000); });
+    expect(mocks.webSockets).toHaveLength(2);
+    expect(mocks.terminalCallbacks.onReconnectTab).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button'));
+    expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledWith('local-tab');
+    await closeLocalShell('local-tab');
+  });
+
+  it('credits the correct sockets and preserves split UTF-8 when a hidden frame spans local reattachment', async () => {
+    const pending = new Map<number, FrameRequestCallback>();
+    let frameId = 0;
+    vi.stubGlobal('requestAnimationFrame', (paint: FrameRequestCallback) => {
+      pending.set(++frameId, paint);
+      return frameId;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => pending.delete(id));
+    render(<PtyTerminal connectionId="raf-tab" connectionName="" localShell />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const [first] = mocks.webSockets;
+    const notifyStarted = (socket: typeof first, generation: number) => {
+      socket.onopen();
+      socket.onmessage({ data: JSON.stringify({ type: 'PtyStarted', connection_id: 'native-pty', generation }) });
+    };
+    const sendOutput = (socket: typeof first, bytes: number[]) => {
+      const id = new TextEncoder().encode('native-pty');
+      socket.onmessage({ data: new Uint8Array([1, 0, id.length, ...id, ...bytes]).buffer });
+    };
+    const resumeCount = (socket: typeof first) => sentJsonMessages(socket).filter(m => m.type === 'Resume').length;
+    act(() => {
+      notifyStarted(first, 1);
+      sendOutput(first, [65, 0xe4]);
+      first.close();
+      first.onclose();
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(251); });
+    const [, next] = mocks.webSockets;
+    act(() => {
+      notifyStarted(next, 2);
+      sendOutput(next, [0xb8, 0xad]);
+      sendOutput(next, [66]);
+    });
+    expect(resumeCount(next)).toBe(2);
+    act(() => {
+      for (const paint of [...pending.values()]) paint(performance.now());
+      pending.clear();
+    });
+    expect(mocks.terminals[0].write).toHaveBeenCalledWith('A中B', expect.any(Function));
+    expect(resumeCount(first)).toBe(2);
+    expect(resumeCount(next)).toBe(4);
+    await closeLocalShell('raf-tab');
+  });
+
+  it('advances ordered local input only on ACKs from its own physical writer generation', async () => {
+    render(<PtyTerminal connectionId="paste-tab" connectionName="" localShell />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const [socket] = mocks.webSockets;
+    const deliver = (message: Record<string, unknown>) => socket.onmessage({ data: JSON.stringify(message) });
+    const ack = (id: string, generation: number) => deliver({ type: 'LocalPtyInputAck', connection_id: id, generation });
+    act(() => {
+      socket.onopen();
+      deliver({ type: 'PtyStarted', connection_id: 'native-pty', generation: 3 });
+    });
+    const input = mocks.terminals[0].onData.mock.calls[0][0];
+    mocks.terminals[0].paste.mockImplementation(input);
+    dispatchTerminalText('paste-tab', 'x'.repeat(5 * 1024 * 1024));
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    vi.mocked(toast.warning).mockClear();
+    input('first');
+    input('pasted');
+    input('内容');
+    input('\r');
+    const payloads = () => socket.send.mock.calls
+      .map(([value]: [unknown]) => value).filter((value: unknown) => value instanceof Uint8Array)
+      .map((frame: Uint8Array) => new TextDecoder().decode(frame.slice(3 + frame[2])));
+    expect(payloads()).toEqual(['first']);
+    ack('other', 3);
+    ack('native-pty', 2);
+    expect(payloads()).toEqual(['first']);
+    ack('native-pty', 3);
+    expect(payloads()).toEqual(['first', 'pasted内容\r']);
+    act(() => deliver({ type: 'Error', code: 'local_pty_input_failed', message: 'write failed', connection_id: 'native-pty' }));
+    expect(mocks.terminals[0].options.disableStdin).toBe(true);
+    expect(toast.warning).toHaveBeenCalledTimes(1);
+    await closeLocalShell('paste-tab');
+  });
+
+  it('retries a hung endpoint and failed socket construction for the five-minute attachment grace', async () => {
+    const onStatus = vi.fn();
+    let resolveStaleLookup!: (value: { port: number; token: string }) => void;
+    vi.mocked(invoke).mockResolvedValueOnce({ runId: 'owned', shellName: 'bash' });
+    vi.mocked(invoke).mockImplementationOnce(() => new Promise(resolve => { resolveStaleLookup = resolve; }));
+    let available = false;
+    const createSocket = vi.fn();
+    class FlakySocket extends mocks.MockWebSocket {
+      constructor(url: string) {
+        createSocket();
+        if (!available) throw new Error('bridge unavailable');
+        super(url);
+      }
+    }
+    vi.stubGlobal('WebSocket', FlakySocket);
+    render(<PtyTerminal connectionId="sleep-tab" connectionName="" localShell onConnectionStatusChange={onStatus} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(255_000); });
+    expect(createSocket.mock.calls.length).toBeGreaterThan(5);
+    expect(mocks.webSockets).toHaveLength(0);
+    expect(onStatus).not.toHaveBeenCalledWith('sleep-tab', 'disconnected');
+
+    available = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    const [socket] = mocks.webSockets;
+    act(() => {
+      socket.onopen();
+      socket.onmessage({ data: JSON.stringify({ type: 'PtyStarted', connection_id: 'owned', generation: 7 }) });
+    });
+    await act(async () => {
+      resolveStaleLookup({ port: 9001, token: 'obsolete' });
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mocks.webSockets).toHaveLength(1);
+    expect(onStatus).toHaveBeenLastCalledWith('sleep-tab', 'connected');
+    expect(vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === 'local_shell_start')).toHaveLength(1);
+
+    available = false;
+    act(() => socket.onclose());
+    await act(async () => { await vi.advanceTimersByTimeAsync(300_001); });
+    expect(onStatus).toHaveBeenLastCalledWith('sleep-tab', 'disconnected');
+    expect(mocks.terminals[0].options.disableStdin).toBe(true);
+    await closeLocalShell('sleep-tab');
+  });
+
+  it('shows settings and explicit retry when the selected local executable cannot launch', async () => {
+    const onSettings = vi.fn();
+    window.addEventListener(OPEN_SETTINGS_EVENT, onSettings);
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('missing shell executable'));
+    render(<PtyTerminal connectionId="invalid-shell" connectionName="" localShell />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    expect(screen.getByRole('status').textContent).toContain('missing shell executable');
+    const [, settings] = screen.getAllByRole('button');
+    fireEvent.click(settings);
+    expect(onSettings.mock.calls[0][0].detail).toBe('local-shell');
+    expect(mocks.webSockets).toHaveLength(0);
+    await closeLocalShell('invalid-shell');
+    window.removeEventListener(OPEN_SETTINGS_EVENT, onSettings);
   });
 
   it('flushes a resize observed while the socket was not OPEN right after StartPty', async () => {

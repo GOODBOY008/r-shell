@@ -1,4 +1,21 @@
 {
+  "localShell": {
+    "open": "打开本地终端",
+    "title": "本地终端",
+    "tabTitle": "本地 · {{shell}}",
+    "setting": "默认本地 Shell",
+    "automatic": "自动",
+    "pathHint": "留空使用系统默认值，也可输入本机 shell 可执行文件的完整路径。",
+    "exited": "Shell 已退出。",
+    "exitedWithCode": "Shell 已退出，退出码为 {{code}}。",
+    "startFailed": "无法启动本地 shell。",
+    "attachFailed": "本地 shell 不可用。",
+    "restart": "重新启动 Shell",
+    "openSettings": "Shell 设置",
+    "inputOverflow": "本地 shell 输入缓冲区已满，部分输入未发送。",
+    "inputInterrupted": "终端连接中断，请在继续输入前检查上一条命令。",
+    "closeFailed": "无法关闭本地 shell。"
+  },
   "common": {
     "cancel": "取消",
     "save": "保存",
@@ -59,9 +76,9 @@
     "restoreLazyDesc": "已重连 {{restoredCount}} 个连接；其余 {{lazyCount}} 个将在打开时自动重连",
     "restoreLazyOnlyDesc": "已恢复上次打开的标签页 —— {{lazyCount}} 个将在打开时自动重连",
     "restoreLazyFailedDesc": "没有连接能自动恢复；{{lazyCount}} 个标签页将在打开时重试",
-    "quitSessionsTitle_one": "仍有 {{count}} 个会话已连接",
-    "quitSessionsTitle_other": "仍有 {{count}} 个会话已连接",
-    "quitSessionsDescription": "退出将断开所有已连接的会话。",
+    "quitSessionsTitle_one": "仍有 {{count}} 个活动会话",
+    "quitSessionsTitle_other": "仍有 {{count}} 个活动会话",
+    "quitSessionsDescription": "退出将结束本地 shell 并断开远程连接。",
     "quitSessionsConfirm": "退出",
     "cannotDuplicate": "无法复制标签页",
     "cannotDuplicateDesc": "未找到连接数据，请创建新连接。",
@@ -521,6 +538,7 @@
       "conflictSummary_other": "保存前请先解决 {{count}} 个快捷键冲突",
       "conflictSaveBlocked": "所有冲突解决后才能保存。",
       "command": {
+        "newLocalTerminal": "打开本地终端",
         "newSession": "新建会话",
         "closeSession": "关闭会话",
         "nextTab": "下一个标签页",

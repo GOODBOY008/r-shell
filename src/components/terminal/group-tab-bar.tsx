@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useLayoutEffect, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { X, Plus, Copy, RefreshCw, ArrowLeft, ArrowRight, XCircle, ArrowUp, ArrowDown, MoveRight, FolderSync, Terminal, Monitor, FileCode, MonitorOff, LayoutDashboard } from 'lucide-react';
-import type { TerminalTab, SplitDirection } from '../../lib/terminal-group-types';
+import { isInteractiveTerminalTab, type TerminalTab, type SplitDirection } from '../../lib/terminal-group-types';
+import { isSshTerminalTab } from '../../lib/session-health';
 import { getTabDisplayName } from '../../lib/terminal-group-utils';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useEditorTabs } from '../../lib/editor-tabs-context';
@@ -60,6 +61,12 @@ function calcInsertionIndex(container: HTMLElement, clientX: number): number {
   return tabElements.length;
 }
 
+const WINDOWS_SHELL_NAMES = new Map([
+  ['pwsh.exe', 'PowerShell'],
+  ['powershell.exe', 'Windows PowerShell'],
+  ['cmd.exe', 'CMD'],
+]);
+
 // ── Component ──
 
 interface GroupTabBarProps {
@@ -67,6 +74,7 @@ interface GroupTabBarProps {
   tabs: TerminalTab[];
   activeTabId: string | null;
   onNewTab?: () => void;
+  onNewLocalTerminal?: (groupId: string) => void;
   onDuplicateTab?: (tabId: string) => void;
   onReconnect?: (tabId: string) => void;
   /** Backend-aware close: tears down the tab's SSH/SFTP/FTP/desktop session. */
@@ -83,6 +91,7 @@ export function GroupTabBar({
   tabs,
   activeTabId,
   onNewTab,
+  onNewLocalTerminal,
   onDuplicateTab,
   onReconnect,
   onCloseTab,
@@ -97,8 +106,14 @@ export function GroupTabBar({
   const shortcutBindings = useShortcutBindings();
   const isMac = navigator.platform.toUpperCase().includes('MAC');
   const duplicateTabShortcut = formatKeyboardShortcut(shortcutBindings.duplicateSession, isMac);
+  const displayName = (tab: TerminalTab) => {
+    if (tab.tabType !== 'local-terminal') return getTabDisplayName(tab, tabs);
+    if (!tab.name) return t('localShell.title');
+    const shell = WINDOWS_SHELL_NAMES.get(tab.name.toLowerCase()) ?? tab.name;
+    return t('localShell.tabTitle', { shell });
+  };
   const formattedCloseTabShortcut = (tab: TerminalTab) => formatKeyboardShortcut(
-    tab.tabType === undefined || tab.tabType === 'terminal'
+    isInteractiveTerminalTab(tab)
       ? terminalShortcutBinding('closeSession', { ...shortcutBindings, closeSession: closeTabShortcut ?? shortcutBindings.closeSession }, isMac)
       : closeTabShortcut ?? shortcutBindings.closeSession,
     isMac,
@@ -427,7 +442,7 @@ export function GroupTabBar({
                     className={`relative flex items-center gap-2 px-3 py-2.5 border-r border-border/60 cursor-pointer group min-w-0 select-none transition-colors ${
                       tab.id === activeTabId ? 'bg-background text-foreground shadow-[inset_0_2px_0_var(--primary)]' : 'text-muted-foreground hover:bg-background/60'
                     } ${activeDrag?.tabId === tab.id ? 'opacity-40' : ''}`}
-                    onPointerDown={(e) => handlePointerDown(e, tab.id, tab.name)}
+                    onPointerDown={(e) => handlePointerDown(e, tab.id, displayName(tab))}
                     onDragStart={handleNativeDragStart}
                     draggable={false}
                     onClick={() => handleTabSelect(tab.id)}
@@ -435,9 +450,9 @@ export function GroupTabBar({
                     <button
                       type="button"
                       className="flex items-center gap-2 min-w-0 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      aria-label={getTabDisplayName(tab, tabs)}
+                      aria-label={displayName(tab)}
                       aria-pressed={tab.id === activeTabId}
-                      title={tab.tabType === 'editor' ? `${tab.host ?? ''} · ${tab.editorFilePath ?? tab.name}` : getTabDisplayName(tab, tabs)}
+                      title={tab.tabType === 'editor' ? `${tab.host ?? ''} · ${tab.editorFilePath ?? tab.name}` : displayName(tab)}
                     >
                       {tab.tabType === 'dashboard' ? (
                         <LayoutDashboard className="h-3.5 w-3.5 shrink-0 text-primary" />
@@ -463,7 +478,7 @@ export function GroupTabBar({
                         }`}
                       />}
                       {tab.tabType === 'dashboard' && tab.dashboardId && <DashboardTabStatus id={tab.dashboardId} />}
-                      <span className="text-xs font-medium truncate">{getTabDisplayName(tab, tabs)}</span>
+                      <span className="text-xs font-medium truncate">{displayName(tab)}</span>
                       {editorTabs?.dirtyTabIds.has(tab.id) && (
                         <span
                           role="img"
@@ -473,7 +488,7 @@ export function GroupTabBar({
                         />
                       )}
                       {tab.hasUnreadOutput && tab.id !== activeTabId &&
-                        (tab.tabType === undefined || tab.tabType === 'terminal') && (
+                        (isInteractiveTerminalTab(tab)) && (
                           <span
                             role="img"
                             aria-label={t('terminal.unreadOutput')}
@@ -504,11 +519,11 @@ export function GroupTabBar({
                 </ContextMenuTrigger>
                 <ContextMenuContent>
                   {/* Reconnect when disconnected */}
-                  {onReconnect && tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && (
+                  {onReconnect && tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && (tab.tabType !== 'local-terminal' || tab.connectionStatus === 'disconnected') && (
                     <>
                       <ContextMenuItem onClick={() => onReconnect(tab.id)}>
                         <RefreshCw className="mr-2 h-4 w-4" />
-                        {t('contextMenu.reconnect')}
+                        {tab.tabType === 'local-terminal' ? t('localShell.restart') : t('contextMenu.reconnect')}
                       </ContextMenuItem>
                       <ContextMenuSeparator />
                     </>
@@ -525,7 +540,7 @@ export function GroupTabBar({
                     </>
                   )}
                   {/* Detach into background (SSH terminal tabs only) */}
-                  {onDetachTab && tab.tabType !== 'file-browser' && tab.tabType !== 'desktop' && tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && (
+                  {onDetachTab && isSshTerminalTab(tab) && (
                     <>
                       <ContextMenuItem onClick={() => onDetachTab(tab.id)}>
                         <MonitorOff className="mr-2 h-4 w-4" />
@@ -616,6 +631,18 @@ export function GroupTabBar({
           )}
         </div>
 
+        {onNewLocalTerminal && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="p-2 h-8 w-8 shrink-0"
+            aria-label={t('localShell.open')}
+            title={[t('localShell.open'), formatKeyboardShortcut(shortcutBindings.newLocalTerminal, isMac)].filter(Boolean).join(' · ')}
+            onClick={() => onNewLocalTerminal(groupId)}
+          >
+            <Terminal className="w-4 h-4" aria-hidden="true" />
+          </Button>
+        )}
         {/* Add new tab button */}
         <Button
           variant="ghost"
