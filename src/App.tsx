@@ -275,16 +275,28 @@ function AppContent() {
     applyPreset,
   } = useLayout();
 
+  const leftSidebarSize = layout.leftSidebarVisible
+    ? Math.min(35, Math.max(layout.leftSidebarSize, leftSidebarMinSize))
+    : 0;
+  // Stored sidebar sizes are percentages of the full workspace. The tools
+  // panel now shares a resize group with the terminal area to its left.
+  const workspaceFraction = (100 - leftSidebarSize) / 100;
+  const mainMinSize = 30 / workspaceFraction;
+  const rightSizeInGroup = Math.min(100 - mainMinSize, Math.max(layout.rightSidebarSize, rightSidebarMinSize) / workspaceFraction);
+
   // For drag-driven changes react-resizable-panels v4 defers `onLayout` until
   // the pointer is released (it also fires on mount and on constraint changes,
   // both without user interaction). Writing panel sizes on every move instead
   // (v3's `onResize`) fed a changed `defaultSize` back into the group mid-drag,
   // which made v4 re-derive the layout from constraints and froze the
   // separator after the first pixel of travel.
-  const handleHorizontalLayout = useCallback((next: Record<string, number>) => {
+  const handleNavigationLayout = useCallback((next: Record<string, number>) => {
     if (next['left-sidebar'] !== undefined) setLeftSidebarSize(next['left-sidebar']);
-    if (next['right-sidebar'] !== undefined) setRightSidebarSize(next['right-sidebar']);
-  }, [setLeftSidebarSize, setRightSidebarSize]);
+  }, [setLeftSidebarSize]);
+
+  const handleToolsLayout = useCallback((next: Record<string, number>) => {
+    if (next['right-sidebar'] !== undefined) setRightSidebarSize(next['right-sidebar'] * workspaceFraction);
+  }, [setRightSidebarSize, workspaceFraction]);
 
   const handleVerticalLayout = useCallback((next: Record<string, number>) => {
     if (next['file-browser'] !== undefined) setBottomPanelSize(next['file-browser']);
@@ -2272,26 +2284,16 @@ function AppContent() {
       />
 
       <div className="relative z-10 flex-1 flex overflow-hidden">
-        <ResizablePanelGroup
-          direction="horizontal"
-          autoSaveId="r-shell-main-layout"
-          onLayout={handleHorizontalLayout}
-          // v4 keys saved layouts by panel combination; sidebars mount
-          // conditionally, so list exactly the panels rendered right now or
-          // hiding one overwrites the combination that includes it.
-          panelIds={[
-            ...(layout.leftSidebarVisible ? ['left-sidebar'] : []),
-            'main-content',
-            ...(showRightSidebar ? ['right-sidebar'] : []),
-          ]}
-        >
+        {/* The outer divider belongs to navigation. Changing terminal tabs only
+            changes the inner group's panels, so the navigation width stays put. */}
+        <ResizablePanelGroup id="workspace-layout" direction="horizontal" onLayout={handleNavigationLayout}>
           {/* Left Sidebar - Connection Manager */}
           {layout.leftSidebarVisible && (
             <>
               <ResizablePanel
                 id="left-sidebar"
                 order={1}
-                defaultSize={Math.max(layout.leftSidebarSize, leftSidebarMinSize)}
+                defaultSize={leftSidebarSize}
                 minSize={leftSidebarMinSize}
                 maxSize={35}
               >
@@ -2324,141 +2326,143 @@ function AppContent() {
             </>
           )}
 
-          {/* Main Content - Grid Renderer replaces ConnectionTabs + single terminal */}
-          <ResizablePanel
-            id="main-content"
-            order={2}
-            defaultSize={100 - (layout.leftSidebarVisible ? Math.max(layout.leftSidebarSize, leftSidebarMinSize) : 0) - (showRightSidebar ? Math.max(layout.rightSidebarSize, rightSidebarMinSize) : 0)}
-            minSize={30}
-          >
-            <div className="relative h-full flex flex-col">
-              <div className="flex min-h-0 flex-1 flex-col">
-                {showWelcomeInMainArea ? (
-                  <WelcomeScreen
-                    onNewConnection={handleNewTab}
-                    onNewLocalTerminal={() => openLocalTerminal()}
-                    onOpenSettings={handleOpenSettings}
-                  />
-                ) : (
-                  <ResizablePanelGroup direction="vertical" className="flex-1" onLayout={handleVerticalLayout}>
-                    {/* Terminal Grid Panel */}
-                    <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
-                      <TerminalCallbacksProvider value={{
-                        onDuplicateTab: handleDuplicateTab,
-                        onNewTab: handleNewTab,
-                        onNewLocalTerminal: openLocalTerminal,
-                        onReconnectTab: handleReconnect,
-                        closeTabShortcut: shortcutBindings.closeSession,
-                        onWorkingDirectoryChange: handleWorkingDirectoryChange,
-                        onCloseTab: handleCloseTab,
-                        onCloseAllTabs: handleCloseAllTabs,
-                        onCloseTabs: handleCloseTabs,
-                        onDetachTab: handleDetachTab,
-                        failedPendingTabIds,
-                      }}>
-                        <ErrorBoundary label={t('app.terminal')}>
-                          <GridRenderer node={state.gridLayout} path={[]} />
-                        </ErrorBoundary>
-                      </TerminalCallbacksProvider>
-                    </ResizablePanel>
-
-                    {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (
-                      <>
-                        <ResizableHandle />
-
-                        {/* File Browser Panel - uses activeConnection from context */}
-                        <ResizablePanel
-                          id="file-browser"
-                          order={2}
-                          defaultSize={layout.bottomPanelSize}
-                          minSize={20}
-                          maxSize={50}
-                        >
-                          <ErrorBoundary label={t('app.fileBrowser')}>
-                            <IntegratedFileBrowser
-                            connectionId={activeConnection.connectionId}
-                            host={activeConnection.host}
-                            isConnected={activeConnection.status === 'connected'}
-                            terminalWorkingDirectory={terminalWorkingDirectories[activeConnection.connectionId]}
-                            onClose={() => {}}
-                            onOpenInLogMonitor={handleOpenInLogMonitor}
-                            onOpenInEditor={handleOpenInEditor}
-                          />
-                          </ErrorBoundary>
-                        </ResizablePanel>
-                      </>
-                    )}
-                  </ResizablePanelGroup>
-                )}
-              </div>
-            </div>
-          </ResizablePanel>
-
-          {showRightSidebar && (
-            <>
-              <ResizableHandle />
-
-              {/* Right Sidebar - Monitor/Logs using activeConnection from context */}
+          <ResizablePanel id="workspace" defaultSize={100 - leftSidebarSize}>
+            <ResizablePanelGroup id="terminal-layout" direction="horizontal" onLayout={handleToolsLayout}>
+              {/* Main Content - Grid Renderer replaces ConnectionTabs + single terminal */}
               <ResizablePanel
-                id="right-sidebar"
-                panelRef={rightSidebarRef}
-                order={3}
-                defaultSize={Math.max(layout.rightSidebarSize, rightSidebarMinSize)}
-                minSize={rightSidebarMinSize}
-                maxSize={70}
+                id="main-content"
+                defaultSize={showRightSidebar ? 100 - rightSizeInGroup : 100}
+                minSize={mainMinSize}
               >
-                <Tabs value={rightSidebar.active} onValueChange={rightSidebar.select} className="h-full min-w-0 flex flex-col bg-sidebar">
-                  <TabsList className="flex w-auto shrink-0 justify-start overflow-x-auto mx-2 mt-2">
-                    <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
-                    <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
-                    <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
-                    <TabsTrigger value="port-forwarding" className="text-xs px-2" title={t('portForwarding.title')}>{t('app.portForwarding')}</TabsTrigger>
-                  </TabsList>
+                <div className="relative h-full flex flex-col">
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    {showWelcomeInMainArea ? (
+                      <WelcomeScreen
+                        onNewConnection={handleNewTab}
+                        onNewLocalTerminal={() => openLocalTerminal()}
+                        onOpenSettings={handleOpenSettings}
+                      />
+                    ) : (
+                      <ResizablePanelGroup direction="vertical" className="flex-1" onLayout={handleVerticalLayout}>
+                        {/* Terminal Grid Panel */}
+                        <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
+                          <TerminalCallbacksProvider value={{
+                            onDuplicateTab: handleDuplicateTab,
+                            onNewTab: handleNewTab,
+                            onNewLocalTerminal: openLocalTerminal,
+                            onReconnectTab: handleReconnect,
+                            closeTabShortcut: shortcutBindings.closeSession,
+                            onWorkingDirectoryChange: handleWorkingDirectoryChange,
+                            onCloseTab: handleCloseTab,
+                            onCloseAllTabs: handleCloseAllTabs,
+                            onCloseTabs: handleCloseTabs,
+                            onDetachTab: handleDetachTab,
+                            failedPendingTabIds,
+                          }}>
+                            <ErrorBoundary label={t('app.terminal')}>
+                              <GridRenderer node={state.gridLayout} path={[]} />
+                            </ErrorBoundary>
+                          </TerminalCallbacksProvider>
+                        </ResizablePanel>
 
-                  <div className="flex-1 mt-0 overflow-hidden relative">
-                    <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <div ref={attachMonitorHost} className="h-full overflow-hidden px-1 py-2" />
-                    </TabsContent>
+                        {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (
+                          <>
+                            <ResizableHandle />
 
-                    <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      {activeConnection && rightSidebar.mounted.has('logs') ? (
-                        <ErrorBoundary label={t('app.logMonitor')}>
-                          <LogMonitor
-                            connectionId={activeConnection.connectionId}
-                            externalLogPath={externalLogPath}
-                            externalLogPathKey={externalLogPathKey}
-                            active={rightSidebar.active === 'logs'}
-                            connectionStatus={activeConnection.status}
-                          />
-                        </ErrorBoundary>
-                      ) : null}
-                    </TabsContent>
-
-                    <TabsContent value="commands" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <div className="h-full overflow-hidden px-1 py-2">
-                        {rightSidebar.mounted.has('commands') ? (
-                          <ErrorBoundary label={t('app.quickCommands')}>
-                            <QuickCommandsPanel activeTerminalId={activeTerminalId} />
-                          </ErrorBoundary>
-                        ) : null}
-                      </div>
-                    </TabsContent>
-
-                    <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      {rightSidebar.mounted.has('port-forwarding') ? (
-                        <ErrorBoundary label={t('portForwarding.title')}>
-                          <PortForwardingPanel
-                            connectionId={activeConnection?.connectionId ?? null}
-                            connectionNames={connectionNames}
-                          />
-                        </ErrorBoundary>
-                      ) : null}
-                    </TabsContent>
+                            {/* File Browser Panel - uses activeConnection from context */}
+                            <ResizablePanel
+                              id="file-browser"
+                              order={2}
+                              defaultSize={layout.bottomPanelSize}
+                              minSize={20}
+                              maxSize={50}
+                            >
+                              <ErrorBoundary label={t('app.fileBrowser')}>
+                                <IntegratedFileBrowser
+                                connectionId={activeConnection.connectionId}
+                                host={activeConnection.host}
+                                isConnected={activeConnection.status === 'connected'}
+                                terminalWorkingDirectory={terminalWorkingDirectories[activeConnection.connectionId]}
+                                onClose={() => {}}
+                                onOpenInLogMonitor={handleOpenInLogMonitor}
+                                onOpenInEditor={handleOpenInEditor}
+                              />
+                              </ErrorBoundary>
+                            </ResizablePanel>
+                          </>
+                        )}
+                      </ResizablePanelGroup>
+                    )}
                   </div>
-                </Tabs>
+                </div>
               </ResizablePanel>
-            </>
-          )}
+
+              {showRightSidebar && (
+                <>
+                  <ResizableHandle />
+
+                  {/* Right Sidebar - Monitor/Logs using activeConnection from context */}
+                  <ResizablePanel
+                    id="right-sidebar"
+                    panelRef={rightSidebarRef}
+                    groupResizeBehavior="preserve-pixel-size"
+                    defaultSize={rightSizeInGroup}
+                    minSize={rightSidebarMinSize / workspaceFraction}
+                  >
+                    <Tabs value={rightSidebar.active} onValueChange={rightSidebar.select} className="h-full min-w-0 flex flex-col bg-sidebar">
+                      <TabsList className="flex w-auto shrink-0 justify-start overflow-x-auto mx-2 mt-2">
+                        <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
+                        <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
+                        <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
+                        <TabsTrigger value="port-forwarding" className="text-xs px-2" title={t('portForwarding.title')}>{t('app.portForwarding')}</TabsTrigger>
+                      </TabsList>
+
+                      <div className="flex-1 mt-0 overflow-hidden relative">
+                        <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          <div ref={attachMonitorHost} className="h-full overflow-hidden px-1 py-2" />
+                        </TabsContent>
+
+                        <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          {activeConnection && rightSidebar.mounted.has('logs') ? (
+                            <ErrorBoundary label={t('app.logMonitor')}>
+                              <LogMonitor
+                                connectionId={activeConnection.connectionId}
+                                externalLogPath={externalLogPath}
+                                externalLogPathKey={externalLogPathKey}
+                                active={rightSidebar.active === 'logs'}
+                                connectionStatus={activeConnection.status}
+                              />
+                            </ErrorBoundary>
+                          ) : null}
+                        </TabsContent>
+
+                        <TabsContent value="commands" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          <div className="h-full overflow-hidden px-1 py-2">
+                            {rightSidebar.mounted.has('commands') ? (
+                              <ErrorBoundary label={t('app.quickCommands')}>
+                                <QuickCommandsPanel activeTerminalId={activeTerminalId} />
+                              </ErrorBoundary>
+                            ) : null}
+                          </div>
+                        </TabsContent>
+
+                        <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          {rightSidebar.mounted.has('port-forwarding') ? (
+                            <ErrorBoundary label={t('portForwarding.title')}>
+                              <PortForwardingPanel
+                                connectionId={activeConnection?.connectionId ?? null}
+                                connectionNames={connectionNames}
+                              />
+                            </ErrorBoundary>
+                          ) : null}
+                        </TabsContent>
+                      </div>
+                    </Tabs>
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizablePanelGroup>
+          </ResizablePanel>
         </ResizablePanelGroup>
       </div>
 
