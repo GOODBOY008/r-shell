@@ -27,6 +27,13 @@ export class DesktopFrameRenderer {
     this.animation = null;
     this.dirty = null;
     this.pixels = new ImageData(width, height);
+    const canvas = this.canvas();
+    if (canvas) {
+      // A new desktop may initially repaint only part of the login screen.
+      // Assigning width clears the visible bitmap even at the same resolution.
+      canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+    }
   }
 
   receive(data: ArrayBuffer): boolean {
@@ -65,7 +72,7 @@ export class DesktopFrameRenderer {
     this.dirty = null;
     if (!pixels || !dirty) return;
     if (canvas) {
-      // Set dimensions at paint time, after React has committed the new layout.
+      // The canvas may have mounted since the resize arrived.
       if (canvas.width !== pixels.width) canvas.width = pixels.width;
       if (canvas.height !== pixels.height) canvas.height = pixels.height;
       canvas.getContext('2d')?.putImageData(pixels, 0, 0, dirty.left, dirty.top, dirty.right - dirty.left, dirty.bottom - dirty.top);
