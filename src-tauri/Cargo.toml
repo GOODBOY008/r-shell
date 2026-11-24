@@ -44,7 +44,7 @@ tokio-util = { version = "0.7", features = ["io"] }
 async-compression = { version = "0.4", features = ["tokio", "zlib"] }
 flate2 = "1"
 tar = "0.4"
-suppaftp = { version = "12.1", features = ["tokio-async-native-tls"] }
+suppaftp = { version = "13.0", features = ["tokio-async-native-tls"] }
 async-native-tls = { version = "0.6", default-features = false, features = ["runtime-tokio"] }
 futures-lite = "2"
 dirs = "7"
