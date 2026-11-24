@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1] - 2026-11-24
+
+### 🔖 R-Shell 3.4.1 — Local Terminal Tabs
+
+Open a local shell alongside an SSH session with Cmd+Shift+T on macOS or Ctrl+Shift+T on Windows and Linux. Cloud sync keeps terminal, editor, and remote desktop input available while applying changes. Clearing an explicit SSH key lets synced devices use their default keys again. The RDP viewer now follows xrdp desktop size changes after login.
+
+### New Features 🎉
+
+- feat(terminal): open local shells alongside remote sessions by @GOODBOY008 in #349
+
+### Bug Fixes 🐛
+
+- fix(cloud-sync): keep session input usable while a sync is applied by @twkrol in #348
+- fix(cloud-sync): honor an explicit SSH key removal across synced devices by @twkrol in #346
+- fix(rdp): keep the viewer in sync with xrdp desktop resizes by @GOODBOY008 in #350
+
+### Other Changes
+
+- chore(deps): update six Rust dependencies by @dependabot[bot] in #351
+- chore(deps): upgrade the FTP client library `suppaftp` to 13.0.0 by @dependabot[bot] in #352
+- chore(deps): apply 20 npm minor and patch updates by @dependabot[bot] in #353
+- chore(deps): upgrade `i18next` to 27.2.2 by @dependabot[bot] in #354
+- chore(deps-dev): upgrade `@testing-library/jest-dom` to 8.0.0 by @dependabot[bot] in #355
+
+### Contributors
+
+Thanks to [@GOODBOY008](https://github.com/GOODBOY008) and [@twkrol](https://github.com/twkrol) for the terminal, cloud sync, and RDP changes. [Dependabot](https://github.com/apps/dependabot) contributed the dependency updates.
+
+**Full Changelog**: https://github.com/GOODBOY008/r-shell/compare/v3.4.0...v3.4.1
+
 ## [3.4.0] - 2026-11-21
 
 ### 🔖 R-Shell 3.4.0 — Compressed Folder Transfers
