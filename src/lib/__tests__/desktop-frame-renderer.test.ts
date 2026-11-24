@@ -29,7 +29,8 @@ describe('desktop frame painting and acknowledgements', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal('ImageData', TestImageData);
-    canvas = { width: 0, height: 0, getContext: () => ({ putImageData }) } as unknown as HTMLCanvasElement;
+    canvas = document.createElement('canvas');
+    vi.spyOn(canvas, 'getContext').mockReturnValue({ putImageData } as unknown as CanvasRenderingContext2D);
     putImageData.mockReset(); ack.mockReset();
     renderer = new DesktopFrameRenderer('conn', () => canvas, ack);
     renderer.start(7, 4, 3);
@@ -59,6 +60,23 @@ describe('desktop frame painting and acknowledgements', () => {
     expect(renderer.receive(frame(7, 1, 0, 0, 42))).toBe(true);
     vi.advanceTimersByTime(20);
     expect(ack).toHaveBeenCalledExactlyOnceWith(7, 1);
+  });
+  it.each(['resize', 'restart'])('clears the visible bitmap on a same-size %s before partial updates arrive', (transition) => {
+    renderer.receive(frame(7, 1, 3, 2, 99));
+    vi.advanceTimersByTime(20);
+    expect(putImageData).toHaveBeenCalledOnce();
+
+    // Writing canvas.width clears every pixel, even when the value is unchanged.
+    const resetBitmap = vi.spyOn(canvas, 'width', 'set');
+    if (transition === 'resize') renderer.resize(4, 3);
+    else renderer.start(8, 4, 3);
+    expect(resetBitmap).toHaveBeenCalledWith(4);
+
+    const [stream, sequence] = transition === 'resize' ? [7, 2] : [8, 1];
+    expect(renderer.receive(frame(stream, sequence, 0, 0, 42))).toBe(true);
+    vi.advanceTimersByTime(20);
+    expect(putImageData.mock.lastCall?.slice(1)).toEqual([0, 0, 0, 0, 1, 1]);
+    expect(ack).toHaveBeenLastCalledWith(stream, sequence);
   });
   it('cancels pending paint across stream replacement and disposal', () => {
     renderer.receive(frame(7, 1, 0, 0, 10));

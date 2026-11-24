@@ -865,8 +865,6 @@ export function DesktopViewer({
       }`}>
         <canvas
           ref={canvasRef}
-          width={desktopWidth}
-          height={desktopHeight}
           className="m-auto block shrink-0"
           style={{
             width: displayedWidth,

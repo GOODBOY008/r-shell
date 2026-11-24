@@ -346,7 +346,9 @@ fn build_ironrdp_config(cfg: &RdpConfig, enable_credssp: bool, enable_tls: bool)
             password: cfg.password.clone(),
         },
         domain,
-        client_build: 0,
+        // Use rdesktop's compatibility build. xrdp 0.9.x treats builds <= 419
+        // as unable to resize and skips reactivation when the X desktop changes.
+        client_build: 2600,
         client_name: "r-shell".to_string(),
         keyboard_type: KeyboardType::IBM_ENHANCED,
         keyboard_subtype: 0,
@@ -394,6 +396,11 @@ fn new_connector(config: &RdpConfig, client_addr: SocketAddr, enable_credssp: bo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advertises_a_resize_capable_client_build_to_xrdp() {
+        assert!(mock_config().client_build > 419);
+    }
 
     #[test]
     fn connection_device_scale_matches_dynamic_display_control() {
