@@ -114,7 +114,7 @@
     "@eslint/js": "^10.0.1",
     "@tailwindcss/postcss": "^4.3.4",
     "@tauri-apps/cli": "^2.12.4",
-    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/jest-dom": "^8.0.0",
     "@testing-library/react": "^16.3.3",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
