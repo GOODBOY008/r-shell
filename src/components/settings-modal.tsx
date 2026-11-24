@@ -60,7 +60,8 @@ import {
   type SettingsSectionId,
   type SettingsState,
 } from './settings/shared';
-import { TerminalSection } from './settings/terminal-section';
+import { readLocalShellPath, saveLocalShellPath } from '../lib/local-shell-settings';
+import { LocalShellSetting, TerminalSection } from './settings/terminal-section';
 import { EditorSection } from './settings/editor-section';
 import { ConnectionSection } from './settings/connection-section';
 import { SecuritySection } from './settings/security-section';
@@ -72,6 +73,7 @@ import { getSyncView, openSyncReview, prepareSync } from '@/lib/config-sync/cont
 import { AUTO, getLanguagePreference, changeLanguage, applyLanguageFromPreference } from '@/lib/i18n';
 
 interface SettingsModalProps {
+  showLocalShell?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCheckForUpdates?: () => void;
@@ -98,13 +100,14 @@ const SECTION_ICONS: Record<SettingsSectionId, typeof TerminalIcon> = {
  * `shortcut-registry`) and Save is blocked while any conflict exists, since
  * the first-match-wins engine would silently shadow a command otherwise.
  */
-export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: SettingsModalProps) {
+export function SettingsModal({ open, onOpenChange, onCheckForUpdates, showLocalShell }: SettingsModalProps) {
   const { t } = useTranslation();
   // Mirrors formatKeyboardShortcut's platform check: labels must show the
   // keys this machine actually uses (⌘N vs Ctrl+N, ⌃Tab vs Ctrl+Tab).
   const isMac = typeof navigator !== 'undefined' && navigator.platform.toUpperCase().includes('MAC');
 
   const [languagePref, setLanguagePref] = useState<string>(() => getLanguagePreference());
+  const [localShellPath, setLocalShellPath] = useState('');
   const [terminalAppearance, setTerminalAppearance] = useState<TerminalAppearanceSettings>(defaultAppearanceSettings);
   const [editorConfig, setEditorConfig] = useState<EditorConfig>(DEFAULT_EDITOR_CONFIG);
   const [settings, setSettings] = useState<SettingsState>(DEFAULT_SETTINGS);
@@ -140,6 +143,8 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     if (open) {
       const appearance = loadAppearanceSettings();
       setTerminalAppearance(appearance);
+      setLocalShellPath(readLocalShellPath() ?? '');
+      if (showLocalShell) setActiveSection('terminal');
       setEditorConfig(loadEditorConfig());
       setShortcutOverrides(loadShortcutOverrides());
       setSearchQuery('');
@@ -176,7 +181,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
           });
       }
     }
-  }, [open]);
+  }, [open, showLocalShell]);
 
   const updateTerminalAppearance = <K extends keyof TerminalAppearanceSettings>(
     key: K,
@@ -275,6 +280,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
 
     // Save terminal appearance settings
     saveAppearanceSettings(terminalAppearance);
+    saveLocalShellPath(localShellPath);
 
     // Save editor config and notify live editors
     saveEditorConfig(editorConfig);
@@ -304,6 +310,7 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
     if (confirm(t('settings.resetConfirm'))) {
       // Reset terminal appearance, editor config, and shortcut overrides
       setTerminalAppearance(defaultAppearanceSettings);
+      setLocalShellPath('');
       setEditorConfig(DEFAULT_EDITOR_CONFIG);
       setShortcutOverrides({});
       setSettings(DEFAULT_SETTINGS);
@@ -330,11 +337,14 @@ export function SettingsModal({ open, onOpenChange, onCheckForUpdates }: Setting
         }} />;
       case 'terminal':
         return (
-          <TerminalSection
-            appearance={terminalAppearance}
-            onChange={updateTerminalAppearance}
-            query={searchQuery}
-          />
+          <>
+            <LocalShellSetting path={localShellPath} onChange={setLocalShellPath} query={searchQuery} />
+            <TerminalSection
+              appearance={terminalAppearance}
+              onChange={updateTerminalAppearance}
+              query={searchQuery}
+            />
+          </>
         );
       case 'editor':
         return (

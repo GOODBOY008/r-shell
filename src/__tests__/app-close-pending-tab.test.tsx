@@ -201,7 +201,10 @@ vi.mock('../components/menu-bar', () => ({ MenuBar: () => null }));
 vi.mock('../components/status-bar', () => ({ StatusBar: () => null }));
 vi.mock('../components/integrated-file-browser', () => ({ IntegratedFileBrowser: () => null }));
 vi.mock('../components/update-checker', () => ({ UpdateChecker: () => null }));
-vi.mock('../components/welcome-screen', () => ({ WelcomeScreen: () => null }));
+vi.mock('../components/welcome-screen', () => ({
+  WelcomeScreen: ({ onNewLocalTerminal }: { onNewLocalTerminal: () => void }) =>
+    <button onClick={onNewLocalTerminal}>Open local terminal</button>,
+}));
 vi.mock('../components/ui/sonner', () => ({ Toaster: () => null }));
 vi.mock('../components/desktop-viewer', () => ({ DesktopViewer: () => null }));
 vi.mock('../components/file-browser-view', () => ({ FileBrowserView: () => null }));
@@ -307,6 +310,24 @@ describe('closing a pending tab while its connect is in flight', () => {
   afterEach(() => {
     cleanup();
     localStorage.clear();
+  });
+
+  it('opens and duplicates independent local tabs and closes them without SSH teardown', async () => {
+    lifecycle.invoke.mockResolvedValue({});
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open local terminal' }));
+    const tabs = () => lifecycle.stateHistory.at(-1)!.groups['group-1'].tabs;
+    const first = tabs()[0];
+    expect(first.tabType).toBe('local-terminal');
+    await act(async () => { await lifecycle.callbacks.onDuplicateTab?.(first.id); });
+    const second = tabs()[1];
+    expect(second.tabType).toBe('local-terminal');
+    expect(second.id).not.toBe(first.id);
+
+    await act(async () => { await lifecycle.callbacks.onCloseTab?.(first.id); });
+    expect(tabs().map(tab => tab.id)).toEqual([second.id]);
+    expect(lifecycle.invoke.mock.calls.some(([command]) => String(command).startsWith('ssh_'))).toBe(false);
+    expect(lifecycle.dialogOpenLog).not.toContain(true);
   });
 
   it('cancels the backend connect and stays silent when the late failure settles', async () => {

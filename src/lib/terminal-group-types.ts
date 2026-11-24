@@ -13,7 +13,7 @@ export interface TerminalTab {
   id: string;
   name: string;
   /** Tab type: 'terminal' for SSH PTY, 'file-browser' for SFTP/FTP, 'desktop' for RDP/VNC, 'editor' for remote file editing */
-  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor' | 'dashboard';
+  tabType?: 'terminal' | 'local-terminal' | 'file-browser' | 'desktop' | 'editor' | 'dashboard';
   /** Saved dashboard identity; dashboard tabs do not own terminal sessions. */
   dashboardId?: string;
   protocol?: string;
@@ -33,6 +33,10 @@ export interface TerminalTab {
   editorConnectionId?: string;
   /** Connection display name, retained if its terminal tab closes. */
   editorConnectionName?: string;
+}
+
+export function isInteractiveTerminalTab(tab: Pick<TerminalTab, 'tabType'>): boolean {
+  return tab.tabType === undefined || tab.tabType === 'terminal' || tab.tabType === 'local-terminal';
 }
 
 /** 终端组 */

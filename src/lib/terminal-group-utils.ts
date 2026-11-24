@@ -1,22 +1,20 @@
 import type { TerminalTab } from './terminal-group-types';
 
-/**
- * Compute the display name for a tab, appending a numeric suffix when multiple
- * tabs in the same group share the same base connection profile.
- *
- * - Single tab from a profile → "Server Name"
- * - Multiple tabs from same profile → "Server Name (1)", "Server Name (2)", etc.
- */
-export function getTabDisplayName(tab: TerminalTab, allTabsInGroup: TerminalTab[]): string {
-  const baseId = tab.originalConnectionId || tab.id;
+// New session ids sort in creation order, including the numeric counter for
+// simultaneous opens. Older UUID-based local tabs still have a stable order.
+const sessionIds = new Intl.Collator('en', { numeric: true });
 
-  const siblings = allTabsInGroup.filter(t => {
-    const tBaseId = t.originalConnectionId || t.id;
-    return tBaseId === baseId;
+export function getTabDisplayName(tab: TerminalTab, groupTabs: TerminalTab[], label = tab.name): string {
+  const profileId = tab.originalConnectionId || tab.id;
+  const siblings = groupTabs.filter(other => tab.tabType === 'local-terminal'
+    ? other.tabType === 'local-terminal' && other.name === tab.name
+    : other.tabType !== 'local-terminal' && (other.originalConnectionId || other.id) === profileId);
+  if (siblings.length <= 1) return label;
+
+  // The label follows the session when the tab strip is reordered.
+  const preceding = siblings.filter(({ id }) => {
+    const comparison = sessionIds.compare(id, tab.id);
+    return comparison < 0 || (comparison === 0 && id < tab.id);
   });
-
-  if (siblings.length <= 1) return tab.name;
-
-  const index = siblings.indexOf(tab) + 1;
-  return `${tab.name} (${index})`;
+  return `${label} (${preceding.length + 1})`;
 }

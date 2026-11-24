@@ -9,6 +9,8 @@ mod desktop_protocol;
 mod desktop_tcp;
 mod folder_transfer;
 mod ftp_client;
+mod local_pty;
+mod local_shell;
 mod ls_parser;
 mod os_detect;
 mod os_keypath;
@@ -336,6 +338,7 @@ pub fn run() {
 
     // Create connection manager
     let connection_manager = Arc::new(ConnectionManager::new());
+    let local_shells = Arc::new(local_shell::LocalShells::default());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -352,6 +355,7 @@ pub fn run() {
         .plugin(tauri_plugin_positioner::init())
         .setup({
             let connection_manager_clone = connection_manager.clone();
+            let local_shells = local_shells.clone();
             move |app| {
                 // Let the connection manager emit SOCKS proxy list changes
                 connection_manager_clone.set_app_handle(app.handle().clone());
@@ -390,7 +394,7 @@ pub fn run() {
 
                 // Start WebSocket server for terminal I/O
                 // Try ports 9001-9010 to avoid conflicts with other instances
-                let ws_server = Arc::new(WebSocketServer::new(connection_manager_clone));
+                let ws_server = Arc::new(WebSocketServer::new(connection_manager_clone, local_shells));
                 tauri::async_runtime::spawn(async move {
                     if let Err(e) = ws_server.start().await {
                         tracing::error!("WebSocket server error: {}", e);
@@ -457,6 +461,15 @@ pub fn run() {
                     return;
                 }
             }
+            #[cfg(not(target_os = "macos"))]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main"
+                    && window.state::<Arc<local_shell::LocalShells>>().active_count() > 0
+                {
+                    api.prevent_close();
+                    quit_guard::request_quit(window.app_handle());
+                }
+            }
             // Keep the quit guard's dirty/pending registries free of stale
             // window labels (also resolves a pending quit when the last
             // dirty editor is discarded during quit confirmation).
@@ -516,6 +529,7 @@ pub fn run() {
 
             }
         })
+        .manage(local_shells)
         .manage(connection_manager)
         .manage(quit_guard::QuitGuard::default())
         .manage(commands::PendingUpdate::default())
@@ -572,6 +586,8 @@ pub fn run() {
             commands::get_gpu_stats,
             commands::get_websocket_port,
             commands::get_websocket_endpoint,
+            local_shell::local_shell_start,
+            local_shell::local_shell_close,
             // Standalone SFTP/FTP commands
             commands::sftp_connect,
             commands::sftp_standalone_disconnect,
@@ -653,6 +669,10 @@ pub fn run() {
                 api.prevent_exit();
                 #[cfg(not(target_os = "macos"))]
                 let _ = api;
+            }
+            tauri::RunEvent::Exit => {
+                let shells = app.state::<Arc<local_shell::LocalShells>>();
+                tauri::async_runtime::block_on(shells.shutdown());
             }
             // Dock icon clicked while no window is visible (macOS): the main
             // window usually still exists but hidden (close-to-hide above) —

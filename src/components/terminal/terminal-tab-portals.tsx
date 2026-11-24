@@ -15,7 +15,7 @@ import { Button } from '../ui/button';
 import { useTerminalGroups } from '../../lib/terminal-group-context';
 import { useTerminalCallbacks } from '../../lib/terminal-callbacks-context';
 import { APP_SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcuts';
-import type { TerminalTab } from '../../lib/terminal-group-types';
+import { isInteractiveTerminalTab, type TerminalTab } from '../../lib/terminal-group-types';
 import { isTerminalTabVisible } from '../../lib/terminal-group-reducer';
 import { ConnectionStorageManager } from '../../lib/connection-storage';
 import { desktopTabDisplay } from '../../lib/desktop-connect';
@@ -86,7 +86,15 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
   const group = groupId ? state.groups[groupId] : undefined;
   const isActive = groupId === state.activeGroupId && group?.activeTabId === tab.id;
   const isVisible = isTerminalTabVisible(state, tab.id);
-  const isTerminal = tab.tabType === undefined || tab.tabType === 'terminal';
+  const isLocal = tab.tabType === 'local-terminal';
+  const isTerminal = isInteractiveTerminalTab(tab);
+  // A restored local shell starts in its visible pane. Once mounted, switching
+  // tabs only hides the portal and must preserve the shell and scrollback.
+  const [localMounted, setLocalMounted] = useState(isLocal && isVisible);
+  if (isLocal && isVisible && !localMounted) setLocalMounted(true);
+  const handleShellName = useCallback((name: string) => {
+    dispatch({ type: 'UPDATE_TAB_NAME', tabId: tab.id, name });
+  }, [dispatch, tab.id]);
   const isViewingTerminal = isVisible && isTerminal && tab.connectionStatus !== 'pending';
 
   // This content owner survives grid host reparenting. A layout-only host remount
@@ -225,7 +233,9 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
         isConnected={tab.connectionStatus === 'connected'}
       />
     );
-  } else if (tab.connectionStatus === 'pending') {
+  } else if (isLocal && !isVisible && !localMounted) {
+    content = null;
+  } else if (!isLocal && tab.connectionStatus === 'pending') {
     // A `pending` tab whose latest connect attempt failed is not waiting for
     // anything: offer an explicit Connect action instead of the pulsing
     // placeholder.
@@ -252,7 +262,9 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
       <PtyTerminal
         key={`${tab.id}-${tab.reconnectCount}`}
         connectionId={tab.id}
-        savedConnectionId={savedConnectionId}
+        savedConnectionId={isLocal ? undefined : savedConnectionId}
+        localShell={isLocal}
+        onShellName={isLocal ? handleShellName : undefined}
         connectionName={tab.name}
         host={tab.host}
         username={tab.username}
@@ -261,7 +273,7 @@ function TerminalTabContent({ tab, themeKey, appearanceKey }: { tab: TerminalTab
         isActive={isActive}
         onOutput={!isVisible && !tab.hasUnreadOutput ? handleOutput : undefined}
         onConnectionStatusChange={handleConnectionStatusChange}
-        onDetach={handleDetach}
+        onDetach={isLocal ? undefined : handleDetach}
       />
     );
   }

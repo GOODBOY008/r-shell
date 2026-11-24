@@ -9,6 +9,8 @@
  * for per-subsystem health and downgrading mismatched tabs is the backstop.
  */
 
+import type { TerminalTab } from './terminal-group-types';
+
 /** Mirrors `SessionHealth` in `src-tauri/src/connection_manager.rs`. */
 export interface SessionHealth {
   /** The SSH connection exists in the backend's connection map. */
@@ -29,7 +31,7 @@ export interface SessionHealth {
 /** Minimal tab shape needed for health checks. */
 export interface HealthCheckedTab {
   id: string;
-  tabType?: 'terminal' | 'file-browser' | 'desktop' | 'editor' | 'dashboard';
+  tabType?: TerminalTab['tabType'];
   protocol?: string;
   connectionStatus: 'connected' | 'connecting' | 'disconnected' | 'pending';
 }

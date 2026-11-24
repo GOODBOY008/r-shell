@@ -15,7 +15,7 @@
  */
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
 import App from '../App';
 
@@ -33,7 +33,7 @@ vi.mock('@/components/ui/resizable', async () => {
       lifecycle.groups.push(props);
       return ReactModule.createElement(
         'div',
-        { 'data-testid': 'panel-group' },
+        { 'data-testid': props.id ?? 'panel-group' },
         props.children as React.ReactNode,
       );
     },
@@ -78,7 +78,7 @@ vi.mock('@/lib/terminal-group-context', async () => {
   const ReactModule = await import('react');
   return {
     TerminalGroupProvider: ({ children }: { children: React.ReactNode }) => {
-      const [state] = ReactModule.useReducer((s: TerminalGroupState) => s, mockState);
+      const state = mockState;
       const activeGroup = state.groups[state.activeGroupId] ?? null;
       const activeTab = activeGroup?.tabs.find((t) => t.id === activeGroup.activeTabId) ?? null;
       const activeConnection = activeTab
@@ -197,9 +197,8 @@ function latestPanels(): Map<unknown, Record<string, unknown>> {
   return byId;
 }
 
-/** Latest props for the group in the given direction. */
-function latestGroup(direction: string): Record<string, unknown> | undefined {
-  return lifecycle.groups.filter((g) => g.direction === direction).at(-1);
+function latestGroup(idOrDirection: string): Record<string, unknown> | undefined {
+  return lifecycle.groups.filter(g => (g.id ?? g.direction) === idOrDirection).at(-1);
 }
 
 describe('main layout reports panel sizes through onLayout, not onResize', () => {
@@ -244,13 +243,13 @@ describe('main layout reports panel sizes through onLayout, not onResize', () =>
     render(<App />);
     await waitFor(() => expect(lifecycle.panels.length).toBeGreaterThan(0));
 
-    const horizontal = latestGroup('horizontal');
+    const horizontal = latestGroup('workspace-layout');
     expect(typeof horizontal?.onLayout).toBe('function');
 
     await act(async () => {
       (horizontal!.onLayout as (layout: Record<string, number>) => void)({
         'left-sidebar': 25,
-        'main-content': 75,
+        'workspace': 75,
       });
     });
 
@@ -274,21 +273,42 @@ describe('main layout reports panel sizes through onLayout, not onResize', () =>
     expect(latestPanels().get('file-browser')?.defaultSize).toBe(40);
   });
 
-  it('applies right sidebar sizes reported by the group onLayout', async () => {
+  it('persists the monitor width as a percentage of the whole window', async () => {
     render(<App />);
-    await waitFor(() => expect(lifecycle.panels.length).toBeGreaterThan(0));
+    const navigation = latestGroup('workspace-layout')!;
+    await act(async () => {
+      (navigation.onLayout as (layout: Record<string, number>) => void)({ 'left-sidebar': 25, workspace: 75 });
+    });
+    const tools = latestGroup('terminal-layout')!;
+    await act(async () => {
+      (tools.onLayout as (layout: Record<string, number>) => void)({ 'main-content': 60, 'right-sidebar': 40 });
+    });
+    expect(latestPanels().get('right-sidebar')?.defaultSize).toBe(40);
+    expect(JSON.parse(localStorage.getItem('r-shell-layout-config')!).rightSidebarSize).toBe(30);
+  });
 
-    const horizontal = latestGroup('horizontal');
-    expect(typeof horizontal?.onLayout).toBe('function');
+  it('keeps the same navigation divider and width when switching between SSH and local tabs', async () => {
+    const local = { id: 'local-1', name: 'zsh', tabType: 'local-terminal', connectionStatus: 'connected', reconnectCount: 0 } as const;
+    mockState.groups['group-1'].tabs.push(local);
+    mockState.tabToGroupMap[local.id] = 'group-1';
+    const view = render(<App />);
+    const navigation = screen.getByTestId('workspace-layout');
+    const left = screen.getByTestId('panel-left-sidebar');
+    const workspace = screen.getByTestId('panel-workspace');
+    const divider = screen.getAllByTestId('panel-handle')[0];
+    expect(screen.getByTestId('panel-right-sidebar').parentElement).toBe(screen.getByTestId('terminal-layout'));
 
     await act(async () => {
-      (horizontal!.onLayout as (layout: Record<string, number>) => void)({
-        'left-sidebar': 23,
-        'right-sidebar': 28,
-      });
+      (latestGroup('workspace-layout')!.onLayout as (layout: Record<string, number>) => void)({ 'left-sidebar': 28, workspace: 72 });
     });
-
-    expect(latestPanels().get('right-sidebar')?.defaultSize).toBe(28);
+    for (const id of [local.id, 'tab-1', local.id]) {
+      const group = mockState.groups['group-1'];
+      mockState = { ...mockState, groups: { 'group-1': { ...group, activeTabId: id } } };
+      view.rerender(<App />);
+      expect(Array.from(navigation.children)).toEqual([left, divider, workspace]);
+      expect(latestPanels().get('left-sidebar')?.defaultSize).toBe(28);
+      expect(Boolean(screen.queryByTestId('panel-right-sidebar'))).toBe(id !== local.id);
+    }
   });
 
   it('leaves the bottom panel size alone when the vertical layout omits it', async () => {
@@ -313,7 +333,7 @@ describe('main layout reports panel sizes through onLayout, not onResize', () =>
     await waitFor(() => expect(lifecycle.panels.length).toBeGreaterThan(0));
 
     const before = latestPanels().get('left-sidebar')?.defaultSize;
-    const horizontal = latestGroup('horizontal');
+    const horizontal = latestGroup('workspace-layout');
 
     await act(async () => {
       (horizontal!.onLayout as (layout: Record<string, number>) => void)({

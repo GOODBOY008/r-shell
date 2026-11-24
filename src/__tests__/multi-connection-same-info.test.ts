@@ -50,6 +50,22 @@ describe('getTabDisplayName', () => {
     expect(getTabDisplayName(tab3, allTabs)).toBe('My Server (3)');
   });
 
+  it('keeps each SSH session number with the same tab after a move', () => {
+    const first = makeTab({ id: 'host-dup-1700000000000-9', originalConnectionId: 'host' });
+    const second = makeTab({ id: 'host-dup-1700000000000-10', originalConnectionId: 'host' });
+    expect([second, first].map(tab => getTabDisplayName(tab, [second, first]))).toEqual(['My Server (2)', 'My Server (1)']);
+  });
+
+  it('distinguishes local sessions of the same shell after reordering and restore', () => {
+    const first = makeTab({ id: 'local:012a', tabType: 'local-terminal', name: 'zsh' });
+    const second = makeTab({ id: 'local:session-dup-1700000000000-0', tabType: 'local-terminal', name: 'zsh' });
+    const bash = makeTab({ id: 'local:other', tabType: 'local-terminal', name: 'bash' });
+    const restored = [{ ...second }, { ...bash }, { ...first }];
+    expect(restored.map(tab => getTabDisplayName(tab, restored, `Local · ${tab.name}`))).toEqual([
+      'Local · zsh (2)', 'Local · bash', 'Local · zsh (1)',
+    ]);
+  });
+
   // Task 2.3: suffix removed when sibling count drops to 1
   it('removes suffix when a sibling is removed and only one tab remains', () => {
     const tab1 = makeTab({ id: 'conn-1' });

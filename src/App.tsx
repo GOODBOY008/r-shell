@@ -5,7 +5,7 @@ import type { PanelImperativeHandle } from 'react-resizable-panels';
 import { useTranslation } from 'react-i18next';
 import { folderPathFromArg } from './lib/connection-folder';
 import { useLazyTabs } from './lib/use-lazy-tabs';
-import { reconcileSessionHealth } from './lib/session-health';
+import { isSshTerminalTab, reconcileSessionHealth } from './lib/session-health';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { MenuBar } from './components/menu-bar';
@@ -60,7 +60,8 @@ import { TerminalGroupProvider, useTerminalGroups } from './lib/terminal-group-c
 import { TerminalCallbacksProvider } from './lib/terminal-callbacks-context';
 import { GridRenderer } from './components/terminal/grid-renderer';
 import { ErrorBoundary } from './components/error-boundary';
-import type { TerminalTab } from './lib/terminal-group-types';
+import { isInteractiveTerminalTab, type TerminalTab } from './lib/terminal-group-types';
+import { closeLocalShell } from './lib/local-shell-runtime';
 import { Toaster } from './components/ui/sonner';
 import {
   AlertDialog,
@@ -182,6 +183,7 @@ function AppContent() {
   // Modal states
   const [connectionDialogOpen, setConnectionDialogOpen] = useState(false);
   const [connectionInitialFolder, setConnectionInitialFolder] = useState<string | undefined>();
+  const [showLocalShellSettings, setShowLocalShellSettings] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   // Sessions-still-connected quit prompt: the backend quit guard emits
   // `confirm-quit-sessions` with the active session count when quitting
@@ -273,16 +275,28 @@ function AppContent() {
     applyPreset,
   } = useLayout();
 
+  const leftSidebarSize = layout.leftSidebarVisible
+    ? Math.min(35, Math.max(layout.leftSidebarSize, leftSidebarMinSize))
+    : 0;
+  // Stored sidebar sizes are percentages of the full workspace. The tools
+  // panel now shares a resize group with the terminal area to its left.
+  const workspaceFraction = (100 - leftSidebarSize) / 100;
+  const mainMinSize = 30 / workspaceFraction;
+  const rightSizeInGroup = Math.min(100 - mainMinSize, Math.max(layout.rightSidebarSize, rightSidebarMinSize) / workspaceFraction);
+
   // For drag-driven changes react-resizable-panels v4 defers `onLayout` until
   // the pointer is released (it also fires on mount and on constraint changes,
   // both without user interaction). Writing panel sizes on every move instead
   // (v3's `onResize`) fed a changed `defaultSize` back into the group mid-drag,
   // which made v4 re-derive the layout from constraints and froze the
   // separator after the first pixel of travel.
-  const handleHorizontalLayout = useCallback((next: Record<string, number>) => {
+  const handleNavigationLayout = useCallback((next: Record<string, number>) => {
     if (next['left-sidebar'] !== undefined) setLeftSidebarSize(next['left-sidebar']);
-    if (next['right-sidebar'] !== undefined) setRightSidebarSize(next['right-sidebar']);
-  }, [setLeftSidebarSize, setRightSidebarSize]);
+  }, [setLeftSidebarSize]);
+
+  const handleToolsLayout = useCallback((next: Record<string, number>) => {
+    if (next['right-sidebar'] !== undefined) setRightSidebarSize(next['right-sidebar'] * workspaceFraction);
+  }, [setRightSidebarSize, workspaceFraction]);
 
   const handleVerticalLayout = useCallback((next: Record<string, number>) => {
     if (next['file-browser'] !== undefined) setBottomPanelSize(next['file-browser']);
@@ -308,7 +322,7 @@ function AppContent() {
   );
 
   const activeTerminalId = activeTab
-    && (activeTab.tabType === undefined || activeTab.tabType === 'terminal')
+    && isInteractiveTerminalTab(activeTab)
     && activeTab.connectionStatus !== 'pending'
     ? activeTab.id
     : null;
@@ -361,7 +375,7 @@ function AppContent() {
   // Without the cancel the attempt lingers until its own timeout (30 s
   // against a down host) and can settle after the tab is gone.
   const cancelPendingTerminalConnect = useCallback((tab: TerminalTab) => {
-    if (tab.tabType === 'dashboard') return;
+    if (tab.tabType === 'dashboard' || tab.tabType === 'local-terminal') return;
     cancelSshConnect(tab.id);
     if (
       (tab.connectionStatus === 'pending' || tab.connectionStatus === 'connecting') &&
@@ -382,6 +396,10 @@ function AppContent() {
   // connection.
   const disconnectTabBackend = useCallback((tab: TerminalTab, remainingTabs: TerminalTab[], released: Set<string>) => {
     if (tab.tabType === 'dashboard') return;
+    if (tab.tabType === 'local-terminal') {
+      void closeLocalShell(tab.id).catch(error => notify.error(t('localShell.closeFailed'), { description: String(error) }));
+      return;
+    }
     if (tab.tabType === 'desktop') {
       // Desktop sessions are established by desktop_connect and live in their
       // own backend map, not with the PTY/SSH connections.
@@ -403,7 +421,7 @@ function AppContent() {
     const command = tab.protocol === 'SFTP' ? 'sftp_standalone_disconnect'
       : tab.protocol === 'FTP' ? 'ftp_disconnect' : 'ssh_disconnect';
     void invoke(command, { connection_id: connectionId }).catch(() => {});
-  }, [cancelPendingTerminalConnect, detachedSessions]);
+  }, [cancelPendingTerminalConnect, detachedSessions, t]);
 
   const closingTabIds = useRef(new Set<string>());
   const handleCloseTabs = useCallback(async (tabIds: string[]) => {
@@ -464,10 +482,12 @@ function AppContent() {
   // Keyboard shortcuts: layout + split view
   const splitViewShortcuts = useMemo(() => {
     const groupIds = Object.keys(state.groups);
-    // Ctrl+Shift+PageUp/PageDown — move the active tab one slot in its group.
-    const moveActiveTab = (delta: -1 | 1) => {
-      if (!activeGroup?.activeTabId) return;
-      const fromIndex = activeGroup.tabs.findIndex((t) => t.id === activeGroup.activeTabId);
+    const moveTab = (delta: -1 | 1) => {
+      if (!activeGroup) return;
+      // A keyboard-focused tab header can differ from the tab displayed in the pane.
+      const header = document.activeElement?.closest<HTMLElement>('[data-tab-bar-group] [data-tab-id]');
+      const tabId = header?.dataset.tabId ?? activeGroup.activeTabId;
+      const fromIndex = activeGroup.tabs.findIndex(tab => tab.id === tabId);
       const toIndex = fromIndex + delta;
       if (fromIndex === -1 || toIndex < 0 || toIndex >= activeGroup.tabs.length) return;
       dispatch({ type: 'REORDER_TAB', groupId: activeGroup.id, fromIndex, toIndex });
@@ -510,8 +530,8 @@ function AppContent() {
             dispatch({ type: 'ACTIVATE_TAB', groupId: activeGroup.id, tabId: activeGroup.tabs[prevIndex].id });
           }
         },
-        moveTabLeft: () => moveActiveTab(-1),
-        moveTabRight: () => moveActiveTab(1),
+        moveTabLeft: () => moveTab(-1),
+        moveTabRight: () => moveTab(1),
       },
       shortcutBindings,
     );
@@ -526,15 +546,15 @@ function AppContent() {
 
   // Save active connections when tabs change (for restore on next launch)
   useEffect(() => {
-    // Editor tabs are transient — exclude them from persistence
-    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor' && tab.tabType !== 'dashboard');
+    // Local shells and dashboards restore directly from the workspace layout.
+    const persistableTabs = allTabs.filter(tab => tab.tabType !== 'editor' && tab.tabType !== 'dashboard' && tab.tabType !== 'local-terminal');
     if (persistableTabs.length > 0) {
       const activeConnections = persistableTabs.map((tab, index) => ({
         tabId: tab.id,
         connectionId: tab.id,
         order: index,
         originalConnectionId: tab.originalConnectionId,
-        tabType: tab.tabType as Exclude<TerminalTab['tabType'], 'dashboard'>,
+        tabType: tab.tabType as Exclude<TerminalTab['tabType'], 'dashboard' | 'local-terminal'>,
         protocol: tab.protocol,
       }));
       ActiveConnectionsManager.saveActiveConnections(activeConnections);
@@ -806,7 +826,7 @@ function AppContent() {
       const lazy = new Set<string>();
       for (const activeConn of [...activeConnections].sort((a, b) => a.order - b.order)) {
         const tab = tabsById.get(activeConn.connectionId);
-        if (!tab || tab.tabType === 'dashboard') {
+        if (!tab || tab.tabType === 'dashboard' || tab.tabType === 'local-terminal') {
           console.warn(`[Restore] No restored tab for ${activeConn.connectionId}; skipping`);
           continue;
         }
@@ -1114,10 +1134,26 @@ function AppContent() {
     setPendingReconnectTabId(null);
   }, []);
 
+  const openLocalTerminal = useCallback((groupId = stateRef.current.activeGroupId) => {
+    const tab: TerminalTab = {
+      id: nextDuplicateId('local:session'),
+      name: '',
+      tabType: 'local-terminal',
+      connectionStatus: 'pending',
+      reconnectCount: 0,
+    };
+    dispatch({ type: 'ACTIVATE_GROUP', groupId });
+    dispatch({ type: 'ADD_TAB', groupId, tab });
+  }, [dispatch]);
+
   const handleDuplicateTab = useCallback(async (tabId: string) => {
     const tabToDuplicate = allTabs.find(tab => tab.id === tabId);
     if (!tabToDuplicate || tabToDuplicate.tabType === 'editor' || tabToDuplicate.tabType === 'dashboard') return;
 
+    if (tabToDuplicate.tabType === 'local-terminal') {
+      openLocalTerminal(stateRef.current.tabToGroupMap[tabId]);
+      return;
+    }
     const originalConnectionId = tabToDuplicate.originalConnectionId || tabId;
     const connectionData = ConnectionStorageManager.getConnection(originalConnectionId);
     if (!connectionData) {
@@ -1214,7 +1250,7 @@ function AppContent() {
         description: error instanceof Error ? error.message : t('app.duplicationErrorDesc'),
       });
     }
-  }, [allTabs, state.activeGroupId, dispatch, t]);
+  }, [allTabs, state.activeGroupId, dispatch, t, openLocalTerminal]);
 
   // Automatic full-reconnect retry
   //
@@ -1241,6 +1277,18 @@ function AppContent() {
     const tabToReconnect = allTabs.find(tab => tab.id === tabId);
     if (!tabToReconnect || tabToReconnect.tabType === 'dashboard') {
       clearReconnectRetry(tabId);
+      return;
+    }
+
+    if (tabToReconnect.tabType === 'local-terminal') {
+      if (!automatic && tabToReconnect.connectionStatus === 'disconnected') {
+        try {
+          await closeLocalShell(tabId);
+          dispatch({ type: 'RECONNECT_TAB', tabId });
+        } catch (error) {
+          notify.error(t('localShell.closeFailed'), { description: String(error) });
+        }
+      }
       return;
     }
 
@@ -1469,7 +1517,7 @@ function AppContent() {
   // session so the user can re-attach to it later.
   const handleDetachTab = useCallback((tabId: string) => {
     const tab = allTabs.find(t => t.id === tabId);
-    if (!tab) return;
+    if (!tab || !isSshTerminalTab(tab)) return;
 
     // If the tab-bar context menu initiated this, the PtyTerminal itself hasn't
     // sent the Detach WS message yet — ask the mounted terminal to do so.
@@ -1769,6 +1817,7 @@ function AppContent() {
   }, [allTabs, state.groups, state.activeGroupId, dispatch, t]);
 
   const handleOpenSettings = useCallback(() => {
+    setShowLocalShellSettings(false);
     setSettingsModalOpen(true);
   }, []);
 
@@ -1777,6 +1826,7 @@ function AppContent() {
     ...splitViewShortcuts,
     ...createCommandShortcuts({
       newSession: () => handleNewTab(),
+      newLocalTerminal: () => openLocalTerminal(),
       openSettings: handleOpenSettings,
       duplicateSession: () => { if (activeTab) void handleDuplicateTab(activeTab.id); },
       reconnect: () => { if (activeTab && activeTab.tabType !== 'editor' && activeTab.tabType !== 'dashboard') void handleReconnect(activeTab.id); },
@@ -1807,9 +1857,13 @@ function AppContent() {
 
   // Open settings requested from below App-level state (empty terminal group welcome screen)
   useEffect(() => {
-    window.addEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
-    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, handleOpenSettings);
-  }, [handleOpenSettings]);
+    const openRequestedSettings = (event: Event) => {
+      setShowLocalShellSettings((event as CustomEvent<unknown>).detail === 'local-shell');
+      setSettingsModalOpen(true);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, openRequestedSettings);
+    return () => window.removeEventListener(OPEN_SETTINGS_EVENT, openRequestedSettings);
+  }, []);
 
   // Listen for native macOS menu events forwarded by Rust via app.emit("menu-action", id)
   useEffect(() => {
@@ -2174,7 +2228,7 @@ function AppContent() {
   // Desktop tabs (RDP/VNC) also don't need right sidebar or bottom panel
   const isDesktopTab = activeTab?.tabType === 'desktop';
   // Keep the file list available while editing so users can open the next file.
-  const hideExtraPanels = isFileBrowserTab || isDesktopTab || activeTab?.tabType === 'dashboard'
+  const hideExtraPanels = activeTab?.tabType === 'local-terminal' || isFileBrowserTab || isDesktopTab || activeTab?.tabType === 'dashboard'
     || activeConnection?.protocol === 'SFTP' || activeConnection?.protocol === 'FTP';
   const showRightSidebar = layout.rightSidebarVisible && hasAnyTabs && !hideExtraPanels;
 
@@ -2200,7 +2254,9 @@ function AppContent() {
         onNextTab={() => { dispatchShortcutCommand('nextTab'); }}
         onPreviousTab={() => { dispatchShortcutCommand('previousTab'); }}
         onCloneTab={() => { dispatchShortcutCommand('duplicateSession'); }}
-        onReconnect={() => { dispatchShortcutCommand('reconnect'); }}
+        onReconnect={activeTab?.tabType === 'local-terminal' && activeTab.connectionStatus !== 'disconnected'
+          ? undefined : () => { dispatchShortcutCommand('reconnect'); }}
+        hasActiveLocalShell={activeTab?.tabType === 'local-terminal'}
         hasActiveEditor={activeTab?.tabType === 'editor'}
         findCommand={activeTab?.tabType === 'editor' ? 'findInEditor' : activeTab?.tabType === 'file-browser' ? 'filterFiles' : 'findInTerminal'}
         onSaveConnection={() => { dispatchShortcutCommand('saveFile'); }}
@@ -2230,26 +2286,16 @@ function AppContent() {
       />
 
       <div className="relative z-10 flex-1 flex overflow-hidden">
-        <ResizablePanelGroup
-          direction="horizontal"
-          autoSaveId="r-shell-main-layout"
-          onLayout={handleHorizontalLayout}
-          // v4 keys saved layouts by panel combination; sidebars mount
-          // conditionally, so list exactly the panels rendered right now or
-          // hiding one overwrites the combination that includes it.
-          panelIds={[
-            ...(layout.leftSidebarVisible ? ['left-sidebar'] : []),
-            'main-content',
-            ...(showRightSidebar ? ['right-sidebar'] : []),
-          ]}
-        >
+        {/* The outer divider belongs to navigation. Changing terminal tabs only
+            changes the inner group's panels, so the navigation width stays put. */}
+        <ResizablePanelGroup id="workspace-layout" direction="horizontal" onLayout={handleNavigationLayout}>
           {/* Left Sidebar - Connection Manager */}
           {layout.leftSidebarVisible && (
             <>
               <ResizablePanel
                 id="left-sidebar"
                 order={1}
-                defaultSize={Math.max(layout.leftSidebarSize, leftSidebarMinSize)}
+                defaultSize={leftSidebarSize}
                 minSize={leftSidebarMinSize}
                 maxSize={35}
               >
@@ -2282,139 +2328,143 @@ function AppContent() {
             </>
           )}
 
-          {/* Main Content - Grid Renderer replaces ConnectionTabs + single terminal */}
-          <ResizablePanel
-            id="main-content"
-            order={2}
-            defaultSize={100 - (layout.leftSidebarVisible ? Math.max(layout.leftSidebarSize, leftSidebarMinSize) : 0) - (showRightSidebar ? Math.max(layout.rightSidebarSize, rightSidebarMinSize) : 0)}
-            minSize={30}
-          >
-            <div className="relative h-full flex flex-col">
-              <div className="flex min-h-0 flex-1 flex-col">
-                {showWelcomeInMainArea ? (
-                  <WelcomeScreen
-                    onNewConnection={handleNewTab}
-                    onOpenSettings={handleOpenSettings}
-                  />
-                ) : (
-                  <ResizablePanelGroup direction="vertical" className="flex-1" onLayout={handleVerticalLayout}>
-                    {/* Terminal Grid Panel */}
-                    <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
-                      <TerminalCallbacksProvider value={{
-                        onDuplicateTab: handleDuplicateTab,
-                        onNewTab: handleNewTab,
-                        onReconnectTab: handleReconnect,
-                        closeTabShortcut: shortcutBindings.closeSession,
-                        onWorkingDirectoryChange: handleWorkingDirectoryChange,
-                        onCloseTab: handleCloseTab,
-                        onCloseAllTabs: handleCloseAllTabs,
-                        onCloseTabs: handleCloseTabs,
-                        onDetachTab: handleDetachTab,
-                        failedPendingTabIds,
-                      }}>
-                        <ErrorBoundary label={t('app.terminal')}>
-                          <GridRenderer node={state.gridLayout} path={[]} />
-                        </ErrorBoundary>
-                      </TerminalCallbacksProvider>
-                    </ResizablePanel>
-
-                    {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (
-                      <>
-                        <ResizableHandle />
-
-                        {/* File Browser Panel - uses activeConnection from context */}
-                        <ResizablePanel
-                          id="file-browser"
-                          order={2}
-                          defaultSize={layout.bottomPanelSize}
-                          minSize={20}
-                          maxSize={50}
-                        >
-                          <ErrorBoundary label={t('app.fileBrowser')}>
-                            <IntegratedFileBrowser
-                            connectionId={activeConnection.connectionId}
-                            host={activeConnection.host}
-                            isConnected={activeConnection.status === 'connected'}
-                            terminalWorkingDirectory={terminalWorkingDirectories[activeConnection.connectionId]}
-                            onClose={() => {}}
-                            onOpenInLogMonitor={handleOpenInLogMonitor}
-                            onOpenInEditor={handleOpenInEditor}
-                          />
-                          </ErrorBoundary>
-                        </ResizablePanel>
-                      </>
-                    )}
-                  </ResizablePanelGroup>
-                )}
-              </div>
-            </div>
-          </ResizablePanel>
-
-          {showRightSidebar && (
-            <>
-              <ResizableHandle />
-
-              {/* Right Sidebar - Monitor/Logs using activeConnection from context */}
+          <ResizablePanel id="workspace" defaultSize={100 - leftSidebarSize}>
+            <ResizablePanelGroup id="terminal-layout" direction="horizontal" onLayout={handleToolsLayout}>
+              {/* Main Content - Grid Renderer replaces ConnectionTabs + single terminal */}
               <ResizablePanel
-                id="right-sidebar"
-                panelRef={rightSidebarRef}
-                order={3}
-                defaultSize={Math.max(layout.rightSidebarSize, rightSidebarMinSize)}
-                minSize={rightSidebarMinSize}
-                maxSize={70}
+                id="main-content"
+                defaultSize={showRightSidebar ? 100 - rightSizeInGroup : 100}
+                minSize={mainMinSize}
               >
-                <Tabs value={rightSidebar.active} onValueChange={rightSidebar.select} className="h-full min-w-0 flex flex-col bg-sidebar">
-                  <TabsList className="flex w-auto shrink-0 justify-start overflow-x-auto mx-2 mt-2">
-                    <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
-                    <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
-                    <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
-                    <TabsTrigger value="port-forwarding" className="text-xs px-2" title={t('portForwarding.title')}>{t('app.portForwarding')}</TabsTrigger>
-                  </TabsList>
+                <div className="relative h-full flex flex-col">
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    {showWelcomeInMainArea ? (
+                      <WelcomeScreen
+                        onNewConnection={handleNewTab}
+                        onNewLocalTerminal={() => openLocalTerminal()}
+                        onOpenSettings={handleOpenSettings}
+                      />
+                    ) : (
+                      <ResizablePanelGroup direction="vertical" className="flex-1" onLayout={handleVerticalLayout}>
+                        {/* Terminal Grid Panel */}
+                        <ResizablePanel id="terminal-grid" order={1} defaultSize={layout.bottomPanelVisible ? 70 : 100} minSize={30}>
+                          <TerminalCallbacksProvider value={{
+                            onDuplicateTab: handleDuplicateTab,
+                            onNewTab: handleNewTab,
+                            onNewLocalTerminal: openLocalTerminal,
+                            onReconnectTab: handleReconnect,
+                            closeTabShortcut: shortcutBindings.closeSession,
+                            onWorkingDirectoryChange: handleWorkingDirectoryChange,
+                            onCloseTab: handleCloseTab,
+                            onCloseAllTabs: handleCloseAllTabs,
+                            onCloseTabs: handleCloseTabs,
+                            onDetachTab: handleDetachTab,
+                            failedPendingTabIds,
+                          }}>
+                            <ErrorBoundary label={t('app.terminal')}>
+                              <GridRenderer node={state.gridLayout} path={[]} />
+                            </ErrorBoundary>
+                          </TerminalCallbacksProvider>
+                        </ResizablePanel>
 
-                  <div className="flex-1 mt-0 overflow-hidden relative">
-                    <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <div ref={attachMonitorHost} className="h-full overflow-hidden px-1 py-2" />
-                    </TabsContent>
+                        {layout.bottomPanelVisible && !hideExtraPanels && activeConnection && (
+                          <>
+                            <ResizableHandle />
 
-                    <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      {activeConnection && rightSidebar.mounted.has('logs') ? (
-                        <ErrorBoundary label={t('app.logMonitor')}>
-                          <LogMonitor
-                            connectionId={activeConnection.connectionId}
-                            externalLogPath={externalLogPath}
-                            externalLogPathKey={externalLogPathKey}
-                            active={rightSidebar.active === 'logs'}
-                            connectionStatus={activeConnection.status}
-                          />
-                        </ErrorBoundary>
-                      ) : null}
-                    </TabsContent>
-
-                    <TabsContent value="commands" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      <div className="h-full overflow-hidden px-1 py-2">
-                        {rightSidebar.mounted.has('commands') ? (
-                          <ErrorBoundary label={t('app.quickCommands')}>
-                            <QuickCommandsPanel activeTerminalId={activeTerminalId} />
-                          </ErrorBoundary>
-                        ) : null}
-                      </div>
-                    </TabsContent>
-
-                    <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
-                      {rightSidebar.mounted.has('port-forwarding') ? (
-                        <ErrorBoundary label={t('portForwarding.title')}>
-                          <PortForwardingPanel
-                            connectionId={activeConnection?.connectionId ?? null}
-                            connectionNames={connectionNames}
-                          />
-                        </ErrorBoundary>
-                      ) : null}
-                    </TabsContent>
+                            {/* File Browser Panel - uses activeConnection from context */}
+                            <ResizablePanel
+                              id="file-browser"
+                              order={2}
+                              defaultSize={layout.bottomPanelSize}
+                              minSize={20}
+                              maxSize={50}
+                            >
+                              <ErrorBoundary label={t('app.fileBrowser')}>
+                                <IntegratedFileBrowser
+                                connectionId={activeConnection.connectionId}
+                                host={activeConnection.host}
+                                isConnected={activeConnection.status === 'connected'}
+                                terminalWorkingDirectory={terminalWorkingDirectories[activeConnection.connectionId]}
+                                onClose={() => {}}
+                                onOpenInLogMonitor={handleOpenInLogMonitor}
+                                onOpenInEditor={handleOpenInEditor}
+                              />
+                              </ErrorBoundary>
+                            </ResizablePanel>
+                          </>
+                        )}
+                      </ResizablePanelGroup>
+                    )}
                   </div>
-                </Tabs>
+                </div>
               </ResizablePanel>
-            </>
-          )}
+
+              {showRightSidebar && (
+                <>
+                  <ResizableHandle />
+
+                  {/* Right Sidebar - Monitor/Logs using activeConnection from context */}
+                  <ResizablePanel
+                    id="right-sidebar"
+                    panelRef={rightSidebarRef}
+                    groupResizeBehavior="preserve-pixel-size"
+                    defaultSize={rightSizeInGroup}
+                    minSize={rightSidebarMinSize / workspaceFraction}
+                  >
+                    <Tabs value={rightSidebar.active} onValueChange={rightSidebar.select} className="h-full min-w-0 flex flex-col bg-sidebar">
+                      <TabsList className="flex w-auto shrink-0 justify-start overflow-x-auto mx-2 mt-2">
+                        <TabsTrigger value="monitor" className="text-xs px-2">{t('app.monitor')}</TabsTrigger>
+                        <TabsTrigger value="logs" className="text-xs px-2">{t('app.logs')}</TabsTrigger>
+                        <TabsTrigger value="commands" className="text-xs px-2">{t('app.quickCommands')}</TabsTrigger>
+                        <TabsTrigger value="port-forwarding" className="text-xs px-2" title={t('portForwarding.title')}>{t('app.portForwarding')}</TabsTrigger>
+                      </TabsList>
+
+                      <div className="flex-1 mt-0 overflow-hidden relative">
+                        <TabsContent value="monitor" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          <div ref={attachMonitorHost} className="h-full overflow-hidden px-1 py-2" />
+                        </TabsContent>
+
+                        <TabsContent value="logs" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          {activeConnection && rightSidebar.mounted.has('logs') ? (
+                            <ErrorBoundary label={t('app.logMonitor')}>
+                              <LogMonitor
+                                connectionId={activeConnection.connectionId}
+                                externalLogPath={externalLogPath}
+                                externalLogPathKey={externalLogPathKey}
+                                active={rightSidebar.active === 'logs'}
+                                connectionStatus={activeConnection.status}
+                              />
+                            </ErrorBoundary>
+                          ) : null}
+                        </TabsContent>
+
+                        <TabsContent value="commands" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          <div className="h-full overflow-hidden px-1 py-2">
+                            {rightSidebar.mounted.has('commands') ? (
+                              <ErrorBoundary label={t('app.quickCommands')}>
+                                <QuickCommandsPanel activeTerminalId={activeTerminalId} />
+                              </ErrorBoundary>
+                            ) : null}
+                          </div>
+                        </TabsContent>
+
+                        <TabsContent value="port-forwarding" forceMount className="absolute inset-0 mt-0 data-[state=inactive]:hidden">
+                          {rightSidebar.mounted.has('port-forwarding') ? (
+                            <ErrorBoundary label={t('portForwarding.title')}>
+                              <PortForwardingPanel
+                                connectionId={activeConnection?.connectionId ?? null}
+                                connectionNames={connectionNames}
+                              />
+                            </ErrorBoundary>
+                          ) : null}
+                        </TabsContent>
+                      </div>
+                    </Tabs>
+                  </ResizablePanel>
+                </>
+              )}
+            </ResizablePanelGroup>
+          </ResizablePanel>
         </ResizablePanelGroup>
       </div>
 
@@ -2447,6 +2497,7 @@ function AppContent() {
 
       <SettingsModal
         open={settingsModalOpen}
+        showLocalShell={showLocalShellSettings}
         onOpenChange={setSettingsModalOpen}
         onCheckForUpdates={() => setUpdateCheckSignal((current) => current + 1)}
       />

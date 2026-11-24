@@ -65,6 +65,8 @@
     "allow-list-remote-files-recursive",
     "allow-list-socks-proxies",
     "allow-list-ssh-key-passphrases",
+    "allow-local-shell-close",
+    "allow-local-shell-start",
     "allow-open-in-os",
     "allow-rdp-close-native-window",
     "allow-rdp-open-native-window",

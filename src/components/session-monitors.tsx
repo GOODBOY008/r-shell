@@ -22,7 +22,7 @@ export function SessionMonitors({
   const sessions = useMemo(() => {
     const open = new Map<string, TerminalTab>();
     for (const tab of tabs) {
-      if (tab.tabType === 'dashboard') continue;
+      if (tab.tabType === 'dashboard' || tab.tabType === 'local-terminal') continue;
       const connectionId = tab.editorConnectionId ?? tab.id;
       // Editors share the source monitor. Prefer the terminal's live status
       // while it is open, and keep the instance if an editor still uses it.

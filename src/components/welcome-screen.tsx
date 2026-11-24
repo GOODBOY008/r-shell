@@ -12,10 +12,11 @@ import rShellIcon from '@/assets/r-shell-icon.svg';
 
 interface WelcomeScreenProps {
   onNewConnection: () => void;
+  onNewLocalTerminal?: () => void;
   onOpenSettings: () => void;
 }
 
-export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreenProps) {
+export function WelcomeScreen({ onNewConnection, onNewLocalTerminal, onOpenSettings }: WelcomeScreenProps) {
   const { t } = useTranslation();
   const { layout, toggleLeftSidebar } = useLayout();
   const shortcuts = useShortcutBindings();
@@ -74,6 +75,12 @@ export function WelcomeScreen({ onNewConnection, onOpenSettings }: WelcomeScreen
               {t('welcome.newConnection')}
               <kbd aria-hidden="true" className="ml-2 rounded border border-current/20 px-1.5 py-0.5 font-mono text-[10px] opacity-75">{shortcut(shortcuts.newSession)}</kbd>
             </Button>
+            {onNewLocalTerminal && (
+              <Button variant="outline" onClick={onNewLocalTerminal} className="h-10 gap-2 px-4">
+                <Terminal className="size-4" aria-hidden="true" />
+                {t('localShell.open')}
+              </Button>
+            )}
             <Button variant="ghost" onClick={openConnectionManager} className="h-10 text-muted-foreground">
               {t('welcome.browseConnections')}
               <ArrowRight className="size-4" aria-hidden="true" />

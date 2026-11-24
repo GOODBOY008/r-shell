@@ -200,7 +200,7 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
-describe('App window close and session quit confirmation', () => {
+describe('App tab shortcuts and session quit confirmation', () => {
   beforeEach(() => {
     (globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverMock;
 
@@ -224,6 +224,31 @@ describe('App window close and session quit confirmation', () => {
     cleanup();
     localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it('moves the keyboard-focused header, and moves the selected session when typing in its terminal', () => {
+    const group = mockState.groups['group-1'];
+    group.tabs = ['A', 'B', 'C'].map(id => ({ id, name: id, connectionStatus: 'connected', reconnectCount: 0 }));
+    group.activeTabId = 'A';
+    mockState.tabToGroupMap = { A: group.id, B: group.id, C: group.id };
+    render(<>
+      <App />
+      <div data-tab-bar-group={group.id}><div data-tab-id="C"><button>Header C</button></div></div>
+      <div className="xterm"><textarea aria-label="Keyboard input" /></div>
+    </>);
+    const header = screen.getByRole('button', { name: 'Header C' });
+    const input = screen.getByLabelText('Keyboard input');
+    const move = (element: HTMLElement, key: string) => {
+      element.focus();
+      fireEvent.keyDown(element, { key, code: key, ctrlKey: true, shiftKey: true });
+      return lifecycle.stateHistory.at(-1)!.groups[group.id];
+    };
+
+    expect(move(header, 'PageUp').tabs.map(tab => tab.id)).toEqual(['A', 'C', 'B']);
+    expect(move(header, 'PageDown').tabs.map(tab => tab.id)).toEqual(['A', 'B', 'C']);
+    const after = move(input, 'PageDown');
+    expect(after.tabs.map(tab => tab.id)).toEqual(['B', 'A', 'C']);
+    expect(after.activeTabId).toBe('A');
   });
 
   it('closes the main window on the close_connection menu action (no tabs)', async () => {
@@ -282,9 +307,9 @@ describe('App window close and session quit confirmation', () => {
     render(<App />);
 
     act(() => lifecycle.eventHandlers.get('confirm-quit-sessions')!(count));
-    const title = count === 1 ? '1 session still connected' : '2 sessions still connected';
+    const title = count === 1 ? '1 active session' : '2 active sessions';
     const dialog = screen.getByRole('alertdialog', { name: title });
-    expect(within(dialog).getByText('Quitting will disconnect all active sessions.')).toBeTruthy();
+    expect(within(dialog).getByText('Quitting will end local shells and disconnect remote sessions.')).toBeTruthy();
     expect(lifecycle.invoke).not.toHaveBeenCalledWith('confirm_app_quit');
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));

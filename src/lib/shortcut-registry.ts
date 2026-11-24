@@ -6,7 +6,7 @@ import {
 } from './keyboard-shortcut-model';
 
 export type ShortcutCommandId =
-  | 'newSession' | 'closeSession' | 'nextTab' | 'previousTab' | 'moveTabLeft' | 'moveTabRight'
+  | 'newSession' | 'newLocalTerminal' | 'closeSession' | 'nextTab' | 'previousTab' | 'moveTabLeft' | 'moveTabRight'
   | 'toggleLeftSidebar' | 'toggleBottomPanel' | 'toggleRightSidebar' | 'toggleZenMode'
   | 'splitRight' | 'splitDown' | 'openSettings' | 'duplicateSession' | 'reconnect'
   | 'saveFile' | 'findInEditor' | 'replaceInEditor' | 'goToLine'
@@ -34,6 +34,7 @@ const define = (id: ShortcutCommandId, chord: string, category: ShortcutCategory
 /** Commands, scopes and keys have one owner; the runtime and all labels read it. */
 export const SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] = [
   define('newSession', 'Mod+N', 'tabs', NAVIGATION, { terminalAlternative: 'Mod+Shift+N' }),
+  define('newLocalTerminal', 'Mod+Shift+T', 'tabs', WORKSPACE),
   define('closeSession', 'Mod+W', 'tabs', NAVIGATION, { terminalAlternative: 'Mod+Shift+W' }),
   define('nextTab', 'Ctrl+Tab', 'tabs', NAVIGATION, { repeat: true }),
   define('previousTab', 'Ctrl+Shift+Tab', 'tabs', NAVIGATION, { repeat: true }),

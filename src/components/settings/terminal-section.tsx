@@ -4,6 +4,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { readLocalBinaryFile } from '../../lib/local-file-access';
 import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Switch } from '../ui/switch';
@@ -465,6 +466,37 @@ export function TerminalSection({ appearance, onChange, query }: TerminalSection
             </div>
           </div>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Device-specific shell selection stays separate from synchronized terminal appearance. */
+export function LocalShellSetting({ path, onChange, query }: {
+  path: string;
+  onChange: (value: string) => void;
+  query: string;
+}) {
+  const { t } = useTranslation();
+  if (!settingMatchesQuery(query, [t('localShell.setting'), englishText('localShell.setting'), 'powershell', 'bash', 'zsh'])) {
+    return null;
+  }
+  return (
+    <Card className="gap-2 rounded-lg shadow-none">
+      <CardHeader className="px-4 pt-4">
+        <Label htmlFor="local-shell-path">{t('localShell.setting')}</Label>
+        <CardDescription id="local-shell-hint">{t('localShell.pathHint')}</CardDescription>
+      </CardHeader>
+      <CardContent className="px-4 last:pb-4">
+        <Input
+          id="local-shell-path"
+          aria-describedby="local-shell-hint"
+          placeholder={t('localShell.automatic')}
+          autoComplete="off"
+          spellCheck={false}
+          value={path}
+          onChange={event => onChange(event.target.value)}
+        />
       </CardContent>
     </Card>
   );

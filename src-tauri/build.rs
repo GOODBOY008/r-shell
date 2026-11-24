@@ -76,6 +76,8 @@ fn main() {
             "list_remote_files_recursive",
             "list_socks_proxies",
             "list_ssh_key_passphrases",
+            "local_shell_start",
+            "local_shell_close",
             "open_in_os",
             "rdp_close_native_window",
             "rdp_open_native_window",
