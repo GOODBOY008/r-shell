@@ -6811,13 +6811,13 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "suppaftp"
-version = "12.2.1"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b58fcf921745cca6f0127c9f822069947da8c6dbeff52e9004750bcc448171f"
+checksum = "919688e3d2128f0c3e77f4dff7a2035f2d73ccf488851ba96ba42002e850cad5"
 dependencies = [
  "async-native-tls",
  "async-trait",
- "chrono",
+ "jiff 1.0.2",
  "lazy-regex",
  "log",
  "pin-project",
