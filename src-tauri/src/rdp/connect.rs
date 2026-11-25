@@ -454,6 +454,44 @@ mod tests {
         }
     }
 
+    fn share_control_bytes(
+        share_id: u32,
+        pdu: ironrdp_pdu::rdp::headers::ShareControlPdu,
+    ) -> Vec<u8> {
+        use ironrdp_core::encode_vec;
+        use ironrdp_pdu::rdp::headers::ShareControlHeader;
+        encode_vec(&ShareControlHeader {
+            pdu_source: 1002,
+            share_id,
+            share_control_pdu: pdu,
+        })
+        .unwrap()
+    }
+
+    fn server_indication(payload: Vec<u8>) -> Vec<u8> {
+        use ironrdp_core::encode_vec;
+        use ironrdp_pdu::{mcs::SendDataIndication, x224::X224};
+        encode_vec(&X224(SendDataIndication {
+            initiator_id: 1002,
+            channel_id: 1003,
+            user_data: payload.into(),
+        }))
+        .unwrap()
+    }
+
+    fn share_data_bytes(share_id: u32, pdu: ironrdp_pdu::rdp::headers::ShareDataPdu) -> Vec<u8> {
+        use ironrdp_pdu::rdp::{client_info::CompressionType, headers::*};
+        share_control_bytes(
+            share_id,
+            ShareControlPdu::Data(ShareDataHeader {
+                share_data_pdu: pdu,
+                stream_priority: StreamPriority::Medium,
+                compression_flags: CompressionFlags::empty(),
+                compression_type: CompressionType::K8,
+            }),
+        )
+    }
+
     #[tokio::test(start_paused = true)]
     async fn server_logon_pdus_reach_the_viewer_and_survive_reattach() {
         use crate::desktop_protocol::DesktopEvent;
@@ -462,9 +500,7 @@ mod tests {
             session::{rdp_session_loop, RenderMode, SessionState},
             SessionSignal,
         };
-        use ironrdp_core::encode_vec;
-        use ironrdp_pdu::rdp::{headers::*, session_info::*};
-        use ironrdp_pdu::{mcs::SendDataIndication, x224::X224};
+        use ironrdp_pdu::rdp::{headers::ShareDataPdu, session_info::*};
         use tokio::io::AsyncWriteExt;
         use tokio_util::sync::CancellationToken;
 
@@ -475,26 +511,13 @@ mod tests {
                 InfoData::PlainNotify => InfoType::PlainNotify,
                 InfoData::LogonExtended(_) => InfoType::LogonExtended,
             };
-            let payload = encode_vec(&ShareControlHeader {
-                pdu_source: 1002,
-                share_id: 1,
-                share_control_pdu: ShareControlPdu::Data(ShareDataHeader {
-                    share_data_pdu: ShareDataPdu::SaveSessionInfo(SaveSessionInfoPdu {
-                        info_type,
-                        info_data,
-                    }),
-                    stream_priority: StreamPriority::Medium,
-                    compression_flags: CompressionFlags::empty(),
-                    compression_type: ironrdp_pdu::rdp::client_info::CompressionType::K8,
+            server_indication(share_data_bytes(
+                1,
+                ShareDataPdu::SaveSessionInfo(SaveSessionInfoPdu {
+                    info_type,
+                    info_data,
                 }),
-            })
-            .unwrap();
-            encode_vec(&X224(SendDataIndication {
-                initiator_id: 1002,
-                channel_id: 1003,
-                user_data: payload.into(),
-            }))
-            .unwrap()
+            ))
         }
 
         async fn wait_info(
@@ -573,6 +596,213 @@ mod tests {
             cancel.cancel();
         };
         let (result, ()) = tokio::join!(session, scenario);
+        result.unwrap();
+    }
+
+    #[tokio::test]
+    async fn vrdp_font_map_with_header_only_length_is_one_packet() {
+        use ironrdp_pdu::rdp::headers::ShareDataPdu;
+        use tokio::io::AsyncWriteExt;
+
+        let mut payload = share_data_bytes(7, ShareDataPdu::FontMap(Default::default()));
+        assert_eq!(payload.len(), 26);
+        payload[..2].copy_from_slice(&18u16.to_le_bytes());
+        let font_map = server_indication(payload);
+
+        let (client, mut server) = tokio::io::duplex(128);
+        let mut framed = ironrdp_tokio::TokioFramed::new(Box::new(client) as ErasedStream);
+        server.write_all(&font_map).await.unwrap();
+        let mut queued = Vec::new().into_iter();
+        let (_, received) = crate::rdp::session::read_session_pdu(&mut framed, &mut queued, 1003)
+            .await
+            .unwrap();
+        assert_eq!(received.as_ref(), font_map);
+        assert_eq!(queued.len(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn xrdp_repaints_before_font_map_during_resize() {
+        use crate::desktop_protocol::DesktopEvent;
+        use crate::rdp::input::{encode_slow_path_input_pdus, map_input};
+        use crate::rdp::session::{rdp_session_loop, RenderMode, SessionState};
+        use ironrdp_core::encode_vec;
+        use ironrdp_pdu::geometry::InclusiveRectangle;
+        use ironrdp_pdu::rdp::{capability_sets::*, headers::*};
+        use ironrdp_pdu::{
+            bitmap::{BitmapData, BitmapUpdateData, Compression},
+            fast_path,
+        };
+        use ironrdp_tokio::FramedWrite as _;
+        use tokio_util::sync::CancellationToken;
+
+        fn bitmap(x: u16) -> Vec<u8> {
+            encode_vec(&BitmapUpdateData {
+                rectangles: vec![BitmapData {
+                    rectangle: InclusiveRectangle {
+                        left: x,
+                        top: 0,
+                        right: x,
+                        bottom: 0,
+                    },
+                    width: 1,
+                    height: 1,
+                    bits_per_pixel: 24,
+                    compression_flags: Compression::empty(),
+                    compressed_data_header: None,
+                    bitmap_data: &[3, 2, 1, 0], // BGR pixel and scanline padding
+                }],
+            })
+            .unwrap()
+        }
+
+        let (client, server) = tokio::io::duplex(4096);
+        let mut server = ironrdp_tokio::TokioFramed::new(server);
+        let (input_tx, input_rx) = mpsc::unbounded_channel();
+        let (_signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let (event_tx, mut event_rx) = crate::desktop_frames::desktop_event_channel();
+        let cancel = CancellationToken::new();
+        let state = SessionState {
+            framed: ironrdp_tokio::TokioFramed::new(Box::new(client) as ErasedStream),
+            connection_result: mock_connection_result(mock_config()),
+            input_rx,
+            enable_server_pointer: true,
+            desktop_scale_factor: 100,
+        };
+        let session = rdp_session_loop(
+            state,
+            RenderMode::Channel(event_tx),
+            signal_rx,
+            cancel.clone(),
+            std::sync::Arc::new(std::sync::Mutex::new((640, 480))),
+        );
+        let scenario = async {
+            let new_share = 7;
+            server
+                .write_all(&server_indication(share_control_bytes(
+                    1,
+                    ShareControlPdu::ServerDeactivateAll(ServerDeactivateAll),
+                )))
+                .await
+                .unwrap();
+            let demand = ShareControlPdu::ServerDemandActive(ServerDemandActive {
+                pdu: DemandActive {
+                    source_descriptor: "xrdp".into(),
+                    capability_sets: vec![
+                        CapabilitySet::General(General {
+                            refresh_rect_support: true,
+                            ..General::default()
+                        }),
+                        CapabilitySet::Bitmap(Bitmap {
+                            pref_bits_per_pix: 24,
+                            desktop_width: 800,
+                            desktop_height: 600,
+                            desktop_resize_flag: true,
+                            drawing_flags: BitmapDrawingFlags::empty(),
+                        }),
+                    ],
+                },
+            });
+            server
+                .write_all(&server_indication(share_control_bytes(new_share, demand)))
+                .await
+                .unwrap();
+            // Confirm Active, Synchronize, Cooperate, Request Control and Font List.
+            for _ in 0..5 {
+                server.read_pdu().await.unwrap();
+            }
+            // Both pixels are outside the previous 640-pixel-wide desktop.
+            let fast = encode_vec(&fast_path::FastPathUpdatePdu {
+                fragmentation: fast_path::Fragmentation::Single,
+                update_code: fast_path::UpdateCode::Bitmap,
+                compression_flags: None,
+                compression_type: None,
+                data: &bitmap(651),
+            })
+            .unwrap();
+            let header =
+                fast_path::FastPathHeader::new(fast_path::EncryptionFlags::empty(), fast.len());
+            server
+                .write_all(&encode_vec(&header).unwrap())
+                .await
+                .unwrap();
+            server.write_all(&fast).await.unwrap();
+            // IronRDP decodes server Update PDUs but does not implement their encoder.
+            let update = bitmap(650);
+            let mut payload = Vec::from((18 + update.len() as u16).to_le_bytes());
+            payload.extend([0x17, 0, 0xea, 3]); // Share Data, source 1002
+            payload.extend(new_share.to_le_bytes());
+            payload.extend([0, 2]); // pad, medium stream priority
+            payload.extend((update.len() as u16).to_le_bytes());
+            payload.extend([2, 0, 0, 0]); // Update, uncompressed
+            payload.extend(update);
+            // A single MCS indication can contain both a bitmap and FontMap.
+            payload.extend(share_data_bytes(
+                new_share,
+                ShareDataPdu::FontMap(Default::default()),
+            ));
+            server.write_all(&server_indication(payload)).await.unwrap();
+
+            let mut resized = false;
+            let mut pixels = [false; 2];
+            while pixels != [true; 2] {
+                match event_rx.recv().await.expect("session ended during resize") {
+                    DesktopEvent::Resized {
+                        width: 800,
+                        height: 600,
+                    } => resized = true,
+                    DesktopEvent::Frame(frame) => {
+                        assert!(resized, "pixels must follow the desktop size change");
+                        for (i, pixel) in pixels.iter_mut().enumerate() {
+                            if let Some(x) = (650 + i).checked_sub(usize::from(frame.x)) {
+                                if frame.y == 0 && x < usize::from(frame.width) {
+                                    assert_eq!(frame.rgba_data[x * 4..x * 4 + 4], [1, 2, 3, 255]);
+                                    *pixel = true;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // A static Xorg desktop can stay black until the client requests a repaint.
+            let mut expected_redraw = ironrdp_core::WriteBuf::new();
+            encode_share_data(
+                1001,
+                1003,
+                new_share,
+                ShareDataPdu::RefreshRectangle(
+                    ironrdp_pdu::rdp::refresh_rectangle::RefreshRectanglePdu {
+                        areas_to_refresh: vec![InclusiveRectangle {
+                            left: 0,
+                            top: 0,
+                            right: 799,
+                            bottom: 599,
+                        }],
+                    },
+                ),
+                &mut expected_redraw,
+            )
+            .unwrap();
+            let (_, redraw) = server.read_pdu().await.unwrap();
+            assert_eq!(&redraw[..], expected_redraw.filled());
+
+            let key = InputCommand::Key {
+                scancode: 0x1e,
+                down: true,
+            };
+            let expected =
+                encode_slow_path_input_pdus(1001, 1003, new_share, &map_input(&key)).concat();
+            input_tx.send(key).unwrap();
+            let (_, actual) = server.read_pdu().await.unwrap();
+            assert_eq!(&actual[..], expected);
+            cancel.cancel();
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            tokio::join!(session, scenario)
+        })
+        .await
+        .expect("resize or input stalled");
         result.unwrap();
     }
 

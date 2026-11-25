@@ -194,7 +194,9 @@ impl RdpClient {
                         }
                     }
                 };
-                let _ = rdp_session_loop(state, mode, frame_loop_rx, cancel, size_thread).await;
+                if let Err(error) = rdp_session_loop(state, mode, frame_loop_rx, cancel, size_thread).await {
+                    tracing::error!("RDP session loop failed: {error:#}");
+                }
                 tracing::info!("RDP session loop ended");
             });
         });
