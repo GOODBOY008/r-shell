@@ -9,8 +9,11 @@ use super::SessionSignal;
 use crate::desktop_protocol::{DesktopEvent, FrameUpdate};
 use crate::rdp::input::{encode_slow_path_input_pdus, map_input, InputCommand};
 use anyhow::Result;
-use ironrdp_connector::ConnectionResult;
+use ironrdp_connector::connection_activation::{ConnectionActivationSequence, ConnectionActivationState};
+use ironrdp_connector::{ConnectionResult, Sequence as _};
+use ironrdp_core::WriteBuf;
 use ironrdp_graphics::image_processing::PixelFormat;
+use ironrdp_pdu::Action;
 use ironrdp_session::image::DecodedImage;
 use ironrdp_session::{ActiveStage, ActiveStageOutput};
 use ironrdp_tokio::FramedWrite;
@@ -137,6 +140,8 @@ pub(super) async fn rdp_session_loop(
         desktop_size.height,
     );
     let activation_factory = connection_result.activation_factory.clone();
+    let mut reactivation: Option<ConnectionActivationSequence> = None;
+    let mut queued_pdus = Vec::new().into_iter();
     let mut active_stage = ironrdp_session::ActiveStageBuilder {
         static_channels: connection_result.static_channels,
         user_channel_id: connection_result.user_channel_id,
@@ -175,7 +180,7 @@ pub(super) async fn rdp_session_loop(
     let mut loop_iter: u64 = 0;
     let mut pending_resize = PendingResize::default();
     loop {
-        let resize_retry_at = pending_resize.retry_at;
+        let resize_retry_at = pending_resize.retry_at.filter(|_| reactivation.is_none());
         loop_iter += 1;
         if loop_iter % 50 == 1 {
             tracing::debug!("RDP session loop iteration {}", loop_iter);
@@ -188,7 +193,7 @@ pub(super) async fn rdp_session_loop(
             }
 
             // Read server PDU
-            frame = framed.read_pdu() => {
+            frame = read_session_pdu(&mut framed, &mut queued_pdus, route.io_channel_id) => {
                 let (action, payload) = match frame {
                     Ok(f) => f,
                     Err(e) => {
@@ -202,6 +207,57 @@ pub(super) async fn rdp_session_loop(
                 if is_mcs_disconnect_ultimatum(&payload) {
                     tracing::info!("RDP server disconnected (MCS Disconnect Provider Ultimatum)");
                     return Ok(());
+                }
+
+                if let Some(seq) = reactivation.as_mut().filter(|_| {
+                    is_activation_pdu(action, &payload, route.io_channel_id)
+                }) {
+                    let mut response = WriteBuf::new();
+                    let step = advance_reactivation(seq, &payload, &mut response)?;
+                    if !response.filled().is_empty() {
+                        framed.write_all(response.filled()).await?;
+                    }
+                    match step {
+                        ReactivationStep::DesktopChanged { width, height, share_id, chunk_size } => {
+                            // xrdp can paint the new desktop before FontMap. Resize the
+                            // decoder and viewer before consuming any of those pixels.
+                            anyhow::ensure!(active_stage.reactivate(
+                                route.io_channel_id, route.user_channel_id, share_id,
+                                connection_result.enable_server_pointer,
+                                connection_result.pointer_software_rendering, chunk_size,
+                            ), "invalid RDP virtual channel chunk size during reactivation");
+                            route.share_id = share_id;
+                            image = DecodedImage::new(PixelFormat::RgbA32, width, height);
+                            *size.lock().unwrap() = (width, height);
+                            match &mut mode {
+                                RenderMode::Channel(tx) => {
+                                    let _ = tx.send(DesktopEvent::Resized { width, height });
+                                }
+                                RenderMode::Native(renderer) => {
+                                    renderer.set_remote_size(width, height);
+                                    if let Some(frame) = compact_frame(
+                                        &image, &mut rgba_buf, 0, 0, width.into(), height.into(),
+                                    ) {
+                                        renderer.blit(&frame);
+                                    }
+                                }
+                                RenderMode::Noop => {}
+                            }
+                        }
+                        ReactivationStep::Complete { refresh_rect_support, suppress_output_support } => {
+                            let (w, h) = (image.width(), image.height());
+                            tracing::info!("RDP reactivation done: {w}x{h}");
+                            pending_resize.acknowledge(w, h);
+                            // A static desktop may provide no damage after a resize.
+                            // Ask for the full image using the newly negotiated capabilities.
+                            for packet in active_stage.request_full_redraw(w, h, refresh_rect_support, suppress_output_support)? {
+                                framed.write_all(&packet).await?;
+                            }
+                            reactivation = None;
+                        }
+                        ReactivationStep::AwaitInput => {}
+                    }
+                    continue;
                 }
 
                 let mut all_outputs = Vec::new();
@@ -245,7 +301,7 @@ pub(super) async fn rdp_session_loop(
             }
 
             // Handle input commands from the frontend
-            cmd = input_rx.recv() => {
+            cmd = input_rx.recv(), if reactivation.is_none() => {
                 let cmd = match cmd {
                     Some(c) => c,
                     None => break, // channel closed
@@ -483,56 +539,7 @@ pub(super) async fn rdp_session_loop(
                 }
                 ActiveStageOutput::DeactivateAll => {
                     tracing::info!("RDP DeactivateAll — running reactivation sequence");
-                    let cas = Box::new(activation_factory.create());
-                    match run_reactivation(&mut framed, cas).await {
-                        Ok(None) => {
-                            tracing::info!(
-                                "RDP server disconnected during reactivation (idle policy) — ending session"
-                            );
-                            return Ok(());
-                        }
-                        Ok(Some((w, h, share_id))) => {
-                            tracing::info!("RDP reactivation done: {}x{} share_id={}", w, h, share_id);
-                            pending_resize.acknowledge(w, h);
-                            route.share_id = share_id;
-                            image = DecodedImage::new(PixelFormat::RgbA32, w, h);
-                            // The framebuffer now truly has this size — publish
-                            // it so DesktopStarted (WS reconnects) stops
-                            // reporting the pre-resize resolution.
-                            *size.lock().unwrap() = (w, h);
-                            active_stage.set_share_id(share_id);
-                            match mode {
-                                RenderMode::Channel(ref tx) => {
-                                    let _ = tx.send(DesktopEvent::Resized {
-                                        width: w,
-                                        height: h,
-                                    });
-                                }
-                                RenderMode::Native(ref mut renderer) => {
-                                    // The reactivated desktop has a new size
-                                    // and layout — sync the renderer and
-                                    // push a full repaint (the framebuffer
-                                    // still holds the pre-resize picture).
-                                    renderer.set_remote_size(w, h);
-                                    if let Some(frame) = compact_frame(
-                                        &image,
-                                        &mut rgba_buf,
-                                        0,
-                                        0,
-                                        w as usize,
-                                        h as usize,
-                                    ) {
-                                        renderer.blit(&frame);
-                                    }
-                                }
-                                RenderMode::Noop => {}
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("RDP reactivation failed: {}", e);
-                            return Ok(());
-                        }
-                    }
+                    reactivation = Some(activation_factory.create());
                 }
                 ActiveStageOutput::PointerDefault
                 | ActiveStageOutput::PointerHidden
@@ -544,6 +551,9 @@ pub(super) async fn rdp_session_loop(
 
         // Retain the latest size until acknowledged, with bounded retries for
         // Windows ignoring a layout during startup despite ready capabilities.
+        if reactivation.is_some() {
+            continue;
+        }
         if let Some(result) = pending_resize.encode(Instant::now(), |w, h| {
             let result = active_stage.encode_resize(w, h, Some(desktop_scale_factor), None);
             if matches!(result, Some(Ok(_))) {
@@ -724,132 +734,114 @@ fn deliver_frame(mode: &mut RenderMode, frame: FrameUpdate) {
     }
 }
 
-/// Drive a Deactivation-Reactivation sequence to completion, returning the
-/// new desktop size and share_id. The caller rebuilds `DecodedImage` and
-/// applies the new share_id from these values.
-///
-/// Returns `Ok(None)` when the server sends an MCS Disconnect Provider
-/// Ultimatum instead of reactivating — i.e. the server is tearing the
-/// session down (typically its idle-disconnect policy) and the caller
-/// should end the session cleanly rather than treat it as an error.
-///
-/// Manual re-implementation of `ironrdp_tokio::single_sequence_step` with a
-/// fallback for legacy servers (e.g. the one at 192.168.20.180) that
-/// concatenate multiple ShareControl PDUs into a single MCS frame: when a
-/// step fails to decode, the frame is split the same way the main session
-/// loop does and each sub-PDU is fed to the activation state machine.
-async fn run_reactivation(
+/// A single MCS indication can contain both handshake and graphics PDUs. Return
+/// each separately so that the session switches decoders at the right point.
+pub(super) async fn read_session_pdu(
     framed: &mut ironrdp_tokio::TokioFramed<ErasedStream>,
-    cas: Box<ironrdp_connector::connection_activation::ConnectionActivationSequence>,
-) -> Result<Option<(u16, u16, u32)>> {
-    use ironrdp_connector::connection_activation::ConnectionActivationState;
-    use ironrdp_connector::Sequence as _;
-    use ironrdp_connector::Written;
-    use ironrdp_core::WriteBuf;
+    queued: &mut std::vec::IntoIter<Vec<u8>>,
+    io_channel_id: u16,
+) -> std::io::Result<(Action, tokio_util::bytes::Bytes)> {
+    use ironrdp_pdu::mcs::decode_send_data_indication;
 
-    fn finalized(
-        seq: &ironrdp_connector::connection_activation::ConnectionActivationSequence,
-    ) -> Option<(u16, u16, u32)> {
-        if let ConnectionActivationState::Finalized {
-            desktop_size, share_id, ..
-        } = seq.connection_activation_state()
-        {
-            Some((desktop_size.width, desktop_size.height, share_id))
-        } else {
-            None
-        }
+    if let Some(packet) = queued.next() {
+        return Ok((Action::X224, packet.into()));
     }
 
-    /// Advance the sequence by one input PDU, writing any response.
-    ///
-    /// `ConnectionActivationSequence::step` uses `mem::take` on its state —
-    /// a decode failure leaves the sequence permanently Consumed. So every
-    /// input is first probed on a throwaway clone; only a successful decode
-    /// is committed to the real sequence.
-    async fn step_and_write(
-        framed: &mut ironrdp_tokio::TokioFramed<ErasedStream>,
-        seq: &mut ironrdp_connector::connection_activation::ConnectionActivationSequence,
-        buf: &mut ironrdp_core::WriteBuf,
-        input: &[u8],
-    ) -> Result<()> {
-        buf.clear();
-        let mut probe = seq.clone();
-        let written: Written = probe
-            .step(input, None, buf)
-            .map_err(|e| anyhow::anyhow!("reactivation step failed: {}", e))?;
-        *seq = probe;
-        if let Some(len) = written.size() {
-            debug_assert_eq!(buf.filled_len(), len);
-            framed
-                .write_all(buf.filled())
-                .await
-                .map_err(|e| anyhow::anyhow!("reactivation write failed: {}", e))?;
+    let (action, packet) = framed.read_pdu().await?;
+    let nonstandard_length = action == Action::X224
+        && decode_send_data_indication(&packet).is_ok_and(|ctx| {
+            ctx.channel_id == io_channel_id
+                && share_control_length(ctx.user_data).is_some_and(|len| len != ctx.user_data.len())
+        });
+    if nonstandard_length {
+        // The same helper also repairs an overstated length from legacy servers.
+        *queued = split_concatenated_share_control(&packet).into_iter();
+        if let Some(first) = queued.next() {
+            return Ok((action, first.into()));
         }
-        Ok(())
     }
+    Ok((action, packet.freeze()))
+}
 
-    let mut seq = *cas;
-    let mut buf = WriteBuf::new();
-    loop {
-        if let Some(result) = finalized(&seq) {
-            return Ok(Some(result));
+/// Ordinary graphics, pointer, and virtual channel traffic continues to use the
+/// active stage even while the connector waits for the server's FontMap.
+fn is_activation_pdu(action: Action, packet: &[u8], io_channel_id: u16) -> bool {
+    use ironrdp_pdu::mcs::decode_send_data_indication;
+    use ironrdp_pdu::rdp::headers::{decode_share_data, ShareDataPduType};
+
+    if action == Action::FastPath {
+        return false;
+    }
+    let Ok(ctx) = decode_send_data_indication(packet) else {
+        return true;
+    };
+    if ctx.channel_id != io_channel_id {
+        return false;
+    }
+    match decode_share_data(ctx) {
+        Ok(data) => matches!(
+            data.pdu.share_header_type(),
+            ShareDataPduType::Synchronize
+                | ShareDataPduType::Control
+                | ShareDataPduType::FontMap
+                | ShareDataPduType::MonitorLayoutPdu
+                | ShareDataPduType::SetErrorInfoPdu
+        ),
+        Err(_) => true, // DemandActive, DeactivateAll, redirection, or an invalid control PDU.
+    }
+}
+
+enum ReactivationStep {
+    AwaitInput,
+    DesktopChanged {
+        width: u16,
+        height: u16,
+        share_id: u32,
+        chunk_size: usize,
+    },
+    Complete {
+        refresh_rect_support: bool,
+        suppress_output_support: bool,
+    },
+}
+
+fn advance_reactivation(
+    seq: &mut ConnectionActivationSequence,
+    packet: &[u8],
+    response: &mut WriteBuf,
+) -> Result<ReactivationStep> {
+    let waiting_for_demand = matches!(
+        seq.connection_activation_state(),
+        ConnectionActivationState::CapabilitiesExchange
+    );
+    seq.step(packet, None, response)?;
+    while !seq.state().is_terminal() && seq.next_pdu_hint().is_none() {
+        seq.step_no_input(response)?;
+    }
+    match seq.connection_activation_state() {
+        ConnectionActivationState::ConnectionFinalization {
+            desktop_size,
+            share_id,
+            static_channel_chunk_size,
+            ..
+        } if waiting_for_demand => Ok(ReactivationStep::DesktopChanged {
+            width: desktop_size.width,
+            height: desktop_size.height,
+            share_id,
+            chunk_size: static_channel_chunk_size,
+        }),
+        ConnectionActivationState::Finalized {
+            refresh_rect_support,
+            suppress_output_support,
+            ..
+        } => Ok(ReactivationStep::Complete {
+            refresh_rect_support,
+            suppress_output_support,
+        }),
+        ConnectionActivationState::Redirected { .. } => {
+            anyhow::bail!("server redirected the session during RDP reactivation")
         }
-
-        if let Some(hint) = seq.next_pdu_hint() {
-            let pdu = framed
-                .read_by_hint(hint)
-                .await
-                .map_err(|e| anyhow::anyhow!("reactivation read failed: {}", e))?;
-
-            if is_mcs_disconnect_ultimatum(&pdu) {
-                tracing::info!("RDP reactivation: server sent Disconnect Provider Ultimatum");
-                return Ok(None);
-            }
-
-            if let Err(e) = step_and_write(framed, &mut seq, &mut buf, &pdu).await {
-                // Decode failed — dump the raw PDU for diagnosis and retry
-                // with split sub-PDUs (legacy server concatenation workaround,
-                // same as the main session loop).
-                tracing::warn!(
-                    "RDP reactivation: PDU decode failed ({}); raw PDU ({} bytes): {:02x?}",
-                    e,
-                    pdu.len(),
-                    &pdu[..pdu.len().min(160)]
-                );
-                let sub_pdus = split_concatenated_share_control(&pdu);
-                let mut any_ok = false;
-                let mut last_err = e;
-                for sub in &sub_pdus {
-                    match step_and_write(framed, &mut seq, &mut buf, sub).await {
-                        Ok(()) => {
-                            any_ok = true;
-                            if finalized(&seq).is_some() {
-                                break;
-                            }
-                        }
-                        Err(e2) => {
-                            last_err = e2;
-                            break;
-                        }
-                    }
-                }
-                if !any_ok {
-                    return Err(last_err);
-                }
-            }
-        } else {
-            buf.clear();
-            let written: Written = seq
-                .step_no_input(&mut buf)
-                .map_err(|e| anyhow::anyhow!("reactivation step (no input) failed: {}", e))?;
-            if let Some(len) = written.size() {
-                debug_assert_eq!(buf.filled_len(), len);
-                framed
-                    .write_all(buf.filled())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("reactivation write failed: {}", e))?;
-            }
-        }
+        _ => Ok(ReactivationStep::AwaitInput),
     }
 }
 
@@ -920,6 +912,15 @@ fn map_input_to_outputs(
 /// input, and they announce it with DeactivateAll followed by this PDU.
 fn is_mcs_disconnect_ultimatum(pdu: &[u8]) -> bool {
     pdu.len() >= 8 && pdu[0] == 3 && pdu[5] == 0xF0 && pdu[7] == 0x21
+}
+
+/// Length of a version 1 Share Control PDU (or a version 0 Server Redirection).
+fn share_control_length(data: &[u8]) -> Option<usize> {
+    let [lo, hi, 0x11 | 0x13 | 0x16 | 0x17 | 0x0a, 0, _, _, ..] = data else {
+        return None;
+    };
+    let len = usize::from(u16::from_le_bytes([*lo, *hi]));
+    (len >= 6).then_some(len)
 }
 
 /// Split concatenated ShareControl PDUs from a single MCS SendDataIndication.
@@ -1010,15 +1011,14 @@ fn split_concatenated_share_control(frame: &[u8]) -> Vec<Vec<u8>> {
     let mut offset = 0;
     while offset < user_data.len() {
         let remaining = &user_data[offset..];
-        if remaining.len() < 6 {
+        // VirtualBox VRDP can declare just the headers of a Font Map (18
+        // bytes), followed by its 8-byte body. Only split at a real next header.
+        let Some(total_length) = share_control_length(remaining).filter(|&len| {
+            remaining.get(len..).and_then(share_control_length).is_some()
+        }) else {
             sub_pdus.push(remaining);
             break;
-        }
-        let total_length = u16::from_le_bytes([remaining[0], remaining[1]]) as usize;
-        if total_length < 6 || total_length > remaining.len() {
-            sub_pdus.push(remaining);
-            break;
-        }
+        };
         sub_pdus.push(&remaining[..total_length]);
         offset += total_length;
     }
