@@ -1442,6 +1442,7 @@
     "close": "Close (Esc)"
   },
   "ptyTerminal": {
+    "exitedWithSignal": "Shell terminated by signal {{signal}}.",
     "terminalNotConnected": "Terminal not connected",
     "failedToReadClipboard": "Failed to read from clipboard",
     "noSudoPassword": "No sudo password is saved for this connection. Add one in the connection settings.",

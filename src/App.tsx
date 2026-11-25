@@ -423,27 +423,34 @@ function AppContent() {
     void invoke(command, { connection_id: connectionId }).catch(() => {});
   }, [cancelPendingTerminalConnect, detachedSessions, t]);
 
+  const removeTabs = useCallback((tabIds: string[]) => {
+    const closing = new Set(tabIds);
+    const currentTabs = Object.values(stateRef.current.groups).flatMap(group => group.tabs);
+    const remaining = currentTabs.filter(tab => !closing.has(tab.id));
+    const released = new Set<string>();
+    for (const tab of currentTabs) {
+      if (!closing.has(tab.id)) continue;
+      const groupId = stateRef.current.tabToGroupMap[tab.id];
+      dispatch({ type: 'REMOVE_TAB', groupId, tabId: tab.id });
+      disconnectTabBackend(tab, remaining, released);
+    }
+    if (remaining.length === 0) ActiveConnectionsManager.clearActiveConnections();
+  }, [dispatch, disconnectTabBackend]);
+
+  // An exited shell owns a terminal tab. Its teardown can finish even while
+  // another tab is waiting for the user to confirm an unsaved editor.
+  const handleShellExit = useCallback((tabId: string) => removeTabs([tabId]), [removeTabs]);
+
   const closingTabIds = useRef(new Set<string>());
   const handleCloseTabs = useCallback(async (tabIds: string[]) => {
     if (tabIds.some(id => closingTabIds.current.has(id))) return;
     tabIds.forEach(id => closingTabIds.current.add(id));
     try {
-      if (!await confirmCloseTabs(tabIds)) return;
-      const closing = new Set(tabIds);
-      const currentTabs = Object.values(stateRef.current.groups).flatMap(group => group.tabs);
-      const remaining = currentTabs.filter(tab => !closing.has(tab.id));
-      const released = new Set<string>();
-      for (const tab of currentTabs) {
-        if (!closing.has(tab.id)) continue;
-        const groupId = stateRef.current.tabToGroupMap[tab.id];
-        dispatch({ type: 'REMOVE_TAB', groupId, tabId: tab.id });
-        disconnectTabBackend(tab, remaining, released);
-      }
-      if (remaining.length === 0) ActiveConnectionsManager.clearActiveConnections();
+      if (await confirmCloseTabs(tabIds)) removeTabs(tabIds);
     } finally {
       tabIds.forEach(id => closingTabIds.current.delete(id));
     }
-  }, [confirmCloseTabs, dispatch, disconnectTabBackend]);
+  }, [confirmCloseTabs, removeTabs]);
 
   const handleCloseTab = useCallback((tabId: string) => handleCloseTabs([tabId]), [handleCloseTabs]);
 
@@ -2356,6 +2363,7 @@ function AppContent() {
                             closeTabShortcut: shortcutBindings.closeSession,
                             onWorkingDirectoryChange: handleWorkingDirectoryChange,
                             onCloseTab: handleCloseTab,
+                            onShellExit: handleShellExit,
                             onCloseAllTabs: handleCloseAllTabs,
                             onCloseTabs: handleCloseTabs,
                             onDetachTab: handleDetachTab,

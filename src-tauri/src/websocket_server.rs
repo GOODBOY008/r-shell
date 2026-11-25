@@ -1,5 +1,6 @@
-use crate::connection_manager::ConnectionManager;
+use crate::connection_manager::{ConnectionManager, StartedPty};
 use crate::local_shell::{LocalAttachment, LocalShells};
+use crate::ssh::{PtyEnd, PtyRead};
 use crate::{WEBSOCKET_PORT, WEBSOCKET_TOKEN};
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
@@ -37,6 +38,13 @@ pub enum WsMessage {
     LocalPtyExited {
         connection_id: String,
         exit_code: Option<u32>,
+    },
+    /// The remote shell ended after its final output. Scoped to one attachment.
+    PtyExited {
+        connection_id: String,
+        generation: u64,
+        #[serde(flatten)]
+        exit: PtyEnd,
     },
     /// The previous binary input frame has been written to the native PTY.
     LocalPtyInputAck { connection_id: String, generation: u64 },
@@ -218,7 +226,7 @@ type OutputControls = Arc<Mutex<HashMap<String, OutputCredits>>>;
 /// Per-connection reader-cancellation tokens. Cancelling a token stops the
 /// PTY reader task without killing the underlying SSH/PTY session — this is
 /// what makes Xshell-style Detach possible.
-type ReaderTokens = Arc<Mutex<HashMap<String, CancellationToken>>>;
+type ReaderTokens = Arc<Mutex<HashMap<String, (u64, CancellationToken)>>>;
 
 /// Desktop (RDP/VNC) frame streams this WebSocket connection started:
 /// connection id → the token that cancels the session-side frame loop.
@@ -515,6 +523,74 @@ async fn flush_output(
     }
 }
 
+/// Drain one specific PTY generation. A queued exit follows its last binary
+/// frame even under backpressure; only losing the transport triggers recovery.
+async fn forward_ssh_output(
+    connection_id: String,
+    started: StartedPty,
+    cancel: CancellationToken,
+    credits: OutputCredits,
+    tx: WsTx,
+) {
+    let mut accumulated = Vec::with_capacity(OUTPUT_FLUSH_BYTES);
+    loop {
+        let deadline = (!accumulated.is_empty())
+            .then(|| Duration::from_millis(OUTPUT_FLUSH_INTERVAL_MS as u64));
+        let end = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return,
+            read = started.session.read_output(deadline) => match read {
+                PtyRead::Data(bytes) => {
+                    accumulated.extend_from_slice(&bytes);
+                    if accumulated.len() < OUTPUT_FLUSH_BYTES { continue; }
+                    None
+                }
+                PtyRead::Flush => None,
+                PtyRead::Ended(end) => Some(end),
+            },
+        };
+        if !accumulated.is_empty() {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return,
+                permit = credits.acquire() => match permit {
+                    Ok(permit) => permit.forget(),
+                    Err(_) => return,
+                },
+            }
+            if flush_output(&tx, &connection_id, &mut accumulated, &cancel).await
+                == SendOutcome::Closed
+            {
+                return;
+            }
+        }
+        if let Some(end) = end {
+            let message = match end {
+                PtyEnd::TransportLost => WsMessage::Error {
+                    message: "Connection lost: PTY connection closed".into(),
+                    code: None,
+                },
+                exit => WsMessage::PtyExited {
+                    connection_id,
+                    generation: started.generation,
+                    exit,
+                },
+            };
+            let frame = Message::Text(
+                serde_json::to_string(&message)
+                    .expect("serialize PTY end")
+                    .into(),
+            );
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {},
+                _ = tx.send(frame) => {},
+            }
+            return;
+        }
+    }
+}
+
 fn should_remove_pty_state(active_gen: Option<u64>, closed_gen: Option<u64>) -> bool {
     match (active_gen, closed_gen) {
         (Some(a), Some(c)) => a == c,
@@ -744,7 +820,7 @@ impl WebSocketServer {
         for (connection_id, generation) in active_pty_generations {
             // Stop this socket's streaming reader without killing the
             // underlying SSH/PTY session.
-            if let Some(reader_cancel) = reader_tokens.lock().await.get(&connection_id) {
+            if let Some((_, reader_cancel)) = reader_tokens.lock().await.get(&connection_id) {
                 reader_cancel.cancel();
             }
             if let Err(e) = self
@@ -851,36 +927,17 @@ impl WebSocketServer {
                     rows
                 );
 
-                let (generation, reattached) = self
+                let started = self
                     .connection_manager
                     .start_pty_connection(&connection_id, cols, rows)
                     .await?;
-
-                let cancel_token = self
-                    .connection_manager
-                    .get_pty_cancel_token(&connection_id)
-                    .await
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("PTY session disappeared immediately after creation")
-                    })?;
-
-                // Per-reader cancellation token. The PTY reader task selects on
-                // this token so it can be stopped without killing the SSH/PTY
-                // session — required for Xshell-style Detach (Ctrl+A+D).
-                let reader_cancel = CancellationToken::new();
+                let generation = started.generation;
+                // Detach stops only this reader; closing the PTY stops its children.
+                let reader_cancel = started.session.cancel.child_token();
                 reader_tokens
                     .lock()
                     .await
-                    .insert(connection_id.clone(), reader_cancel.clone());
-
-                // When the *session* is cancelled (normal close), also cancel
-                // the reader so the task stops promptly.
-                let session_cancel = cancel_token.clone();
-                let reader_cancel_link = reader_cancel.clone();
-                tokio::spawn(async move {
-                    session_cancel.cancelled().await;
-                    reader_cancel_link.cancel();
-                });
+                    .insert(connection_id.clone(), (generation, reader_cancel.clone()));
 
                 // Credit semaphore: 0 initial permits.  The PTY reader acquires
                 // 1 permit before each flush; the frontend grants permits via
@@ -896,124 +953,23 @@ impl WebSocketServer {
                 };
                 send_control(&tx, &response).await?;
 
-                let started = WsMessage::PtyStarted {
+                let handshake = WsMessage::PtyStarted {
                     connection_id: connection_id.clone(),
                     generation,
-                    reattached,
+                    reattached: started.reattached,
                 };
-                send_control(&tx, &started).await?;
-
-                // Spawn the PTY reader task.
-                // `flush_output` blocks when the WS channel is full — this
-                // propagates back-pressure through output_tx to the SSH window.
-                let connection_manager = self.connection_manager.clone();
-                let connection_id_clone = connection_id.clone();
-                let tx_clone = tx.clone();
-
-                tokio::spawn(async move {
-                    let mut accumulated = Vec::with_capacity(OUTPUT_FLUSH_BYTES);
-
-                    loop {
-                        // --- Read from PTY (event-driven) ---
-                        // With nothing pending, block until data arrives — an
-                        // idle terminal consumes zero wakeups (this used to be
-                        // a 1 ms poll, ~1000 wakeups/s per PTY). While data
-                        // is pending unflushed, arm the flush-interval
-                        // deadline so small chunks still ship within 10 ms.
-                        let read_result = tokio::select! {
-                            biased;
-                            _ = reader_cancel.cancelled() => {
-                                tracing::info!(
-                                    "PTY reader task cancelled for {}",
-                                    connection_id_clone
-                                );
-                                // Flush any remaining data before exiting.
-                                let _ = flush_output(
-                                    &tx_clone,
-                                    &connection_id_clone,
-                                    &mut accumulated,
-                                    &reader_cancel,
-                                ).await;
-                                return;
-                            }
-                            result = connection_manager.read_from_pty(
-                                &connection_id_clone,
-                                if accumulated.is_empty() {
-                                    None
-                                } else {
-                                    Some(Duration::from_millis(OUTPUT_FLUSH_INTERVAL_MS as u64))
-                                },
-                            ) => result,
-                        };
-
-                        match read_result {
-                            // Deadline elapsed with pending data — time to flush.
-                            Ok(None) => {
-                                // Wait for 1 frontend ACK before sending.
-                                let ok = tokio::select! {
-                                    biased;
-                                    _ = reader_cancel.cancelled() => false,
-                                    r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
-                                };
-                                if !ok {
-                                    break;
-                                }
-                                if flush_output(
-                                    &tx_clone,
-                                    &connection_id_clone,
-                                    &mut accumulated,
-                                    &reader_cancel,
-                                )
-                                .await
-                                    == SendOutcome::Closed
-                                {
-                                    break;
-                                }
-                            }
-                            Ok(Some(data)) => {
-                                accumulated.extend_from_slice(&data);
-                                if accumulated.len() < OUTPUT_FLUSH_BYTES {
-                                    continue; // keep batching until size or deadline
-                                }
-                                // Wait for 1 frontend ACK before sending.
-                                let ok = tokio::select! {
-                                    biased;
-                                    _ = reader_cancel.cancelled() => false,
-                                    r = credits.acquire() => r.map(|p| { p.forget(); true }).unwrap_or(false),
-                                };
-                                if !ok {
-                                    break;
-                                }
-                                if flush_output(
-                                    &tx_clone,
-                                    &connection_id_clone,
-                                    &mut accumulated,
-                                    &reader_cancel,
-                                )
-                                .await
-                                    == SendOutcome::Closed
-                                {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(
-                                    "Error reading from PTY {}: {}",
-                                    connection_id_clone,
-                                    e
-                                );
-                                let error_msg = WsMessage::Error {
-                                    message: format!("Connection lost: {}", e),
-                                    code: None,
-                                };
-                                let _ = send_control(&tx_clone, &error_msg).await;
-                                break;
-                            }
-                        }
-                    }
-
-                    tracing::info!("PTY reader task exiting for {}", connection_id_clone);
-                });
+                let frame = serde_json::to_string(&handshake).map_err(anyhow::Error::from)?;
+                if tx.send(Message::Text(frame.into())).await.is_ok() {
+                    tokio::spawn(forward_ssh_output(
+                        connection_id.clone(),
+                        started,
+                        reader_cancel,
+                        credits,
+                        tx,
+                    ));
+                }
+                // Even if the socket just dropped, register this attachment so
+                // transport cleanup can park it for its next reader.
 
                 Ok(PtyLifecycleEvent::Started {
                     connection_id,
@@ -1115,8 +1071,12 @@ impl WebSocketServer {
                 // Stop the reader task so it no longer streams to this WS.
                 // The session itself is NOT cancelled — it stays alive in the
                 // backend so a later StartPty can re-attach to it.
-                if let Some(reader_cancel) = reader_tokens.lock().await.get(&connection_id) {
-                    reader_cancel.cancel();
+                if let Some((current, reader_cancel)) =
+                    reader_tokens.lock().await.get(&connection_id)
+                {
+                    if generation.is_none_or(|expected| expected == *current) {
+                        reader_cancel.cancel();
+                    }
                 }
                 self.connection_manager
                     .detach_pty_connection(&connection_id, generation)
@@ -1346,6 +1306,61 @@ mod tests {
     use super::error_code;
     use super::{decode_input_frame, WsError, WsMessage, BINARY_INPUT_CMD};
     use crate::connection_manager::PtyStartError;
+
+    #[tokio::test]
+    async fn final_ssh_output_precedes_exit_and_transport_loss_keeps_its_error() {
+        use super::*;
+        use crate::ssh::PtySession;
+
+        for end in [Some(PtyEnd::Exited { exit_code: Some(0) }), None] {
+            let (output, rx) = mpsc::channel(1);
+            let session = Arc::new(PtySession {
+                input_tx: mpsc::channel(1).0,
+                output_rx: Arc::new(Mutex::new(rx)),
+                resize_tx: mpsc::channel(1).0,
+                cancel: CancellationToken::new(),
+                end: Default::default(),
+            });
+            if let Some(reason) = &end {
+                session.end.set(reason.clone()).unwrap();
+            }
+            output.send(b"logout\r\n".to_vec()).await.unwrap();
+            drop(output);
+
+            let id = "saved-dup-359";
+            let cancel = session.cancel.child_token();
+            let started = StartedPty {
+                session,
+                generation: 17,
+                reattached: false,
+            };
+            // A single socket slot forces the exit to queue behind the last frame.
+            let (tx, mut frames) = mpsc::channel(1);
+            let reader = tokio::spawn(forward_ssh_output(
+                id.into(),
+                started,
+                cancel,
+                Arc::new(Semaphore::new(1)),
+                tx,
+            ));
+            tokio::time::timeout(Duration::from_secs(2), async {
+                let data = frames.recv().await.unwrap().into_data();
+                assert_eq!(data.as_ref(), encode_output_frame(id, b"logout\r\n"));
+                let message = frames.recv().await.unwrap();
+                let exit: serde_json::Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                if end.is_some() {
+                    assert_eq!(exit, serde_json::json!({
+                        "type": "PtyExited", "connection_id": id, "generation": 17, "reason": "exited", "exit_code": 0
+                    }));
+                } else {
+                    assert_eq!(exit["type"], "Error");
+                    assert!(exit["message"].as_str().unwrap().contains("Connection lost"));
+                }
+                reader.await.unwrap();
+                assert!(frames.recv().await.is_none());
+            }).await.expect("PTY reader should finish after its final frame");
+        }
+    }
 
     #[test]
     fn test_error_message_serde_round_trips_code() {

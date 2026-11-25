@@ -1473,6 +1473,7 @@
     "close": "Fechar (Esc)"
   },
   "ptyTerminal": {
+    "exitedWithSignal": "O shell foi encerrado pelo sinal {{signal}}.",
     "terminalNotConnected": "Terminal desconectado",
     "failedToReadClipboard": "Não foi possível ler a área de transferência",
     "noSudoPassword": "Esta conexão não tem uma senha do sudo salva. Adicione uma nas configurações da conexão.",

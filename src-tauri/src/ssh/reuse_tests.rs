@@ -110,11 +110,11 @@ async fn docker_dashboard_reuses_transport_without_sharing_owner_lifecycle() {
         .await
         .unwrap();
     let original = manager.get_connection("terminal").await.unwrap();
-    manager
+    let started = manager
         .start_pty_connection("terminal", 80, 24)
         .await
         .unwrap();
-    let terminal_cancel = manager.get_pty_cancel_token("terminal").await.unwrap();
+    let terminal_cancel = started.session.cancel.clone();
     // Exercise dispatcher ownership without requiring a local X server.
     let registry = original.read().await.x11_registry.clone();
     let (x11_tx, mut x11_rx) = mpsc::unbounded_channel();

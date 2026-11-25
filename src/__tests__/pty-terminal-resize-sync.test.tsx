@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => {
   const terminalCallbacks = {
     onWorkingDirectoryChange: vi.fn(),
     onReconnectTab: vi.fn(),
+    onShellExit: vi.fn(),
   };
 
   class MockTerminal {
@@ -230,7 +231,7 @@ async function mountTerminal(options: { readyState?: number } = {}) {
   return webSocket;
 }
 
-describe('PtyTerminal resize synchronization (issue #88)', () => {
+describe('PtyTerminal transport lifecycle and resize synchronization', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
@@ -269,6 +270,78 @@ describe('PtyTerminal resize synchronization (issue #88)', () => {
     cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { local: true, code: 0 },
+    { local: false, code: 0 },
+    { local: false, code: null },
+  ])('forwards Ctrl+D and closes the owning tab only after shell exit (local=$local, code=$code)', async ({ local, code }) => {
+    const tabId = local ? 'eof-tab' : 'saved-dup-359';
+    const id = local ? 'native-pty' : tabId;
+    render(<PtyTerminal connectionId={tabId} savedConnectionId="saved" connectionName="shell" localShell={local} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+    const [socket] = mocks.webSockets;
+    const [term] = mocks.terminals;
+    const deliver = (message: SentMessage) => socket.onmessage({ data: JSON.stringify(message) });
+    const exited = local
+      ? { type: 'LocalPtyExited', connection_id: id, exit_code: code }
+      : { type: 'PtyExited', connection_id: id, generation: 3, reason: 'exited', exit_code: code };
+    act(() => {
+      socket.onopen();
+      deliver({ type: 'PtyStarted', connection_id: id, generation: 3 });
+      deliver({ ...exited, connection_id: 'another-tab' });
+      if (!local) deliver({ ...exited, generation: 2 });
+    });
+    const key = new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, cancelable: true });
+    expect(term.attachCustomKeyEventHandler.mock.calls[0][0](key)).toBe(true);
+    expect(key.defaultPrevented).toBe(false);
+    term.onData.mock.calls[0][0]('\x04');
+    const frame = socket.send.mock.calls.at(-1)[0];
+    expect(frame).toEqual(new Uint8Array([0, 0, id.length, ...new TextEncoder().encode(id), 4]));
+    // A nested shell exits and the parent prints another prompt on the same PTY.
+    act(() => deliver({ type: 'Output', connection_id: id, data: [36, 32] }));
+    expect(mocks.terminalCallbacks.onShellExit).not.toHaveBeenCalled();
+    expect(socket.close).not.toHaveBeenCalled();
+
+    let parsedFinalOutput: (() => void) | undefined;
+    term.write.mockImplementation((_: string, parsed?: () => void) => { parsedFinalOutput = parsed; });
+    act(() => {
+      deliver(exited);
+      deliver(exited);
+      socket.onerror(new Event('error'));
+      socket.onclose();
+    });
+    expect(mocks.terminalCallbacks.onShellExit).not.toHaveBeenCalled();
+    expect(parsedFinalOutput).toBeTypeOf('function');
+    act(() => parsedFinalOutput!());
+    expect(mocks.terminalCallbacks.onShellExit).toHaveBeenCalledExactlyOnceWith(tabId);
+    expect(term.write).toHaveBeenCalledWith('$ ', expect.any(Function));
+    expect(term.write.mock.calls.flat().join(' ')).not.toMatch(/WebSocket error|reconnect/i);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(mocks.webSockets).toHaveLength(1);
+    expect(mocks.terminalCallbacks.onReconnectTab).not.toHaveBeenCalled();
+    if (local) await closeLocalShell(tabId);
+  });
+
+  it.each([
+    { reason: 'exited', exit_code: 23, diagnostic: '23' },
+    { reason: 'signalled', signal: 'TERM', diagnostic: 'TERM' },
+  ])('keeps an abnormal SSH shell exit available for inspection ($diagnostic)', async (exit) => {
+    const socket = await mountTerminal();
+    const deliver = (message: SentMessage) => socket.onmessage({ data: JSON.stringify(message) });
+    act(() => {
+      socket.onopen();
+      deliver({ type: 'PtyStarted', connection_id: 'connection-1', generation: 4 });
+      deliver({ type: 'PtyExited', connection_id: 'connection-1', generation: 4, ...exit });
+      socket.onclose();
+    });
+    expect(screen.getByRole('status').textContent).toContain(exit.diagnostic);
+    expect(mocks.terminalCallbacks.onShellExit).not.toHaveBeenCalled();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(mocks.webSockets).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button'));
+    expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledExactlyOnceWith('connection-1');
   });
 
   it('reattaches a local shell by native ID and drains its final output without respawning', async () => {

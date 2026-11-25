@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { TerminalGroupState } from '../lib/terminal-group-types';
 import App from '../App';
+import { startLocalShell } from '../lib/local-shell-runtime';
 
 const lifecycle = vi.hoisted(() => ({
   invoke: vi.fn(),
@@ -21,6 +22,7 @@ const lifecycle = vi.hoisted(() => ({
   eventHandlers: new Map<string, (payload?: unknown) => void>(),
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
   stateHistory: [] as TerminalGroupState[],
+  onShellExit: undefined as ((id: string) => void) | undefined,
 }));
 
 let mockState: TerminalGroupState;
@@ -191,7 +193,11 @@ vi.mock('@/components/file-editor-view', async () => {
 });
 vi.mock('@/components/terminal/grid-renderer', async () => {
   const ReactModule = await import('react');
-  return { GridRenderer: () => ReactModule.createElement('div') };
+  const { useTerminalCallbacks } = await import('@/lib/terminal-callbacks-context');
+  return { GridRenderer: () => {
+    lifecycle.onShellExit = useTerminalCallbacks().onShellExit;
+    return ReactModule.createElement('div');
+  } };
 });
 
 class ResizeObserverMock {
@@ -212,6 +218,7 @@ describe('App tab shortcuts and session quit confirmation', () => {
 
     lifecycle.eventHandlers.clear();
     lifecycle.stateHistory.length = 0;
+    lifecycle.onShellExit = undefined;
     lifecycle.closeMainWindow.mockClear();
     lifecycle.invoke.mockReset();
     lifecycle.invoke.mockImplementation(async (command: string) => {
@@ -249,6 +256,41 @@ describe('App tab shortcuts and session quit confirmation', () => {
     const after = move(input, 'PageDown');
     expect(after.tabs.map(tab => tab.id)).toEqual(['B', 'A', 'C']);
     expect(after.activeTabId).toBe('A');
+  });
+
+  it.each([true, false])('removes an exited SSH tab and releases the connection only for its last user (editor=%s)', async (withEditor) => {
+    const group = mockState.groups['group-1'];
+    const id = 'saved-dup-359';
+    const tab = { id, name: 'SSH', protocol: 'SSH', connectionStatus: 'connected', reconnectCount: 0 } as const;
+    group.tabs = [tab, { ...tab, id: 'sibling' }];
+    if (withEditor) group.tabs.push({
+      ...tab, id: 'editor', tabType: 'editor', editorConnectionId: id, editorFilePath: '/example.txt',
+    });
+    group.activeTabId = 'sibling';
+    mockState.tabToGroupMap = Object.fromEntries(group.tabs.map(item => [item.id, group.id]));
+    render(<App />);
+    act(() => lifecycle.onShellExit!(id));
+    const remaining = lifecycle.stateHistory.at(-1)!.groups[group.id];
+    expect(remaining.tabs.map(item => item.id)).toEqual(withEditor ? ['sibling', 'editor'] : ['sibling']);
+    expect(remaining.activeTabId).toBe('sibling');
+    const disconnects = lifecycle.invoke.mock.calls.filter(([command]) => command === 'ssh_disconnect');
+    expect(disconnects).toEqual(withEditor ? [] : [['ssh_disconnect', { connection_id: id }]]);
+    expect(lifecycle.closeMainWindow).not.toHaveBeenCalled();
+  });
+
+  it('releases the native run when the last local shell exits and keeps the window open', async () => {
+    const id = 'local-tab-359';
+    const group = mockState.groups['group-1'];
+    group.tabs = [{ id, name: 'sh', tabType: 'local-terminal', connectionStatus: 'connected', reconnectCount: 0 }];
+    group.activeTabId = id;
+    mockState.tabToGroupMap = { [id]: group.id };
+    lifecycle.invoke.mockResolvedValueOnce({ runId: 'native-359', shellName: 'sh' });
+    await startLocalShell(id, 80, 24);
+    render(<App />);
+    await act(async () => { lifecycle.onShellExit!(id); });
+    expect(lifecycle.stateHistory.at(-1)!.tabToGroupMap).toEqual({});
+    expect(lifecycle.invoke).toHaveBeenCalledWith('local_shell_close', { runId: 'native-359' });
+    expect(lifecycle.closeMainWindow).not.toHaveBeenCalled();
   });
 
   it('closes the main window on the close_connection menu action (no tabs)', async () => {
