@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Button } from './ui/button';
 import { openLocalShellSettings } from '../lib/app-events';
 import { LocalShellInput } from '../lib/local-shell-input';
@@ -38,6 +39,22 @@ function sendBinaryInput(ws: WebSocket, id: Uint8Array, payload: Uint8Array): vo
   frame.set(id, 3);
   frame.set(payload, 3 + id.length);
   ws.send(frame);
+}
+
+type TerminalEnd =
+  | { kind: 'exited'; code: number | null }
+  | { kind: 'signalled'; signal: string }
+  | { kind: 'startFailed' | 'attachFailed'; detail?: string };
+
+function terminalEndMessage(end: TerminalEnd, t: TFunction) {
+  switch (end.kind) {
+    case 'exited':
+      return end.code === null ? t('localShell.exited') : t('localShell.exitedWithCode', { code: end.code });
+    case 'signalled':
+      return t('ptyTerminal.exitedWithSignal', { signal: end.signal });
+    default:
+      return t(`localShell.${end.kind}`);
+  }
 }
 
 interface PtyTerminalProps {
@@ -153,10 +170,13 @@ export function PtyTerminal({
   onDetach,
 }: PtyTerminalProps) {
   const { t } = useTranslation();
-  const [localEnd, setLocalEnd] = React.useState<
-    { kind: 'exited'; code: number | null } | { kind: 'startFailed' | 'attachFailed'; detail?: string } | null
-  >(null);
-  const { onReconnectTab, onWorkingDirectoryChange } = useTerminalCallbacks();
+  const [terminalEnd, setTerminalEnd] = React.useState<TerminalEnd | null>(null);
+  const { onShellExit, onReconnectTab, onWorkingDirectoryChange } = useTerminalCallbacks();
+  const shellExitRef = React.useRef(onShellExit);
+  React.useLayoutEffect(() => {
+    shellExitRef.current = onShellExit;
+    return () => { shellExitRef.current = undefined; };
+  }, [onShellExit]);
   const terminalRef = React.useRef<HTMLDivElement | null>(null);
   const xtermRef = React.useRef<XTerm | null>(null);
   const fitRef = React.useRef<FitAddon | null>(null);
@@ -606,15 +626,15 @@ export function PtyTerminal({
     let isRunning = true;
     let transportId = connectionId;
     let localRunReady = false;
-    let localFinished = false;
+    let finished = false;
     let localConnectStarted = false;
-    let localAttempt = 0;
+    let socketAttempt = 0;
     let localReconnectBy: number | undefined;
     let localRetryDelay = LOCAL_INITIAL_RETRY_MS;
     let localRetryTimer: ReturnType<typeof setTimeout> | undefined;
-    const finishLocal = (end: NonNullable<typeof localEnd>) => {
-      if (!isRunning || localFinished) return;
-      localFinished = true;
+    const finishSession = (end: TerminalEnd) => {
+      if (!isRunning || finished) return;
+      finished = true;
       clearTimeout(localRetryTimer);
       if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
       term.options.disableStdin = true;
@@ -622,10 +642,21 @@ export function PtyTerminal({
         notify.warning(i18n.t('localShell.inputInterrupted'));
       }
       localInputRef.current = null;
-      setLocalEnd(end);
       connectionStatusRef.current = 'disconnected';
       onConnectionStatusChange?.(connectionId, 'disconnected');
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      if (!localShell && ws?.readyState === WebSocket.OPEN && ptyGenerationRef.current !== null) {
+        ws.send(JSON.stringify({ type: 'Close', connection_id: connectionId, generation: ptyGenerationRef.current }));
+      }
+      ws?.close();
+      const cleanExit = end.kind === 'exited' && (end.code === 0 || (!localShell && end.code === null));
+      if (cleanExit && shellExitRef.current) {
+        // xterm parses writes asynchronously. Wait for preceding output, even
+        // when its frame was already submitted before the exit arrived.
+        term.write('', () => { if (isRunning) shellExitRef.current?.(connectionId); });
+      } else {
+        setTerminalEnd(end);
+      }
     };
     // Last dims known to have been delivered to the PTY. The onResize handler
     // only forwards actual changes, so a resize must always update this —
@@ -719,7 +750,7 @@ export function PtyTerminal({
             localRunReady = true;
             onShellName?.(run.shellName);
           } catch (error) {
-            finishLocal({ kind: 'startFailed', detail: String(error) });
+            finishSession({ kind: 'startFailed', detail: String(error) });
             return;
           }
         }
@@ -737,13 +768,13 @@ export function PtyTerminal({
       }
       
       // Port + per-launch bridge token from the backend (issue #138).
-      const attempt = ++localAttempt;
-      const attemptIsCurrent = () => isRunning && !localFinished && attempt === localAttempt;
+      const attempt = ++socketAttempt;
+      const attemptIsCurrent = () => isRunning && !finished && attempt === socketAttempt;
       const retryLocalAttach = () => {
         if (!attemptIsCurrent()) return;
         // Invalidate the old endpoint lookup and socket handlers before closing.
         // A delayed close/open must never affect a more recent attachment.
-        ++localAttempt;
+        ++socketAttempt;
         if (startPtyWatchdog) clearTimeout(startPtyWatchdog);
         if (localInputRef.current?.hasPending) {
           notify.warning(i18n.t('localShell.inputInterrupted'));
@@ -756,7 +787,7 @@ export function PtyTerminal({
         localReconnectBy ??= now + LOCAL_ATTACH_GRACE_MS;
         const remaining = localReconnectBy - now;
         if (remaining <= 0) {
-          finishLocal({ kind: 'attachFailed' });
+          finishSession({ kind: 'attachFailed' });
           return;
         }
         if (connectionStatusRef.current !== 'connecting') {
@@ -764,7 +795,7 @@ export function PtyTerminal({
           onConnectionStatusChange?.(connectionId, 'connecting');
         }
         localRetryTimer = setTimeout(() => {
-          if (isRunning && !localFinished) void connectWebSocket();
+          if (isRunning && !finished) void connectWebSocket();
         }, Math.min(localRetryDelay, remaining));
         localRetryDelay = Math.min(localRetryDelay * 2, LOCAL_MAX_RETRY_MS);
       };
@@ -794,6 +825,7 @@ export function PtyTerminal({
       // multi-byte sequences that may be split across successive output frames.
       const outputDecoder = localOutputDecoder ?? new TextDecoder('utf-8');
       wsRef.current = ws;
+      ptyGenerationRef.current = null;
 
       ws.onopen = () => {
         if (!attemptIsCurrent()) return;
@@ -929,7 +961,7 @@ export function PtyTerminal({
       };
 
       ws.onmessage = (event) => {
-        if (!isRunning || localFinished || wsRef.current !== ws) return;
+        if (!isRunning || finished || wsRef.current !== ws) return;
         // Binary frames carry raw PTY output.
         // Format: [0x01][id_len: u16 BE][connection_id bytes][payload bytes]
         if (event.data instanceof ArrayBuffer) {
@@ -957,16 +989,28 @@ export function PtyTerminal({
                 localInputRef.current?.acknowledge(msg.generation);
               }
               break;
-            case 'LocalPtyExited':
-              if (localShell && msg.connection_id === transportId) {
-                // The native bridge drains the PTY before reporting exit. Flush
-                // any queued final bytes before disabling input on this run.
-                writeBuffer += outputDecoder.decode();
-                if (rafId !== null) cancelAnimationFrame(rafId);
-                flushWriteBuffer();
-                finishLocal({ kind: 'exited', code: typeof msg.exit_code === 'number' ? msg.exit_code : null });
+            case 'PtyExited':
+            case 'LocalPtyExited': {
+              if (msg.connection_id !== transportId || detachedRef.current) break;
+              if (localShell !== (msg.type === 'LocalPtyExited')) break;
+              if (!localShell && (typeof msg.generation !== 'number' || msg.generation !== ptyGenerationRef.current)) break;
+
+              let end: TerminalEnd;
+              if (!localShell && msg.reason === 'signalled' && typeof msg.signal === 'string') {
+                end = { kind: 'signalled', signal: msg.signal };
+              } else if ((localShell || msg.reason === 'exited') &&
+                  (typeof msg.exit_code === 'number' || msg.exit_code === null)) {
+                end = { kind: 'exited', code: msg.exit_code };
+              } else {
+                break;
               }
+              // Both bridges send the exit after the final output frame.
+              writeBuffer += outputDecoder.decode();
+              if (rafId !== null) cancelAnimationFrame(rafId);
+              flushWriteBuffer();
+              finishSession(end);
               break;
+            }
             case 'Success':
               if (localShell || typeof msg.message !== 'string') break;
               console.log(`[PTY Terminal] [${connectionId}]`, msg.message);
@@ -1005,6 +1049,7 @@ export function PtyTerminal({
                   startPtyWatchdog = null;
                 }
                 ptyGenerationRef.current = msg.generation;
+                setTerminalEnd(null);
                 console.log(`[PTY Terminal] [${connectionId}] PTY generation: ${msg.generation}`);
                 if (localShell) {
                   if (localInputRef.current?.generation === msg.generation) break;
@@ -1085,7 +1130,7 @@ export function PtyTerminal({
               if (localShell) {
                 if (msg.connection_id !== undefined && msg.connection_id !== transportId) break;
                 if (errorCode === 'local_pty_input_failed' || errorCode === 'local_pty_unavailable' || (!ptyHandshakeDone && errorCode !== 'local_pty_io')) {
-                  finishLocal({ kind: 'attachFailed', detail: msg.message });
+                  finishSession({ kind: 'attachFailed', detail: msg.message });
                 } else {
                   term.writeln(i18n.t('ptyTerminal.error', { message: msg.message }));
                 }
@@ -1154,7 +1199,7 @@ export function PtyTerminal({
       };
 
       ws.onerror = (error) => {
-        if (localShell) return; // Socket close handles local transport recovery.
+        if (!attemptIsCurrent() || localShell) return; // Socket close handles local transport recovery.
         console.error('[PTY Terminal] WebSocket error:', error);
         term.write(`\r\n\x1b[31m${i18n.t('ptyTerminal.webSocketError')}\x1b[0m\r\n`);
         // Report disconnected status on WebSocket error
@@ -1165,6 +1210,7 @@ export function PtyTerminal({
       };
 
       ws.onclose = () => {
+        if (!attemptIsCurrent()) return;
         if (localShell) {
           retryLocalAttach();
           return;
@@ -1840,22 +1886,20 @@ export function PtyTerminal({
            terminal theme so any partial-row gap at the bottom is invisible. */}
       <div className="absolute inset-0 z-10 flex flex-col">
         <div ref={terminalRef} className="min-h-0 w-full flex-1" />
-        {localShell && (
-          <div className={localEnd ? 'flex shrink-0 flex-wrap items-center gap-2 border-t bg-background px-3 py-2 text-sm text-foreground' : 'sr-only'}>
+        {(localShell || terminalEnd) && (
+          <div className={terminalEnd ? 'flex shrink-0 flex-wrap items-center gap-2 border-t bg-background px-3 py-2 text-sm text-foreground' : 'sr-only'}>
             <div role="status" className="min-w-0 flex-[1_1_14rem]">
-              {localEnd && (
+              {terminalEnd && (
                 <>
-                  {localEnd.kind === 'exited'
-                    ? localEnd.code === null ? t('localShell.exited') : t('localShell.exitedWithCode', { code: localEnd.code })
-                    : t(`localShell.${localEnd.kind}`)}
-                  {localEnd.kind !== 'exited' && localEnd.detail && <p className="break-words text-muted-foreground">{localEnd.detail}</p>}
+                  {terminalEndMessage(terminalEnd, t)}
+                  {'detail' in terminalEnd && terminalEnd.detail && <p className="break-words text-muted-foreground">{terminalEnd.detail}</p>}
                 </>
               )}
             </div>
-            {localEnd && (
+            {terminalEnd && (
               <div className="flex flex-wrap gap-1">
-                <Button size="sm" className="h-auto min-h-8 max-w-full whitespace-normal" onClick={handleReconnect}>{t('localShell.restart')}</Button>
-                {localEnd.kind === 'startFailed' && (
+                <Button size="sm" className="h-auto min-h-8 max-w-full whitespace-normal" onClick={handleReconnect}>{t(localShell ? 'localShell.restart' : 'common.reconnect')}</Button>
+                {terminalEnd.kind === 'startFailed' && (
                   <Button size="sm" variant="secondary" className="h-auto min-h-8 max-w-full whitespace-normal" onClick={openLocalShellSettings}>{t('localShell.openSettings')}</Button>
                 )}
               </div>

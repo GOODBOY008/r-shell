@@ -1498,6 +1498,7 @@
     "close": "Zamknij (Esc)"
   },
   "ptyTerminal": {
+    "exitedWithSignal": "Powłoka została zakończona sygnałem {{signal}}.",
     "terminalNotConnected": "Terminal nie jest połączony",
     "failedToReadClipboard": "Nie udało się odczytać schowka",
     "noSudoPassword": "To połączenie nie ma zapisanego hasła sudo. Dodaj je w ustawieniach połączenia.",

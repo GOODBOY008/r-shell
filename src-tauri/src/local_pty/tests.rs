@@ -111,6 +111,38 @@ async fn native_pty_transfers_input_resizes_and_drains_before_exit() {
     shell.close().await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn ctrl_d_returns_from_inner_shell_then_exits_top_level_pty() {
+    let (shell, mut events) = LocalPty::spawn(80, 24, Some(shell_path())).await.unwrap();
+    timeout(Duration::from_secs(10), async {
+        shell.write(b"/bin/sh -c 'printf \"inner-%s\\n\" ready; read value'; printf 'parent-%s\\n' ready\r".to_vec()).await.unwrap();
+        for marker in ["inner-ready", "parent-ready"] {
+            let mut output = Vec::new();
+            while !String::from_utf8_lossy(&output).contains(marker) {
+                match events.recv().await.unwrap() {
+                    LocalPtyEvent::Output(bytes) => output.extend(bytes),
+                    LocalPtyEvent::Error(error) => panic!("{error}"),
+                    LocalPtyEvent::Exited(code) => panic!("exited before {marker}: {code:?}"),
+                }
+            }
+            assert!(shell.is_running());
+            shell.write(vec![0x04]).await.unwrap();
+        }
+        loop {
+            match events.recv().await.unwrap() {
+                LocalPtyEvent::Output(_) => {}
+                LocalPtyEvent::Error(error) => panic!("{error}"),
+                LocalPtyEvent::Exited(code) => {
+                    assert_eq!(code, Some(0));
+                    break;
+                }
+            }
+        }
+    }).await.expect("both shell EOFs should complete");
+    shell.close().await;
+}
+
 #[tokio::test]
 async fn invalid_override_and_size_do_not_start_a_shell() {
     assert!(LocalPty::spawn(80, 24, Some("relative-shell".into()))

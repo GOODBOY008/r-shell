@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -24,6 +23,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+mod pty;
+pub use pty::{PtyEnd, PtyRead, PtySession};
 pub(crate) mod remote_shell;
 
 /// Preferred host-key algorithms advertised to the server, ordered from most to
@@ -316,23 +317,6 @@ pub struct SshClient {
     /// The stored X11 config, captured at connect time so create_pty_session
     /// can read it without the caller re-passing it.
     x11_config: Option<crate::x11::X11Config>,
-}
-
-// PTY session handle for interactive shell
-pub struct PtySession {
-    pub input_tx: mpsc::Sender<Vec<u8>>,
-    pub output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<Vec<u8>>>>,
-    pub channel_id: ChannelId,
-    /// Sender for resize requests (cols, rows) — forwarded to the SSH channel
-    pub resize_tx: mpsc::Sender<(u32, u32)>,
-    /// Cancellation token — cancelled when this session is torn down.
-    /// The WebSocket reader task should select on this to stop promptly.
-    pub cancel: CancellationToken,
-    /// Set once the PTY output channel has closed because the SSH channel is
-    /// gone (transport dropped). A dead session must never be re-attached:
-    /// its reader errors instantly with "PTY connection closed" and the tab
-    /// would otherwise loop reconnect → reattach → error forever.
-    pub dead: Arc<AtomicBool>,
 }
 
 /// How the server's host key is checked. Set per connection from the
@@ -1728,8 +1712,6 @@ impl SshClient {
             let (input_tx, mut input_rx) = mpsc::channel::<Vec<u8>>(1000); // Increased from 100
             let (output_tx, output_rx) = mpsc::channel::<Vec<u8>>(128); // Bounded: back-pressure to SSH window
 
-            let channel_id = channel.id();
-
             // Clone channel for input task
             let mut input_channel = channel.make_writer();
             if let Some(version) = bash_version {
@@ -1751,7 +1733,8 @@ impl SshClient {
             // Spawn task to handle input (frontend → SSH)
             // This is similar to ttyd's pty_write and INPUT command handling
             // Key: immediate write + flush for responsiveness
-            let input_cancel = cancel.clone();
+            let writer_cancel = cancel.child_token();
+            let input_cancel = writer_cancel.clone();
             tokio::spawn(async move {
                 let mut writer = input_channel;
                 loop {
@@ -1781,7 +1764,10 @@ impl SshClient {
             // We use `tokio::select!` to multiplex between output reading, resize,
             // and session cancellation.
             let output_cancel = cancel.clone();
+            let end = Arc::new(std::sync::OnceLock::new());
+            let output_end = end.clone();
             tokio::spawn(async move {
+                let mut exit = pty::PtyExitTracker::default();
                 loop {
                     tokio::select! {
                         _ = output_cancel.cancelled() => {
@@ -1801,14 +1787,12 @@ impl SshClient {
                                         break;
                                     }
                                 }
-                                Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                                    eprintln!("[PTY] Channel closed");
-                                    break;
+                                message => {
+                                    if let Some(reason) = exit.observe(message) {
+                                        let _ = output_end.set(reason);
+                                        break;
+                                    }
                                 }
-                                Some(ChannelMsg::ExitStatus { exit_status }) => {
-                                    eprintln!("[PTY] Process exited with status: {}", exit_status);
-                                }
-                                _ => {}
                             }
                         }
                         resize = resize_rx.recv() => {
@@ -1829,6 +1813,9 @@ impl SshClient {
                     }
                 }
 
+                // Wake the reader as soon as the final bytes and outcome are ready.
+                drop(output_tx);
+                writer_cancel.cancel();
                 // Close the SSH channel on every exit path. Dropping the
                 // handle does not close a russh channel, so without this the
                 // remote shell kept running after the tab was closed.
@@ -1838,10 +1825,9 @@ impl SshClient {
             Ok(PtySession {
                 input_tx,
                 output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
-                channel_id,
                 resize_tx,
                 cancel,
-                dead: Arc::new(AtomicBool::new(false)),
+                end,
             })
         } else {
             Err(anyhow::anyhow!("Not connected"))

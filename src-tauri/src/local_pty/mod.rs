@@ -97,8 +97,8 @@ impl LocalPty {
             }
             let (status, _) = tokio::join!(supervisor, writer);
             finished.cancel();
-            let status = status.map_err(anyhow::Error::from).and_then(|s| s);
-            if let Some(error) = read_result.as_ref().err().or_else(|| status.as_ref().err()) {
+            let status = read_result.and(status.map_err(anyhow::Error::from).and_then(|s| s));
+            if let Err(error) = &status {
                 send_event(&output, LocalPtyEvent::Error(error.to_string()), &closing).await;
             }
             send_event(&output, LocalPtyEvent::Exited(status.ok()), &closing).await;

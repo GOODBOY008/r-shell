@@ -2336,3 +2336,115 @@ mod auth_timeout_tests {
         assert_eq!(crate::ssh::summarize_command("echo hi"), "echo hi");
     }
 }
+
+#[cfg(test)]
+mod pty_exit_tests {
+    use crate::ssh::{Client, HostKeyPolicy, PtyEnd, PtyRead, SshClient};
+    use russh::keys::{Algorithm, PrivateKey};
+    use russh::{client, server, Channel, ChannelId};
+    use std::{sync::Arc, time::Duration};
+
+    /// Two prompt levels on a real SSH channel over an in-memory transport.
+    struct ShellPeer {
+        inner: bool,
+    }
+
+    impl server::Handler for ShellPeer {
+        type Error = russh::Error;
+
+        async fn auth_none(&mut self, _user: &str) -> Result<server::Auth, Self::Error> {
+            Ok(server::Auth::Accept)
+        }
+
+        async fn channel_open_session(
+            &mut self,
+            _: Channel<server::Msg>,
+            reply: server::ChannelOpenHandle,
+            _: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            reply.accept().await;
+            Ok(())
+        }
+
+        async fn exec_request(
+            &mut self,
+            id: ChannelId,
+            _: &[u8],
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            // The shell probe runs on a separate channel. Use the plain PTY path.
+            session.exit_status_request(id, 1)?;
+            session.close(id)
+        }
+
+        async fn shell_request(
+            &mut self,
+            id: ChannelId,
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            session.channel_success(id)
+        }
+
+        async fn data(
+            &mut self,
+            id: ChannelId,
+            data: &[u8],
+            session: &mut server::Session,
+        ) -> Result<(), Self::Error> {
+            assert_eq!(data, b"\x04");
+            if self.inner {
+                self.inner = false;
+                return session.data(id, b"parent$ ".as_slice());
+            }
+            session.data(id, b"logout\r\n".as_slice())?;
+            session.eof(id)?;
+            session.exit_status_request(id, 0)?;
+            session.close(id)
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_ctrl_d_reaches_the_peer_and_only_top_level_exit_ends_the_pty() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (local, remote) = tokio::io::duplex(64 * 1024);
+            let config = server::Config {
+                keys: vec![PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap()],
+                ..Default::default()
+            };
+            let peer = tokio::spawn(async move {
+                server::run_stream(Arc::new(config), remote, ShellPeer { inner: true })
+                    .await
+                    .unwrap()
+                    .await
+            });
+            let mut ssh = SshClient::new();
+            let (client, _) = Client::with_known_hosts(
+                "shell-test",
+                22,
+                None,
+                HostKeyPolicy::Off,
+                ssh.x11_registry.clone(),
+            );
+            let mut handle =
+                client::connect_stream(Arc::new(client::Config::default()), local, client)
+                    .await
+                    .unwrap();
+            assert!(handle.authenticate_none("test").await.unwrap().success());
+            ssh.session = Some(Arc::new(handle));
+            let pty = ssh.create_pty_session(80, 24, "tab").await.unwrap();
+
+            for output in [b"parent$ ".as_slice(), b"logout\r\n".as_slice()] {
+                pty.input_tx.send(vec![4]).await.unwrap();
+                assert_eq!(pty.read_output(None).await, PtyRead::Data(output.to_vec()));
+            }
+            assert_eq!(
+                pty.read_output(None).await,
+                PtyRead::Ended(PtyEnd::Exited { exit_code: Some(0) })
+            );
+            ssh.disconnect().await.unwrap();
+            peer.await.unwrap().unwrap();
+        })
+        .await
+        .expect("SSH shell lifecycle should complete");
+    }
+}

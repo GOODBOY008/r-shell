@@ -1436,6 +1436,7 @@
     "close": "关闭 (Esc)"
   },
   "ptyTerminal": {
+    "exitedWithSignal": "Shell 已因信号 {{signal}} 终止。",
     "terminalNotConnected": "终端未连接",
     "failedToReadClipboard": "从剪贴板读取失败",
     "noSudoPassword": "此连接未保存 sudo 密码。请在连接设置中添加。",

@@ -11,6 +11,8 @@ export interface TerminalCallbacks {
   closeTabShortcut?: string;
   /** Full reconnect: re-establishes the backend connection then remounts the terminal. */
   onReconnectTab?: (tabId: string, automatic?: boolean) => void | Promise<void>;
+  /** Removes the owning tab after a clean top-level shell exit. */
+  onShellExit?: (tabId: string) => void;
   /** Reports a terminal's remote working directory without coupling it to the file browser. */
   onWorkingDirectoryChange?: (connectionId: string, path: string) => void;
   /**
