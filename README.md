@@ -13,7 +13,7 @@
 
 R-Shell supports SSH, SFTP, FTP/FTPS, RDP, and VNC on macOS, Windows, and Linux. It uses a Rust backend and the system webview through Tauri 2.
 
-[Download](#-installation) · [Features](#-features) · [Screenshots](#-screenshots) · [Contributing](#-contributing)
+[Website](https://r-shell.pages.dev/) · [Docs](https://r-shell.pages.dev/docs/) · [Download](#-installation) · [Features](#-features) · [Screenshots](#-screenshots) · [Contributing](#-contributing)
 
 </div>
 
@@ -233,6 +233,8 @@ brew upgrade --cask r-shell
 Homebrew-managed installs update exclusively through brew — the in-app updater detects them and stands down automatically.
 
 ### 📥 Download Releases (stable)
+
+The [official downloads page](https://r-shell.pages.dev/download/) lists GitHub and Cloudflare R2 download links and a SHA-256 checksum for each installer.
 
 Download from the [Releases](https://github.com/GOODBOY008/r-shell/releases) page:
 
