@@ -1,0 +1,183 @@
+---
+const { t } = Astro.locals;
+const base = Astro.url.pathname.startsWith('/zh/') ? '/zh' : '';
+const features = [
+  { path: 'transfers', image: 'file-transfer-workspace', width: 1100, height: 742 },
+  { path: 'monitoring', image: 'multi-host-dashboard', width: 1460, height: 1034 },
+] as const;
+---
+
+<div class="home">
+  <section class="hero" aria-labelledby="home-title">
+    <div class="hero-copy">
+      <p class="product-kind">{t('site.home.kind')}</p>
+      <h1 id="home-title">{t('site.home.headline')}<span>{t('site.home.headlineAccent')}</span></h1>
+      <p class="intro">{t('site.home.intro')}</p>
+      <div class="actions">
+        <a class="primary" href={`${base}/download/`}>{t('site.home.download')}</a>
+        <a class="secondary" href={`${base}/docs/`}>{t('site.home.handbook')}</a>
+      </div>
+      <p class="platforms">{t('site.home.platforms')}</p>
+    </div>
+    <figure class="hero-visual">
+      <div class="hero-screen">
+        <img
+          src="/media/ssh-workspace.webp"
+          width="1540"
+          height="980"
+          alt={t('site.home.screenshot')}
+          fetchpriority="high"
+        />
+      </div>
+      <figcaption>
+        <span>{t('site.home.demo')}</span>
+        <a href="/media/ssh-workspace.webp">{t('site.home.expand')}</a>
+      </figcaption>
+    </figure>
+  </section>
+
+  {features.map((feature, i) => (
+    <section class:list={['feature', { reverse: i === 1 }]} aria-labelledby={`feature-${feature.path}`}>
+      <div class="feature-copy">
+        <h2 id={`feature-${feature.path}`}>{t(`site.home.${feature.path}.title`)}</h2>
+        <p>{t(`site.home.${feature.path}.description`)}</p>
+        <a class="guide-link" href={`${base}/docs/${feature.path}/`}>{t(`site.home.${feature.path}.link`)}</a>
+      </div>
+      <div class="feature-screen">
+        <img
+          src={`/media/${feature.image}.webp`}
+          width={feature.width}
+          height={feature.height}
+          alt={t(`site.home.${feature.path}.alt`)}
+          loading="lazy"
+          decoding="async"
+        />
+      </div>
+    </section>
+  ))}
+</div>
+
+<style>
+  .home {
+    --home-ink: #f3f7f8;
+    --home-copy: #b5c4cd;
+    --home-muted: #9aaeb8;
+    --home-accent: #a0eed4;
+    --home-rule: #2a393f;
+    color: var(--home-ink);
+    width: min(100%, 88rem);
+    margin-inline: auto;
+    padding-inline: clamp(1.15rem, 4.8vw, 4.2rem);
+    container: homepage / inline-size;
+  }
+
+  .home :where(h1, h2, p, figure) { margin: 0; }
+  .home :where(a:focus-visible) { outline: 3px solid #74dfce; outline-offset: 4px; }
+  .hero,
+  .feature { display: grid; align-items: center; gap: clamp(1.5rem, 5cqi, 4rem); }
+  .hero { padding-block: clamp(2.5rem, 7cqi, 6.75rem) clamp(2.75rem, 6cqi, 5.25rem); }
+  .hero-copy,
+  .hero-visual,
+  .feature-copy,
+  .feature-screen { min-width: 0; }
+
+  .product-kind {
+    color: var(--home-accent);
+    font-size: .9rem;
+    line-height: 1.5;
+    font-weight: 600;
+  }
+  .home h1 {
+    margin-block: .9rem 1.2rem;
+    color: var(--home-ink);
+    font-size: clamp(3rem, 1.7rem + 3.9vw, 5.8rem);
+    line-height: .99;
+    letter-spacing: -.058em;
+    font-weight: 700;
+  }
+  .home h1 span { display: block; color: var(--home-accent); }
+  .home:lang(zh-CN) h1,
+  .home:lang(zh) h1 { line-height: 1.15; letter-spacing: -.04em; }
+  .intro,
+  .feature-copy p { color: var(--home-copy); line-height: 1.65; }
+  .intro { max-width: 42ch; font-size: clamp(1.0625rem, 1rem + .3vw, 1.27rem); }
+  .actions { display: flex; flex-wrap: wrap; gap: .65rem; margin-block-start: 1.6rem; }
+  .actions a {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 2.875rem;
+    padding: .64rem 1.15rem;
+    border: 1px solid transparent;
+    border-radius: .5rem;
+    text-decoration: none;
+    font-size: .99rem;
+    line-height: 1.4;
+    font-weight: 650;
+  }
+  .actions .primary { color: #0b2320; background: var(--home-accent); }
+  .actions .primary:hover { background: #c6f7e9; }
+  .actions .secondary { color: var(--home-ink); border-color: #516269; }
+  .actions .secondary:hover { border-color: var(--home-accent); }
+  .platforms { padding-block-start: .8rem; color: var(--home-muted); font-size: .9rem; }
+
+  .hero-screen,
+  .feature-screen {
+    position: relative;
+    border: 1px solid #3e575c;
+    border-radius: .8rem;
+    background: #131d24;
+  }
+  .hero-screen {
+    padding: clamp(.32rem, .65cqi, .55rem);
+    background: linear-gradient(135deg, #254049 0%, #233139 54%, #173c35);
+    box-shadow: 0 1.15rem 3.8rem -1.7rem #020605;
+  }
+  .hero-screen img,
+  .feature-screen img { display: block; width: 100%; height: auto; }
+  .hero-screen img { border-radius: .44rem; }
+  .hero-visual figcaption {
+    padding: .7rem .1rem 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .45rem 1rem;
+    flex-wrap: wrap;
+    color: var(--home-muted);
+    font-size: .875rem;
+    line-height: 1.45;
+  }
+  figcaption a,
+  .guide-link { color: var(--home-accent); text-underline-offset: .22em; }
+  figcaption a { padding-block: .18rem; }
+  .feature { padding-block: clamp(2.4rem, 5cqi, 4rem); border-top: 1px solid var(--home-rule); }
+  .feature-copy { max-width: 37rem; }
+  .home h2 {
+    color: var(--home-ink);
+    font-size: clamp(1.85rem, 1.2rem + 2.3vw, 3.1rem);
+    font-weight: 650;
+    line-height: 1.1;
+    letter-spacing: -.04em;
+  }
+  .home:lang(zh-CN) h2,
+  .home:lang(zh) h2 { line-height: 1.28; }
+  .feature-copy p { margin-block-start: 1.05rem; font-size: 1.0625rem; max-width: 49ch; }
+  .guide-link {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.75rem;
+    margin-block-start: .65rem;
+    font-weight: 550;
+  }
+  .feature-screen { padding: .3rem; }
+  .feature-screen img { border-radius: .46rem; }
+
+  @container homepage (min-width: 54rem) {
+    .hero { grid-template-columns: minmax(0, .84fr) minmax(0, 1.35fr); column-gap: clamp(1.75rem, 3.6cqi, 3.5rem); }
+    .home h1 { font-size: clamp(3rem, 1rem + 4.65cqi, 5.55rem); }
+    .feature { grid-template-columns: minmax(0, .78fr) minmax(0, 1.18fr); }
+    .feature.reverse { grid-template-columns: minmax(0, 1.18fr) minmax(0, .78fr); }
+    .reverse .feature-copy { grid-area: 1 / 2; }
+    .reverse .feature-screen { grid-area: 1 / 1; }
+  }
+</style>

@@ -30,6 +30,7 @@ tauri-plugin-positioner = "2"
 tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+semver = "1"
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 russh = "0.65"
@@ -51,6 +52,7 @@ dirs = "7"
 glob = "0.3"
 open = "5"
 base64 = "0.23"
+minisign-verify = "0.3"
 sys-locale = "0.3"
 keyring = "4"
 aes-gcm = "0.11"
@@ -102,6 +104,11 @@ default = []
 # require the Dockerized sshd from tests/x11-e2e/ and are #[ignore]d; run with:
 #   cargo test --features x11-e2e -- --ignored --nocapture x11_e2e
 x11-e2e = []
+
+# The Tauri mock runtime cannot load in Windows test executables. Exercise its
+# end-to-end transport on Unix and test the shared manifest validation on all hosts.
+[target.'cfg(unix)'.dev-dependencies]
+tauri = { version = "2.1", features = ["test"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

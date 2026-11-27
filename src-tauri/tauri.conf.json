@@ -28,6 +28,7 @@
   },
   "plugins": {
     "updater": {
+      "requireSignedVersion": true,
       "active": true,
       "endpoints": [
         "https://github.com/GOODBOY008/r-shell/releases/latest/download/latest.json"

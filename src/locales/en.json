@@ -977,6 +977,8 @@
     "sendSudoPassword": "Type sudo password"
   },
   "updateChecker": {
+    "tryingSource": "Retrying download from {{source}}…",
+    "usingSource": "Update source: {{source}}",
     "checkForUpdates": "Check for Updates",
     "checking": "Checking for updates...",
     "upToDate": "You're up to date!",

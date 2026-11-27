@@ -1,0 +1,11 @@
+{
+  "name": "r-shell",
+  "compatibility_date": "2026-11-01",
+  "pages_build_output_dir": "./dist",
+  "r2_buckets": [
+    {
+      "binding": "RELEASES",
+      "bucket_name": "r-shell-releases"
+    }
+  ]
+}

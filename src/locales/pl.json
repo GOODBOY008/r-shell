@@ -1001,6 +1001,8 @@
     "sendSudoPassword": "Wpisz hasło sudo"
   },
   "updateChecker": {
+    "tryingSource": "Ponowne pobieranie z {{source}}…",
+    "usingSource": "Źródło aktualizacji: {{source}}",
     "checkForUpdates": "Sprawdź aktualizacje",
     "checking": "Sprawdzanie aktualizacji...",
     "upToDate": "Masz najnowszą wersję!",

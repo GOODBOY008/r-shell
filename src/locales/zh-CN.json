@@ -975,6 +975,8 @@
     "sendSudoPassword": "输入 sudo 密码"
   },
   "updateChecker": {
+    "tryingSource": "正在从 {{source}} 重新下载…",
+    "usingSource": "更新来源：{{source}}",
     "checkForUpdates": "检查更新",
     "checking": "正在检查更新...",
     "upToDate": "已是最新版本！",

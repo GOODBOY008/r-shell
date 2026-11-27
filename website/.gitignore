@@ -1,0 +1,4 @@
+.astro/
+.wrangler/
+public/media/
+.data/

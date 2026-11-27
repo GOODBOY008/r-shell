@@ -1,0 +1,6 @@
+---
+import SiteShell from '../../components/SiteShell.astro';
+import HomeContent from '../../components/HomeContent.astro';
+const { t } = Astro.locals;
+---
+<SiteShell title={t('site.home.title')} description={t('site.home.description')}><HomeContent/></SiteShell>

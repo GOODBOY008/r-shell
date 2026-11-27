@@ -199,13 +199,8 @@ jobs:
           # like v3.0.0-current.1) and compat-line beta/rc tags. Stable tags
           # are always vX.Y.Z (no dash).
           prerelease: ${{ matrix.baseline == 'current' || (startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-')) }}
-          # The complete manifest is assembled by upload-updater-json /
-          # upload-current-json; a per-job latest.json would be partial, so
-          # only stable compat tags (vX.Y.Z) let tauri-action emit one at all.
-          # tauri-action v1 renamed this input from includeUpdaterJson; the
-          # old name is silently ignored and the v1 default (true) would make
-          # every matrix job upload a partial manifest.
-          uploadUpdaterJson: ${{ matrix.baseline == 'compat' && !contains(github.ref_name, '-') }}
+          # Only the aggregate jobs publish complete channel manifests.
+          uploadUpdaterJson: false
           args: ${{ matrix.args }}
 
   # Generate and upload latest.json for the in-app updater.

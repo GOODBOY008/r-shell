@@ -1,0 +1,28 @@
+{
+  "stable": {
+    "version": "0.0.1",
+    "installers": [
+      {
+        "platform": "macOS",
+        "arch": "Apple Silicon",
+        "format": "DMG",
+        "name": "r-shell_0.0.1_aarch64.dmg",
+        "size": 1024,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "current": {
+    "version": "0.0.2-current.1",
+    "installers": [
+      {
+        "platform": "Windows",
+        "arch": "x64",
+        "format": "EXE",
+        "name": "r-shell_0.0.2-current.1_x64-setup.exe",
+        "size": 2048,
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    ]
+  }
+}

@@ -65,6 +65,7 @@ interface UpdateMeta {
 interface UpdaterProgressPayload {
   downloaded: number;
   total: number | null;
+  fallbackSource?: 'GitHub' | 'Cloudflare';
 }
 
 /** Read the user's "auto check for updates" preference from localStorage. */
@@ -101,6 +102,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
   const [status, setStatus] = useState<UpdateStatus>('idle');
   const [updateInfo, setUpdateInfo] = useState<UpdateMeta | null>(null);
   const [progress, setProgress] = useState(0);
+  const [fallbackSource, setFallbackSource] = useState<UpdaterProgressPayload['fallbackSource']>();
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   // The auto toast's "Download update" action also opens the dialog from
@@ -161,6 +163,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
       return;
     }
 
+    setFallbackSource(undefined);
     setStatus('checking');
     setError(null);
 
@@ -320,6 +323,7 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
   }, [t, applyAnnouncement]);
 
   const handleDownload = useCallback(async () => {
+    setFallbackSource(undefined);
     setStatus('downloading');
     setProgress(0);
     setError(null);
@@ -376,7 +380,11 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
     let disposed = false;
     let unlisten: UnlistenFn | undefined;
     void listen<UpdaterProgressPayload>('updater://progress', (event) => {
-      const { downloaded, total } = event.payload;
+      const { downloaded, total, fallbackSource: nextSource } = event.payload;
+      if (nextSource) {
+        setFallbackSource(nextSource);
+        setProgress(0);
+      }
       if (total && total > 0) {
         const percent = Math.round((downloaded / total) * 100);
         setProgress(Math.max(0, Math.min(100, percent)));
@@ -518,10 +526,13 @@ export function UpdateChecker({ checkSignal, openDialogSignal, onAnnouncement }:
 
         <div className="space-y-3">
           <p className="max-h-[45dvh] overflow-y-auto break-words rounded-md border border-border bg-muted/30 p-3 text-sm text-muted-foreground whitespace-pre-line">{notes}</p>
+          {fallbackSource && (status === 'available' || status === 'checking') && (
+            <p role="status" className="text-sm text-muted-foreground">{t('updateChecker.usingSource', { source: fallbackSource })}</p>
+          )}
           {status === 'downloading' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{t('updateChecker.downloading')}</span>
+                <span>{fallbackSource ? t('updateChecker.tryingSource', { source: fallbackSource }) : t('updateChecker.downloading')}</span>
                 <span>{progress}%</span>
               </div>
               <Progress value={progress} />
