@@ -1,5 +1,6 @@
 ---
 import SiteShell from '../../components/SiteShell.astro';
 import HomeContent from '../../components/HomeContent.astro';
+const { t } = Astro.locals;
 ---
-<SiteShell zh={true} title="R-Shell · SSH 与远程桌面工作区" description="在 macOS、Windows 和 Linux 上分屏使用 SSH、传输文件、监控多台主机。"><HomeContent zh={true}/></SiteShell>
+<SiteShell title={t('site.home.title')} description={t('site.home.description')}><HomeContent/></SiteShell>

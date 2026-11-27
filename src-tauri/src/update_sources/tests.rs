@@ -15,6 +15,7 @@ enum Manifest {
     Version(&'static str),
     HttpError,
     Malformed,
+    MalformedSignature,
     MissingPlatform,
     Stall,
 }
@@ -82,7 +83,12 @@ impl Server {
                                 } else {
                                     "releases"
                                 };
-                                let entry = json!({"signature":include_str!("test-package.sig").trim(), "url":url.join(&format!("{prefix}/v{version}/{NAME}")).unwrap().as_str()});
+                                let signature = if matches!(mode, Manifest::MalformedSignature) {
+                                    "YWJj"
+                                } else {
+                                    include_str!("test-package.sig").trim()
+                                };
+                                let entry = json!({"signature":signature, "url":url.join(&format!("{prefix}/v{version}/{NAME}")).unwrap().as_str()});
                                 let target = if matches!(mode, Manifest::MissingPlatform) {
                                     "missing"
                                 } else {
@@ -177,6 +183,7 @@ async fn checks_fall_back_on_status_timeout_html_missing_target_and_wrong_channe
         Manifest::Stall,
         Manifest::HttpError,
         Manifest::Malformed,
+        Manifest::MalformedSignature,
         Manifest::MissingPlatform,
         Manifest::Version("3.0.0-current.1"),
     ] {
@@ -335,4 +342,33 @@ async fn manifest_deadline_is_independent_of_download_idle_limit() {
         .unwrap()
         .unwrap();
     assert!(selected.source == Source::Cloudflare);
+}
+
+#[tokio::test]
+async fn failed_refresh_preserves_only_the_announced_channel() {
+    let app = application();
+    let primary = Server::start(Source::Github, Manifest::Version("2.0.0"), Package::Good).await;
+    let failed = Server::start(Source::Cloudflare, Manifest::HttpError, Package::Missing).await;
+    let mut slot = None;
+    sources(&primary, &failed)
+        .refresh(&mut slot, Channel::Stable, || builder(&app), |_| {})
+        .await
+        .unwrap();
+    for channel in [Channel::Stable, Channel::Current] {
+        assert!(sources(&failed, &failed)
+            .refresh(&mut slot, channel, || builder(&app), |_| {})
+            .await
+            .is_err());
+        if channel == Channel::Stable {
+            let bytes = slot
+                .as_ref()
+                .unwrap()
+                .download(|_, _| {}, |_| {})
+                .await
+                .unwrap();
+            assert_eq!(bytes, GOOD);
+        } else {
+            assert!(slot.is_none());
+        }
+    }
 }

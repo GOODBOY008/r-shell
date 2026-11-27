@@ -5401,6 +5401,7 @@ dependencies = [
  "ironrdp-tokio",
  "keyring",
  "libc",
+ "minisign-verify",
  "native-tls",
  "objc2",
  "objc2-app-kit",

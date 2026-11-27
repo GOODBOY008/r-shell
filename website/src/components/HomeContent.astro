@@ -1,78 +1,23 @@
 ---
-interface Props {
-  zh: boolean;
-}
-
-const { zh } = Astro.props;
-const base = zh ? '/zh' : '';
-const copy = zh
-  ? {
-      kind: '开源 SSH 与远程桌面客户端',
-      headline: ['多台主机，', '并排管理。'],
-      intro: '把不同主机的 SSH 会话放进分屏，在标签页中打开 RDP 或 VNC 桌面，随时查看远程文件和系统指标。',
-      download: '下载 R-Shell',
-      handbook: '阅读用户手册',
-      platforms: '适用于 macOS、Windows 和 Linux',
-      screenshot: '在两个分屏终端中，edge-01 显示部署日志，edge-02 运行 htop。下方打开了 SFTP 文件浏览器。',
-      demo: '两个 SSH 会话中的灰度部署检查',
-      expand: '查看原图',
-      features: [
-        {
-          title: '在本地与远端之间传文件',
-          description: '在双栏文件浏览器中上传目录、打开远程配置文件。同步前可以逐项比较差异，选择要传输或跳过的文件。',
-          alt: '双栏 SFTP 文件浏览器中选中了本地构建文件，下方传输队列显示了上传进度。',
-          link: '文件传输指南',
-        },
-        {
-          title: '把多台主机的指标放在一起看',
-          description: '通过 SSH 采集数据，将不同主机的请求量、延迟和服务状态放在同一块看板上。把发布检查清单放在图表旁，边观察边核对。',
-          alt: 'Edge fleet 看板并排展示两台主机的请求率、P95 响应时间、服务健康状态和灰度发布清单。',
-          link: '监控与看板指南',
-        },
-      ],
-    }
-  : {
-      kind: 'Open-source SSH and remote desktop client',
-      headline: ['Your servers,', 'side by side.'],
-      intro: 'Split SSH sessions across your screen, open RDP or VNC desktops in tabs, and keep remote files and live system metrics in view.',
-      download: 'Download R-Shell',
-      handbook: 'Read the handbook',
-      platforms: 'For macOS, Windows, and Linux',
-      screenshot: 'Split SSH terminals show deployment logs on edge-01 and htop on edge-02, above an SFTP browser with remote configuration files.',
-      demo: 'Checking a canary deployment across two SSH sessions',
-      expand: 'View full image',
-      features: [
-        {
-          title: 'Move files between machines',
-          description: 'Upload a directory or open a remote configuration file in the dual-pane file browser. Compare changes before you sync, then choose which files to transfer or skip.',
-          alt: 'The two-pane SFTP browser shows selected local build files, a remote site directory, and an active upload in the transfer queue.',
-          link: 'File transfer guide',
-        },
-        {
-          title: 'Compare metrics across hosts',
-          description: 'Collect data over SSH and put request rates, latency, and service health on the same dashboard. Keep a rollout checklist beside the charts as you watch a deployment.',
-          alt: 'An Edge fleet dashboard compares request rate and P95 response time across two hosts beside service health and a canary rollout checklist.',
-          link: 'Monitoring and dashboards',
-        },
-      ],
-    };
+const { t } = Astro.locals;
+const base = Astro.url.pathname.startsWith('/zh/') ? '/zh' : '';
 const features = [
-  { ...copy.features[0], path: 'transfers', image: 'file-transfer-workspace', width: 1100, height: 742 },
-  { ...copy.features[1], path: 'monitoring', image: 'multi-host-dashboard', width: 1460, height: 1034 },
-];
+  { path: 'transfers', image: 'file-transfer-workspace', width: 1100, height: 742 },
+  { path: 'monitoring', image: 'multi-host-dashboard', width: 1460, height: 1034 },
+] as const;
 ---
 
 <div class="home">
   <section class="hero" aria-labelledby="home-title">
     <div class="hero-copy">
-      <p class="product-kind">{copy.kind}</p>
-      <h1 id="home-title">{copy.headline[0]}<span>{copy.headline[1]}</span></h1>
-      <p class="intro">{copy.intro}</p>
+      <p class="product-kind">{t('site.home.kind')}</p>
+      <h1 id="home-title">{t('site.home.headline')}<span>{t('site.home.headlineAccent')}</span></h1>
+      <p class="intro">{t('site.home.intro')}</p>
       <div class="actions">
-        <a class="primary" href={`${base}/download/`}>{copy.download}</a>
-        <a class="secondary" href={`${base}/docs/`}>{copy.handbook}</a>
+        <a class="primary" href={`${base}/download/`}>{t('site.home.download')}</a>
+        <a class="secondary" href={`${base}/docs/`}>{t('site.home.handbook')}</a>
       </div>
-      <p class="platforms">{copy.platforms}</p>
+      <p class="platforms">{t('site.home.platforms')}</p>
     </div>
     <figure class="hero-visual">
       <div class="hero-screen">
@@ -80,13 +25,13 @@ const features = [
           src="/media/ssh-workspace.webp"
           width="1540"
           height="980"
-          alt={copy.screenshot}
+          alt={t('site.home.screenshot')}
           fetchpriority="high"
         />
       </div>
       <figcaption>
-        <span>{copy.demo}</span>
-        <a href="/media/ssh-workspace.webp">{copy.expand}</a>
+        <span>{t('site.home.demo')}</span>
+        <a href="/media/ssh-workspace.webp">{t('site.home.expand')}</a>
       </figcaption>
     </figure>
   </section>
@@ -94,16 +39,16 @@ const features = [
   {features.map((feature, i) => (
     <section class:list={['feature', { reverse: i === 1 }]} aria-labelledby={`feature-${feature.path}`}>
       <div class="feature-copy">
-        <h2 id={`feature-${feature.path}`}>{feature.title}</h2>
-        <p>{feature.description}</p>
-        <a class="guide-link" href={`${base}/docs/${feature.path}/`}>{feature.link}</a>
+        <h2 id={`feature-${feature.path}`}>{t(`site.home.${feature.path}.title`)}</h2>
+        <p>{t(`site.home.${feature.path}.description`)}</p>
+        <a class="guide-link" href={`${base}/docs/${feature.path}/`}>{t(`site.home.${feature.path}.link`)}</a>
       </div>
       <div class="feature-screen">
         <img
           src={`/media/${feature.image}.webp`}
           width={feature.width}
           height={feature.height}
-          alt={feature.alt}
+          alt={t(`site.home.${feature.path}.alt`)}
           loading="lazy"
           decoding="async"
         />

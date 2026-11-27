@@ -1,9 +1,11 @@
 ---
-interface Props { zh: boolean; title: string; description: string }
-const { zh, title, description } = Astro.props;
+interface Props { title: string; description: string }
+const { title, description } = Astro.props;
+const { t } = Astro.locals;
+const zh = Astro.url.pathname.startsWith('/zh/');
 const prefix = zh ? '/zh' : '';
 const path = Astro.url.pathname.replace(/^\/zh(?=\/)/,'');
-const destinations = [[prefix + '/',zh?'首页':'Home'],[prefix + '/docs/',zh?'手册':'Docs'],[prefix + '/download/',zh?'下载':'Download']];
+const destinations = [[prefix + '/',t('site.nav.home')],[prefix + '/docs/',t('site.nav.docs')],[prefix + '/download/',t('site.nav.download')]];
 const canonical = new URL(Astro.url.pathname, Astro.site);
 ---
 <!doctype html>
@@ -15,16 +17,16 @@ const canonical = new URL(Astro.url.pathname, Astro.site);
     <link rel="alternate" hreflang="en" href={new URL(path,Astro.site)}/><link rel="alternate" hreflang="zh-CN" href={new URL('/zh'+path,Astro.site)}/>
   </head>
   <body>
-    <a class="skip" href="#main">{zh?'跳到正文':'Skip to content'}</a>
+    <a class="skip" href="#main">{t('site.nav.skip')}</a>
     <header class="top"><div class="navwrap">
       <a class="brand" href={prefix+'/'}><img src="/media/r-shell-icon.svg" alt="" width="34" height="34"/>R-Shell</a>
-      <nav aria-label={zh?'主导航':'Main navigation'}>{destinations.map(([href,label])=><a href={href} aria-current={Astro.url.pathname===href?'page':undefined}>{label}</a>)}
+      <nav aria-label={t('site.nav.navigation')}>{destinations.map(([href,label])=><a href={href} aria-current={Astro.url.pathname===href?'page':undefined}>{label}</a>)}
         <a href="https://github.com/GOODBOY008/r-shell">GitHub</a>
-        <a class="lang" href={zh?path:'/zh'+path} lang={zh?'en':'zh-CN'}>{zh?'English':'中文'}</a>
+        <a class="lang" href={zh?path:'/zh'+path} lang={zh?'en':'zh-CN'}>{t('site.nav.language')}</a>
       </nav>
     </div></header>
     <main id="main"><slot/></main>
-    <footer class="foot"><a class="brand" href={prefix+'/'}><img src="/media/r-shell-icon.svg" alt="" width="24" height="24"/>R-Shell</a><a href="https://github.com/GOODBOY008/r-shell">{zh?'GitHub 源码':'Source on GitHub'}</a></footer>
+    <footer class="foot"><a class="brand" href={prefix+'/'}><img src="/media/r-shell-icon.svg" alt="" width="24" height="24"/>R-Shell</a><a href="https://github.com/GOODBOY008/r-shell">{t('site.nav.source')}</a></footer>
   </body>
 </html>
 <style is:global>

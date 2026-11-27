@@ -5404,9 +5404,9 @@ pub async fn updater_check(
         return Err("Invalid update proxy URL".into());
     }
     let mut slot = pending.0.lock().await;
-    *slot = None;
-    let selected = Sources::official()
-        .check(
+    Sources::official()
+        .refresh(
+            &mut slot,
             channel,
             || {
                 let builder = app.updater_builder();
@@ -5418,13 +5418,11 @@ pub async fn updater_check(
             |source| update_source_changed(&app, source),
         )
         .await?;
-    let metadata = selected.as_ref().map(|s| UpdateMeta {
+    Ok(slot.as_ref().map(|s| UpdateMeta {
         version: s.update.version.clone(),
         current_version: s.update.current_version.clone(),
         body: s.update.body.clone(),
-    });
-    *slot = selected;
-    Ok(metadata)
+    }))
 }
 
 #[tauri::command]

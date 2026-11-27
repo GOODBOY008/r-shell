@@ -8,6 +8,13 @@ use tokio::time::timeout;
 const CONNECT: Duration = Duration::from_secs(8);
 const READ_IDLE: Duration = Duration::from_secs(30);
 
+fn validate_signature(encoded: &str) -> Result<(), String> {
+    let bytes = BASE64.decode(encoded.trim()).map_err(|e| e.to_string())?;
+    let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+    minisign_verify::Signature::decode(text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Channel {
     Stable,
@@ -98,13 +105,11 @@ impl Sources {
             || !name
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
-            || BASE64
-                .decode(update.signature.trim())
-                .map_or(true, |raw| raw.is_empty())
             || self.package(source, &update.version, name) != update.download_url
         {
-            return Err("Invalid update channel, signature or versioned asset URL".into());
+            return Err("Invalid update channel or versioned asset URL".into());
         }
+        validate_signature(&update.signature)?;
         let alternate = self.package(source.other(), &update.version, name);
         Ok(SelectedUpdate {
             update,
@@ -113,7 +118,26 @@ impl Sources {
         })
     }
 
-    pub(crate) async fn check(
+    pub(crate) async fn refresh(
+        &self,
+        slot: &mut Option<SelectedUpdate>,
+        channel: Channel,
+        builder: impl FnMut() -> UpdaterBuilder,
+        on_switch: impl Fn(Source),
+    ) -> Result<(), String> {
+        // Keep an already announced update across a transient check failure
+        // only while the user stays on the channel that supplied it.
+        if slot
+            .as_ref()
+            .is_some_and(|s| !channel.accepts(&s.update.version))
+        {
+            *slot = None;
+        }
+        *slot = self.check(channel, builder, on_switch).await?;
+        Ok(())
+    }
+
+    async fn check(
         &self,
         channel: Channel,
         mut builder: impl FnMut() -> UpdaterBuilder,
@@ -207,5 +231,44 @@ impl SelectedUpdate {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    #[test]
+    fn parses_the_minisign_envelope_before_pinning_an_artifact() {
+        let signature = include_str!("update_sources/test-package.sig");
+        assert!(validate_signature(signature).is_ok());
+        for invalid in ["", "invalid!", "YWJj", &BASE64.encode([0xff])] {
+            assert!(validate_signature(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn channels_have_distinct_pointers_and_immutable_download_urls() {
+        let sources = Sources::official();
+        for (channel, version, alias) in [
+            (Channel::Stable, "3.4.1", "latest"),
+            (Channel::Current, "3.0.0-current.1", "current"),
+        ] {
+            assert!(channel.accepts(version));
+            assert_ne!(
+                Channel::Stable.accepts(version),
+                Channel::Current.accepts(version)
+            );
+            assert_eq!(
+                sources.manifest(Source::Cloudflare, channel).path(),
+                format!("/updates/{alias}.json")
+            );
+            for source in [Source::Github, Source::Cloudflare] {
+                let url = sources.package(source, version, "r-shell_x64-setup.exe");
+                assert!(url
+                    .path()
+                    .ends_with(&format!("/v{version}/r-shell_x64-setup.exe")));
+            }
+        }
+    }
+}
