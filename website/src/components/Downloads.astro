@@ -1,0 +1,44 @@
+---
+import { readFile } from 'node:fs/promises';
+import SiteShell from './SiteShell.astro';
+import fixture from '../../tests/fixtures/catalog.json';
+interface Props { zh: boolean }
+interface Asset { name:string; platform:string; arch:string; format:string; size:number; sha256:string }
+interface Catalog { version:string; installers:Asset[] }
+const { zh } = Astro.props;
+const production = process.env.RSHELL_PRODUCTION === '1';
+if (production && !process.env.RSHELL_SITE_CATALOG) throw new Error('Production requires a verified release catalog');
+const source = process.env.RSHELL_SITE_CATALOG;
+const catalogs:Record<'stable'|'current',Catalog|null> = source ? JSON.parse(await readFile(source,'utf8')) : fixture;
+if (!catalogs.stable?.installers.length) throw new Error('Missing stable release');
+const github='https://github.com/GOODBOY008/r-shell/releases';
+const channels=['stable','current'] as const;
+const title=zh?'下载 R-Shell':'Download R-Shell';
+---
+<SiteShell {zh} title={title} description={zh?'从 GitHub 或 Cloudflare 下载签名发布文件并核对 SHA-256。':'Get R-Shell installers from GitHub or Cloudflare and verify SHA-256 checksums.'}>
+<div class="downloads">
+  <h1>{title}</h1>
+  <p class="intro">{zh?'按操作系统和芯片选择安装包。两个下载源提供相同的发布文件。':'Choose an installer for your operating system and processor. Both sources serve the same release files.'}</p>
+  {channels.map(channel => { const data=catalogs[channel]; if(!data) return null;
+    const tag='v'+data.version; const base='/releases/'+tag+'/'; return <section aria-labelledby={channel}>
+    <h2 id={channel}>{channel==='stable'?(zh?'稳定版':'Stable'):(zh?'Current 预发布版':'Current prerelease')} <span>{tag}</span></h2>
+    {channel==='current' && <p>{zh?'macOS 需要 Apple Silicon 和 macOS 26 或更高版本。':'On macOS, Current requires Apple Silicon and macOS 26 or later.'}</p>}
+    <ul>{data.installers.map(a=><li>
+      <div><h3>{a.platform} · {a.arch} · {a.format}</h3><span class="file">{a.name} · {(a.size/1e6).toFixed(1)} MB</span></div>
+      <div class="sources"><a href={github+'/download/'+tag+'/'+a.name} aria-label={'GitHub · '+a.name}>GitHub</a><a href={base+a.name} aria-label={'Cloudflare · '+a.name}>Cloudflare R2</a></div>
+      <details><summary>SHA-256</summary><code>{a.sha256}</code></details>
+    </li>)}</ul>
+    <a class="checks" href={base+'SHA256SUMS'}>{zh?'下载完整校验清单':'Download all checksums'}</a>
+    </section>})}
+  <p><a href={github}>{zh?'所有历史版本（GitHub）':'All releases on GitHub'}</a> · <a href={(zh?'/zh':'')+'/docs/installation/'}>{zh?'安装指南':'Installation guide'}</a></p>
+</div></SiteShell>
+<style>
+.downloads{max-width:64rem;margin:0 auto;padding:clamp(2rem,6vw,5rem) 1.25rem;line-height:1.55}
+h1{font-size:clamp(2.4rem,6vw,4.2rem);letter-spacing:-.045em;line-height:1.04;margin:0 0 1rem}.intro,p,.file{color:#adbdc4}
+section{margin:2.8rem 0}h2{font-size:1.65rem}h2 span{font:500 .95rem ui-monospace,monospace;color:#99dfc6;margin-left:.5rem}
+ul{list-style:none;padding:0;margin:.5rem 0;}li{padding:1rem 0;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.25rem 1rem;border-top:1px solid #2e3b42}
+h3{font-size:1.05rem;margin:0}.file{font-size:.9rem;overflow-wrap:anywhere}.sources{display:flex;gap:.6rem;flex-wrap:wrap}
+a,summary{color:#9fe5cc;text-underline-offset:.23em}.sources a,.checks{display:inline-block;padding:.4rem .7rem;border:1px solid #45675d;border-radius:.35rem;text-decoration:none}.sources a:hover,.checks:hover{background:#17372c}
+details{grid-column:1/-1;font-size:.9rem}summary{cursor:pointer;width:fit-content;padding:.2rem 0}code{overflow-wrap:anywhere}
+@media(max-width:40rem){li{grid-template-columns:1fr;gap:.7rem}.sources{gap:.5rem}}
+</style>

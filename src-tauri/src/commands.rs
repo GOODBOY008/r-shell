@@ -5230,15 +5230,6 @@ pub const HOMEBREW_MANAGED_MARKER: &str = "HOMEBREW_MANAGED_INSTALL";
 /// install as brew-managed.
 const HOMEBREW_CASK_TOKENS: [&str; 2] = ["r-shell", "r-shell@current"];
 
-/// Stable channel manifest. `releases/latest` never points at a prerelease,
-/// so evolution-line tags (`v*-current.N`) cannot hijack this URL.
-const STABLE_MANIFEST_URL: &str =
-    "https://github.com/GOODBOY008/r-shell/releases/latest/download/latest.json";
-/// Evolution channel manifest, attached to the rolling lightweight `current`
-/// tag (moved to the latest `v*-current.N` release by CI).
-const CURRENT_MANIFEST_URL: &str =
-    "https://github.com/GOODBOY008/r-shell/releases/download/current/current.json";
-
 /// Environment facts the update settings UI gates on. `current` channel is
 /// only offered for macOS ≥ 26 on Apple Silicon outside Homebrew.
 /// `auto_check_disabled` suppresses the frontend's startup auto-check: dev
@@ -5375,11 +5366,18 @@ pub struct UpdateMeta {
     pub body: Option<String>,
 }
 
-/// Process-wide cache of the update found by the last `updater_check`. The
-/// entry survives a failed `updater_download_and_install` so the frontend's
-/// retry re-downloads; it is only cleared after a successful install.
+/// Serialize checks and installations so concurrent IPC calls cannot install twice.
 #[derive(Default)]
-pub struct PendingUpdate(Mutex<Option<tauri_plugin_updater::Update>>);
+pub struct PendingUpdate(tokio::sync::Mutex<Option<crate::update_sources::SelectedUpdate>>);
+
+fn update_source_changed(app: &tauri::AppHandle, source: crate::update_sources::Source) {
+    let _ = app.emit(
+        "updater://progress",
+        serde_json::json!({
+            "downloaded": 0, "total": null, "fallbackSource": source.label()
+        }),
+    );
+}
 
 #[tauri::command]
 pub async fn updater_check(
@@ -5388,49 +5386,45 @@ pub async fn updater_check(
     proxy: Option<String>,
     pending: State<'_, PendingUpdate>,
 ) -> Result<Option<UpdateMeta>, String> {
+    use crate::update_sources::{Channel, Sources};
     if homebrew_managed() {
         return Err(HOMEBREW_MANAGED_MARKER.to_string());
     }
-
-    // Endpoint override only exists on the Rust UpdaterBuilder (the JS
-    // CheckOptions have no such field), which is why the check lives here.
-    let endpoint = match channel.as_str() {
-        "stable" => STABLE_MANIFEST_URL,
-        "current" => CURRENT_MANIFEST_URL,
-        _ => return Err(format!("Unknown update channel: {channel}")),
-    };
-
-    let mut builder = app
-        .updater_builder()
-        .endpoints(vec![endpoint
-            .parse()
-            .map_err(|e| format!("Invalid endpoint: {e}"))?])
-        .map_err(|e| e.to_string())?;
-
-    if let Some(proxy) = proxy {
-        let url: tauri::Url = proxy
-            .parse()
-            .map_err(|_| "Invalid update proxy URL".to_string())?;
-        if url.scheme() != "http" && url.scheme() != "https" {
-            return Err("Invalid update proxy URL".to_string());
-        }
-        builder = builder.proxy(url);
+    let channel = Channel::parse(&channel)?;
+    let proxy = proxy
+        .map(|v| {
+            v.parse::<tauri::Url>()
+                .map_err(|_| "Invalid update proxy URL".to_owned())
+        })
+        .transpose()?;
+    if proxy
+        .as_ref()
+        .is_some_and(|u| !matches!(u.scheme(), "http" | "https"))
+    {
+        return Err("Invalid update proxy URL".into());
     }
-
-    let update = builder
-        .build()
-        .map_err(|e| e.to_string())?
-        .check()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    *pending.0.lock().map_err(|e| e.to_string())? = update.clone();
-
-    Ok(update.map(|u| UpdateMeta {
-        version: u.version.clone(),
-        current_version: u.current_version.clone(),
-        body: u.body.clone(),
-    }))
+    let mut slot = pending.0.lock().await;
+    *slot = None;
+    let selected = Sources::official()
+        .check(
+            channel,
+            || {
+                let builder = app.updater_builder();
+                match &proxy {
+                    Some(url) => builder.proxy(url.clone()),
+                    None => builder,
+                }
+            },
+            |source| update_source_changed(&app, source),
+        )
+        .await?;
+    let metadata = selected.as_ref().map(|s| UpdateMeta {
+        version: s.update.version.clone(),
+        current_version: s.update.current_version.clone(),
+        body: s.update.body.clone(),
+    });
+    *slot = selected;
+    Ok(metadata)
 }
 
 #[tauri::command]
@@ -5438,38 +5432,27 @@ pub async fn updater_download_and_install(
     app: tauri::AppHandle,
     pending: State<'_, PendingUpdate>,
 ) -> Result<(), String> {
-    // Clone rather than take: `Update` is cheap to clone and the cached one
-    // must survive a failed transfer, otherwise the dialog's retry would
-    // always die with "No update available" instead of re-downloading.
-    let update = pending.0.lock().map_err(|e| e.to_string())?.clone();
-    let Some(update) = update else {
-        return Err("No update available — run updater_check first".to_string());
-    };
-
-    let mut downloaded: u64 = 0;
-    let progress_app = app.clone();
-    let result = update
-        .download_and_install(
-            move |chunk_len, total| {
-                downloaded += chunk_len as u64;
-                let _ = progress_app.emit(
+    if homebrew_managed() {
+        return Err(HOMEBREW_MANAGED_MARKER.to_string());
+    }
+    let mut slot = pending.0.lock().await;
+    let selected = slot
+        .as_ref()
+        .ok_or("No update available — run updater_check first")?;
+    selected
+        .apply(
+            |downloaded, total| {
+                let _ = app.emit(
                     "updater://progress",
                     serde_json::json!({ "downloaded": downloaded, "total": total }),
                 );
             },
-            || {},
+            |source| update_source_changed(&app, source),
+            |update, bytes| update.install(bytes).map_err(|e| e.to_string()),
         )
-        .await;
-
-    match result {
-        Ok(()) => {
-            // Installed: drop the cache so a stale `Update` can never be
-            // re-downloaded against the now-current version.
-            *pending.0.lock().map_err(|e| e.to_string())? = None;
-            Ok(())
-        }
-        Err(e) => Err(e.to_string()),
-    }
+        .await?;
+    *slot = None;
+    Ok(())
 }
 
 // ========== Updater Tests ==========

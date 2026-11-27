@@ -1,0 +1,42 @@
+---
+interface Props { zh: boolean; title: string; description: string }
+const { zh, title, description } = Astro.props;
+const prefix = zh ? '/zh' : '';
+const path = Astro.url.pathname.replace(/^\/zh(?=\/)/,'');
+const destinations = [[prefix + '/',zh?'首页':'Home'],[prefix + '/docs/',zh?'手册':'Docs'],[prefix + '/download/',zh?'下载':'Download']];
+const canonical = new URL(Astro.url.pathname, Astro.site);
+---
+<!doctype html>
+<html lang={zh?'zh-CN':'en'}>
+  <head>
+    <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>{title}</title><meta name="description" content={description}/><meta name="theme-color" content="#0c1217"/>
+    <link rel="icon" href="/media/r-shell-icon.svg" type="image/svg+xml"/><link rel="canonical" href={canonical}/>
+    <link rel="alternate" hreflang="en" href={new URL(path,Astro.site)}/><link rel="alternate" hreflang="zh-CN" href={new URL('/zh'+path,Astro.site)}/>
+  </head>
+  <body>
+    <a class="skip" href="#main">{zh?'跳到正文':'Skip to content'}</a>
+    <header class="top"><div class="navwrap">
+      <a class="brand" href={prefix+'/'}><img src="/media/r-shell-icon.svg" alt="" width="34" height="34"/>R-Shell</a>
+      <nav aria-label={zh?'主导航':'Main navigation'}>{destinations.map(([href,label])=><a href={href} aria-current={Astro.url.pathname===href?'page':undefined}>{label}</a>)}
+        <a href="https://github.com/GOODBOY008/r-shell">GitHub</a>
+        <a class="lang" href={zh?path:'/zh'+path} lang={zh?'en':'zh-CN'}>{zh?'English':'中文'}</a>
+      </nav>
+    </div></header>
+    <main id="main"><slot/></main>
+    <footer class="foot"><a class="brand" href={prefix+'/'}><img src="/media/r-shell-icon.svg" alt="" width="24" height="24"/>R-Shell</a><a href="https://github.com/GOODBOY008/r-shell">{zh?'GitHub 源码':'Source on GitHub'}</a></footer>
+  </body>
+</html>
+<style is:global>
+  :root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#0c1217;color:#eaf2f6}
+  *,*::before,*::after{box-sizing:border-box}body{margin:0}a{color:inherit}
+  :focus-visible{outline:3px solid #98ecd0;outline-offset:4px}
+  .skip{position:absolute;top:-6rem;left:1rem;z-index:3;padding:.7rem;background:#163a31}.skip:focus{top:.5rem}
+  .top{border-bottom:1px solid #2a373c;background:#10181e}
+  .navwrap,.foot{width:min(100% - 2.5rem,75rem);margin:auto;display:flex;align-items:center;justify-content:space-between;gap:1rem}
+  .navwrap{min-height:4.3rem;flex-wrap:wrap;padding:.6rem 0}.brand{display:inline-flex;align-items:center;gap:.6rem;text-decoration:none;font-weight:720;letter-spacing:-.035em;font-size:1.2rem}
+  .top nav,.foot{display:flex;align-items:center;flex-wrap:wrap}.top nav{gap:clamp(.5rem,2.4vw,1.65rem)}
+  .top nav a,.foot>a:last-child{display:inline-block;color:#c0ced3;text-underline-offset:.35em;font-size:.94rem;padding:.4rem .05rem;text-decoration:none}.top nav a[aria-current],.top nav a:hover,.foot>a:hover{color:#9ee5cb;text-decoration:underline}
+  .lang{border-left:1px solid #3a464b;padding-left:.8rem!important}.foot{border-top:1px solid #2b373b;min-height:5rem;margin-top:3rem}
+  @media(max-width:38rem){.navwrap{gap:.4rem}.top nav{width:100%;justify-content:space-between}.lang{border:0;padding-left:.05rem!important}}
+</style>

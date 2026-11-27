@@ -24,6 +24,7 @@ mod sftp_transfer;
 mod socks_proxy;
 mod ssh;
 mod ssh_config;
+mod update_sources;
 mod vnc_client;
 mod websocket_server;
 mod x11;

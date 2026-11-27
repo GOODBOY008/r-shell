@@ -89,7 +89,7 @@ function makeUpdateMeta(version = '9.9.9', body?: string) {
 }
 
 /** Captured updater://progress listener, if the component subscribed one. */
-let progressListener: ((event: { payload: { downloaded: number; total: number | null } }) => void) | null = null;
+let progressListener: ((event: { payload: { downloaded: number; total: number | null; fallbackSource?: string } }) => void) | null = null;
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ describe('UpdateChecker', () => {
       return Promise.reject(new Error(`unexpected command: ${cmd}`));
     });
     mockListen.mockImplementation(
-      async (_event: string, handler: (e: { payload: { downloaded: number; total: number | null } }) => void) => {
+      async (_event: string, handler: (e: { payload: { downloaded: number; total: number | null; fallbackSource?: string } }) => void) => {
         progressListener = handler;
         return () => {};
       }
@@ -660,6 +660,12 @@ describe('UpdateChecker', () => {
         await new Promise(r => setTimeout(r, 10));
       });
       expect(screen.getByTestId('progress').getAttribute('data-value')).toBe('50');
+      await act(async () => {
+        progressListener!({ payload: { downloaded: 0, total: null, fallbackSource: 'Cloudflare' } });
+      });
+      expect(screen.getByTestId('progress').getAttribute('data-value')).toBe('0');
+      expect(screen.getByText(/Retrying download from Cloudflare/)).toBeTruthy();
+
 
       // Finish the install → ready state
       await act(async () => {

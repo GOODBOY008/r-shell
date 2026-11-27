@@ -1,0 +1,86 @@
+name: Website and release mirror
+on:
+  pull_request:
+    branches: [main]
+    paths: ['website/**', 'scripts/*release*mirror*', 'screenshots/**', 'src/assets/r-shell-*.svg', '.github/workflows/website.yml']
+  push:
+    branches: [main]
+    paths: ['website/**', 'scripts/*release*mirror*', 'screenshots/**', 'src/assets/r-shell-*.svg', '.github/workflows/website.yml']
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional retained version to verify when reconciling both channels
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install boto3==1.44.12
+      - run: python scripts/test_release_mirror.py
+      - working-directory: website
+        run: pnpm install --frozen-lockfile && pnpm test && pnpm build && python scripts/check-links.py
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: cloudflare-production
+    concurrency:
+      group: r-shell-cloudflare-production
+      cancel-in-progress: false
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      RSHELL_PRODUCTION: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - run: echo "RSHELL_SITE_CATALOG=$RUNNER_TEMP/r-shell-catalog.json" >> "$GITHUB_ENV"
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install boto3==1.44.12 && sudo apt-get update -qq && sudo apt-get install -y minisign
+      - name: Prepare verified catalogs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+          MODE: ${{ github.event_name == 'push' && 'catalog' || 'sync' }}
+        run: |
+          args=()
+          if [[ -n "$REQUESTED_TAG" ]]; then args+=(--tag "$REQUESTED_TAG"); fi
+          python scripts/release-mirror.py "$MODE" --cache "$RUNNER_TEMP/packages" --catalog "$RSHELL_SITE_CATALOG" "${args[@]}"
+      - working-directory: website
+        run: pnpm install --frozen-lockfile && pnpm build
+      - name: Deploy production Pages site
+        working-directory: website
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_TOKEN }}
+          WRANGLER_SEND_METRICS: 'false'
+        run: pnpm dlx wrangler@4.127.1 pages deploy dist --branch main
+      - name: Check production and expire superseded objects
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          node website/scripts/smoke.mjs "$RSHELL_SITE_CATALOG"
+          python scripts/release-mirror.py prune --cache "$RUNNER_TEMP/packages" --catalog "$RSHELL_SITE_CATALOG"

@@ -989,6 +989,8 @@
     "sendSudoPassword": "Digitar senha do sudo"
   },
   "updateChecker": {
+    "tryingSource": "Tentando baixar novamente de {{source}}…",
+    "usingSource": "Fonte da atualização: {{source}}",
     "checkForUpdates": "Buscar atualizações",
     "checking": "Buscando atualizações...",
     "upToDate": "Você já tem a versão mais recente",
