@@ -20,12 +20,15 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 const lifecycle = vi.hoisted(() => ({
   invoke: vi.fn(),
+  getEndpoint: vi.fn(),
   readClipboard: vi.fn<() => Promise<string>>(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
   isTauri: () => false,
-  invoke: (...args: unknown[]) => lifecycle.invoke(...args),
+  invoke: (command: string, ...args: unknown[]) => command === 'get_websocket_endpoint'
+    ? lifecycle.getEndpoint()
+    : lifecycle.invoke(command, ...args),
 }));
 vi.mock('@tauri-apps/api/event', () => ({
   listen: async () => () => {},
@@ -33,9 +36,6 @@ vi.mock('@tauri-apps/api/event', () => ({
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   readText: lifecycle.readClipboard,
   writeText: async () => {},
-}));
-vi.mock('@/lib/websocket-endpoint', () => ({
-  getWebSocketUrl: async () => 'ws://127.0.0.1:9999',
 }));
 vi.mock('@/lib/notifications', () => ({
   notify: { error: vi.fn(), info: vi.fn(), success: vi.fn(), warning: vi.fn() },
@@ -112,6 +112,7 @@ describe('DesktopViewer window-fit scaling', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     lifecycle.invoke.mockReset();
+    lifecycle.getEndpoint.mockReset().mockResolvedValue({ port: 9999, token: 'test-token' });
     lifecycle.readClipboard.mockReset().mockResolvedValue('');
     // Call sites chain .catch() on the returned value.
     lifecycle.invoke.mockImplementation(async () => {});
@@ -132,6 +133,28 @@ describe('DesktopViewer window-fit scaling', () => {
     vi.useRealTimers();
     Reflect.deleteProperty(document, 'fullscreenElement');
     Reflect.deleteProperty(document, 'exitFullscreen');
+  });
+
+  it.each(['RDP', 'VNC'])('shows Reconnect without opening a socket when the %s bridge is unavailable', async (protocol) => {
+    lifecycle.getEndpoint.mockRejectedValueOnce(new Error('Bridge unavailable'));
+    const onReconnect = vi.fn();
+    await act(async () => { render(<DesktopViewer {...viewerProps({ protocol, onReconnect })} />); });
+
+    expect(screen.getByText('Desktop Disconnected')).toBeTruthy();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(onReconnect).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a late endpoint failure after switching desktop sessions', async () => {
+    let rejectPrevious!: (error: Error) => void;
+    lifecycle.getEndpoint.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectPrevious = reject; }));
+    const view = render(<DesktopViewer {...viewerProps()} />);
+    view.rerender(<DesktopViewer {...viewerProps({ connectionId: 'conn-2' })} />);
+    await act(async () => { rejectPrevious(new Error('Bridge unavailable')); });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(view.container.querySelector('canvas')).not.toBeNull();
   });
 
   it.each(['Win32', 'MacIntel'])('sends Ctrl+W to RDP instead of closing its local tab on %s', async (platform) => {

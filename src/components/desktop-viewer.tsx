@@ -89,9 +89,8 @@ export function DesktopViewer({
   // Frame-stream watchdog bookkeeping
   const activeCloseRef = useRef(false);
   const lastFrameRef = useRef(0);
-  // Set when the backend reports the desktop session is gone (e.g. after an
-  // app restart restored the tab before its connection was re-established);
-  // shows the reconnect panel instead of a dead canvas that eats clicks.
+  // Show the reconnect panel if the bridge is unavailable or the backend
+  // reports that the desktop session is gone.
   const [sessionMissing, setSessionMissing] = useState(false);
   const startedRef = useRef(false);
   const reconnectAttemptRef = useRef(0);
@@ -166,12 +165,14 @@ export function DesktopViewer({
 
     let renderer: DesktopFrameRenderer | null = null;
     const connect = async () => {
-      // Port + per-launch bridge token from the backend (issue #138).
-      const wsUrl = await getWebSocketUrl();
-
-      if (cancelled) return;
-
-      ws = new WebSocket(wsUrl);
+      try {
+        const wsUrl = await getWebSocketUrl();
+        if (cancelled) return;
+        ws = new WebSocket(wsUrl);
+      } catch {
+        if (!cancelled) setSessionMissing(true);
+        return;
+      }
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
       renderer?.dispose();
