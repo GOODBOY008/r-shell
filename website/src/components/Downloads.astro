@@ -2,6 +2,7 @@
 import { readFile } from 'node:fs/promises';
 import SiteShell from './SiteShell.astro';
 import fixture from '../../tests/fixtures/catalog.json';
+import mirrorOrigin from '../../mirror-origin.txt?raw';
 interface Asset { name:string; platform:string; arch:string; format:string; size:number; sha256:string }
 interface Catalog { version:string; installers:Asset[] }
 const { t } = Astro.locals;
@@ -20,7 +21,7 @@ const title=t('site.downloads.title');
   <h1>{title}</h1>
   <p class="intro">{t('site.downloads.intro')}</p>
   {channels.map(channel => { const data=catalogs[channel]; if(!data) return null;
-    const tag='v'+data.version; const base='/releases/'+tag+'/'; return <section aria-labelledby={channel}>
+    const tag='v'+data.version; const base=mirrorOrigin.trim()+'/releases/'+tag+'/'; return <section aria-labelledby={channel}>
     <h2 id={channel}>{t(`site.downloads.${channel}`)} <span>{tag}</span></h2>
     {channel==='current' && <p>{t('site.downloads.currentMac')}</p>}
     <ul>{data.installers.map(a=><li>

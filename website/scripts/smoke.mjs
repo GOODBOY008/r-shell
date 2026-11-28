@@ -1,51 +1,56 @@
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
 
-const origin = (
+const site = (
   await readFile(new URL("../origin.txt", import.meta.url), "utf8")
 ).trim();
+const mirror = (
+  await readFile(new URL("../mirror-origin.txt", import.meta.url), "utf8")
+).trim();
+const github = "https://github.com/GOODBOY008/r-shell/releases/download";
 const catalogs = JSON.parse(await readFile(process.argv[2], "utf8"));
-async function get(path, options) {
-  const response = await fetch(origin + path, {
+async function get(url, options) {
+  const response = await fetch(url, {
     ...options,
     signal: AbortSignal.timeout(30000),
   });
-  assert.ok(response.ok, path + " returned " + response.status);
+  assert.ok(response.ok, url + " returned " + response.status);
   return response;
 }
 async function smoke() {
   for (const prefix of ["", "/zh"]) {
-    const home = await (await get(prefix + "/")).text();
+    const home = await (await get(site + prefix + "/")).text();
     assert.ok(
       home.includes("github.com/GOODBOY008/r-shell") &&
         home.includes(prefix + "/download/"),
     );
-    await get(prefix + "/docs/", { method: "HEAD" });
-    const download = await (await get(prefix + "/download/")).text();
-    for (const c of Object.values(catalogs))
-      for (const a of c.installers) {
-        assert.ok(
-          download.includes("/releases/v" + c.version + "/" + a.name) &&
-            download.includes(
-              "/releases/download/v" + c.version + "/" + a.name,
-            ),
-        );
-        assert.ok(download.includes(a.sha256));
+    await get(site + prefix + "/docs/", { method: "HEAD" });
+    const download = await (await get(site + prefix + "/download/")).text();
+    for (const catalog of Object.values(catalogs)) {
+      const base = mirror + "/releases/v" + catalog.version + "/";
+      const upstream = github + "/v" + catalog.version + "/";
+      assert.ok(download.includes('href="' + base + 'SHA256SUMS"'));
+      for (const asset of catalog.installers) {
+        assert.ok(download.includes('href="' + base + asset.name + '"'));
+        assert.ok(download.includes('href="' + upstream + asset.name + '"'));
+        assert.ok(download.includes(asset.sha256));
       }
+    }
   }
-  await get("/pagefind/pagefind.js", { method: "HEAD" });
+  await get(site + "/pagefind/pagefind.js", { method: "HEAD" });
   for (const [channel, catalog] of Object.entries(catalogs)) {
-    const live = await (
-      await get(
-        channel === "stable" ? "/updates/latest.json" : "/updates/current.json",
-      )
-    ).json();
+    const manifest =
+      channel === "stable" ? "/updates/latest.json" : "/updates/current.json";
+    const live = await (await get(mirror + manifest)).json();
     assert.deepEqual(live, catalog);
+    const base = mirror + "/releases/v" + catalog.version + "/";
+    const checksums = (await (await get(base + "SHA256SUMS")).text()).split("\n");
     for (const a of catalog.installers) {
-      const path = "/releases/v" + catalog.version + "/" + a.name;
-      const head = await get(path, { method: "HEAD" });
+      const url = base + a.name;
+      assert.ok(checksums.includes(a.sha256 + "  " + a.name));
+      const head = await get(url, { method: "HEAD" });
       assert.equal(Number(head.headers.get("content-length")), a.size);
-      const part = await get(path, { headers: { Range: "bytes=1024-1055" } });
+      const part = await get(url, { headers: { Range: "bytes=1024-1055" } });
       assert.equal(part.status, 206);
       assert.equal(
         part.headers.get("content-range"),

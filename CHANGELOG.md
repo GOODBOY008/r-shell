@@ -14,6 +14,7 @@ R-Shell can now download signed updates from Cloudflare when GitHub is unavailab
 ### New Features 🎉
 
 - feat(updater): add signed update failover and publish the bilingual website by @GOODBOY008 in #362
+- feat(releases): use `r-shell.hzbwx.cn` for Cloudflare installer downloads and signed updates by @GOODBOY008
 
 ### Bug Fixes 🐛
 
