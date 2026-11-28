@@ -344,6 +344,20 @@ describe('PtyTerminal transport lifecycle and resize synchronization', () => {
     expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledExactlyOnceWith('connection-1');
   });
 
+  it('offers reconnect without opening a socket when the SSH bridge endpoint is unavailable', async () => {
+    const onStatus = vi.fn();
+    vi.mocked(invoke).mockRejectedValueOnce(new Error('WebSocket server not yet started'));
+    render(<PtyTerminal connectionId="connection-1" connectionName="SSH Server" onConnectionStatusChange={onStatus} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60); });
+
+    expect(invoke).toHaveBeenCalledWith('get_websocket_endpoint');
+    expect(mocks.webSockets).toHaveLength(0);
+    expect(onStatus).toHaveBeenLastCalledWith('connection-1', 'disconnected');
+    expect(mocks.terminals[0].options.disableStdin).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+    expect(mocks.terminalCallbacks.onReconnectTab).toHaveBeenCalledExactlyOnceWith('connection-1');
+  });
+
   it('reattaches a local shell by native ID and drains its final output without respawning', async () => {
     const onStatus = vi.fn();
     const onName = vi.fn();

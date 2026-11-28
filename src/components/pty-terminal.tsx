@@ -14,7 +14,7 @@ import { SearchAddon } from '@xterm/addon-search';
 import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager';
-import { getAuthenticatedWebSocketUrl, getWebSocketUrl } from '@/lib/websocket-endpoint';
+import { getWebSocketUrl } from '@/lib/websocket-endpoint';
 import { loadAppearanceSettings, getThemeAwareTerminalOptions, getThemeAwareTerminalTheme, terminalThemes, defaultTerminalTheme } from '../lib/terminal-config';
 import { TerminalContextMenu } from './terminal/terminal-context-menu';
 import { TerminalSearchBar, type TerminalSearchState } from './terminal/terminal-search-bar';
@@ -44,6 +44,7 @@ function sendBinaryInput(ws: WebSocket, id: Uint8Array, payload: Uint8Array): vo
 type TerminalEnd =
   | { kind: 'exited'; code: number | null }
   | { kind: 'signalled'; signal: string }
+  | { kind: 'bridgeUnavailable' }
   | { kind: 'startFailed' | 'attachFailed'; detail?: string };
 
 function terminalEndMessage(end: TerminalEnd, t: TFunction) {
@@ -52,6 +53,8 @@ function terminalEndMessage(end: TerminalEnd, t: TFunction) {
       return end.code === null ? t('localShell.exited') : t('localShell.exitedWithCode', { code: end.code });
     case 'signalled':
       return t('ptyTerminal.exitedWithSignal', { signal: end.signal });
+    case 'bridgeUnavailable':
+      return t('ptyTerminal.terminalNotConnected');
     default:
       return t(`localShell.${end.kind}`);
   }
@@ -809,12 +812,12 @@ export function PtyTerminal({
           Math.min(START_PTY_WATCHDOG_MS, Math.max(0, localReconnectBy - Date.now())));
       }
       try {
-        const wsUrl = await (localShell ? getAuthenticatedWebSocketUrl() : getWebSocketUrl());
+        const wsUrl = await getWebSocketUrl();
         if (!attemptIsCurrent()) return;
         ws = new WebSocket(wsUrl);
-      } catch (error) {
-        if (!localShell) throw error;
-        retryLocalAttach();
+      } catch {
+        if (localShell) retryLocalAttach();
+        else if (attemptIsCurrent()) finishSession({ kind: 'bridgeUnavailable' });
         return;
       }
       // Receive PTY output as ArrayBuffer so we can avoid the JSON overhead of

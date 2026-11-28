@@ -1,39 +1,19 @@
 import { invoke } from '@tauri-apps/api/core';
 
-/** Port the bridge falls back to when the backend cannot be asked (browser dev mode). */
-export const DEFAULT_WS_PORT = 9001;
-
 /** Shape returned by the `get_websocket_endpoint` Tauri command. */
 export interface WebSocketEndpoint {
   port: number;
   token: string;
 }
 
-// Local shells must never disclose their run handle or terminal input to the
-// unauthenticated fallback port used by the browser-only development mode.
-export async function getAuthenticatedWebSocketUrl(): Promise<string> {
-  const { port, token } = await invoke<WebSocketEndpoint>('get_websocket_endpoint');
-  if (!token || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid bridge endpoint');
-  return `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
-}
-
 /**
- * Build the URL for the local PTY/desktop WebSocket bridge.
- *
- * The bridge listens on loopback, which every local process — and, through a
- * browser, every web page — can reach. Since issue #138 the backend therefore
- * requires a per-launch token in the handshake; it is only ever handed to this
- * webview via IPC, so it must travel in the query string of every connection.
- *
- * Without a backend (plain `pnpm dev` in a browser) there is no token; the
- * default port is returned so the failure surfaces as a normal connection
- * error rather than an exception here.
+ * Only the backend knows which loopback port it bound and the token for this
+ * launch. If lookup fails, a guessed port could belong to another process.
  */
 export async function getWebSocketUrl(): Promise<string> {
-  try {
-    return await getAuthenticatedWebSocketUrl();
-  } catch (e) {
-    console.warn('[WebSocket] Failed to get bridge endpoint, using default port without token:', e);
-    return `ws://127.0.0.1:${DEFAULT_WS_PORT}`;
+  const { port, token } = await invoke<WebSocketEndpoint>('get_websocket_endpoint');
+  if (!Number.isInteger(port) || port < 1 || port > 65535 || typeof token !== 'string' || !token.trim()) {
+    throw new Error('Invalid bridge endpoint');
   }
+  return `ws://127.0.0.1:${port}/?token=${encodeURIComponent(token)}`;
 }
