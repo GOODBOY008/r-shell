@@ -33,7 +33,6 @@ class MirrorTests(unittest.TestCase):
         )
         self.assertEqual(mirror.retain(releases, "current", tags[-3]), tags[-3:-1])
 
-    @patch.object(mirror, "MIRROR_ORIGIN", "https://downloads.example.org")
     def test_mirror_pins_signatures_version_and_actual_filename(self):
         tag = "v3.0.0-current.1"
         name = "r-shell_aarch64.app.tar.gz"
@@ -44,10 +43,7 @@ class MirrorTests(unittest.TestCase):
         data = mirror.mirrored_manifest(original, tag, [], {name: "signed"})
         self.assertEqual(
             data["platforms"]["darwin-aarch64"],
-            dict(
-                signature="signed",
-                url=f"https://downloads.example.org/releases/{tag}/{name}",
-            ),
+            dict(signature="signed", url=f"{mirror.ORIGIN}/releases/{tag}/{name}"),
         )
         self.assertEqual(original["platforms"]["darwin-aarch64"], record)
         with self.assertRaises(ValueError):
@@ -57,18 +53,6 @@ class MirrorTests(unittest.TestCase):
         del original["platforms"]["linux-x86_64"]
         with self.assertRaises(ValueError):
             mirror.mirrored_manifest(original, tag, [], {name: "signed"})
-
-    def test_catalog_with_any_old_package_origin_requires_sync(self):
-        base = f"{mirror.MIRROR_ORIGIN}/releases/v3.4.1/"
-        platforms = {
-            "a": {"url": base + "r-shell-a"},
-            "b": {"url": base + "r-shell-b"},
-        }
-        catalog = {"version": "3.4.1", "platforms": platforms}
-        self.assertTrue(mirror.uses_mirror_origin(catalog))
-        platforms["a"]["url"] = "https://old.example/releases/v3.4.1/r-shell-a"
-        self.assertFalse(mirror.uses_mirror_origin(catalog))
-        self.assertFalse(mirror.uses_mirror_origin(None))
 
     def test_old_run_cannot_overwrite_alias(self):
         with (

@@ -70,7 +70,7 @@ impl Sources {
             check_timeout: CONNECT,
             read_idle: READ_IDLE,
             github: Url::parse("https://github.com/GOODBOY008/r-shell/releases/").unwrap(),
-            mirror: Url::parse(include_str!("../../website/mirror-origin.txt").trim()).unwrap(),
+            mirror: Url::parse(include_str!("../../website/origin.txt").trim()).unwrap(),
         }
     }
     fn manifest(&self, source: Source, channel: Channel) -> Url {

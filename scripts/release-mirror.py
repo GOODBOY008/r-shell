@@ -19,8 +19,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 ROOT = Path(__file__).resolve().parents[1]
-SITE_ORIGIN = (ROOT / "website/origin.txt").read_text().strip()
-MIRROR_ORIGIN = (ROOT / "website/mirror-origin.txt").read_text().strip()
+ORIGIN = (ROOT / "website/origin.txt").read_text().strip()
 REPO = "GOODBOY008/r-shell"
 GH = "https://github.com/" + REPO + "/releases"
 BUCKET = "r-shell-releases"
@@ -262,7 +261,7 @@ def mirrored_manifest(original, tag, assets, signed):
             or signed[name] != record["signature"]
         ):
             raise ValueError("Package URL or signature mismatch for " + target)
-        platforms[target] = dict(record, url=f"{MIRROR_ORIGIN}/releases/{tag}/{name}")
+        platforms[target] = dict(record, url=ORIGIN + "/releases/" + tag + "/" + name)
     installs = [i for a in assets if (i := installer(a))]
     ranks = {"macOS": 0, "Windows": 1, "Linux": 2}
     installs.sort(key=lambda i: (ranks[i["platform"]], i["arch"], i["format"]))
@@ -346,13 +345,6 @@ def prune(s3, keep):
         print("Expired " + tag)
 
 
-def uses_mirror_origin(catalog):
-    if not catalog or not catalog.get("platforms"):
-        return False
-    prefix = f"{MIRROR_ORIGIN}/releases/v{catalog['version']}/"
-    return all(p["url"].startswith(prefix) for p in catalog["platforms"].values())
-
-
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("action", choices=["sync", "catalog", "prune"])
@@ -369,11 +361,11 @@ def main():
         catalogs = {
             ch: json_object(s3, "updates/" + name)[0] for ch, name in CHANNELS.items()
         }
-        if all(uses_mirror_origin(catalog) for catalog in catalogs.values()):
+        if all(catalogs.values()):
             args.catalog.parent.mkdir(parents=True, exist_ok=True)
             args.catalog.write_text(json.dumps(catalogs, ensure_ascii=False))
             return
-        # Rebuild missing catalogs or migrate package URLs after an origin change.
+        # The first deployment bootstraps a fresh mirror.
     pages = json.loads(
         subprocess.check_output(
             [
@@ -398,7 +390,7 @@ def main():
             if live != deployed[ch] or live["version"] != tip[1:]:
                 raise ValueError("Channel advanced during deployment; skip cleanup")
         prune(s3, keep)
-        destination = SITE_ORIGIN + "/download/"
+        destination = ORIGIN + "/download/"
         page = (
             '<!doctype html><html lang="en"><meta charset="utf-8"><title>R-Shell downloads</title>'
             f'<meta http-equiv="refresh" content="0;url={destination}"><a href="{destination}">R-Shell downloads</a></html>'
